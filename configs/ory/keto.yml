@@ -1,0 +1,21 @@
+version: v0.16.0
+
+dsn: postgres://postgres:postgres-local-dev@postgres:5432/postgres
+
+serve:
+  read:
+    host: 0.0.0.0
+    port: 4466
+  write:
+    host: 0.0.0.0
+    port: 4467
+
+log:
+  level: info
+  format: text
+
+namespaces:
+  # Phase 03 authors relations here; the namespace exists so the containers
+  # are live from phase 00 without a consumer.
+  - id: 0
+    name: sanvi

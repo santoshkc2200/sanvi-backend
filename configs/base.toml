@@ -1,0 +1,69 @@
+# Base configuration: defaults for every environment. NO SECRETS HERE.
+# Environment overlays: configs/local.toml, configs/staging.toml,
+# configs/production.toml (selected by SANVI_ENV).
+# Secrets only ever come from the environment: SANVI__SECTION__KEY,
+# e.g. SANVI__DATABASE__PASSWORD. See .env.example.
+
+readiness_probe_secs = 2
+
+[server]
+host = "0.0.0.0"
+port = 8080
+workers = 0               # 0 = one per CPU core
+shutdown_timeout_secs = 30
+request_timeout_secs = 30
+max_body_bytes = 1048576  # 1 MiB
+max_concurrency = 10000
+
+[server.cors]
+# Explicit origin allow-list; wildcards are rejected at startup.
+allowed_origins = []
+allow_credentials = true
+max_age_secs = 600
+
+[server.rate_limit]
+enabled = true
+burst = 60
+per_second = 10
+fail_open = true
+exempt_paths = ["/healthz", "/readyz", "/metrics"]
+
+[database]
+host = "localhost"
+port = 5432
+name = "sanvi"
+user = "sanvi_app"        # NOBYPASSRLS application role
+password = ""             # env only: SANVI__DATABASE__PASSWORD
+max_connections = 10
+min_connections = 1
+acquire_timeout_secs = 10
+idle_timeout_secs = 300
+max_lifetime_secs = 1800
+ssl_mode = "disable"
+migrations_dir = "./migrations"
+
+[redis]
+url = "redis://localhost:6379"
+
+[telemetry]
+service_name = "sanvi-api"
+environment = "local"
+log_format = "text"       # text | json
+default_level = "info"
+
+[telemetry.otlp]
+enabled = false
+endpoint = "http://localhost:4317"
+
+[ory]
+kratos_public_url = "http://localhost:4433"
+keto_read_url = "http://localhost:4466"
+
+[features]
+# Phase gates live here from phase 01 onward.
+
+[outbox]
+poll_interval_ms = 1000
+batch_size = 100
+max_attempts = 5
+stream = "sanvi.events"

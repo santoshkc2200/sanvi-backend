@@ -1,0 +1,139 @@
+name: main — build, sign, deploy staging
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # keyless signing
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: build & sign image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+
+      - name: set up QEMU + Buildx
+        uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build and push
+        uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: sign image (keyless)
+        uses: sigstore/cosign-installer@v3
+      - run: |
+          cosign sign --yes \
+            "${REGISTRY}/${IMAGE_NAME}-api@${{ steps.build.outputs.digest }}"
+
+  migrate:
+    name: run migrations (pre-deploy)
+    runs-on: ubuntu-latest
+    needs: build
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          docker run --rm \
+            -e SANVI__DATABASE__HOST="${{ secrets.STAGING_DB_HOST }}" \
+            -e SANVI__DATABASE__PORT="${{ secrets.STAGING_DB_PORT }}" \
+            -e SANVI__DATABASE__NAME="${{ secrets.STAGING_DB_NAME }}" \
+            -e SANVI__DATABASE__USER="${{ secrets.STAGING_DB_MIGRATOR_USER }}" \
+            -e SANVI__DATABASE__PASSWORD="${{ secrets.STAGING_DB_MIGRATOR_PASSWORD }}" \
+            -e SANVI__DATABASE__SSL_MODE=require \
+            -v "$PWD/migrations:/app/migrations:ro" \
+            "${REGISTRY}/${IMAGE_NAME}-api:sha-${{ github.sha }}" \
+            /usr/local/bin/sanvi-cli migrate up
+
+  deploy:
+    name: deploy staging (reversible)
+    runs-on: ubuntu-latest
+    needs: migrate
+    environment: staging
+    steps:
+      - name: deploy via SSH (docker compose pull + up)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/sanvi
+            echo "IMAGE=sha-${{ github.sha }}" > .deploy-image
+            docker compose -f docker-compose.staging.yml pull api worker
+            docker compose -f docker-compose.staging.yml up -d --no-deps api worker
+            docker compose -f docker-compose.staging.yml ps
+
+  smoke:
+    name: smoke test
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: smoke against staging
+        run: |
+          for endpoint in healthz readyz api/v1/system/version; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              --max-time 15 "https://${{ secrets.STAGING_HOSTNAME }}/$endpoint")
+            echo "/$endpoint -> $status"
+            [ "$status" = "200" ] || exit 1
+          done
+
+  rollback:
+    name: rollback (manual)
+    runs-on: ubuntu-latest
+    needs: []
+    environment: staging
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: revert to previous image
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/sanvi
+            PREV="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' \
+              "$(docker ps -aq --filter name=sanvi-api)" 2>/dev/null || echo unknown)"
+            docker compose -f docker-compose.staging.yml pull api worker
+            docker compose -f docker-compose.staging.yml up -d --no-deps api worker
+            echo "rollback executed; previous image: $PREV"

@@ -1,0 +1,29 @@
+[package]
+name = "sanvi-system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+actix-web.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+redis.workspace = true
+sanvi-http.workspace = true
+sanvi-kernel.workspace = true
+sanvi-persistence.workspace = true
+sanvi-telemetry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+actix-http.workspace = true
+sanvi-messaging.workspace = true

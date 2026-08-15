@@ -1,0 +1,8 @@
+# Local development overlay: everything points at docker-compose hostnames.
+# No secrets: local passwords come from .env (see .env.example).
+
+[server.cors]
+allowed_origins = ["http://localhost:5173", "http://localhost:4173"]
+
+[telemetry]
+log_format = "text"

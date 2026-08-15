@@ -1,0 +1,26 @@
+# Production overlay. Secrets via the platform secret manager, exposed to the
+# process as SANVI__* environment variables. Reviewed by the platform team on
+# every change.
+
+[server.cors]
+allowed_origins = ["https://app.sanvi.dev", "https://admin.sanvi.dev"]
+
+[database]
+ssl_mode = "require"
+max_connections = 50
+min_connections = 10
+acquire_timeout_secs = 5
+
+[server.rate_limit]
+enabled = true
+burst = 120
+per_second = 20
+fail_open = false
+
+[telemetry]
+log_format = "json"
+environment = "production"
+
+[telemetry.otlp]
+enabled = true
+endpoint = "http://otel-collector:4317"

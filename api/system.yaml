@@ -1,0 +1,66 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.1.0
+openapi: 3.1.0
+paths:
+  /api/v1/system/version:
+    get:
+      operationId: version
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuildInfo'
+          description: Build information
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: 'Build/version info: `GET /api/v1/system/version`.'
+      tags:
+      - system
+  /healthz:
+    get:
+      operationId: liveness
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessResult'
+          description: Process is alive
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: 'Liveness: `GET /healthz`. Never depends on anything else.'
+      tags:
+      - system
+  /readyz:
+    get:
+      operationId: readiness
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+          description: All dependencies healthy
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+          description: At least one dependency is degraded
+      summary: 'Readiness: `GET /readyz`. Degrades (503) when a dependency is down.'
+      tags:
+      - system

@@ -1,0 +1,45 @@
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "Apache-2.0 WITH LLVM-exception",
+]
+confidence-threshold = 0.8
+exceptions = [
+    # Permissive, per-file licensed crates that need explicit acknowledgement.
+]
+
+[bans]
+version = 2
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+deny = [
+    # Banned by policy: unmaintained or known-problematic dependencies.
+]
+skip = [
+    # Transitive dev-only crates may appear twice across toolchains.
+]
+skip-tree = []
+
+[sources]
+version = 2
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[output]
+feature-depth = 1

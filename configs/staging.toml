@@ -1,0 +1,18 @@
+# Staging overlay. Secrets via the platform secret manager, exposed to the
+# process as SANVI__* environment variables.
+
+[server.cors]
+allowed_origins = ["https://app.staging.sanvi.dev", "https://admin.staging.sanvi.dev"]
+
+[database]
+ssl_mode = "require"
+max_connections = 25
+min_connections = 5
+
+[telemetry]
+log_format = "json"
+environment = "staging"
+
+[telemetry.otlp]
+enabled = true
+endpoint = "http://jaeger:4317"

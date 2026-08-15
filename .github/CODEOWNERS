@@ -1,0 +1,9 @@
+# Global owners
+* @sanvi/platform-engineering
+
+# Architecture invariants are owned by the platform team
+docs/architecture-overview.md @sanvi/platform-engineering
+docs/adr/ @sanvi/platform-engineering
+scripts/check-layering.sh @sanvi/platform-engineering
+deny.toml @sanvi/platform-engineering
+.github/workflows/ @sanvi/platform-engineering

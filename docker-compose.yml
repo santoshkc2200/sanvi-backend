@@ -1,0 +1,123 @@
+# Local development stack.
+#
+# Default (no profile): the `core` services — Postgres + Redis.
+# `./scripts/dev.sh up --full` adds Ory Kratos/Keto, MailHog, MinIO, Jaeger.
+#
+# Ory containers run from day one but nothing consumes them until phase 02.
+
+name: sanvi
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres-local-dev
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kratos-migrate:
+    image: oryd/kratos:v1.4.0
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DSN: postgres://postgres:postgres-local-dev@postgres:5432/postgres
+    volumes:
+      - ./configs/ory:/etc/config/kratos:ro
+    command: migrate sql -e --yes
+
+  kratos:
+    image: oryd/kratos:v1.4.0
+    profiles: ["full"]
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "4433:4433"
+      - "4434:4434"
+    environment:
+      DSN: postgres://postgres:postgres-local-dev@postgres:5432/postgres
+      LOG_LEVEL: trace
+    volumes:
+      - ./configs/ory:/etc/config/kratos:ro
+    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+
+  keto-migrate:
+    image: oryd/keto:v0.16.0
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DSN: postgres://postgres:postgres-local-dev@postgres:5432/postgres
+    command: migrate up -y
+
+  keto:
+    image: oryd/keto:v0.16.0
+    profiles: ["full"]
+    depends_on:
+      keto-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "4466:4466"
+      - "4467:4467"
+    environment:
+      DSN: postgres://postgres:postgres-local-dev@postgres:5432/postgres
+    volumes:
+      - ./configs/ory/keto.yml:/etc/config/keto/keto.yml:ro
+    command: serve -c /etc/config/keto/keto.yml
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    profiles: ["full"]
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["full"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio-local-dev
+      MINIO_ROOT_PASSWORD: minio-local-dev
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    profiles: ["full"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
+volumes:
+  pgdata:
+  miniodata:

@@ -1,0 +1,33 @@
+version: "3.9"
+
+name: sanvi
+
+services:
+  api:
+    image: ${API_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}
+    init: true
+    environment:
+      SANVI_ENV: production
+      SANVI__SERVER__HOST: 0.0.0.0
+      SANVI__SERVER__PORT: 8080
+      # All remaining secrets come from the host's secret manager:
+      # SANVI__DATABASE__HOST / PORT / NAME / USER / PASSWORD
+      # SANVI__REDIS__URL
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    image: ${WORKER_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}
+    init: true
+    command: /usr/local/bin/sanvi-worker
+    environment:
+      SANVI_ENV: production
+      # SANVI__DATABASE__* / SANVI__REDIS__URL from the host's secret manager
+    restart: unless-stopped

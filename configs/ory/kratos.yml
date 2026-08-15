@@ -1,0 +1,80 @@
+version: v1.4.0
+
+dsn: postgres://postgres:postgres-local-dev@postgres:5432/postgres
+
+serve:
+  public:
+    base_url: http://127.0.0.1:4433/
+  admin:
+    base_url: http://127.0.0.1:4434/
+
+selfservice:
+  default_browser_return_url: http://127.0.0.1:4455/
+  allowed_return_urls:
+    - http://127.0.0.1:4455
+
+  methods:
+    password:
+      enabled: true
+    code:
+      enabled: false
+
+  flows:
+    error:
+      ui_url: http://127.0.0.1:4455/error
+    settings:
+      ui_url: http://127.0.0.1:4455/settings
+      privileged_session_max_age: 15m
+      required_aal: lowest_available
+    recovery:
+      enabled: true
+      ui_url: http://127.0.0.1:4455/recovery
+    verification:
+      enabled: true
+      ui_url: http://127.0.0.1:4455/verification
+      after:
+        default_browser_return_url: http://127.0.0.1:4455/
+    logout:
+      after:
+        default_browser_return_url: http://127.0.0.1:4455/login
+    login:
+      ui_url: http://127.0.0.1:4455/login
+      lifespan: 10m
+    registration:
+      lifespan: 10m
+      ui_url: http://127.0.0.1:4455/registration
+      after:
+        password:
+          hooks:
+            - hook: session
+
+log:
+  level: info
+  format: text
+  leak_sensitive_values: false
+
+secrets:
+  cookie:
+    - please-change-me-in-local-dev
+  cipher:
+    - 32-LONG-SECRET-NOT-SECURE-AT-ALL-EXPOSED
+    - local-dev-placeholder-change-me
+
+ciphers:
+  algorithm: xchacha20-poly1305
+
+hashers:
+  algorithm: bcrypt
+  bcrypt:
+    cost: 8
+
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///etc/config/kratos/identity.schema.json
+
+courier:
+  smtp:
+    connection_uri: smtp://mailhog:1025/?skip_ssl_verify=true
+    from_address: no-reply@local.sanvi.dev

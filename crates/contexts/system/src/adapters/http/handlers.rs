@@ -1,0 +1,103 @@
+//! Handlers: thin actix shims over the application layer.
+//!
+//! The handlers know nothing about Postgres or Redis; they resolve their use
+//! cases from application state and translate errors into [`ApiError`].
+
+use std::{sync::Arc, time::Duration};
+
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, web};
+use sanvi_http::{ApiError, ProblemDetail};
+
+use crate::{
+    application::{CheckLiveness, CheckReadiness, GetBuildInfo, LivenessResult},
+    domain::{BuildInfo, Readiness},
+};
+
+/// Application state visible to this context's handlers.
+#[derive(Clone)]
+pub struct SystemState {
+    pub build_info: Arc<GetBuildInfo>,
+    pub readiness: Arc<CheckReadiness>,
+    pub liveness: Arc<CheckLiveness>,
+}
+
+/// Liveness: `GET /healthz`. Never depends on anything else.
+#[utoipa::path(
+    get,
+    path = "/healthz",
+    tag = "system",
+    operation_id = "liveness",
+    responses(
+        (status = 200, description = "Process is alive", body = LivenessResult),
+        (status = 500, description = "Internal error", body = ProblemDetail)
+    )
+)]
+pub async fn healthz(state: web::Data<SystemState>) -> impl Responder {
+    HttpResponse::Ok().json(state.liveness.execute())
+}
+
+/// Readiness: `GET /readyz`. Degrades (503) when a dependency is down.
+#[utoipa::path(
+    get,
+    path = "/readyz",
+    tag = "system",
+    operation_id = "readiness",
+    responses(
+        (status = 200, description = "All dependencies healthy", body = Readiness),
+        (status = 503, description = "At least one dependency is degraded", body = Readiness)
+    )
+)]
+pub async fn readyz(state: web::Data<SystemState>, req: HttpRequest) -> impl Responder {
+    let output = state.readiness.execute().await;
+    if output.readiness.is_ready() {
+        HttpResponse::Ok().json(output.readiness)
+    } else {
+        let detail = output
+            .readiness
+            .checks
+            .iter()
+            .filter(|check| check.state == crate::domain::HealthState::Degraded)
+            .map(|check| {
+                check
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| "degraded".to_string())
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let problem = ApiError::ServiceUnavailable {
+            detail: format!("one or more dependencies are degraded: {detail}"),
+        }
+        .with_context(
+            Some(req.path().to_string()),
+            req.extensions()
+                .get::<sanvi_http::RequestId>()
+                .map(|id| id.to_string()),
+        );
+        HttpResponse::ServiceUnavailable().json(problem)
+    }
+}
+
+/// Build/version info: `GET /api/v1/system/version`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/system/version",
+    tag = "system",
+    operation_id = "version",
+    responses(
+        (status = 200, description = "Build information", body = BuildInfo),
+        (status = 500, description = "Internal error", body = ProblemDetail)
+    )
+)]
+pub async fn version(state: web::Data<SystemState>) -> impl Responder {
+    HttpResponse::Ok().json(state.build_info.execute())
+}
+
+/// Convenience for tests: state with no real dependencies.
+pub fn state_for_tests(build_info: BuildInfo, budget: Duration) -> SystemState {
+    SystemState {
+        build_info: Arc::new(GetBuildInfo::new(build_info)),
+        readiness: Arc::new(CheckReadiness::new(Vec::new(), budget)),
+        liveness: Arc::new(CheckLiveness::new()),
+    }
+}

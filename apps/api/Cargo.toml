@@ -1,0 +1,32 @@
+[package]
+name = "sanvi-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+actix-web.workspace = true
+anyhow.workspace = true
+figment.workspace = true
+redis.workspace = true
+sanvi-http.workspace = true
+sanvi-kernel.workspace = true
+sanvi-messaging.workspace = true
+sanvi-persistence.workspace = true
+sanvi-system.workspace = true
+sanvi-telemetry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-actix-web.workspace = true
+utoipa.workspace = true
+utoipa-scalar.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+actix-http.workspace = true
+sanvi-kernel.workspace = true
