@@ -104,6 +104,7 @@ mod tests {
             },
             redis: RedisConfig {
                 url: "not a url".to_string(),
+                ..RedisConfig::default()
             },
             readiness_probe_secs: 0,
             ..AppConfig::default()

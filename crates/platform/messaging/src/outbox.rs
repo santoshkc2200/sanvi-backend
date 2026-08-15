@@ -89,8 +89,23 @@ impl OutboxDispatcher {
         }
     }
 
-    /// Claim one batch of unpublished rows.
-    async fn claim(&self) -> Result<Vec<OutboxRecord>> {
+    /// Claim one batch of unpublished rows, holding their locks for the life
+    /// of the returned transaction.
+    ///
+    /// `SELECT ... FOR UPDATE SKIP LOCKED` only protects against concurrent
+    /// claims (by another worker replica or another poll cycle) for as long
+    /// as the row locks are held — that requires running it, and every
+    /// following `mark_published`/`record_failure`, inside the *same*
+    /// transaction. A bare `.fetch_all(&pool)` auto-commits the SELECT the
+    /// instant it returns, releasing the locks before the batch is
+    /// processed, which lets two dispatchers claim and publish the same
+    /// rows.
+    async fn claim(&self) -> Result<(sqlx::Transaction<'_, sqlx::Postgres>, Vec<OutboxRecord>)> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to start outbox claim transaction")?;
         let rows = sqlx::query_as!(
             OutboxRecord,
             r#"SELECT id, aggregate, aggregate_id, event_type, payload, metadata,
@@ -104,38 +119,50 @@ impl OutboxDispatcher {
             self.max_attempts,
             self.batch_size as i64
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .context("failed to claim outbox batch")?;
-        Ok(rows)
+        Ok((tx, rows))
     }
 
-    async fn mark_published(&self, id: Uuid) -> Result<()> {
+    async fn mark_published(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+    ) -> Result<()> {
         sqlx::query!(
             "UPDATE platform.outbox SET published_at = now() WHERE id = $1",
             id
         )
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await
         .context("failed to mark outbox row published")?;
         Ok(())
     }
 
-    async fn record_failure(&self, id: Uuid) -> Result<()> {
+    async fn record_failure(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: Uuid,
+    ) -> Result<()> {
         sqlx::query!(
             "UPDATE platform.outbox SET attempts = attempts + 1 WHERE id = $1",
             id
         )
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await
         .context("failed to record outbox failure")?;
         Ok(())
     }
 
     /// Publish one batch. Returns the number of events published.
+    ///
+    /// The whole batch — claim, every publish attempt, every mark — runs
+    /// inside one transaction, so the `FOR UPDATE SKIP LOCKED` claim stays
+    /// in effect (and the rows genuinely unavailable to a concurrent
+    /// dispatcher) until the batch is fully processed and committed.
     pub async fn run_once(&self) -> Result<usize> {
-        let batch = self.claim().await?;
+        let (mut tx, batch) = self.claim().await?;
         if batch.is_empty() {
+            tx.commit().await.context("failed to close empty claim")?;
             return Ok(0);
         }
 
@@ -151,7 +178,7 @@ impl OutboxDispatcher {
                 .await
             {
                 Ok(_) => {
-                    if let Err(err) = self.mark_published(record.id).await {
+                    if let Err(err) = Self::mark_published(&mut tx, record.id).await {
                         // The event reached the stream; a failed mark means it
                         // will be delivered again — consumers dedupe on id.
                         error!(error = %err, event_id = %record.id, "published but failed to mark");
@@ -162,10 +189,13 @@ impl OutboxDispatcher {
                 Err(err) => {
                     error!(error = %err, event_id = %record.id, attempts = record.attempts + 1,
                         "failed to publish event to stream");
-                    let _ = self.record_failure(record.id).await;
+                    if let Err(err) = Self::record_failure(&mut tx, record.id).await {
+                        error!(error = %err, event_id = %record.id, "failed to record outbox failure");
+                    }
                 }
             }
         }
+        tx.commit().await.context("failed to commit outbox batch")?;
         Ok(published)
     }
 

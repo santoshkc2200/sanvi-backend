@@ -2,7 +2,7 @@
 # Local development stack manager.
 #
 #   ./scripts/dev.sh up           # start core stack (Postgres + Redis)
-#   ./scripts/dev.sh up --full    # + Ory Kratos/Keto, MailHog, MinIO, Jaeger
+#   ./scripts/dev.sh up --full    # + Ory Kratos/Keto, Mailpit, MinIO, Jaeger
 #   ./scripts/dev.sh down         # stop everything (keep data volumes)
 #   ./scripts/dev.sh reset        # stop AND wipe data volumes
 #   ./scripts/dev.sh logs [-f]    # tail logs

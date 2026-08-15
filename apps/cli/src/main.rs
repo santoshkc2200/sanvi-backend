@@ -9,6 +9,7 @@
 //!   fails when the committed per-context specs in `api/` have drifted.
 
 mod config;
+mod healthcheck;
 mod migrate;
 mod openapi;
 
@@ -52,6 +53,17 @@ enum Command {
         /// (Re)generate the committed `api/{context}.yaml` specs.
         #[arg(long)]
         write: bool,
+    },
+    /// Probe an HTTP endpoint without a shell or `curl` (container HEALTHCHECK).
+    Healthcheck {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        #[arg(long, default_value = "/healthz")]
+        path: String,
+        #[arg(long, default_value_t = 3)]
+        timeout_secs: u64,
     },
 }
 
@@ -99,6 +111,18 @@ async fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("openapi check failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Healthcheck {
+            host,
+            port,
+            path,
+            timeout_secs,
+        } => match healthcheck::run(&host, port, &path, timeout_secs).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("healthcheck failed: {err:#}");
                 ExitCode::FAILURE
             }
         },

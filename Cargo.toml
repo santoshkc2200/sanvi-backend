@@ -16,10 +16,15 @@ default-members = ["apps/api", "apps/worker", "apps/cli"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.97"
 license = "MIT"
 repository = "https://github.com/sanvi/sanvi-backend"
 authors = ["Sanvi Team"]
+# Internal application crates, never published to crates.io. Also lets
+# cargo-deny's `allow-wildcard-paths` apply: it only trusts unversioned path
+# deps between workspace members once they're marked unpublishable, since
+# crates.io itself would reject a published crate with such a dependency.
+publish = false
 
 [workspace.dependencies]
 sanvi-kernel = { path = "crates/kernel" }
@@ -46,11 +51,11 @@ opentelemetry-prometheus = "0.32"
 opentelemetry-semantic-conventions = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 prometheus = { version = "0.14", features = ["process"] }
-redis = { version = "0.29", default-features = false, features = ["tokio-comp", "aio", "connection-manager", "script", "streams"] }
+redis = { version = "1.5", default-features = false, features = ["tokio-comp", "aio", "connection-manager", "script", "streams"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-sqlx = { version = "0.8", default-features = false, features = [
+sqlx = { version = "0.9", default-features = false, features = [
     "postgres",
     "runtime-tokio",
     "tls-rustls-ring-webpki",
@@ -71,6 +76,8 @@ utoipa-scalar = { version = "0.3", features = ["actix-web"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 
 proptest = "1"
+# Pinned to what testcontainers-modules 0.15 (latest) depends on; bumping past
+# 0.27 conflicts on the transitive `bollard-stubs` version until modules 0.16 ships.
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres", "redis"] }
 

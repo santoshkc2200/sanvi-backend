@@ -1,13 +1,24 @@
 use anyhow::{Context, Result};
-use redis::{AsyncCommands, aio::ConnectionManager};
+use redis::{
+    AsyncCommands,
+    aio::{ConnectionManager, ConnectionManagerConfig},
+};
 
 use crate::RedisConfig;
 
 /// Connect with the shared, reconnecting connection manager.
+///
+/// Timeouts are taken from config rather than the library defaults, so a
+/// bump of the `redis` crate can't silently change how fast we give up on a
+/// slow Redis (`ConnectionManager::new()` alone defaults to 1s connect /
+/// 500ms response as of redis 1.x).
 pub async fn connect_redis(config: &RedisConfig) -> Result<ConnectionManager> {
     config.validate()?;
     let client = redis::Client::open(config.url.as_str()).context("invalid redis URL")?;
-    let manager = ConnectionManager::new(client)
+    let manager_config = ConnectionManagerConfig::new()
+        .set_connection_timeout(Some(config.connect_timeout()))
+        .set_response_timeout(Some(config.response_timeout()));
+    let manager = ConnectionManager::new_with_config(client, manager_config)
         .await
         .context("failed to connect to redis")?;
     Ok(manager)
@@ -92,7 +103,8 @@ mod tests {
     fn config_validation_rejects_bad_urls() {
         assert!(
             crate::RedisConfig {
-                url: "not a url".to_string()
+                url: "not a url".to_string(),
+                ..crate::RedisConfig::default()
             }
             .validate()
             .is_err()

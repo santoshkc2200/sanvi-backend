@@ -21,8 +21,9 @@ pub struct DatabaseConfig {
     pub name: String,
     pub user: String,
     /// Set only via the environment (`SANVI__DATABASE__PASSWORD`), never in
-    /// committed files. Debug output never prints it.
-    #[serde(default)]
+    /// committed files. Never appears in `Debug` or `Serialize` output —
+    /// only `skip_serializing` here, so it still deserializes normally.
+    #[serde(default, skip_serializing)]
     pub password: String,
     pub max_connections: u32,
     pub min_connections: u32,
@@ -139,6 +140,17 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(!debug.contains("hunter2-ultra-secret"));
         assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn serialized_output_never_contains_the_password() {
+        let config = DatabaseConfig {
+            password: "hunter2-ultra-secret".to_string(),
+            ..DatabaseConfig::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("hunter2-ultra-secret"));
+        assert!(!json.contains("\"password\""));
     }
 
     #[test]

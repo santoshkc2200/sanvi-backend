@@ -15,6 +15,9 @@ pub struct RateLimiter {
     script: redis::Script,
 }
 
+// Returns `{allowed, tokens}` rather than just `allowed`, so the caller can
+// compute a `Retry-After` proportional to how close the bucket actually is
+// to its next token, instead of a static "time to refill from empty."
 const LUA_BUCKET: &str = r#"
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
@@ -35,7 +38,7 @@ if tokens >= 1 then
 end
 redis.call('HSET', key, 'tokens', tokens, 'ts', now)
 redis.call('EXPIRE', key, math.ceil(capacity / refill) + 1)
-return allowed
+return {allowed, tostring(tokens)}
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +83,7 @@ impl RateLimiter {
             .as_secs();
 
         let mut conn = conn.clone();
-        let result: redis::RedisResult<i32> = self
+        let result: redis::RedisResult<(i32, String)> = self
             .script
             .key(&bucket_key)
             .arg(self.config.burst)
@@ -90,10 +93,16 @@ impl RateLimiter {
             .await;
 
         match result {
-            Ok(1) => Ok(()),
-            Ok(_) => Err(LimitError::Denied {
-                retry_after_secs: retry_after(&self.config),
-            }),
+            Ok((1, _)) => Ok(()),
+            Ok((_, tokens)) => {
+                let tokens: f64 = tokens.parse().unwrap_or(0.0);
+                Err(LimitError::Denied {
+                    retry_after_secs: retry_after_from_tokens(
+                        tokens,
+                        self.config.per_second as f64,
+                    ),
+                })
+            }
             Err(err) => {
                 tracing::warn!(error = %err, "rate limit check failed");
                 Err(LimitError::BackendUnavailable)
@@ -111,17 +120,21 @@ pub fn simulate_bucket(tokens: f64, ts: u64, now: u64, capacity: f64, refill: f6
             retry_after_secs: 0,
         }
     } else {
-        let needed = 1.0 - tokens;
         Allowance {
             allowed: false,
-            retry_after_secs: (needed / refill).ceil().max(1.0) as u64,
+            retry_after_secs: retry_after_from_tokens(tokens, refill),
         }
     }
 }
 
-/// Time the caller should wait before retrying (for the `Retry-After` header).
-pub fn retry_after(config: &RateLimitConfig) -> u64 {
-    (config.burst / config.per_second).max(1)
+/// Seconds until the bucket holds one more token than it currently does —
+/// the real wait, not a static "time to refill the whole bucket" estimate.
+/// Shared by the live path (fed the token count the Lua script just wrote)
+/// and `simulate_bucket` (the model the unit tests below pin), so a test
+/// passing here is a guarantee about what `try_acquire` actually returns.
+pub fn retry_after_from_tokens(tokens: f64, refill: f64) -> u64 {
+    let needed = (1.0 - tokens).max(0.0);
+    (needed / refill).ceil().max(1.0) as u64
 }
 
 /// Wall-clock budget for a single rate-limit check (used in integration
@@ -155,12 +168,24 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_derives_from_config() {
-        let config = RateLimitConfig {
-            burst: 30,
-            per_second: 10,
-            ..Default::default()
-        };
-        assert_eq!(retry_after(&config), 3);
+    fn retry_after_scales_with_how_close_the_bucket_is_to_a_token() {
+        // Nearly full deficit (almost 0 tokens): needs ~0.5s at refill 2/s.
+        assert_eq!(retry_after_from_tokens(0.0, 2.0), 1);
+        // Already 0.9 tokens in: only 0.05s needed, rounds up to 1s.
+        assert_eq!(retry_after_from_tokens(0.9, 2.0), 1);
+        // A slow refill rate (0.1/s) starting from empty needs 10s.
+        assert_eq!(retry_after_from_tokens(0.0, 0.1), 10);
+    }
+
+    #[test]
+    fn retry_after_never_reflects_a_full_bucket_refill_when_close_to_a_token() {
+        // Burst 60 / refill 10 per second: the old static formula (burst /
+        // per_second) would report a flat 6s regardless of state. A client
+        // that is one tick away from a token must not be told to wait 6s.
+        let almost_full = retry_after_from_tokens(0.95, 10.0);
+        assert!(
+            almost_full < 6,
+            "expected a short wait near a full bucket, got {almost_full}s"
+        );
     }
 }

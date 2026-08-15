@@ -20,20 +20,23 @@ jobs:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - uses: actions/checkout@v7
+      # rustup (preinstalled on the runner) auto-installs the exact
+      # toolchain — and, per rust-toolchain.toml's `components`, rustfmt —
+      # pinned in rust-toolchain.toml the first time cargo/rustc runs here.
+      # A `dtolnay/rust-toolchain@stable` step would install whatever is
+      # current stable *instead*, silently ignoring that pin.
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
       - run: cargo fmt --check
 
   clippy:
     name: cargo clippy (-D warnings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -41,7 +44,7 @@ jobs:
     name: architecture lint (+ self-test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: ./scripts/check-layering.sh
       - run: ./scripts/check-layering.sh --self-test
 
@@ -49,8 +52,9 @@ jobs:
     name: cargo test (unit + application, SQLx offline)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --workspace --exclude sanvi-persistence --exclude sanvi-messaging
@@ -75,8 +79,9 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@sqlx-cli
       - name: prepare schema
@@ -92,8 +97,9 @@ jobs:
     name: integration tests (testcontainers)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging
@@ -102,8 +108,9 @@ jobs:
     name: OpenAPI contract drift
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo run -p sanvi-cli -- openapi --check
 
@@ -111,7 +118,7 @@ jobs:
     name: cargo audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -120,31 +127,38 @@ jobs:
     name: cargo deny (licenses, bans, advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   secrets:
     name: gitleaks secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      # v2 runs on the Node 20 runtime GitHub is retiring: opt-out required
+      # from 2026-06-02, and it stops working entirely on 2026-09-16. v3 is
+      # a behavior-identical Node 24 rebuild (no input/output changes).
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only required for organization-owned repos, not personal
+          # accounts; harmless if GITLEAKS_LICENSE is unset.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
   sbom:
     name: SBOM (CycloneDX)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
       - name: generate SBOM
         run: |
           cargo install cargo-cyclonedx --locked
           cargo cyclonedx --all --format json --output-format json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: "*.cdx.json"
@@ -153,9 +167,14 @@ jobs:
     name: trivy filesystem scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      # Pinned to a release tag, not @master: trivy-action suffered a real
+      # supply-chain compromise (credential-stealing code injected via
+      # imposter commits, affecting all tags up to v0.34.2) discovered in
+      # March 2026. @master would have tracked that compromised history
+      # directly. v0.36.0 postdates the project's remediation.
       - name: Run Trivy vulnerability scanner in fs mode
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -166,10 +185,14 @@ jobs:
     name: coverage (ratchets upward)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
+      # Not part of rust-toolchain.toml's components (that file is shared
+      # with every dev machine; llvm-tools is only needed for coverage), so
+      # add it to whichever toolchain the step above just activated.
+      - name: add llvm-tools-preview
+        run: rustup component add llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: test with coverage
@@ -179,7 +202,7 @@ jobs:
             --ignore-filename-regex 'apps/.*/src/main\.rs' \
             --fail-under-lines 70 \
             --lcov --output-path lcov.info
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}

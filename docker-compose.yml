@@ -1,15 +1,20 @@
 # Local development stack.
 #
 # Default (no profile): the `core` services — Postgres + Redis.
-# `./scripts/dev.sh up --full` adds Ory Kratos/Keto, MailHog, MinIO, Jaeger.
+# `./scripts/dev.sh up --full` adds Ory Kratos/Keto, Mailpit, MinIO, Jaeger.
 #
 # Ory containers run from day one but nothing consumes them until phase 02.
+#
+# Every image below is pinned to an explicit tag (never :latest) so a fresh
+# `docker compose pull` can't silently change what's running. Kratos/Keto/
+# Mailpit/Jaeger/MinIO were all re-verified live against this repo's actual
+# configs when last bumped — see git history for what broke and why.
 
 name: sanvi
 
 services:
   postgres:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres-local-dev
@@ -26,7 +31,7 @@ services:
       retries: 20
 
   redis:
-    image: redis:7
+    image: redis:8
     ports:
       - "6379:6379"
     healthcheck:
@@ -36,7 +41,7 @@ services:
       retries: 20
 
   kratos-migrate:
-    image: oryd/kratos:v1.4.0
+    image: oryd/kratos:v26.2.0
     profiles: ["full"]
     depends_on:
       postgres:
@@ -48,7 +53,7 @@ services:
     command: migrate sql -e --yes
 
   kratos:
-    image: oryd/kratos:v1.4.0
+    image: oryd/kratos:v26.2.0
     profiles: ["full"]
     depends_on:
       kratos-migrate:
@@ -64,17 +69,21 @@ services:
     command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
 
   keto-migrate:
-    image: oryd/keto:v0.16.0
+    image: oryd/keto:v26.2.0
     profiles: ["full"]
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DSN: postgres://postgres:postgres-local-dev@postgres:5432/postgres
-    command: migrate up -y
+    # v26.2.0 requires a config file for `migrate up` too, unlike v0.16.0
+    # which only needed DSN.
+    volumes:
+      - ./configs/ory/keto.yml:/etc/config/keto/keto.yml:ro
+    command: migrate up -y -c /etc/config/keto/keto.yml
 
   keto:
-    image: oryd/keto:v0.16.0
+    image: oryd/keto:v26.2.0
     profiles: ["full"]
     depends_on:
       keto-migrate:
@@ -88,15 +97,22 @@ services:
       - ./configs/ory/keto.yml:/etc/config/keto/keto.yml:ro
     command: serve -c /etc/config/keto/keto.yml
 
-  mailhog:
-    image: mailhog/mailhog:latest
+  # mailhog is unmaintained (no releases since 2020); mailpit is the active,
+  # drop-in-compatible successor (same SMTP :1025 / web UI :8025 defaults).
+  mailpit:
+    image: axllent/mailpit:v1.30.7
     profiles: ["full"]
     ports:
       - "1025:1025"
       - "8025:8025"
 
+  # minio/minio on Docker Hub was archived in Feb 2026 (community edition is
+  # source-only now); Chainguard publishes an actively-maintained,
+  # zero-CVE-focused build that's a verified drop-in (same env vars, same
+  # `server /data --console-address :9001` command, same ports). Chainguard's
+  # free tier only offers a rolling :latest, not pinned numeric tags.
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     profiles: ["full"]
     command: server /data --console-address ":9001"
     environment:
@@ -108,11 +124,13 @@ services:
     volumes:
       - miniodata:/data
 
+  # Jaeger v1 (the all-in-one image) is EOL; v2 is a from-scratch rebuild on
+  # the OTel Collector and ships under a new image name. Its defaults already
+  # match what COLLECTOR_OTLP_ENABLED=true used to turn on (OTLP gRPC :4317,
+  # OTLP HTTP :4318, in-memory storage, UI :16686) — no env var needed.
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/jaeger:2.20.0
     profiles: ["full"]
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
     ports:
       - "16686:16686"
       - "4317:4317"

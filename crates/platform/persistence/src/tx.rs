@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use sqlx::PgPool;
-use tracing::info;
+use tracing::debug;
 use uuid::Uuid;
 
 /// Transaction handle. Every write path in the system runs inside one.
@@ -70,7 +70,9 @@ impl TxManager {
             .begin()
             .await
             .context("failed to begin transaction (pool exhausted or database unavailable)")?;
-        info!("transaction started");
+        // debug, not info: every write path opens one of these, so at info
+        // level this would spam a log line per request in production.
+        debug!("transaction started");
         Ok(Tx { inner })
     }
 

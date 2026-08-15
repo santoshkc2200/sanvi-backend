@@ -1,9 +1,11 @@
-version: "3.9"
-
 name: sanvi
 
 services:
   api:
+    # The :latest fallback is only for an operator running `docker compose
+    # up` by hand; the CI pipeline (.github/workflows/main.yml) always sets
+    # API_IMAGE/WORKER_IMAGE explicitly to a specific sha-<commit> tag, both
+    # on deploy and on rollback, so a real deploy never floats on :latest.
     image: ${API_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}
     init: true
     environment:
@@ -17,7 +19,9 @@ services:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      # The runtime image is distroless (no shell, no curl); sanvi-cli
+      # ships in the same image and speaks raw HTTP for exactly this.
+      test: ["CMD", "/usr/local/bin/sanvi-cli", "healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3

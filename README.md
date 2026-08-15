@@ -34,7 +34,7 @@ curl http://localhost:8080/metrics
 # Scalar API docs: http://localhost:8080/scalar (dev dependency, see below)
 ```
 
-The full stack (Ory Kratos + Keto, MailHog, MinIO, Jaeger) starts with
+The full stack (Ory Kratos + Keto, Mailpit, MinIO, Jaeger) starts with
 `./scripts/dev.sh up --full`. Ory containers run from day one but nothing
 consumes them until phase 02.
 

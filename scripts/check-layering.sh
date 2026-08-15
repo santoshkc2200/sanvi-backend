@@ -17,9 +17,15 @@ check() {
     local violations=0
     while IFS= read -r file; do
         for crate in "${FORBIDDEN[@]}"; do
-            if grep -nE "use +${crate}|::${crate}::|extern crate +${crate}" "$file" >/dev/null 2>&1; then
+            # Matches `use crate_name`, `extern crate crate_name`, and any
+            # qualified path reference to it — `::crate_name::x` *and* a
+            # bare `crate_name::x` with no `use` in sight (e.g. an inline
+            # `sqlx::Error` return type), which the old pattern (requiring a
+            # leading `::`) missed entirely.
+            local pattern="use +${crate}|(^|[^A-Za-z0-9_])${crate}::|extern crate +${crate}"
+            if grep -nE "$pattern" "$file" >/dev/null 2>&1; then
                 echo "LAYERING VIOLATION: $file imports $crate" >&2
-                grep -nE "use +${crate}|::${crate}::|extern crate +${crate}" "$file" >&2
+                grep -nE "$pattern" "$file" >&2
                 violations=$((violations + 1))
             fi
         done
@@ -30,15 +36,32 @@ check() {
 if [[ "${1:-}" == "--self-test" ]]; then
     FIXTURE="crates/contexts/system/src/domain/__layering_fixture.rs"
     trap 'rm -f "$FIXTURE"' EXIT
+
     cat > "$FIXTURE" <<'EOF'
 // CI fixture: proves the layering lint fails on a violating domain file.
 use sqlx::PgPool;
 EOF
     if check; then
-        echo "SELF-TEST FAILED: violation was not detected" >&2
+        echo "SELF-TEST FAILED: 'use' import was not detected" >&2
         exit 1
     fi
-    echo "self-test OK: violation detected as expected"
+    echo "self-test OK: 'use' import detected as expected"
+
+    # A bare qualified path with no `use` statement in sight must be caught
+    # too — this is what the leading-`::`-only pattern used to miss.
+    cat > "$FIXTURE" <<'EOF'
+// CI fixture: proves the layering lint catches a bare qualified path too.
+pub fn handler() -> sqlx::Error {
+    unimplemented!()
+}
+EOF
+    if check; then
+        echo "SELF-TEST FAILED: bare qualified path was not detected" >&2
+        exit 1
+    fi
+    echo "self-test OK: bare qualified path detected as expected"
+
+    rm -f "$FIXTURE"
     exit 0
 fi
 

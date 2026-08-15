@@ -17,6 +17,12 @@ allow = [
     "CC0-1.0",
     "OpenSSL",
     "Apache-2.0 WITH LLVM-exception",
+    # webpki-roots (transitive via sqlx's rustls TLS backend) licenses its
+    # bundled Mozilla CA root data under this; permissive, data-only.
+    "CDLA-Permissive-2.0",
+    # xxhash-rust (transitive via redis 1.x); OSI-approved, MIT-equivalent
+    # permissive license.
+    "BSL-1.0",
 ]
 confidence-threshold = 0.8
 exceptions = [
@@ -24,9 +30,13 @@ exceptions = [
 ]
 
 [bans]
-version = 2
 multiple-versions = "warn"
 wildcards = "deny"
+# Our own crates.io-unpublished workspace members (sanvi-kernel, sanvi-http,
+# ...) are path-only deps with no version pin by design; newer cargo-deny
+# treats that as a wildcard match unless told it's expected for path deps.
+# `wildcards = "deny"` still catches a *real* unpinned crates.io dependency.
+allow-wildcard-paths = true
 highlight = "all"
 deny = [
     # Banned by policy: unmaintained or known-problematic dependencies.
@@ -37,7 +47,6 @@ skip = [
 skip-tree = []
 
 [sources]
-version = 2
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 

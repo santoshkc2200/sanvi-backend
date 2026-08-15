@@ -44,6 +44,8 @@ migrations_dir = "./migrations"
 
 [redis]
 url = "redis://localhost:6379"
+connect_timeout_ms = 1000
+response_timeout_ms = 500
 
 [telemetry]
 service_name = "sanvi-api"

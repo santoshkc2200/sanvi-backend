@@ -1,4 +1,4 @@
-version: v1.4.0
+version: v26.2.0
 
 dsn: postgres://postgres:postgres-local-dev@postgres:5432/postgres
 
@@ -25,7 +25,9 @@ selfservice:
     settings:
       ui_url: http://127.0.0.1:4455/settings
       privileged_session_max_age: 15m
-      required_aal: lowest_available
+      # `lowest_available` was removed from the schema; `aal1` is the
+      # equivalent here since only the password method (AAL1) is enabled.
+      required_aal: aal1
     recovery:
       enabled: true
       ui_url: http://127.0.0.1:4455/recovery
@@ -56,9 +58,11 @@ log:
 secrets:
   cookie:
     - please-change-me-in-local-dev
+  # xchacha20-poly1305 requires an exact 32-byte key; both length bounds
+  # are enforced by the config schema, not just a minimum.
   cipher:
-    - 32-LONG-SECRET-NOT-SECURE-AT-ALL-EXPOSED
-    - local-dev-placeholder-change-me
+    - local-dev-cipher-secret-32-char!
+    - local-dev-cipher-secret-32-char2
 
 ciphers:
   algorithm: xchacha20-poly1305
@@ -76,5 +80,5 @@ identity:
 
 courier:
   smtp:
-    connection_uri: smtp://mailhog:1025/?skip_ssl_verify=true
+    connection_uri: smtp://mailpit:1025/?skip_ssl_verify=true
     from_address: no-reply@local.sanvi.dev

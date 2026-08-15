@@ -111,6 +111,7 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
     let streams = StreamsClient::new(
         connect_redis(&RedisConfig {
             url: format!("redis://127.0.0.1:{redis_port}"),
+            ..RedisConfig::default()
         })
         .await
         .unwrap(),
@@ -161,6 +162,91 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
     assert_eq!(dispatcher.run_once().await.unwrap(), 0);
 }
 
+/// Regression test for the claim transaction: two dispatcher replicas racing
+/// on the same unpublished rows must never both claim (and republish) the
+/// same row. Before the `SELECT ... FOR UPDATE SKIP LOCKED` claim ran inside
+/// a transaction that stays open until the batch is marked published, the
+/// row lock was released the instant the SELECT returned, so a concurrent
+/// `run_once()` could see the same "unlocked" rows and double-publish them.
+#[tokio::test]
+async fn concurrent_dispatchers_never_double_claim_the_same_row() {
+    let (pool, _pg_node) = prepare_postgres().await;
+
+    let redis_node = Redis::default()
+        .start()
+        .await
+        .expect("failed to start redis");
+    let redis_port = redis_node
+        .get_host_port_ipv4(6379)
+        .await
+        .expect("redis port");
+
+    let streams = StreamsClient::new(
+        connect_redis(&RedisConfig {
+            url: format!("redis://127.0.0.1:{redis_port}"),
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap(),
+    );
+
+    const ROWS: usize = 20;
+    let mut event_ids = Vec::with_capacity(ROWS);
+    for _ in 0..ROWS {
+        let event_id = uuid::Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload)
+             VALUES ($1, 'test.aggregate', $2, 'test.something_happened', $3::jsonb)",
+        )
+        .bind(event_id)
+        .bind(uuid::Uuid::now_v7())
+        .bind(r#"{"k":"v"}"#)
+        .execute(&pool)
+        .await
+        .unwrap();
+        event_ids.push(event_id);
+    }
+
+    let stream = StreamName("sanvi.concurrent-test".to_string());
+    // A large batch size relative to ROWS: unprotected, either dispatcher
+    // could greedily claim the whole table on its own.
+    let dispatcher_a = OutboxDispatcher::new(pool.clone(), streams.clone(), stream.clone(), 50, 5);
+    let dispatcher_b = OutboxDispatcher::new(pool.clone(), streams.clone(), stream.clone(), 50, 5);
+
+    let (published_a, published_b) = tokio::join!(dispatcher_a.run_once(), dispatcher_b.run_once());
+    let total_published = published_a.expect("dispatch a") + published_b.expect("dispatch b");
+    assert_eq!(
+        total_published, ROWS,
+        "every row must be published exactly once across both dispatchers"
+    );
+
+    let entries = streams.range(stream.as_str(), "-", "+").await.unwrap();
+    assert_eq!(
+        entries.len(),
+        ROWS,
+        "the stream must contain exactly one entry per row, no duplicates"
+    );
+
+    let published_ids: std::collections::HashSet<uuid::Uuid> = entries
+        .iter()
+        .map(|(_, fields)| {
+            let event_json = fields
+                .iter()
+                .find(|(k, _)| k == "event")
+                .map(|(_, v)| v.clone())
+                .unwrap();
+            let envelope: sanvi_kernel::EventEnvelope = serde_json::from_str(&event_json).unwrap();
+            envelope.id
+        })
+        .collect();
+    assert_eq!(
+        published_ids.len(),
+        ROWS,
+        "every published id must be unique"
+    );
+    assert_eq!(published_ids, event_ids.into_iter().collect());
+}
+
 #[tokio::test]
 async fn consumer_group_creation_is_idempotent() {
     let redis_node = Redis::default()
@@ -174,6 +260,7 @@ async fn consumer_group_creation_is_idempotent() {
     let streams = StreamsClient::new(
         connect_redis(&RedisConfig {
             url: format!("redis://127.0.0.1:{redis_port}"),
+            ..RedisConfig::default()
         })
         .await
         .unwrap(),

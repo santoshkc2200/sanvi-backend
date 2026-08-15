@@ -6,47 +6,101 @@
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "aggregate",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "aggregate"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "aggregate_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "aggregate_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "event_type",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "event_type"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "payload",
-        "type_info": "Jsonb"
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "payload"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "metadata",
-        "type_info": "Jsonb"
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "metadata"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "occurred_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "occurred_at"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "published_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "published_at"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "attempts",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "platform.outbox",
+            "name": "attempts"
+          }
+        }
       }
     ],
     "parameters": {

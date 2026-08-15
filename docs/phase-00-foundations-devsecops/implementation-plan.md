@@ -16,7 +16,7 @@ is the machine that builds every later phase.
 **In**
 - Cargo workspace with the crate layout from [`../architecture-overview.md`](../architecture-overview.md).
 - One vertical slice (`health` + a trivial `system` context) proving the layering end to end.
-- docker-compose local stack: Postgres, Redis, Ory Kratos, Ory Keto, MailHog, MinIO, Jaeger.
+- docker-compose local stack: Postgres, Redis, Ory Kratos, Ory Keto, Mailpit, MinIO, Jaeger.
 - Configuration, error model, telemetry, OpenAPI generation, migration runner.
 - CI/CD pipeline with security gates; container image build; staging deploy.
 
@@ -74,11 +74,11 @@ with a readable report listing *all* invalid/missing keys, not just the first.
 
 | Service | Purpose |
 |---|---|
-| `postgres:17` | Primary DB; init script creates `sanvi_app` (NOBYPASSRLS) and `sanvi_migrator` roles |
-| `redis:7` | Cache, streams, locks |
+| `postgres:18` | Primary DB; init script creates `sanvi_app` (NOBYPASSRLS) and `sanvi_migrator` roles |
+| `redis:8` | Cache, streams, locks |
 | `kratos` + `kratos-migrate` | Identity (configured in phase 02, running now) |
 | `keto` + `keto-migrate` | Permissions |
-| `mailhog` | Local mail capture |
+| `mailpit` | Local mail capture |
 | `minio` | S3-compatible object storage |
 | `jaeger` (all-in-one, OTLP) | Trace viewing |
 

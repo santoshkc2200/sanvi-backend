@@ -183,7 +183,7 @@ system roles, non-deletable). Seeded idempotently by `apps/cli seed roles`.
 
 ## Work breakdown
 
-1. Kratos config, identity schema, jsonnet mappers, docker-compose wiring, MailHog verification loop.
+1. Kratos config, identity schema, jsonnet mappers, docker-compose wiring, Mailpit verification loop.
 2. Webhook receivers + local user projection (transactional, idempotent, replay-safe).
 3. Session middleware + cache + logout invalidation.
 4. `access` domain: permission registry, roles, `Authorizer` port; Keto OPL + adapter + seed job.

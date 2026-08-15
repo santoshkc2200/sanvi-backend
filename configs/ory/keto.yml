@@ -1,4 +1,4 @@
-version: v0.16.0
+version: v26.2.0
 
 dsn: postgres://postgres:postgres-local-dev@postgres:5432/postgres
 

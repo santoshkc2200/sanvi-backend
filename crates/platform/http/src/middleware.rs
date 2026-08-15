@@ -30,7 +30,8 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 ///
 /// Outermost → innermost:
 /// metrics → request id → tracing span → concurrency limit → panic catch →
-/// rate limit → request timeout → CORS → body normalize → security headers.
+/// rate limit → request timeout → body normalize → CORS → security headers →
+/// error handlers.
 ///
 /// The tracing span wraps every protective middleware, so one span covers a
 /// request from accept to first byte; `tracing-actix-web` maps response
