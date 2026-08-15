@@ -5,8 +5,10 @@ members = [
     "crates/platform/telemetry",
     "crates/platform/persistence",
     "crates/platform/messaging",
+    "crates/platform/cache",
     "crates/platform/http",
     "crates/contexts/system",
+    "crates/contexts/tenancy",
     "apps/api",
     "apps/worker",
     "apps/cli",
@@ -31,8 +33,10 @@ sanvi-kernel = { path = "crates/kernel" }
 sanvi-telemetry = { path = "crates/platform/telemetry" }
 sanvi-persistence = { path = "crates/platform/persistence" }
 sanvi-messaging = { path = "crates/platform/messaging" }
+sanvi-cache = { path = "crates/platform/cache" }
 sanvi-http = { path = "crates/platform/http" }
 sanvi-system = { path = "crates/contexts/system" }
+sanvi-tenancy = { path = "crates/contexts/tenancy" }
 sanvi-api = { path = "apps/api" }
 
 actix-web = "4"
@@ -41,10 +45,12 @@ actix-http = "3"
 actix-service = "2"
 anyhow = "1"
 async-trait = "0.1"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 futures-util = "0.3"
+hmac = "0.12"
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "metrics"] }
 opentelemetry-prometheus = "0.32"
@@ -55,6 +61,7 @@ redis = { version = "1.5", default-features = false, features = ["tokio-comp", "
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = [
     "postgres",
     "runtime-tokio",
@@ -75,7 +82,7 @@ tracing = "0.1"
 tracing-actix-web = "0.7"
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
-utoipa = "5"
+utoipa = { version = "5", features = ["uuid", "chrono"] }
 utoipa-scalar = { version = "0.3", features = ["actix-web"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 

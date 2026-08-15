@@ -53,6 +53,67 @@ impl<'a> Tx<'a> {
     }
 }
 
+/// A transaction scoped to exactly one tenant.
+///
+/// Constructed only by [`TxManager::begin_for`], which issues
+/// `SET LOCAL sanvi.tenant_id` before returning — so any repository port that
+/// takes a `&mut ScopedTx` (tenant-scoped tables only) *cannot* be reached
+/// without the RLS context. Forgetting the scope is a type error, not a
+/// row leak.
+pub struct ScopedTx<'a> {
+    inner: Tx<'a>,
+}
+
+impl<'a> ScopedTx<'a> {
+    pub async fn commit(self) -> Result<()> {
+        self.inner.commit().await
+    }
+
+    pub async fn rollback(self) -> Result<()> {
+        self.inner.rollback().await
+    }
+
+    /// The raw transaction (outbox writer and similar platform machinery).
+    pub fn tx_mut(&mut self) -> &mut Tx<'a> {
+        &mut self.inner
+    }
+
+    /// Cap statement runtime inside this transaction.
+    pub async fn set_statement_timeout_ms(&mut self, millis: u64) -> Result<()> {
+        self.inner.set_statement_timeout_ms(millis).await
+    }
+}
+
+/// A deliberately unscoped (platform-wide) transaction.
+///
+/// Constructed only by [`TxManager::begin_unscoped`], which writes an audit
+/// row recording the reason and actor *before* any statement can run. This is
+/// the single escape hatch from tenant scoping, and every use is on the
+/// record.
+pub struct PlatformScope<'a> {
+    inner: Tx<'a>,
+}
+
+impl<'a> PlatformScope<'a> {
+    pub async fn commit(self) -> Result<()> {
+        self.inner.commit().await
+    }
+
+    pub async fn rollback(self) -> Result<()> {
+        self.inner.rollback().await
+    }
+
+    /// The raw transaction (outbox writer and similar platform machinery).
+    pub fn tx_mut(&mut self) -> &mut Tx<'a> {
+        &mut self.inner
+    }
+
+    /// Cap statement runtime inside this transaction.
+    pub async fn set_statement_timeout_ms(&mut self, millis: u64) -> Result<()> {
+        self.inner.set_statement_timeout_ms(millis).await
+    }
+}
+
 /// Opens read/write transactions on the shared pool.
 #[derive(Debug, Clone)]
 pub struct TxManager {
@@ -74,6 +135,36 @@ impl TxManager {
         // level this would spam a log line per request in production.
         debug!("transaction started");
         Ok(Tx { inner })
+    }
+
+    /// Open a tenant-scoped transaction: `SET LOCAL sanvi.tenant_id` runs
+    /// before anything else, so every tenant-scoped table in the transaction
+    /// is filtered by Postgres itself.
+    pub async fn begin_for(&self, tenant_id: Uuid) -> Result<ScopedTx<'_>> {
+        let mut tx = self.begin().await?;
+        tx.set_tenant_id(tenant_id).await?;
+        debug!(tenant_id = %tenant_id, "tenant-scoped transaction started");
+        Ok(ScopedTx { inner: tx })
+    }
+
+    /// Open an audited, unscoped transaction (platform-wide access).
+    ///
+    /// `reason` and `actor` are recorded in `platform.audit_log` inside the
+    /// same transaction, so the audit trail commits atomically with whatever
+    /// the caller does next.
+    pub async fn begin_unscoped(&self, reason: &str, actor: &str) -> Result<PlatformScope<'_>> {
+        let mut tx = self.begin().await?;
+        sqlx::query!(
+            "INSERT INTO platform.audit_log (actor, action, reason, detail)
+             VALUES ($1, 'platform_scope_begin', $2, '{}'::jsonb)",
+            actor,
+            reason
+        )
+        .execute(&mut **tx.as_inner())
+        .await
+        .context("failed to write platform scope audit record")?;
+        debug!(reason, actor, "unscoped platform transaction started");
+        Ok(PlatformScope { inner: tx })
     }
 
     pub fn pool(&self) -> &PgPool {

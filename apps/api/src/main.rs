@@ -12,7 +12,7 @@ use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
-use sanvi_api::{AppConfig, build_app, build_system_state};
+use sanvi_api::{AppConfig, build_app, build_system_state, build_tenancy_state};
 use sanvi_http::{bind, run};
 use sanvi_messaging::connect_redis;
 use sanvi_persistence::build_pool;
@@ -86,10 +86,12 @@ async fn main() -> ExitCode {
 
     let system = build_system_state(
         build_info(&config),
-        pool,
+        pool.clone(),
         redis.clone(),
         config.readiness_probe_secs,
     );
+
+    let tenancy = build_tenancy_state(pool, redis.clone(), &config.tenancy);
 
     let bind_config = config.clone();
     let factory_config = config.clone();
@@ -98,6 +100,7 @@ async fn main() -> ExitCode {
             factory_config.clone(),
             metrics.clone(),
             system.clone(),
+            tenancy.clone(),
             redis.clone(),
         )
     }) {

@@ -4,6 +4,7 @@ use sanvi_http::ServerConfig;
 use sanvi_messaging::RedisConfig;
 use sanvi_persistence::DatabaseConfig;
 use sanvi_telemetry::TelemetryConfig;
+use sanvi_tenancy::TenancyConfig;
 
 /// Ory endpoints. The containers run from phase 00; nothing consumes them
 /// until phase 02 (identity) and phase 03 (access).
@@ -27,9 +28,17 @@ impl Default for OryConfig {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FeaturesConfig {
+    /// Phase-01 gate: mounts tenant resolution middleware and tenancy routes
+    /// when enabled.
+    #[serde(default = "default_true")]
+    pub tenancy: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Aggregate configuration for the API process.
@@ -42,6 +51,7 @@ pub struct AppConfig {
     pub telemetry: TelemetryConfig,
     pub ory: OryConfig,
     pub features: FeaturesConfig,
+    pub tenancy: TenancyConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -55,6 +65,7 @@ impl Default for AppConfig {
             telemetry: TelemetryConfig::default(),
             ory: OryConfig::default(),
             features: FeaturesConfig::default(),
+            tenancy: TenancyConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -74,6 +85,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.telemetry.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.tenancy.validate() {
             problems.push(err.to_string());
         }
         if self.readiness_probe_secs == 0 {

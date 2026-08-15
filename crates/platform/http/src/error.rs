@@ -23,6 +23,10 @@ pub struct ProblemDetail {
     /// Correlates with the request id and the trace in OpenObserve.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
+    /// Machine-readable reason for statuses that carry one (e.g. tenant
+    /// suspension); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Application-level API error.
@@ -47,6 +51,9 @@ pub enum ApiError {
     #[error("{detail}")]
     Conflict { detail: String },
 
+    #[error("tenant is suspended")]
+    TenantSuspended,
+
     #[error("rate limit exceeded")]
     TooManyRequests { retry_after_secs: u64 },
 
@@ -69,6 +76,7 @@ impl ApiError {
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::TenantSuspended => StatusCode::LOCKED,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::RequestTimeout => StatusCode::GATEWAY_TIMEOUT,
             Self::ServiceUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
@@ -84,6 +92,7 @@ impl ApiError {
             Self::Forbidden { .. } => "forbidden",
             Self::NotFound { .. } => "not-found",
             Self::Conflict { .. } => "conflict",
+            Self::TenantSuspended => "tenant-suspended",
             Self::TooManyRequests { .. } => "too-many-requests",
             Self::RequestTimeout => "request-timeout",
             Self::ServiceUnavailable { .. } => "service-unavailable",
@@ -98,6 +107,7 @@ impl ApiError {
             Self::Forbidden { .. } => "Forbidden",
             Self::NotFound { .. } => "Not Found",
             Self::Conflict { .. } => "Conflict",
+            Self::TenantSuspended => "Tenant Suspended",
             Self::TooManyRequests { .. } => "Too Many Requests",
             Self::RequestTimeout => "Gateway Timeout",
             Self::ServiceUnavailable { .. } => "Service Unavailable",
@@ -113,6 +123,7 @@ impl ApiError {
             detail: self.to_string(),
             instance: None,
             trace_id: None,
+            reason: None,
         }
     }
 
@@ -298,6 +309,7 @@ fn fallback_problem(
         detail: String::new(),
         instance: Some(instance.to_string()),
         trace_id,
+        reason: None,
     }
 }
 

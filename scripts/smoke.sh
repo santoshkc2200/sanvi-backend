@@ -22,6 +22,14 @@ curl -fsS "${BASE_URL}/metrics" | grep -qE '^# (HELP|TYPE)' || fail "/metrics"
 
 curl -fsS "${BASE_URL}/openapi.json" | grep -q '"openapi"' || fail "/openapi.json"
 
+# Tenant resolution: unknown host on a tenant-scoped route is a 404; the
+# public host-context endpoint answers for unknown hosts too.
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/api/v1/tenant/context" -H 'Host: unknown.invalid')
+[[ "${STATUS}" == "404" ]] || fail "unknown tenant host must 404 (got ${STATUS})"
+
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/api/v1/public/tenant-context" -H 'Host: unknown.invalid')
+[[ "${STATUS}" == "404" ]] || fail "unknown public tenant-context must 404 (got ${STATUS})"
+
 STATUS=$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/healthz" -H 'Origin: http://evil.example')
 [[ "${STATUS}" == "200" ]] || fail "unexpected cross-origin status ${STATUS}"
 

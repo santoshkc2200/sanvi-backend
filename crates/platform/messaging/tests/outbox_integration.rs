@@ -145,8 +145,9 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
             .unwrap();
     assert!(published_at.is_some());
 
-    // …and the event reached the stream with the same id as the outbox row.
-    let entries = streams.range("sanvi.events", "-", "+").await.unwrap();
+    // …and the event reached the per-context stream (`{base}.{aggregate
+    // context}`) with the same id as the outbox row.
+    let entries = streams.range("sanvi.events.test", "-", "+").await.unwrap();
     assert_eq!(entries.len(), 1);
     let (_, fields) = &entries[0];
     let event_json = fields
@@ -220,7 +221,10 @@ async fn concurrent_dispatchers_never_double_claim_the_same_row() {
         "every row must be published exactly once across both dispatchers"
     );
 
-    let entries = streams.range(stream.as_str(), "-", "+").await.unwrap();
+    let entries = streams
+        .range("sanvi.concurrent-test.test", "-", "+")
+        .await
+        .unwrap();
     assert_eq!(
         entries.len(),
         ROWS,

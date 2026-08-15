@@ -14,6 +14,7 @@ pub struct ServerConfig {
     pub max_concurrency: usize,
     pub cors: CorsConfig,
     pub rate_limit: RateLimitConfig,
+    pub tenant: TenantPolicyConfig,
 }
 
 impl Default for ServerConfig {
@@ -28,6 +29,7 @@ impl Default for ServerConfig {
             max_concurrency: 10_000,
             cors: CorsConfig::default(),
             rate_limit: RateLimitConfig::default(),
+            tenant: TenantPolicyConfig::default(),
         }
     }
 }
@@ -57,6 +59,9 @@ impl ServerConfig {
         if let Err(err) = self.rate_limit.validate() {
             problems.push(err.to_string());
         }
+        if let Err(err) = self.tenant.validate() {
+            problems.push(err.to_string());
+        }
         if !problems.is_empty() {
             anyhow::bail!(
                 "invalid server configuration:\n  - {}",
@@ -64,6 +69,68 @@ impl ServerConfig {
             );
         }
         Ok(())
+    }
+}
+
+/// Tenant-resolution middleware policy.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TenantPolicyConfig {
+    /// Path prefixes that never require a tenant (health, platform admin,
+    /// public endpoints). Request path must start with one of these to be
+    /// exempt from tenant resolution.
+    pub public_prefixes: Vec<String>,
+    /// Path prefixes a tenant may still reach while not `Active`
+    /// (provisioning, suspended, or archived — billing/legal allow-list).
+    /// Everything else gets 423 for any non-`Active` status.
+    pub suspended_allowlist: Vec<String>,
+    /// Per-tenant token bucket applied after resolution (optional).
+    pub tenant_rate_limit: Option<RateLimitConfig>,
+}
+
+impl Default for TenantPolicyConfig {
+    fn default() -> Self {
+        Self {
+            public_prefixes: vec![
+                "/healthz".to_string(),
+                "/readyz".to_string(),
+                "/metrics".to_string(),
+                "/openapi.json".to_string(),
+                "/scalar".to_string(),
+                "/api/v1/platform".to_string(),
+                "/api/v1/public".to_string(),
+            ],
+            suspended_allowlist: vec!["/api/v1/billing".to_string()],
+            tenant_rate_limit: None,
+        }
+    }
+}
+
+impl TenantPolicyConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self
+            .public_prefixes
+            .iter()
+            .any(|prefix| !prefix.starts_with('/'))
+        {
+            anyhow::bail!("server.tenant.public_prefixes must start with '/'");
+        }
+        if let Some(limit) = &self.tenant_rate_limit {
+            limit.validate()?;
+        }
+        Ok(())
+    }
+
+    pub fn is_public_path(&self, path: &str) -> bool {
+        self.public_prefixes
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+    }
+
+    pub fn is_suspended_allowlisted(&self, path: &str) -> bool {
+        self.suspended_allowlist
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
     }
 }
 

@@ -8,6 +8,7 @@ use actix_web::{http::StatusCode, test};
 use sanvi_api::{AppConfig, build_app, build_system_state};
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
+use sanvi_tenancy::adapters::http::state_for_tests as tenancy_state_for_tests;
 
 fn test_config() -> AppConfig {
     let mut config = AppConfig::default();
@@ -37,7 +38,7 @@ fn test_app() -> actix_web::App<
         "sanvi-api-test".into(),
     );
     let system = build_system_state(build_info, pool_stub(), None, 1);
-    build_app(config, metrics, system, None)
+    build_app(config, metrics, system, tenancy_state_for_tests(), None)
 }
 
 /// A lazy pool that never connects: the readiness probe is not part of this

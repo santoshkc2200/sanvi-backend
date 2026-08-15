@@ -12,10 +12,11 @@ mod config;
 mod healthcheck;
 mod migrate;
 mod openapi;
+mod tenant;
 
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "sanvi", version, about = "Sanvi operator CLI")]
@@ -41,6 +42,11 @@ enum Command {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Provision and manage tenants (operator use until self-service lands).
+    Tenant {
+        #[command(subcommand)]
+        action: TenantAction,
+    },
     /// Seed reference data (nothing to seed in phase 00).
     Seed,
     /// Load, validate and print the configuration.
@@ -65,6 +71,59 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         timeout_secs: u64,
     },
+}
+
+#[derive(Subcommand)]
+enum TenantAction {
+    /// Provision a new tenant.
+    Create {
+        #[command(flatten)]
+        args: TenantCreateArgs,
+        /// Move straight to `active` instead of leaving it `provisioning`.
+        #[arg(long)]
+        activate: bool,
+    },
+    /// List tenants (cursor-paginated).
+    List {
+        /// Cursor: tenant id of the last item of the previous page.
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Show one tenant.
+    Get { id: String },
+    /// Activate a provisioning tenant.
+    Activate { id: String },
+    /// Suspend a tenant (requires --reason).
+    Suspend {
+        id: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Resume a suspended tenant.
+    Resume { id: String },
+    /// Archive a tenant (read-only; schedules purge).
+    Archive { id: String },
+}
+
+/// Shared arguments for `tenant create`.
+#[derive(Args)]
+struct TenantCreateArgs {
+    /// DNS-safe subdomain slug (lowercase; immutable).
+    #[arg(long)]
+    slug: String,
+    /// Human-facing tenant name.
+    #[arg(long)]
+    display_name: String,
+    /// Data residency region: eu | jp | us.
+    #[arg(long, default_value = "us")]
+    region: String,
+    /// Default locale (BCP 47-ish tag, e.g. `en`, `ja-JP`).
+    #[arg(long, default_value = "en")]
+    default_locale: String,
 }
 
 #[derive(Subcommand)]
@@ -96,6 +155,49 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Tenant { action } => {
+            let result = match action {
+                TenantAction::Create { args, activate } => {
+                    tenant::create(
+                        &cli.env,
+                        &tenant::TenantCreateArgs {
+                            slug: args.slug,
+                            display_name: args.display_name,
+                            region: args.region,
+                            default_locale: args.default_locale,
+                        },
+                        activate,
+                    )
+                    .await
+                }
+                TenantAction::List {
+                    after,
+                    limit,
+                    status,
+                } => tenant::list(&cli.env, after, limit, status).await,
+                TenantAction::Get { id } => tenant::get(&cli.env, &id).await,
+                TenantAction::Activate { id } => {
+                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Activate, None).await
+                }
+                TenantAction::Suspend { id, reason } => {
+                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Suspend, reason)
+                        .await
+                }
+                TenantAction::Resume { id } => {
+                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Resume, None).await
+                }
+                TenantAction::Archive { id } => {
+                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Archive, None).await
+                }
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("tenant command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Seed => {
             println!("no seeds are defined in phase 00");
             ExitCode::SUCCESS

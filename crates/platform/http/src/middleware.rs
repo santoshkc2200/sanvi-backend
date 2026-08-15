@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::config::{CorsConfig, RateLimitConfig, ServerConfig};
 use crate::metrics::{HttpInstruments, context_from_path};
 use crate::rate_limit::RateLimiter;
+use crate::tenancy::{TenantMiddleware, TenantRateLimitLayer, TenantResolutionLayer};
 
 /// Request correlation id; present on every request, in logs, traces and the
 /// `x-request-id` response header.
@@ -30,8 +31,11 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 ///
 /// Outermost → innermost:
 /// metrics → request id → tracing span → concurrency limit → panic catch →
-/// rate limit → request timeout → body normalize → CORS → security headers →
-/// error handlers.
+/// rate limit → tenant resolution → tenant rate limit → request timeout →
+/// body normalize → CORS → security headers → error handlers.
+///
+/// `tenant` is `None` until the tenancy context is wired (phase 01+); without
+/// it every route behaves as a public route.
 ///
 /// The tracing span wraps every protective middleware, so one span covers a
 /// request from accept to first byte; `tracing-actix-web` maps response
@@ -40,6 +44,7 @@ pub fn stack<T>(
     app: actix_web::App<T>,
     config: ServerConfig,
     redis: Option<redis::aio::ConnectionManager>,
+    tenant: Option<std::sync::Arc<TenantMiddleware>>,
 ) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -59,8 +64,16 @@ where
         > + 'static,
 {
     let cors = build_cors(&config.cors);
-    let limiter = Arc::new(RateLimiter::new(&config.rate_limit, redis));
+    let limiter = Arc::new(RateLimiter::new(&config.rate_limit, redis.clone()));
     let hsts = config.host != "localhost" && config.host != "0.0.0.0";
+
+    // The per-tenant limiter uses its own bucket namespace but the same
+    // Redis backend as the per-IP limiter.
+    let tenant_limiter = tenant
+        .as_ref()
+        .and_then(|parts| parts.policy.tenant_rate_limit.as_ref())
+        .filter(|rate_config| rate_config.enabled)
+        .map(|rate_config| Arc::new(RateLimiter::new(rate_config, redis)));
 
     app.wrap(crate::error::ErrorHandlersLayer)
         .wrap(SecurityHeaders { hsts })
@@ -69,6 +82,8 @@ where
         .wrap(RequestTimeout {
             duration: Duration::from_secs(config.request_timeout_secs),
         })
+        .wrap(TenantRateLimitLayer::new(tenant_limiter))
+        .wrap(TenantResolutionLayer::new(tenant))
         .wrap(RateLimit {
             limiter,
             config: config.rate_limit.clone(),

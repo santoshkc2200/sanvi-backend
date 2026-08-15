@@ -6,14 +6,16 @@
 
 mod config;
 mod health;
+mod idempotency;
 mod migrate;
 mod pool;
 mod tx;
 
 pub use config::{DatabaseConfig, SslMode};
 pub use health::check_database;
+pub use idempotency::{IdempotencyHit, IdempotencyStore};
 pub use migrate::Migrator;
 pub use pool::build_pool;
-pub use tx::{Tx, TxManager};
+pub use tx::{PlatformScope, ScopedTx, Tx, TxManager};
 
 pub use sqlx::PgPool;

@@ -57,14 +57,19 @@ impl StreamsClient {
         Ok(id)
     }
 
-    /// Create a consumer group at the tail of the stream (idempotent).
+    /// Create a consumer group at the start of the stream (idempotent).
+    ///
+    /// `0` (not `$`) on purpose: a brand-new consumer group must see events
+    /// that predate it — handlers are idempotent under the processed-events
+    /// dedup key, so replaying the stream on first start is safe, while a
+    /// `$` group silently loses everything published before it existed.
     pub async fn ensure_consumer_group(&self, stream: &str, group: &str) -> Result<()> {
         let mut conn = self.conn.clone();
         match redis::cmd("XGROUP")
             .arg("CREATE")
             .arg(stream)
             .arg(group)
-            .arg("$")
+            .arg("0")
             .arg("MKSTREAM")
             .query_async::<()>(&mut conn)
             .await

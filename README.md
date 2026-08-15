@@ -34,6 +34,28 @@ curl http://localhost:8080/metrics
 # Scalar API docs: http://localhost:8080/scalar (dev dependency, see below)
 ```
 
+### Creating a tenant (phase 01)
+
+Until self-service lands, operators provision tenants with the CLI:
+
+```bash
+cargo run -p sanvi-cli -- tenant create --slug acme --display-name "Acme Corp" --region us --activate
+cargo run -p sanvi-cli -- tenant list
+```
+
+Once provisioned, `acme` serves traffic on its subdomain
+(`acme.localhost` locally; `acme.platform.sanvi.app` in production):
+
+```bash
+curl http://localhost:8080/api/v1/public/tenant-context -H 'Host: acme.localhost'
+curl http://localhost:8080/api/v1/tenant/context -H 'Host: acme.localhost'
+```
+
+Tenant isolation is enforced twice over: repositories can only be
+constructed from tenant-scoped transactions (`TxManager::begin_for`), and
+Postgres RLS (`FORCE ROW LEVEL SECURITY` on every `tenant_id`-carrying table)
+filters rows by `SET LOCAL sanvi.tenant_id` — covered by the RLS matrix test.
+
 The full stack (Ory Kratos + Keto, Mailpit, MinIO, OpenObserve) starts with
 `./scripts/dev.sh up --full`. Ory containers run from day one but nothing
 consumes them until phase 02.
@@ -58,16 +80,18 @@ hours later in an export batch is worse than a failure at boot.
 crates/
   kernel/                  # shared kernel: ids, time, pagination, event envelope
   platform/
-    http/                  # actix server, middleware, problem+json, OpenAPI
-    persistence/           # pool, TxManager, migrations, health probe
-    messaging/             # outbox dispatcher, Redis Streams client
+    http/                  # actix server, middleware, tenant resolution, problem+json, OpenAPI
+    persistence/           # pool, TxManager (scoped transactions), migrations, idempotency
+    messaging/             # outbox writer/dispatcher, stream consumers, scheduler, Redis
+    cache/                 # tenant-namespaced caching (prefix enforced by construction)
     telemetry/             # tracing, OTel, Prometheus, redaction
   contexts/
     system/                # reference context (health, version, build info)
+    tenancy/               # tenants, lifecycle, settings, resolution (phase 01)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher loop
-  cli/                     # migrate, seed, config check, openapi
+  worker/                  # outbox dispatcher + consumers + scheduler
+  cli/                     # migrate, tenant, config check, openapi
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)
 configs/                   # base.toml + per-env overlays (no secrets)

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenancy.tenants\n               (id, slug, display_name, status, region, default_locale, suspended_reason,\n                created_at, updated_at, archived_at, purge_requested_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n             ON CONFLICT (id) DO UPDATE SET\n               display_name = EXCLUDED.display_name,\n               status = EXCLUDED.status,\n               region = EXCLUDED.region,\n               default_locale = EXCLUDED.default_locale,\n               suspended_reason = EXCLUDED.suspended_reason,\n               updated_at = EXCLUDED.updated_at,\n               archived_at = EXCLUDED.archived_at,\n               purge_requested_at = EXCLUDED.purge_requested_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9625744602e4fd690d2fdd7809b2fa9cc3ab7f13c14451ab1a3157b1bb989a6"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenancy.slug_reservations (slug) VALUES ($1)\n             ON CONFLICT (slug) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c94f8a9ef098864a53309f4b9b4e4b05d6308e1bf5252b2ab8b700e5df7534e4"
+}

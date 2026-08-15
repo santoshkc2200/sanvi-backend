@@ -28,6 +28,41 @@ per_second = 10
 fail_open = true
 exempt_paths = ["/healthz", "/readyz", "/metrics"]
 
+# Tenant resolution middleware policy. Public prefixes skip resolution;
+# suspended tenants can still reach the allow-listed prefixes (billing).
+[server.tenant]
+public_prefixes = [
+  "/healthz",
+  "/readyz",
+  "/metrics",
+  "/openapi.json",
+  "/scalar",
+  "/api/v1/platform",
+  "/api/v1/public",
+]
+suspended_allowlist = ["/api/v1/billing"]
+
+[server.tenant.tenant_rate_limit]
+enabled = true
+burst = 120
+per_second = 20
+fail_open = true
+exempt_paths = []
+
+[tenancy]
+# Suffix under which tenant subdomains live. Local development overrides
+# this to "localhost" (see configs/local.toml).
+base_domain = "platform.sanvi.app"
+resolution_cache_ttl_secs = 60
+# Internal-header signing keys: id → secret. Secrets come from the
+# environment (SANVI__TENANCY__SIGNING_KEYS__K1=…); an empty secret disables
+# that key, and the internal header channel only accepts tokens when at
+# least one usable key is configured.
+signing_keys = { k1 = "" }
+# Which key signs newly minted tokens (rotate by adding a key and flipping
+# this id; verification accepts every configured key).
+active_key_id = "k1"
+
 [database]
 host = "localhost"
 port = 5432
@@ -67,9 +102,15 @@ keto_read_url = "http://localhost:4466"
 
 [features]
 # Phase gates live here from phase 01 onward.
+tenancy = true
 
 [outbox]
 poll_interval_ms = 1000
 batch_size = 100
 max_attempts = 5
 stream = "sanvi.events"
+
+[scheduler]
+purge_sweep_interval_secs = 3600
+purge_retention_days = 30
+idempotency_sweep_interval_secs = 3600

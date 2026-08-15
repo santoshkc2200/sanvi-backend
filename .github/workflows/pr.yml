@@ -57,7 +57,7 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace --exclude sanvi-persistence --exclude sanvi-messaging
+      - run: cargo nextest run --workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy
         env:
           SQLX_OFFLINE: "true"
 
@@ -87,7 +87,7 @@ jobs:
       - name: prepare schema
         run: |
           PGPASSWORD=prep psql -h 127.0.0.1 -U prep -d prep -c "CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS;"
-          PGPASSWORD=prep psql -h 127.0.0.1 -U prep -d prep -f migrations/20260101000000_platform_bootstrap.sql
+          for f in migrations/*.sql; do case "$f" in *.down.sql) continue;; esac; PGPASSWORD=prep psql -h 127.0.0.1 -U prep -d prep -q -f "$f"; done
       - name: check query cache
         run: cargo sqlx prepare --workspace --check
         env:
@@ -102,7 +102,7 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging
+      - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy
 
   openapi:
     name: OpenAPI contract drift
@@ -198,7 +198,7 @@ jobs:
       - name: test with coverage
         run: |
           cargo llvm-cov nextest --workspace \
-            --exclude sanvi-persistence --exclude sanvi-messaging \
+            --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy \
             --ignore-filename-regex 'apps/.*/src/main\.rs' \
             --fail-under-lines 70 \
             --lcov --output-path lcov.info

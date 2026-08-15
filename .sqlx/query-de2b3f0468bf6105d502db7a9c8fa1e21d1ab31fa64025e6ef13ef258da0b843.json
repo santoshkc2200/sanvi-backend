@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform.idempotency_keys (key, scope, response, status, created_at, expires_at)\n             VALUES ($1, $2, NULL, 'in_progress', now(), now() + ($3 || ' seconds')::interval)\n             ON CONFLICT (key, scope) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de2b3f0468bf6105d502db7a9c8fa1e21d1ab31fa64025e6ef13ef258da0b843"
+}

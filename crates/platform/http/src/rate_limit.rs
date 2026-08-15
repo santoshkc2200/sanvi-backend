@@ -72,11 +72,16 @@ impl RateLimiter {
     /// Check and consume one token for `key`. Non-blocking from the caller's
     /// point of view: the whole decision is one atomic Lua script.
     pub async fn try_acquire(&self, key: &str) -> Result<(), LimitError> {
+        self.try_acquire_bucket(&format!("sanvi:rl:{key}")).await
+    }
+
+    /// Like [`Self::try_acquire`], but over an explicit bucket key. Used by
+    /// per-tenant limiters whose buckets are namespaced by tenant id.
+    pub async fn try_acquire_bucket(&self, bucket_key: &str) -> Result<(), LimitError> {
         let Some(conn) = &self.conn else {
             return Err(LimitError::BackendUnavailable);
         };
 
-        let bucket_key = format!("sanvi:rl:{key}");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -85,7 +90,7 @@ impl RateLimiter {
         let mut conn = conn.clone();
         let result: redis::RedisResult<(i32, String)> = self
             .script
-            .key(&bucket_key)
+            .key(bucket_key)
             .arg(self.config.burst)
             .arg(self.config.per_second)
             .arg(now)

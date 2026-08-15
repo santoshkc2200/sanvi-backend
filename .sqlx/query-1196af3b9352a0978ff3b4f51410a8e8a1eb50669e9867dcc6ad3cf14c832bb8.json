@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM platform.idempotency_keys WHERE key = $1 AND scope = $2 AND status = 'in_progress'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1196af3b9352a0978ff3b4f51410a8e8a1eb50669e9867dcc6ad3cf14c832bb8"
+}

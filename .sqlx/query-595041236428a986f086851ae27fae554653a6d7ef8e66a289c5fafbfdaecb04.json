@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM platform.idempotency_keys WHERE key = $1 AND scope = $2 AND expires_at <= now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "595041236428a986f086851ae27fae554653a6d7ef8e66a289c5fafbfdaecb04"
+}

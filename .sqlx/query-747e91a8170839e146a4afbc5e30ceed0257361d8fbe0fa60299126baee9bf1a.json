@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n               SELECT 1 FROM tenancy.reserved_slugs WHERE slug = $1\n               UNION ALL\n               SELECT 1 FROM tenancy.slug_reservations WHERE slug = $1\n               UNION ALL\n               SELECT 1 FROM tenancy.tenants WHERE slug = $1\n             )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "747e91a8170839e146a4afbc5e30ceed0257361d8fbe0fa60299126baee9bf1a"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM platform.idempotency_keys WHERE expires_at < now() - ($1 || ' seconds')::interval",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3a57f9c469ba27bcbd5e7cd9b751b527ccedc7ecf5a473b93093fbd8d9eed3f5"
+}

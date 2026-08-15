@@ -72,6 +72,43 @@ pub fn context_from_path(path: &str) -> &str {
     }
 }
 
+/// Tenant resolution instruments: which source resolved the tenant, and how
+/// long resolution took.
+#[derive(Clone)]
+pub struct TenantResolutionInstruments {
+    duration: Histogram<f64>,
+    source: opentelemetry::metrics::Counter<u64>,
+}
+
+impl TenantResolutionInstruments {
+    pub fn build() -> Self {
+        let meter = opentelemetry::global::meter("sanvi.tenancy");
+        Self {
+            duration: meter
+                .f64_histogram("tenant_resolution_duration")
+                .with_unit("s")
+                .with_description("Tenant resolution duration in seconds")
+                .build(),
+            source: meter
+                .u64_counter("tenant_resolution_source_total")
+                .with_description("Tenant resolutions by source")
+                .build(),
+        }
+    }
+
+    /// Process-wide instance for the middleware (constructed once).
+    pub fn process() -> &'static Self {
+        static INSTRUMENTS: std::sync::OnceLock<TenantResolutionInstruments> =
+            std::sync::OnceLock::new();
+        INSTRUMENTS.get_or_init(TenantResolutionInstruments::build)
+    }
+
+    pub fn record(&self, duration: Duration, source: String) {
+        self.duration.record(duration.as_secs_f64(), &[]);
+        self.source.add(1, &[KeyValue::new("source", source)]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

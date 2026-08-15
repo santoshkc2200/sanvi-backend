@@ -1,0 +1,417 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.1.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/tenants:
+    get:
+      operationId: list_tenants
+      parameters:
+      - description: Page size (default 20, max 100)
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      - description: 'Cursor: tenant id of the last item of the previous page'
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
+      - description: Filter by tenant status
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantListView'
+          description: Tenant page
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid filter
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`GET /api/v1/platform/tenants` — list tenants (cursor pagination).'
+      tags:
+      - tenancy
+    post:
+      operationId: provision_tenant
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProvisionTenantCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantView'
+          description: Tenant provisioned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid input
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Slug unavailable or illegal transition
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`POST /api/v1/platform/tenants` — provision a new tenant.'
+      tags:
+      - tenancy
+  /api/v1/platform/tenants/{id}:
+    get:
+      operationId: get_tenant
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantView'
+          description: Tenant
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`GET /api/v1/platform/tenants/{id}` — tenant detail.'
+      tags:
+      - tenancy
+  /api/v1/platform/tenants/{id}/activate:
+    post:
+      operationId: activate_tenant
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantView'
+          description: Tenant activated
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Illegal transition
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`POST /api/v1/platform/tenants/{id}/activate` — provisioning → active.'
+      tags:
+      - tenancy
+  /api/v1/platform/tenants/{id}/archive:
+    post:
+      operationId: archive_tenant
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantView'
+          description: Tenant archived
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Illegal transition
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`POST /api/v1/platform/tenants/{id}/archive` — active|suspended → archived.'
+      tags:
+      - tenancy
+  /api/v1/platform/tenants/{id}/resume:
+    post:
+      operationId: resume_tenant
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantView'
+          description: Tenant resumed
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Illegal transition
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`POST /api/v1/platform/tenants/{id}/resume` — suspended → active.'
+      tags:
+      - tenancy
+  /api/v1/platform/tenants/{id}/suspend:
+    post:
+      operationId: suspend_tenant
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SuspendTenantRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantView'
+          description: Tenant suspended
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Illegal transition
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`POST /api/v1/platform/tenants/{id}/suspend` — active → suspended.'
+      tags:
+      - tenancy
+  /api/v1/public/slug-availability:
+    get:
+      operationId: check_slug_availability
+      parameters:
+      - description: Candidate slug
+        in: query
+        name: slug
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlugAvailability'
+          description: Availability answer
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`GET /api/v1/public/slug-availability` — is this slug free? (boolean only.)'
+      tags:
+      - tenancy
+  /api/v1/public/tenant-context:
+    get:
+      operationId: public_tenant_context
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantContext'
+          description: Tenant context for this host
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown host
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: |-
+        `GET /api/v1/public/tenant-context` — host-based context for the
+        storefront SSR bootstrap. Unknown host → 404; suspended tenants answer
+        normally (the frontend renders the maintenance page).
+      tags:
+      - tenancy
+  /api/v1/tenant/context:
+    get:
+      operationId: get_tenant_context
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantContext'
+          description: Resolved tenant context
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No tenant resolved
+      summary: |-
+        `GET /api/v1/tenant/context` — the current tenant's self-description
+        (resolved by the middleware; the frontend bootstrap endpoint).
+      tags:
+      - tenancy
+  /api/v1/tenant/settings:
+    get:
+      operationId: get_tenant_settings
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantSettingsOutput'
+          description: Tenant settings
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No tenant resolved
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`GET /api/v1/tenant/settings` — all settings of the current tenant.'
+      tags:
+      - tenancy
+    put:
+      operationId: update_tenant_settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsUpdate'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantSettingsOutput'
+          description: Updated settings
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid settings
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No tenant resolved
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Internal error
+      summary: '`PUT /api/v1/tenant/settings` — upsert settings of the current tenant.'
+      tags:
+      - tenancy

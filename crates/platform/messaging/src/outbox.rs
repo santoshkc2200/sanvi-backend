@@ -8,9 +8,11 @@ use sqlx::PgPool;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::redis::StreamsClient;
+use crate::{OutboxMetrics, redis::StreamsClient};
 
-/// Name of the stream domain events are published to.
+/// Base name events are published under. Each event is routed to
+/// `{base}.{context}` (context = the aggregate's first segment), so every
+/// bounded context owns a stream: `sanvi.events.tenancy`, `sanvi.events.billing`, …
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamName(pub String);
 
@@ -23,6 +25,12 @@ impl Default for StreamName {
 impl StreamName {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Stream a record belongs to, derived from its aggregate type.
+    pub fn stream_for(&self, aggregate: &str) -> String {
+        let context = aggregate.split('.').next().unwrap_or("platform");
+        format!("{}.{context}", self.0)
     }
 }
 
@@ -61,8 +69,8 @@ impl OutboxRecord {
 /// - Publishes then marks published; a crash between the two is safe because
 ///   consumers deduplicate on the event id.
 /// - Failed publishes increment `attempts`; rows are retried on the next
-///   poll. A row is abandoned (logged) after `max_attempts` so a poison
-///   message cannot block the queue forever.
+///   poll. A row that exhausts `max_attempts` moves to `platform.outbox_dlq`
+///   so a poison message cannot block the queue forever.
 #[derive(Clone)]
 pub struct OutboxDispatcher {
     pool: PgPool,
@@ -70,6 +78,7 @@ pub struct OutboxDispatcher {
     stream: StreamName,
     batch_size: usize,
     max_attempts: i32,
+    metrics: Option<std::sync::Arc<OutboxMetrics>>,
 }
 
 impl OutboxDispatcher {
@@ -86,7 +95,13 @@ impl OutboxDispatcher {
             stream,
             batch_size,
             max_attempts,
+            metrics: None,
         }
+    }
+
+    pub fn with_metrics(mut self, metrics: std::sync::Arc<OutboxMetrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Claim one batch of unpublished rows, holding their locks for the life
@@ -153,6 +168,43 @@ impl OutboxDispatcher {
         Ok(())
     }
 
+    /// Move an exhausted row to the dead-letter table (same transaction).
+    async fn dead_letter(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        record: &OutboxRecord,
+        failure: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "WITH moved AS (
+               DELETE FROM platform.outbox WHERE id = $1
+               RETURNING aggregate, aggregate_id, event_type, payload, metadata,
+                         occurred_at, published_at, attempts
+             )
+             INSERT INTO platform.outbox_dlq
+               (id, aggregate, aggregate_id, event_type, payload, metadata,
+                occurred_at, published_at, attempts, failure)
+             SELECT $1, aggregate, aggregate_id, event_type, payload, metadata,
+                    occurred_at, published_at, attempts, $2
+             FROM moved",
+        )
+        .bind(record.id)
+        .bind(failure)
+        .execute(&mut **tx)
+        .await
+        .context("failed to dead-letter outbox row")?;
+        Ok(())
+    }
+
+    /// Number of unpublished rows currently waiting (gauge source).
+    pub async fn pending_count(&self) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM platform.outbox WHERE published_at IS NULL")
+                .fetch_one(&self.pool)
+                .await
+                .context("failed to count pending outbox rows")?;
+        Ok(count)
+    }
+
     /// Publish one batch. Returns the number of events published.
     ///
     /// The whole batch — claim, every publish attempt, every mark — runs
@@ -163,6 +215,7 @@ impl OutboxDispatcher {
         let (mut tx, batch) = self.claim().await?;
         if batch.is_empty() {
             tx.commit().await.context("failed to close empty claim")?;
+            self.refresh_pending_gauge();
             return Ok(0);
         }
 
@@ -171,12 +224,20 @@ impl OutboxDispatcher {
             let envelope = record.envelope();
             let payload =
                 serde_json::to_string(&envelope).context("failed to serialize event envelope")?;
+            let stream = self.stream.stream_for(&record.aggregate);
 
-            match self
+            let started = std::time::Instant::now();
+            let outcome = self
                 .streams
-                .append(self.stream.as_str(), &[("event", payload.as_str())], 10_000)
-                .await
-            {
+                .append(&stream, &[("event", payload.as_str())], 10_000)
+                .await;
+            if let Some(metrics) = &self.metrics {
+                metrics
+                    .publish_latency
+                    .observe(started.elapsed().as_secs_f64());
+            }
+
+            match outcome {
                 Ok(_) => {
                     if let Err(err) = Self::mark_published(&mut tx, record.id).await {
                         // The event reached the stream; a failed mark means it
@@ -187,16 +248,52 @@ impl OutboxDispatcher {
                     published += 1;
                 }
                 Err(err) => {
+                    let exhausted = record.attempts + 1 >= self.max_attempts;
                     error!(error = %err, event_id = %record.id, attempts = record.attempts + 1,
-                        "failed to publish event to stream");
-                    if let Err(err) = Self::record_failure(&mut tx, record.id).await {
+                        exhausted, "failed to publish event to stream");
+                    if exhausted {
+                        match Self::dead_letter(&mut tx, &record, &err.to_string()).await {
+                            Ok(()) => {
+                                error!(event_id = %record.id, stream = %stream,
+                                    "event dead-lettered after exhausting retries");
+                                if let Some(metrics) = &self.metrics {
+                                    metrics.dead_lettered.inc();
+                                }
+                            }
+                            Err(dlq_err) => {
+                                error!(error = %dlq_err, event_id = %record.id,
+                                    "failed to dead-letter exhausted row; recording failure instead");
+                                let _ = Self::record_failure(&mut tx, record.id).await;
+                            }
+                        }
+                    } else if let Err(err) = Self::record_failure(&mut tx, record.id).await {
                         error!(error = %err, event_id = %record.id, "failed to record outbox failure");
                     }
                 }
             }
         }
         tx.commit().await.context("failed to commit outbox batch")?;
+        self.refresh_pending_gauge();
         Ok(published)
+    }
+
+    fn refresh_pending_gauge(&self) {
+        if self.metrics.is_none() {
+            return;
+        }
+        let metrics = self.metrics.clone().expect("checked above");
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            match sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM platform.outbox WHERE published_at IS NULL",
+            )
+            .fetch_one(&pool)
+            .await
+            {
+                Ok(count) => metrics.pending.set(count),
+                Err(err) => error!(error = %err, "failed to refresh outbox pending gauge"),
+            }
+        });
     }
 
     /// Poll in a loop until `shutdown` fires; exits after the current batch.

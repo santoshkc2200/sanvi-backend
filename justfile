@@ -39,6 +39,12 @@ worker:
 config-check:
     cargo run -p sanvi-cli -- config
 
+tenant-create:
+    cargo run -p sanvi-cli -- tenant create --slug {{slug}} --display-name "{{display_name}}" --region {{region}} --activate
+
+tenant-list:
+    cargo run -p sanvi-cli -- tenant list
+
 # --- quality gates ----------------------------------------------------------
 
 fmt:

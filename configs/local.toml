@@ -4,5 +4,9 @@
 [server.cors]
 allowed_origins = ["http://localhost:5173", "http://localhost:4173"]
 
+[tenancy]
+# Local hosts: acme.localhost:8080
+base_domain = "localhost"
+
 [telemetry]
 log_format = "text"
