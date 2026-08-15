@@ -20,7 +20,7 @@ pub struct ProblemDetail {
     /// URI of the offending resource, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
-    /// Correlates with the request id and the trace in Jaeger.
+    /// Correlates with the request id and the trace in OpenObserve.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
 }

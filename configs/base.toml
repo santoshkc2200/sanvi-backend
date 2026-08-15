@@ -54,8 +54,12 @@ log_format = "text"       # text | json
 default_level = "info"
 
 [telemetry.otlp]
+# OpenObserve's OTLP/gRPC receiver (its UI and OTLP/HTTP share :5080 instead).
 enabled = false
-endpoint = "http://localhost:4317"
+endpoint = "http://localhost:5081"
+organization = "default"
+stream = "default"
+auth_token = ""           # env only: SANVI__TELEMETRY__OTLP__AUTH_TOKEN
 
 [ory]
 kratos_public_url = "http://localhost:4433"

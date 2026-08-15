@@ -16,7 +16,7 @@ is the machine that builds every later phase.
 **In**
 - Cargo workspace with the crate layout from [`../architecture-overview.md`](../architecture-overview.md).
 - One vertical slice (`health` + a trivial `system` context) proving the layering end to end.
-- docker-compose local stack: Postgres, Redis, Ory Kratos, Ory Keto, Mailpit, MinIO, Jaeger.
+- docker-compose local stack: Postgres, Redis, Ory Kratos, Ory Keto, Mailpit, MinIO, OpenObserve.
 - Configuration, error model, telemetry, OpenAPI generation, migration runner.
 - CI/CD pipeline with security gates; container image build; staging deploy.
 
@@ -80,7 +80,7 @@ with a readable report listing *all* invalid/missing keys, not just the first.
 | `keto` + `keto-migrate` | Permissions |
 | `mailpit` | Local mail capture |
 | `minio` | S3-compatible object storage |
-| `jaeger` (all-in-one, OTLP) | Trace viewing |
+| `openobserve` (OTLP receiver + UI) | Traces, metrics and logs |
 
 Plus `Dockerfile` for the API: multi-stage, `cargo-chef` dependency caching, distroless/`debian:slim`
 runtime, non-root user, no shell in the final image, `HEALTHCHECK`, OCI labels with git SHA.
@@ -194,7 +194,7 @@ readiness failures and error-rate burn. `docs/runbooks/` seeded with `api-down.m
 - [x] `cargo test --workspace` green; coverage reported; layering lint proven to fail on violation.
 - [ ] CI runs all gates in < 12 min on cache hit; image signed and SBOM published.
 - [ ] Staging deploy is automated and reversible; rollback documented and rehearsed once.
-- [x] `/metrics` scraped, traces visible in Jaeger for a sample request.
+- [x] `/metrics` scraped, traces visible in OpenObserve for a sample request.
 - [x] ADRs 0001–0003 merged; README quickstart validated by someone who did not write it.
 
 ## Risks
@@ -204,4 +204,4 @@ readiness failures and error-rate burn. `docs/runbooks/` seeded with `api-down.m
 | Over-engineering the skeleton before real domains exist | Only the `system` slice is built; `scripts/new-context.sh` makes later contexts cheap |
 | SQLx offline data drift causing red CI | `cargo sqlx prepare --check` in CI + pre-commit hook |
 | Slow Rust CI eroding feedback loops | `cargo-chef`, sccache, split jobs, `cargo nextest` |
-| docker-compose sprawl slowing laptops | Profiles: `core` (pg+redis) default, `full` adds Ory/MinIO/Jaeger |
+| docker-compose sprawl slowing laptops | Profiles: `core` (pg+redis) default, `full` adds Ory/MinIO/OpenObserve |

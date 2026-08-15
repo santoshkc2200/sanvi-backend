@@ -53,6 +53,6 @@ curl -s http://<host>:8080/readyz   # 503 body lists failing checks
 
 ## 5. Post-incident
 
-- Capture the relevant request ids from logs; find the traces in Jaeger.
+- Capture the relevant request ids from logs; find the traces in OpenObserve.
 - Update this runbook if a step was missing; refresh the threat model if the
   cause was security-relevant.

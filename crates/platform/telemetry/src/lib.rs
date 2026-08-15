@@ -5,6 +5,8 @@
 //! - [`init`] builds the global `tracing` subscriber (JSON or human-readable),
 //!   the OTLP tracer exporter, the Prometheus metrics pipeline, and returns a
 //!   [`TelemetryGuard`] that shuts everything down cleanly on drop.
+//! - The OTLP receiver is OpenObserve (gRPC :5081), which authenticates every
+//!   export; see [`OtlpConfig`] for the metadata that carries.
 //! - [`Redacted`] is the approved way to log sensitive values: it always
 //!   renders as `<redacted>`, no matter which `fmt`/`Debug` implementation the
 //!   wrapped type has.
@@ -17,12 +19,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig};
+use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::{
     Resource,
     metrics::{PeriodicReader, SdkMeterProvider},
     trace::SdkTracerProvider,
 };
+use tonic::metadata::{Ascii, MetadataMap, MetadataValue};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -66,6 +69,32 @@ fn build_resource(config: &TelemetryConfig) -> Resource {
         .build()
 }
 
+/// gRPC metadata OpenObserve requires on every OTLP export: which org and
+/// stream the data belongs to, and who is sending it.
+fn otlp_metadata(config: &OtlpConfig) -> Result<MetadataMap> {
+    let mut metadata = MetadataMap::with_capacity(3);
+    metadata.insert(
+        "organization",
+        config
+            .organization
+            .parse()
+            .context("telemetry.otlp.organization is not a valid gRPC metadata value")?,
+    );
+    metadata.insert(
+        "stream-name",
+        config
+            .stream
+            .parse()
+            .context("telemetry.otlp.stream is not a valid gRPC metadata value")?,
+    );
+    // Deliberately not `context`-ed with the value: this is the credential.
+    let authorization: MetadataValue<Ascii> = format!("Basic {}", config.auth_token)
+        .parse()
+        .context("telemetry.otlp.auth_token is not a valid gRPC metadata value")?;
+    metadata.insert("authorization", authorization);
+    Ok(metadata)
+}
+
 fn build_otlp_tracer(config: &TelemetryConfig) -> Result<Option<SdkTracerProvider>> {
     if !config.otlp.enabled {
         return Ok(None);
@@ -73,6 +102,7 @@ fn build_otlp_tracer(config: &TelemetryConfig) -> Result<Option<SdkTracerProvide
     let exporter = SpanExporter::builder()
         .with_tonic()
         .with_endpoint(config.otlp.endpoint.clone())
+        .with_metadata(otlp_metadata(&config.otlp)?)
         .build()
         .context("failed to build OTLP span exporter")?;
     Ok(Some(
@@ -92,6 +122,7 @@ fn build_otlp_meter_reader(
     let exporter = MetricExporter::builder()
         .with_tonic()
         .with_endpoint(config.otlp.endpoint.clone())
+        .with_metadata(otlp_metadata(&config.otlp)?)
         .build()
         .context("failed to build OTLP metric exporter")?;
     Ok(Some(PeriodicReader::builder(exporter).build()))

@@ -15,4 +15,7 @@ environment = "staging"
 
 [telemetry.otlp]
 enabled = true
-endpoint = "http://jaeger:4317"
+endpoint = "http://openobserve:5081"
+organization = "sanvi"
+stream = "staging"
+# auth_token via SANVI__TELEMETRY__OTLP__AUTH_TOKEN (secret manager).

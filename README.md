@@ -34,9 +34,23 @@ curl http://localhost:8080/metrics
 # Scalar API docs: http://localhost:8080/scalar (dev dependency, see below)
 ```
 
-The full stack (Ory Kratos + Keto, Mailpit, MinIO, Jaeger) starts with
+The full stack (Ory Kratos + Keto, Mailpit, MinIO, OpenObserve) starts with
 `./scripts/dev.sh up --full`. Ory containers run from day one but nothing
 consumes them until phase 02.
+
+### Traces and metrics
+
+OpenObserve is the OTLP backend in every environment: traces and metrics are
+pushed to it over OTLP/gRPC, while `/metrics` keeps serving Prometheus text for
+local scraping. Export is off by default locally — uncomment the
+`SANVI__TELEMETRY__OTLP__*` block in `.env.example` (its `AUTH_TOKEN` is the
+base64 of the compose root credentials) and restart the API. The UI is at
+<http://localhost:5080>, `root@sanvi.local` / `OpenObserve-local-dev1`; spans
+land in the `default` organization, stream `default`.
+
+Ingestion is authenticated, so the API refuses to start when
+`telemetry.otlp.enabled` is true without an `auth_token` — a 401 discovered
+hours later in an export batch is worse than a failure at boot.
 
 ## Repository layout
 

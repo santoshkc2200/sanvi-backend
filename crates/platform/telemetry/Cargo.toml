@@ -18,6 +18,7 @@ prometheus.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tonic.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true

@@ -15,6 +15,8 @@ services:
       # All remaining secrets come from the host's secret manager:
       # SANVI__DATABASE__HOST / PORT / NAME / USER / PASSWORD
       # SANVI__REDIS__URL
+      # SANVI__TELEMETRY__OTLP__AUTH_TOKEN (OpenObserve ingestion credential;
+      # the API refuses to start without it once OTLP is enabled)
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
@@ -33,5 +35,6 @@ services:
     command: /usr/local/bin/sanvi-worker
     environment:
       SANVI_ENV: production
-      # SANVI__DATABASE__* / SANVI__REDIS__URL from the host's secret manager
+      # SANVI__DATABASE__* / SANVI__REDIS__URL / SANVI__TELEMETRY__OTLP__AUTH_TOKEN
+      # from the host's secret manager
     restart: unless-stopped

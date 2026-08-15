@@ -107,7 +107,8 @@ Context list and responsibility:
 
 ## 8. Observability
 
-- `tracing` with JSON output; OpenTelemetry OTLP export of traces and metrics.
+- `tracing` with JSON output; OpenTelemetry OTLP export of traces and metrics
+  to OpenObserve (its own OTLP/gRPC receiver — no collector in between).
 - Every span carries `request_id`, `tenant_id`, `actor_id`, `route`, `context`.
 - RED metrics per endpoint, USE metrics for pools, plus domain metrics per phase.
 - Health endpoints: `/healthz` (liveness), `/readyz` (dependency checks), `/metrics` (Prometheus).

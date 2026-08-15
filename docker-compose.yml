@@ -1,14 +1,15 @@
 # Local development stack.
 #
 # Default (no profile): the `core` services — Postgres + Redis.
-# `./scripts/dev.sh up --full` adds Ory Kratos/Keto, Mailpit, MinIO, Jaeger.
+# `./scripts/dev.sh up --full` adds Ory Kratos/Keto, Mailpit, MinIO,
+# OpenObserve.
 #
 # Ory containers run from day one but nothing consumes them until phase 02.
 #
 # Every image below is pinned to an explicit tag (never :latest) so a fresh
 # `docker compose pull` can't silently change what's running. Kratos/Keto/
-# Mailpit/Jaeger/MinIO were all re-verified live against this repo's actual
-# configs when last bumped — see git history for what broke and why.
+# Mailpit/OpenObserve/MinIO were all re-verified live against this repo's
+# actual configs when last bumped — see git history for what broke and why.
 
 name: sanvi
 
@@ -124,18 +125,36 @@ services:
     volumes:
       - miniodata:/data
 
-  # Jaeger v1 (the all-in-one image) is EOL; v2 is a from-scratch rebuild on
-  # the OTel Collector and ships under a new image name. Its defaults already
-  # match what COLLECTOR_OTLP_ENABLED=true used to turn on (OTLP gRPC :4317,
-  # OTLP HTTP :4318, in-memory storage, UI :16686) — no env var needed.
-  jaeger:
-    image: jaegertracing/jaeger:2.20.0
+  # OpenObserve replaces Jaeger: one single-binary backend for traces, metrics
+  # and logs instead of a traces-only UI. It is its own OTLP receiver — no
+  # collector in front — but it does not use the standard OTLP ports: gRPC is
+  # :5081 and HTTP/UI share :5080 (traces POST to /api/<org>/v1/traces).
+  #
+  # Ingestion is authenticated, unlike Jaeger's open OTLP port: every request
+  # carries `authorization: Basic <base64(email:password)>` plus `organization`
+  # and `stream-name` metadata. The root credentials below are read on first
+  # start only — they are baked into the volume, so changing them here after
+  # the fact does nothing until `./scripts/dev.sh reset`.
+  #
+  # The default org for a fresh root user is literally named `default`; that's
+  # what configs/base.toml points at.
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:v0.92.1
     profiles: ["full"]
+    environment:
+      ZO_ROOT_USER_EMAIL: root@sanvi.local
+      # Rejected at boot unless it has upper, lower, digit and symbol.
+      ZO_ROOT_USER_PASSWORD: OpenObserve-local-dev1
+      ZO_DATA_DIR: /data
+      # Off by default it phones home usage events on every start.
+      ZO_TELEMETRY: "false"
     ports:
-      - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
+      - "5080:5080"
+      - "5081:5081"
+    volumes:
+      - openobservedata:/data
 
 volumes:
   pgdata:
   miniodata:
+  openobservedata:
