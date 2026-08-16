@@ -2977,7 +2977,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sanvi-access"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -3007,7 +3007,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-api"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -3019,6 +3019,7 @@ dependencies = [
  "redis",
  "sanvi-access",
  "sanvi-audit",
+ "sanvi-billing",
  "sanvi-http",
  "sanvi-identity",
  "sanvi-kernel",
@@ -3041,7 +3042,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-audit"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -3066,8 +3067,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "sanvi-billing"
+version = "0.5.0"
+dependencies = [
+ "actix-http",
+ "actix-web",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures-util",
+ "hmac 0.12.1",
+ "prometheus",
+ "reqwest 0.12.28",
+ "sanvi-access",
+ "sanvi-audit",
+ "sanvi-http",
+ "sanvi-kernel",
+ "sanvi-messaging",
+ "sanvi-persistence",
+ "sanvi-tenancy",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
 name = "sanvi-cache"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "redis",
@@ -3081,7 +3115,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3090,6 +3124,7 @@ dependencies = [
  "sanvi-access",
  "sanvi-api",
  "sanvi-audit",
+ "sanvi-billing",
  "sanvi-http",
  "sanvi-identity",
  "sanvi-persistence",
@@ -3108,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-http"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-cors",
  "actix-http",
@@ -3134,7 +3169,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-identity"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -3163,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-kernel"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "proptest",
@@ -3175,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-messaging"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3197,7 +3232,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-persistence"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3213,7 +3248,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-platform-admin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -3243,7 +3278,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-system"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -3267,7 +3302,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-telemetry"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "opentelemetry",
@@ -3288,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "sanvi-tenancy"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "actix-http",
  "actix-web",
@@ -3320,12 +3355,14 @@ dependencies = [
 
 [[package]]
 name = "sanvi-worker"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "figment",
+ "prometheus",
  "sanvi-access",
  "sanvi-audit",
+ "sanvi-billing",
  "sanvi-http",
  "sanvi-messaging",
  "sanvi-persistence",

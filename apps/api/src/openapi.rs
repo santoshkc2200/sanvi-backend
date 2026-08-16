@@ -58,6 +58,18 @@ use utoipa::OpenApi;
         sanvi_platform_admin::adapters::http::list_pending_approvals,
         sanvi_platform_admin::adapters::http::approve_request,
         sanvi_platform_admin::adapters::http::reject_request,
+        sanvi_billing::adapters::http::handlers::list_public_plans,
+        sanvi_billing::adapters::http::handlers::create_checkout_session,
+        sanvi_billing::adapters::http::handlers::create_portal_session,
+        sanvi_billing::adapters::http::handlers::get_subscription,
+        sanvi_billing::adapters::http::handlers::list_invoices,
+        sanvi_billing::adapters::http::handlers::list_plans,
+        sanvi_billing::adapters::http::handlers::create_plan,
+        sanvi_billing::adapters::http::handlers::update_plan,
+        sanvi_billing::adapters::http::handlers::add_plan_price,
+        sanvi_billing::adapters::http::handlers::set_plan_entitlements,
+        sanvi_billing::adapters::http::handlers::apply_subscription_override,
+        sanvi_billing::adapters::http::handlers::revoke_subscription_override,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
@@ -66,7 +78,8 @@ use utoipa::OpenApi;
         (name = "identity", description = "Users, memberships, invitations and account linking"),
         (name = "access", description = "Permissions, roles, features and entitlements"),
         (name = "audit", description = "Append-only, hash-chained audit trail"),
-        (name = "platform_admin", description = "Operator control plane: tenants, impersonation, approvals")
+        (name = "platform_admin", description = "Operator control plane: tenants, impersonation, approvals"),
+        (name = "billing", description = "Platform billing: plans, subscriptions, invoices, checkout and portal")
     ),
     info(
         title = "Sanvi API",
@@ -130,5 +143,21 @@ mod tests {
         assert!(json.contains("ImpersonationGrantView"));
         assert!(json.contains("AuditPageView"));
         assert!(json.contains("ApprovalView"));
+    }
+
+    #[test]
+    fn doc_contains_the_billing_contract() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/public/plans"));
+        assert!(json.contains("/api/v1/tenant/billing/checkout-session"));
+        assert!(json.contains("/api/v1/tenant/billing/portal-session"));
+        assert!(json.contains("/api/v1/tenant/billing/subscription"));
+        assert!(json.contains("/api/v1/tenant/billing/invoices"));
+        assert!(json.contains("/api/v1/platform/plans"));
+        assert!(json.contains("/api/v1/platform/tenants/{id}/subscription/override"));
+        assert!(json.contains("PublicPlanView"));
+        assert!(json.contains("PlanAdminView"));
+        assert!(json.contains("SubscriptionView"));
+        assert!(json.contains("InvoiceView"));
     }
 }

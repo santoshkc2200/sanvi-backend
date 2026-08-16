@@ -78,6 +78,18 @@ worker:
 config-check:
     cargo run -p sanvi-cli -- config
 
+billing-plans:
+    cargo run -p sanvi-cli -- billing plans
+
+billing-tax-check:
+    cargo run -p sanvi-cli -- billing tax-check
+
+billing-reconcile:
+    cargo run -p sanvi-cli -- billing reconcile
+
+billing-webhooks:
+    cargo run -p sanvi-cli -- billing webhooks
+
 tenant-create:
     cargo run -p sanvi-cli -- tenant create --slug {{slug}} --display-name "{{display_name}}" --region {{region}} --activate
 

@@ -238,6 +238,26 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Change the tenant's subscription",
     },
+    PermissionDef {
+        key: "billing.subscription.create",
+        scope: PermissionScope::Tenant,
+        description: "Start a subscription checkout",
+    },
+    PermissionDef {
+        key: "billing.invoice.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the tenant's invoices",
+    },
+    PermissionDef {
+        key: "platform.plan.write",
+        scope: PermissionScope::Platform,
+        description: "Manage billing plans, prices and entitlement maps",
+    },
+    PermissionDef {
+        key: "platform.subscription.override",
+        scope: PermissionScope::Platform,
+        description: "Grant and revoke subscription overrides",
+    },
 ];
 
 /// Registry lookup.

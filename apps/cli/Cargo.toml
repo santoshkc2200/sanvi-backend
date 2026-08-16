@@ -15,6 +15,7 @@ figment.workspace = true
 sanvi-access.workspace = true
 sanvi-api.workspace = true
 sanvi-audit.workspace = true
+sanvi-billing.workspace = true
 sanvi-http.workspace = true
 sanvi-identity.workspace = true
 sanvi-persistence.workspace = true

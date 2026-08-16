@@ -112,6 +112,27 @@ services:
       - ./configs/ory/keto.yml:/etc/config/keto/keto.yml:ro
     command: serve -c /etc/config/keto/keto.yml
 
+  # stripe-mock: a local HTTP stand-in for the Stripe API (no real charges,
+  # no real keys). Point SANVI__BILLING__STRIPE_API_BASE at it
+  # (http://localhost:12111) to exercise checkout/portal/webhook flows in
+  # local development.
+  stripe-mock:
+    image: stripe/stripe-mock:v0.195.0
+    profiles: ["billing"]
+    ports:
+      - "12111:12111"
+      - "12112:12112"
+
+  # stripe-cli: forwards test-mode Stripe webhooks to the API container.
+  # Usage: stripe listen --forward-to host.docker.internal:8080/internal/webhooks/stripe/platform
+  # (run with `docker compose run --rm stripe-cli ...` after docker login).
+  stripe-cli:
+    image: stripe/stripe-cli:v1.35.0
+    profiles: ["billing"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    entrypoint: ["/bin/stripe"]
+
   # mailhog is unmaintained (no releases since 2020); mailpit is the active,
   # drop-in-compatible successor (same SMTP :1025 / web UI :8025 defaults).
   mailpit:

@@ -29,7 +29,8 @@ fail_open = true
 exempt_paths = ["/healthz", "/readyz", "/metrics"]
 
 # Tenant resolution middleware policy. Public prefixes skip resolution;
-# suspended tenants can still reach the allow-listed prefixes (billing).
+# suspended tenants can still reach the allow-listed prefixes (billing, so a
+# payment failure can be fixed).
 [server.tenant]
 public_prefixes = [
   "/healthz",
@@ -44,7 +45,7 @@ public_prefixes = [
   "/api/v1/access",
   "/internal",
 ]
-suspended_allowlist = ["/api/v1/billing"]
+suspended_allowlist = ["/api/v1/billing", "/api/v1/tenant/billing"]
 
 [server.tenant.tenant_rate_limit]
 enabled = true
@@ -134,11 +135,29 @@ fresh_aal2_max_age_secs = 300
 verify_batch_size = 1000
 retention_months = 12
 
+[billing]
+stripe_api_base = "https://api.stripe.com"
+stripe_api_key = ""                  # env only: SANVI__BILLING__STRIPE_API_KEY (rk_ restricted key)
+stripe_api_version = "2026-06-24.dahlia"
+stripe_webhook_secret = ""           # env only: SANVI__BILLING__STRIPE_WEBHOOK_SECRET (whsec_)
+success_url = "http://localhost:5173/billing/success"
+cancel_url = "http://localhost:5173/pricing"
+portal_return_url = "http://localhost:5173/billing"
+dunning_grace_days = 14
+trial_reminder_days = 3
+automatic_tax_enabled = false
+webhook_tolerance_secs = 300
+# Client IPs allowed to POST to /internal/webhooks/stripe/platform
+# (defence in depth on top of signature verification). Empty = fail closed.
+webhook_allowed_clients = ["127.0.0.1", "::1", "172.16.0.0/12", "192.168.0.0/16"]
+integration_identifier_suffix_len = 8
+
 [features]
 # Phase gates live here from phase 01 onward.
 tenancy = true
 identity = true
 platform_admin = true
+billing = true
 
 [outbox]
 poll_interval_ms = 1000
@@ -154,3 +173,9 @@ idempotency_sweep_interval_secs = 3600
 quota_rollover_interval_secs = 86400
 entitlement_expiry_sweep_interval_secs = 3600
 audit_verify_interval_secs = 86400
+# Phase 04 jobs
+webhook_dispatch_interval_secs = 10
+dunning_sweep_interval_secs = 3600
+reconciliation_interval_secs = 86400
+tax_check_interval_secs = 86400
+billing_metrics_interval_secs = 60

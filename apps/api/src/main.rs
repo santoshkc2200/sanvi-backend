@@ -16,7 +16,8 @@ use figment::{
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
-    build_identity_state, build_platform_admin_state, build_system_state, build_tenancy_state,
+    build_billing_state, build_identity_state, build_platform_admin_state, build_system_state,
+    build_tenancy_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::RoleCatalog;
@@ -156,6 +157,22 @@ async fn main() -> ExitCode {
         audit.writer.clone(),
     );
 
+    // Phase 04: the billing context consumes the access context's
+    // entitlement repository (subscription-source rows) and the audit
+    // writer; its Stripe client and tax gate are built from BillingConfig.
+    let billing = if config.features.billing {
+        Some(build_billing_state(
+            pool.clone(),
+            &config.billing,
+            access.entitlements_repo.clone(),
+            access.features_repo.clone(),
+            audit.writer.clone(),
+            metrics.prometheus_registry(),
+        ))
+    } else {
+        None
+    };
+
     let bind_config = config.clone();
     let factory_config = config.clone();
     let server = match bind(&bind_config.server, move || {
@@ -168,6 +185,7 @@ async fn main() -> ExitCode {
             access.clone(),
             audit.clone(),
             platform_admin.clone(),
+            billing.clone(),
             redis.clone(),
         )
     }) {

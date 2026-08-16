@@ -9,6 +9,7 @@
 //!   fails when the committed per-context specs in `api/` have drifted.
 
 mod access;
+mod billing;
 mod config;
 mod control;
 mod healthcheck;
@@ -86,6 +87,11 @@ enum Command {
     Approval {
         #[command(subcommand)]
         action: ApprovalAction,
+    },
+    /// Phase-04: billing operator commands.
+    Billing {
+        #[command(subcommand)]
+        action: BillingAction,
     },
     /// Load, validate and print the configuration.
     Config,
@@ -218,6 +224,19 @@ enum ApprovalAction {
         #[arg(long)]
         id: uuid::Uuid,
     },
+}
+
+#[derive(Subcommand)]
+enum BillingAction {
+    /// List plans with prices and entitlement grants.
+    Plans,
+    /// Fail loudly when automatic_tax is enabled without an active Stripe
+    /// Tax registration.
+    TaxCheck,
+    /// One manual Stripe → local reconciliation pass.
+    Reconcile,
+    /// The webhook store-first queue's backlog.
+    Webhooks,
 }
 
 #[derive(Subcommand)]
@@ -515,6 +534,21 @@ async fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("approval command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Billing { action } => {
+            let result = match action {
+                BillingAction::Plans => billing::plans(&cli.env).await,
+                BillingAction::TaxCheck => billing::tax_check(&cli.env).await,
+                BillingAction::Reconcile => billing::reconcile(&cli.env).await,
+                BillingAction::Webhooks => billing::webhooks(&cli.env).await,
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("billing command failed: {err:#}");
                     ExitCode::FAILURE
                 }
             }

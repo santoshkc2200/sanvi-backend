@@ -1,0 +1,401 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.5.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/plans:
+    get:
+      operationId: list_plans
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/PlanAdminView'
+                type: array
+          description: All plans
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/platform/plans` — the operator catalog (hidden plans too).'
+      tags:
+      - billing
+    post:
+      operationId: create_plan
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePlanRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanAdminView'
+          description: Created plan
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Plan key taken
+      summary: |-
+        `POST /api/v1/platform/plans` — create a plan (the Stripe Product must
+        exist in the Dashboard first; its id goes into `stripe_product_id`).
+      tags:
+      - billing
+  /api/v1/platform/plans/{id}:
+    patch:
+      operationId: update_plan
+      parameters:
+      - description: Plan id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlanRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanAdminView'
+          description: Updated plan
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Plan not found
+      summary: '`PATCH /api/v1/platform/plans/{id}` — update a plan''s mutable fields.'
+      tags:
+      - billing
+  /api/v1/platform/plans/{id}/entitlements:
+    put:
+      operationId: set_plan_entitlements
+      parameters:
+      - description: Plan id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetEntitlementsRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/EntitlementGrant'
+                type: array
+          description: The new map
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown feature key
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Plan not found
+      summary: |-
+        `PUT /api/v1/platform/plans/{id}/entitlements` — replace the plan's
+        entitlement map. Pricing changes never require a deploy; tenants get the
+        new map on their next entitlement recompute.
+      tags:
+      - billing
+  /api/v1/platform/plans/{id}/prices:
+    post:
+      operationId: add_plan_price
+      parameters:
+      - description: Plan id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPriceRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanAdminPriceView'
+          description: Created price
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Plan not found
+      summary: |-
+        `POST /api/v1/platform/plans/{id}/prices` — attach a Stripe Price
+        (billing variant of the plan).
+      tags:
+      - billing
+  /api/v1/platform/tenants/{id}/subscription/override:
+    delete:
+      operationId: revoke_subscription_override
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '204':
+          description: Override revoked
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Not an operator override
+      summary: |-
+        `DELETE /api/v1/platform/tenants/{id}/subscription/override` — revoke an
+        operator override.
+      tags:
+      - billing
+    post:
+      operationId: apply_subscription_override
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionOverrideRequest'
+        required: true
+      responses:
+        '200':
+          description: Override applied
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Plan not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Live Stripe subscription blocks an override
+      summary: |-
+        `POST /api/v1/platform/tenants/{id}/subscription/override` — grant a
+        plan's entitlements without a Stripe subscription (audited operator
+        action).
+      tags:
+      - billing
+  /api/v1/public/plans:
+    get:
+      operationId: list_public_plans
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/PublicPlanView'
+                type: array
+          description: Plans with prices and entitlement grants
+      summary: |-
+        `GET /api/v1/public/plans` — the pricing page catalog (localized by
+        phase 06; hidden plans excluded).
+      tags:
+      - billing
+  /api/v1/tenant/billing/checkout-session:
+    post:
+      operationId: create_checkout_session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutSessionRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutSessionView'
+          description: Checkout URL
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: A live subscription already exists
+      summary: |-
+        `POST /api/v1/tenant/billing/checkout-session` — start subscribing.
+        Access is granted only when Stripe webhooks arrive, never from the
+        redirect.
+      tags:
+      - billing
+  /api/v1/tenant/billing/invoices:
+    get:
+      operationId: list_invoices
+      parameters:
+      - description: Page size (default 50)
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/InvoiceView'
+                type: array
+          description: Invoices, newest first
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/tenant/billing/invoices` — the tenant''s invoices.'
+      tags:
+      - billing
+  /api/v1/tenant/billing/portal-session:
+    post:
+      operationId: create_portal_session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PortalSessionRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalSessionView'
+          description: Portal URL
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No subscription
+      summary: |-
+        `POST /api/v1/tenant/billing/portal-session` — open the Customer Portal
+        (upgrades, downgrades, cancellation, payment methods).
+      tags:
+      - billing
+  /api/v1/tenant/billing/subscription:
+    get:
+      operationId: get_subscription
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: 'null'
+                - $ref: '#/components/schemas/SubscriptionView'
+          description: The subscription, or null when none
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/tenant/billing/subscription` — the tenant''s subscription.'
+      tags:
+      - billing

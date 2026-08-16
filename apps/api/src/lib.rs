@@ -45,6 +45,26 @@ use sanvi_audit::{
     application::{ListAuditLog, VerifyAuditChain},
     domain::{AuditReader, AuditWriter},
 };
+use sanvi_billing::{
+    BillingConfig,
+    adapters::{
+        AccessEntitlementSyncer, CachedTaxGate, HttpStripeClient, SqlxInvoiceRepository,
+        SqlxPlanEntitlementRepository, SqlxPlanPriceRepository, SqlxPlanRepository,
+        SqlxSubscriptionRepository, SqlxWebhookEventRepository, StripeMetrics,
+        SystemClock as BillingSystemClock, SystemIdGenerator as BillingSystemIdGenerator,
+    },
+    application::{
+        AddPlanPrice, ApplySubscriptionOverride, CreateCheckoutSession, CreatePlan,
+        CreatePortalSession, GetSubscription, ListInvoices, ListPlans, ListPublicPlans,
+        RevokeSubscriptionOverride, SetPlanEntitlements, UpdatePlan, WebhookReceiver,
+    },
+    domain::{
+        Clock as BillingClock, EntitlementSyncer, IdGenerator as BillingIds, InvoiceRepository,
+        PlanEntitlementRepository, PlanPriceRepository, PlanRepository, StripeClient,
+        SubscriptionRepository, TaxGate, WebhookEventRepository,
+    },
+    routes as billing_routes,
+};
 use sanvi_http::{
     AuthnMiddleware, FeatureGate as HttpFeatureGatePort, PermissionGate, ProblemDetail,
     ResourceRef, Subject, middleware,
@@ -1029,6 +1049,141 @@ pub fn build_platform_admin_state(
     }
 }
 
+/// The billing context's application state.
+pub fn build_billing_state(
+    pool: sanvi_persistence::PgPool,
+    config: &BillingConfig,
+    entitlements_repo: Arc<dyn sanvi_access::domain::EntitlementRepository>,
+    features_repo: Arc<dyn sanvi_access::domain::FeatureRepository>,
+    audit_writer: Arc<dyn AuditWriter>,
+    registry: &prometheus::Registry,
+) -> sanvi_billing::adapters::http::BillingState {
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+
+    let plans: Arc<dyn PlanRepository> = Arc::new(SqlxPlanRepository::new());
+    let prices: Arc<dyn PlanPriceRepository> = Arc::new(SqlxPlanPriceRepository::new());
+    let grants: Arc<dyn PlanEntitlementRepository> = Arc::new(SqlxPlanEntitlementRepository::new());
+    let subscriptions: Arc<dyn SubscriptionRepository> =
+        Arc::new(SqlxSubscriptionRepository::new());
+    let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
+    let webhook_events: Arc<dyn WebhookEventRepository> =
+        Arc::new(SqlxWebhookEventRepository::new());
+    let ids: Arc<dyn BillingIds> = Arc::new(BillingSystemIdGenerator);
+    let clock: Arc<dyn BillingClock> = Arc::new(BillingSystemClock);
+
+    let stripe_metrics = StripeMetrics::new(registry);
+    let stripe: Arc<dyn StripeClient> = Arc::new(HttpStripeClient::new(
+        config.stripe_api_base.clone(),
+        config.stripe_api_key.clone(),
+        config.stripe_api_version.clone(),
+        Some(stripe_metrics),
+    ));
+    let tax_gate: Arc<dyn TaxGate> = Arc::new(CachedTaxGate::new(
+        stripe.clone(),
+        std::time::Duration::from_secs(300),
+    ));
+
+    let syncer: Arc<dyn EntitlementSyncer> =
+        Arc::new(AccessEntitlementSyncer::new(entitlements_repo));
+
+    sanvi_billing::adapters::http::BillingState {
+        list_public_plans: Arc::new(ListPublicPlans::new(
+            tx_manager.clone(),
+            plans.clone(),
+            prices.clone(),
+            grants.clone(),
+        )),
+        create_checkout: Arc::new(CreateCheckoutSession::new(
+            tx_manager.clone(),
+            plans.clone(),
+            prices.clone(),
+            subscriptions.clone(),
+            stripe.clone(),
+            tax_gate,
+            audit_writer.clone(),
+            clock.clone(),
+            config.success_url.clone(),
+            config.cancel_url.clone(),
+            config.automatic_tax_enabled,
+            config.integration_identifier_suffix_len,
+        )),
+        create_portal: Arc::new(CreatePortalSession::new(
+            tx_manager.clone(),
+            subscriptions.clone(),
+            stripe.clone(),
+            audit_writer.clone(),
+            clock.clone(),
+            config.portal_return_url.clone(),
+        )),
+        get_subscription: Arc::new(GetSubscription::new(
+            tx_manager.clone(),
+            subscriptions.clone(),
+            plans.clone(),
+        )),
+        list_invoices: Arc::new(ListInvoices::new(tx_manager.clone(), invoices.clone())),
+        list_plans: Arc::new(ListPlans::new(
+            tx_manager.clone(),
+            plans.clone(),
+            prices.clone(),
+            grants.clone(),
+        )),
+        create_plan: Arc::new(CreatePlan::new(
+            tx_manager.clone(),
+            plans.clone(),
+            ids.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        update_plan: Arc::new(UpdatePlan::new(
+            tx_manager.clone(),
+            plans.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        add_price: Arc::new(AddPlanPrice::new(
+            tx_manager.clone(),
+            plans.clone(),
+            prices.clone(),
+            ids.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        set_entitlements: Arc::new(SetPlanEntitlements::new(
+            tx_manager.clone(),
+            plans.clone(),
+            grants.clone(),
+            features_repo,
+            audit_writer.clone(),
+        )),
+        apply_override: Arc::new(ApplySubscriptionOverride::new(
+            tx_manager.clone(),
+            plans.clone(),
+            prices.clone(),
+            grants.clone(),
+            subscriptions.clone(),
+            syncer.clone(),
+            ids.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        revoke_override: Arc::new(RevokeSubscriptionOverride::new(
+            tx_manager.clone(),
+            subscriptions.clone(),
+            syncer,
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        webhook: Arc::new(WebhookReceiver::new(
+            tx_manager,
+            webhook_events,
+            clock,
+            config.stripe_webhook_secret.clone(),
+            config.webhook_tolerance_secs,
+            config.webhook_allowed_clients.clone(),
+        )),
+    }
+}
+
 /// Assemble the actix `App`: middleware stack, routes, OpenAPI, metrics.
 ///
 /// This is the factory `HttpServer` clones per worker; everything captured
@@ -1043,6 +1198,7 @@ pub fn build_app(
     access: AccessWiring,
     audit: AuditWiring,
     platform_admin: PlatformAdminWiring,
+    billing: Option<sanvi_billing::adapters::http::BillingState>,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -1059,6 +1215,16 @@ pub fn build_app(
         build_info: system.build_info.execute(),
         metrics,
         config: config.clone(),
+    };
+
+    // The billing context mounts its tenant routes inside the shared tenant
+    // scope (a second scope on the same prefix would shadow the first).
+    let tenant_scope = web::scope("/api/v1/tenant")
+        .configure(tenancy_routes::tenant_scope_routes)
+        .configure(identity_routes::tenant_scope_routes);
+    let tenant_scope = match &billing {
+        Some(_) => tenant_scope.configure(billing_routes::tenant_scope_routes),
+        None => tenant_scope,
     };
 
     let app = App::new()
@@ -1080,11 +1246,7 @@ pub fn build_app(
         .configure(health_routes)
         .configure(platform_routes)
         .configure(tenancy_routes::platform_routes)
-        .service(
-            web::scope("/api/v1/tenant")
-                .configure(tenancy_routes::tenant_scope_routes)
-                .configure(identity_routes::tenant_scope_routes),
-        )
+        .service(tenant_scope)
         .configure(tenancy_routes::public_routes)
         .configure(identity_routes::identity_routes)
         .configure(identity_routes::internal_routes)
@@ -1092,6 +1254,17 @@ pub fn build_app(
         .configure(sanvi_audit::routes::audit_routes)
         .configure(platform_admin_routes::platform_admin_routes)
         .service(web::scope("/api/v1/system").configure(api_routes));
+
+    // Phase-04 gate: with the flag off, the billing state is not wired and
+    // no billing route is mounted.
+    let app = match billing {
+        Some(billing_state) => app
+            .app_data(web::Data::new(billing_state))
+            .configure(billing_routes::public_routes)
+            .configure(billing_routes::billing_platform_routes)
+            .configure(billing_routes::billing_internal_routes),
+        None => app,
+    };
 
     // The phase-01 feature gate: with the flag off, no resolution middleware
     // and (by the classification below) no tenant-scoped routes either.

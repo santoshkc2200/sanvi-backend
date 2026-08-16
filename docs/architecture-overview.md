@@ -126,3 +126,32 @@ Context list and responsibility:
 
 RLS is tested explicitly: a test asserts tenant A's connection cannot read tenant B's rows for
 *every* tenant-scoped table (generated from the catalog, so new tables are covered automatically).
+
+## 10. Billing (phase 04)
+
+- **Stripe is the source of truth for money; webhooks are the source of truth for status.** The local
+  `billing.subscriptions`/`billing.invoices` rows are a projection for *access* (entitlements).
+  Webhook events are stored first (`billing.webhook_events`, PK on `stripe_event_id` = free
+  deduplication), acknowledged immediately, and applied asynchronously by the worker. Out-of-order
+  delivery is guarded by comparing event `created` against local `updated_at`; final state is
+  reconciled daily by a job that re-reads live subscriptions from Stripe.
+- **Plan → entitlement mapping is data, not code.** `billing.plans` + `billing.plan_entitlements`
+  seed the three tiers; pricing changes never require a deploy. On every subscription state change
+  the application rewrites the tenant's `access.entitlements` rows with `source = 'subscription'`
+  and emits `billing.entitlements_recomputed` (the worker invalidates the entitlement cache).
+  Operator overrides (`source = 'override'`) still win per the phase-03 precedence.
+- **Dunning is a state machine on the subscription** (`collection_state`: ok → dunning →
+  grace_expired). `invoice.payment_failed` starts the clock; the sweep expires grace windows,
+  downgrades entitlements and suspends the tenant with the billing reason; `invoice.paid` restores
+  everything — and only lifts suspensions *we* applied.
+- **Stripe API rules**: pinned API version per environment, restricted key (`rk_`) with
+  least-privilege scopes, `Idempotency-Key` on every write, never `payment_method_types`
+  (dynamic payment methods), one Stripe Product per plan tier, Prices for billing variants only,
+  `integration_identifier` with a random 8-letter suffix.
+- **Stripe Tax gate**: `automatic_tax` is only enabled when an active registration exists (checked
+  at Checkout creation and daily from the worker/CLI; enabling it without one silently collects
+  nothing). Product tax codes come from the canonical Tax Codes API, confirmed by the business
+  owner — never invented.
+- No card data touches our servers (Checkout/Customer Portal are Stripe-hosted): PCI scope stays
+  SAQ-A. Invoices contain personal data → the phase-05 data map registers them with a
+  legal-retention rule that overrides erasure requests.

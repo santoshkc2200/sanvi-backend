@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use sanvi_access::AccessConfig;
 use sanvi_audit::AuditConfig;
+use sanvi_billing::BillingConfig;
 use sanvi_http::ServerConfig;
 use sanvi_identity::IdentityConfig;
 use sanvi_messaging::RedisConfig;
@@ -49,6 +50,9 @@ pub struct FeaturesConfig {
     /// gate and the impersonation middleware.
     #[serde(default = "default_true")]
     pub platform_admin: bool,
+    /// Phase-04 gate: mounts the billing context's routes and state.
+    #[serde(default = "default_true")]
+    pub billing: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -73,6 +77,7 @@ pub struct AppConfig {
     pub access: AccessConfig,
     pub platform_admin: PlatformAdminConfig,
     pub audit: AuditConfig,
+    pub billing: BillingConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -91,6 +96,7 @@ impl Default for AppConfig {
             access: AccessConfig::default(),
             platform_admin: PlatformAdminConfig::default(),
             audit: AuditConfig::default(),
+            billing: BillingConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -125,6 +131,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.audit.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.billing.validate() {
             problems.push(err.to_string());
         }
         if self.readiness_probe_secs == 0 {

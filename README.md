@@ -134,10 +134,11 @@ crates/
     access/                # permission registry, roles, authorization, features/entitlements (phase 02/03)
     audit/                 # append-only hash-chained audit trail (phase 03)
     platform_admin/        # operator control plane, impersonation, four-eyes (phase 03)
+    billing/               # plans, subscriptions, invoices, Stripe, dunning (phase 04)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher + consumers (tenancy/identity/access) + scheduler (phase 01–03 jobs)
-  cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval, config, openapi
+  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing) + scheduler (phase 01–04 jobs)
+  cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval/billing, config, openapi
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)
 configs/                   # base.toml + per-env overlays + Ory configs (no secrets)

@@ -67,6 +67,19 @@ fn catalogs() -> Vec<(&'static str, Vec<(&'static str, String, &'static str)>)> 
             .collect(),
     ));
     all.push((
+        "billing",
+        sanvi_billing::catalog::PERMISSIONED_ROUTES
+            .iter()
+            .map(|route| {
+                (
+                    route.path,
+                    route.method.as_str().to_string(),
+                    route.permission,
+                )
+            })
+            .collect(),
+    ));
+    all.push((
         "tenancy",
         TENANCY_ROUTES
             .iter()

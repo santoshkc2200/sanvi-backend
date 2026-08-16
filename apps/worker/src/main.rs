@@ -40,6 +40,23 @@ use sanvi_audit::{
     adapters::{SqlxAuditReader, SqlxAuditWriter},
     application::VerifyAuditChain,
 };
+use sanvi_billing::{
+    BillingConfig,
+    adapters::{
+        AccessEntitlementSyncer, HttpStripeClient, LoggingNotifications,
+        OutboxEventPublisher as BillingEventPublisher, SqlxInvoiceRepository,
+        SqlxPlanEntitlementRepository, SqlxPlanPriceRepository, SqlxPlanRepository,
+        SqlxSubscriptionRepository, SqlxWebhookEventRepository, StripeMetrics, SystemClock,
+        SystemIdGenerator, TenancyTenantLifecycle, metrics::BillingMetrics,
+    },
+    application::{CheckTaxRegistrations, DunningSweep, ReconcileSubscriptions, WebhookDispatcher},
+    domain::{
+        Clock as BillingClock, EntitlementSyncer, EventPublisher as BillingEvents,
+        IdGenerator as BillingIds, InvoiceRepository, Notifications, PlanEntitlementRepository,
+        PlanPriceRepository, PlanRepository, StripeClient, SubscriptionRepository,
+        WebhookEventRepository,
+    },
+};
 use sanvi_messaging::{
     ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
     StreamConsumer, StreamName, StreamsClient, connect_redis,
@@ -49,8 +66,9 @@ use sanvi_telemetry::TelemetryConfig;
 use sanvi_tenancy::{
     TenancyConfig,
     adapters::{
-        OutboxEventPublisher as TenancyEventPublisher, SystemClock, events::tenant_event_handler,
-        repo::SqlxTenantRepository, resolution::RedisTenantResolutionCache,
+        OutboxEventPublisher as TenancyEventPublisher, SystemClock as TenancySystemClock,
+        events::tenant_event_handler, repo::SqlxTenantRepository,
+        resolution::RedisTenantResolutionCache,
     },
     application::{PurgeSweep, ResolveTenant},
 };
@@ -94,6 +112,16 @@ pub struct SchedulerConfig {
     pub entitlement_expiry_sweep_interval_secs: u64,
     /// Audit hash-chain verification.
     pub audit_verify_interval_secs: u64,
+    /// Stripe webhook event dispatch (phase 04).
+    pub webhook_dispatch_interval_secs: u64,
+    /// Dunning grace sweep (phase 04).
+    pub dunning_sweep_interval_secs: u64,
+    /// Stripe → local reconciliation (phase 04).
+    pub reconciliation_interval_secs: u64,
+    /// Stripe Tax registration check (phase 04).
+    pub tax_check_interval_secs: u64,
+    /// Billing gauges refresh (phase 04).
+    pub billing_metrics_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -105,6 +133,11 @@ impl Default for SchedulerConfig {
             quota_rollover_interval_secs: 86400,
             entitlement_expiry_sweep_interval_secs: 3600,
             audit_verify_interval_secs: 86400,
+            webhook_dispatch_interval_secs: 10,
+            dunning_sweep_interval_secs: 3600,
+            reconciliation_interval_secs: 86400,
+            tax_check_interval_secs: 86400,
+            billing_metrics_interval_secs: 60,
         }
     }
 }
@@ -139,6 +172,7 @@ pub struct WorkerConfig {
     pub ory: OryConfig,
     pub access: AccessConfig,
     pub audit: AuditConfig,
+    pub billing: BillingConfig,
 }
 
 impl WorkerConfig {
@@ -149,6 +183,7 @@ impl WorkerConfig {
         self.tenancy.validate()?;
         self.access.validate()?;
         self.audit.validate()?;
+        self.billing.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -337,9 +372,101 @@ async fn main() -> ExitCode {
         Some(access_store),
     );
 
+    // --- billing context: Stripe webhooks, dunning, reconciliation -----------
+    let billing_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let billing_tenancy_events = Arc::new(TenancyEventPublisher::new());
+    let billing_plans: std::sync::Arc<dyn PlanRepository> =
+        std::sync::Arc::new(SqlxPlanRepository::new());
+    let billing_prices: std::sync::Arc<dyn PlanPriceRepository> =
+        std::sync::Arc::new(SqlxPlanPriceRepository::new());
+    let billing_grants: std::sync::Arc<dyn PlanEntitlementRepository> =
+        std::sync::Arc::new(SqlxPlanEntitlementRepository::new());
+    let billing_subscriptions: std::sync::Arc<dyn SubscriptionRepository> =
+        std::sync::Arc::new(SqlxSubscriptionRepository::new());
+    let billing_invoices: std::sync::Arc<dyn InvoiceRepository> =
+        std::sync::Arc::new(SqlxInvoiceRepository::new());
+    let billing_webhooks: std::sync::Arc<dyn WebhookEventRepository> =
+        std::sync::Arc::new(SqlxWebhookEventRepository::new());
+    let billing_events: std::sync::Arc<dyn BillingEvents> =
+        std::sync::Arc::new(BillingEventPublisher::new());
+    let billing_notifications: std::sync::Arc<dyn Notifications> =
+        std::sync::Arc::new(LoggingNotifications::new());
+    let billing_ids: std::sync::Arc<dyn BillingIds> = std::sync::Arc::new(SystemIdGenerator);
+    let billing_clock: std::sync::Arc<dyn BillingClock> = std::sync::Arc::new(SystemClock);
+    let billing_syncer: std::sync::Arc<dyn EntitlementSyncer> =
+        std::sync::Arc::new(AccessEntitlementSyncer::new(entitlements.clone()));
+    let billing_lifecycle: std::sync::Arc<dyn sanvi_billing::domain::TenantLifecycle> =
+        std::sync::Arc::new(TenancyTenantLifecycle::new(
+            billing_tx.clone(),
+            tenants.clone(),
+            billing_tenancy_events,
+            std::sync::Arc::new(TenancySystemClock),
+        ));
+    let billing_metrics = BillingMetrics::new(registry);
+    let stripe_metrics = StripeMetrics::new(registry);
+    let billing_stripe: std::sync::Arc<dyn StripeClient> =
+        std::sync::Arc::new(HttpStripeClient::new(
+            config.billing.stripe_api_base.clone(),
+            config.billing.stripe_api_key.clone(),
+            config.billing.stripe_api_version.clone(),
+            Some(stripe_metrics),
+        ));
+    let billing_dispatcher = std::sync::Arc::new(
+        WebhookDispatcher::new(
+            billing_tx.clone(),
+            billing_webhooks.clone(),
+            billing_subscriptions.clone(),
+            billing_invoices.clone(),
+            billing_prices.clone(),
+            billing_plans.clone(),
+            billing_grants.clone(),
+            billing_syncer.clone(),
+            billing_lifecycle.clone(),
+            billing_notifications.clone(),
+            billing_events.clone(),
+            billing_stripe.clone(),
+            billing_ids.clone(),
+            billing_clock.clone(),
+        )
+        .with_metrics(billing_metrics.clone()),
+    );
+    let dunning_sweep = std::sync::Arc::new(DunningSweep::new(
+        billing_tx.clone(),
+        billing_subscriptions.clone(),
+        billing_syncer.clone(),
+        billing_lifecycle.clone(),
+        billing_notifications.clone(),
+        billing_events.clone(),
+        billing_clock.clone(),
+        config.billing.dunning_grace_days,
+        config.billing.trial_reminder_days,
+    ));
+    let reconciliation = std::sync::Arc::new(ReconcileSubscriptions::new(
+        billing_tx.clone(),
+        billing_subscriptions.clone(),
+        billing_stripe.clone(),
+        billing_dispatcher.clone(),
+    ));
+    let tax_check = std::sync::Arc::new(CheckTaxRegistrations::new(
+        billing_stripe.clone(),
+        config.billing.automatic_tax_enabled,
+    ));
+
+    // --- billing events consumer: entitlement cache invalidation ------------
+    let billing_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let billing_consumer_metrics = std::sync::Arc::new(ConsumerMetrics::new("billing"));
+    if let Err(err) = billing_consumer_metrics.register(registry) {
+        eprintln!("failed to register billing consumer metrics: {err}");
+        return ExitCode::from(1);
+    }
+    let billing_consumer = billing_consumer.with_metrics(billing_consumer_metrics);
+    let billing_consumer_name = format!("billing-{}", uuid::Uuid::now_v7());
+    let billing_event_handler =
+        sanvi_billing::adapters::billing_event_handler(entitlement_cache.clone());
+
     // --- scheduler: purge + idempotency + quota rollover + expiry + audit ----
     let events = Arc::new(TenancyEventPublisher::new());
-    let clock = Arc::new(SystemClock);
+    let clock = Arc::new(TenancySystemClock);
     let purge_sweep = Arc::new(PurgeSweep::new(
         tx_manager.clone(),
         tenants.clone(),
@@ -472,6 +599,140 @@ async fn main() -> ExitCode {
                 }
             },
         )),
+        // --- phase 04: billing -------------------------------------------------
+        Arc::new(FnJob::new(
+            "billing.webhook_dispatch",
+            Duration::from_secs(config.scheduler.webhook_dispatch_interval_secs),
+            {
+                let dispatcher = billing_dispatcher.clone();
+                move || {
+                    let dispatcher = dispatcher.clone();
+                    Box::pin(async move {
+                        let report = dispatcher
+                            .dispatch(100)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.processed > 0 || report.skipped > 0 || report.failed > 0 {
+                            tracing::info!(
+                                processed = report.processed,
+                                skipped = report.skipped,
+                                failed = report.failed,
+                                "stripe webhook dispatch pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "billing.dunning_sweep",
+            Duration::from_secs(config.scheduler.dunning_sweep_interval_secs),
+            {
+                let sweep = dunning_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(500)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.grace_expired > 0 || report.trials_notified > 0 {
+                            tracing::info!(
+                                grace_expired = report.grace_expired,
+                                trials_notified = report.trials_notified,
+                                "billing dunning sweep",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "billing.reconciliation",
+            Duration::from_secs(config.scheduler.reconciliation_interval_secs),
+            {
+                let reconciliation = reconciliation.clone();
+                let metrics = billing_metrics.clone();
+                move || {
+                    let reconciliation = reconciliation.clone();
+                    let metrics = metrics.clone();
+                    Box::pin(async move {
+                        let report = reconciliation
+                            .execute(500)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        metrics.drift_total().inc_by(report.drift_repaired as u64);
+                        tracing::info!(
+                            checked = report.checked,
+                            drift_repaired = report.drift_repaired,
+                            errors = report.errors,
+                            "billing reconciliation pass",
+                        );
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "billing.tax_check",
+            Duration::from_secs(config.scheduler.tax_check_interval_secs),
+            {
+                let tax_check = tax_check.clone();
+                move || {
+                    let tax_check = tax_check.clone();
+                    Box::pin(async move {
+                        // Errors already log at error level inside the use
+                        // case (the alerting rule fires on them).
+                        let _ = tax_check.execute().await;
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "billing.metrics",
+            Duration::from_secs(config.scheduler.billing_metrics_interval_secs),
+            {
+                let tx = billing_tx.clone();
+                let subscriptions = billing_subscriptions.clone();
+                let webhooks = billing_webhooks.clone();
+                let metrics = billing_metrics.clone();
+                move || {
+                    let tx = tx.clone();
+                    let subscriptions = subscriptions.clone();
+                    let webhooks = webhooks.clone();
+                    let metrics = metrics.clone();
+                    Box::pin(async move {
+                        let mut scope = tx
+                            .begin_unscoped("billing_metrics", "worker")
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        metrics
+                            .unprocessed()
+                            .set(webhooks.unprocessed_count(&mut scope).await? as i64);
+                        metrics
+                            .dead_letter_total()
+                            .set(webhooks.dead_letter_count(&mut scope).await? as i64);
+                        metrics
+                            .dunning_active()
+                            .set(subscriptions.dunning_count(&mut scope).await? as i64);
+                        metrics
+                            .mrr()
+                            .set(subscriptions.mrr_minor(&mut scope).await? as f64);
+                        for (status, count) in subscriptions.count_by_status(&mut scope).await? {
+                            metrics
+                                .status_gauge()
+                                .with_label_values(&[status.as_str()])
+                                .set(count);
+                        }
+                        scope.commit().await.map_err(|err| anyhow::anyhow!(err))?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
     ];
     let scheduler = Scheduler::new(
         redis.clone(),
@@ -533,6 +794,20 @@ async fn main() -> ExitCode {
             .await;
     });
 
+    let billing_shutdown = shutdown_rx.clone();
+    let billing_stream = format!("{}.billing", config.outbox.stream);
+    let billing_task = tokio::spawn(async move {
+        billing_consumer
+            .run_until_shutdown(
+                &billing_stream,
+                "billing",
+                &billing_consumer_name,
+                billing_event_handler,
+                billing_shutdown,
+            )
+            .await;
+    });
+
     let scheduler_shutdown = shutdown_rx.clone();
     let scheduler_task = tokio::spawn(async move {
         scheduler.run_until_shutdown(scheduler_shutdown).await;
@@ -552,6 +827,7 @@ async fn main() -> ExitCode {
         tenancy_task,
         access_task,
         entitlement_task,
+        billing_task,
         scheduler_task
     );
 

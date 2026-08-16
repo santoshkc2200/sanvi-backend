@@ -104,6 +104,7 @@ fn test_app() -> actix_web::App<
         audit,
         platform_admin,
         None,
+        None,
     )
 }
 
