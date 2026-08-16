@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO identity.linked_accounts (user_id, provider, subject, linked_via, linked_at)\n             VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "50112f97ce031bd0bb05bfe93d42ea2ff5a8c00ee144c0a3aab95c3a66aeb856"
+}

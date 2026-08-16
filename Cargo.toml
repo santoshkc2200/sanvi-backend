@@ -9,6 +9,8 @@ members = [
     "crates/platform/http",
     "crates/contexts/system",
     "crates/contexts/tenancy",
+    "crates/contexts/identity",
+    "crates/contexts/access",
     "apps/api",
     "apps/worker",
     "apps/cli",
@@ -16,7 +18,7 @@ members = [
 default-members = ["apps/api", "apps/worker", "apps/cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -37,6 +39,8 @@ sanvi-cache = { path = "crates/platform/cache" }
 sanvi-http = { path = "crates/platform/http" }
 sanvi-system = { path = "crates/contexts/system" }
 sanvi-tenancy = { path = "crates/contexts/tenancy" }
+sanvi-identity = { path = "crates/contexts/identity" }
+sanvi-access = { path = "crates/contexts/access" }
 sanvi-api = { path = "apps/api" }
 
 actix-web = "4"
@@ -58,6 +62,7 @@ opentelemetry-semantic-conventions = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 prometheus = { version = "0.14", features = ["process"] }
 redis = { version = "1.5", default-features = false, features = ["tokio-comp", "aio", "connection-manager", "script", "streams"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

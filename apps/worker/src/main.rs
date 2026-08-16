@@ -19,6 +19,8 @@ use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
+use sanvi_access::adapters::{HttpKetoClient, SqlxRoleRepository};
+use sanvi_access::domain::{PermissionStore, RoleRepository};
 use sanvi_messaging::{
     ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
     StreamConsumer, StreamName, StreamsClient, connect_redis,
@@ -78,6 +80,23 @@ impl Default for SchedulerConfig {
     }
 }
 
+/// Keto endpoints the access sync consumer needs.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct OryConfig {
+    pub keto_read_url: String,
+    pub keto_write_url: String,
+}
+
+impl Default for OryConfig {
+    fn default() -> Self {
+        Self {
+            keto_read_url: "http://localhost:4466".to_string(),
+            keto_write_url: "http://localhost:4467".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct WorkerConfig {
@@ -87,6 +106,8 @@ pub struct WorkerConfig {
     pub outbox: OutboxConfig,
     pub scheduler: SchedulerConfig,
     pub tenancy: TenancyConfig,
+    #[serde(default)]
+    pub ory: OryConfig,
 }
 
 impl WorkerConfig {
@@ -200,6 +221,61 @@ async fn main() -> ExitCode {
         StreamConsumer::new(pool.clone(), streams.clone()).with_metrics(consumer_metrics.clone());
     let consumer_name = format!("tenancy-{}", uuid::Uuid::now_v7());
 
+    // --- access consumer: keeps Keto in sync with identity events -----------
+    let access_store: Arc<dyn PermissionStore> = match HttpKetoClient::new(
+        config.ory.keto_read_url.clone(),
+        config.ory.keto_write_url.clone(),
+    ) {
+        Ok(client) => Arc::new(client),
+        Err(err) => {
+            eprintln!("failed to build the keto client: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    let access_roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
+    let access_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let role_key_resolver = {
+        let roles = access_roles.clone();
+        let tx = access_tx.clone();
+        move |role_id: uuid::Uuid| {
+            let roles = roles.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                let mut scope = match tx.begin_unscoped("access_role_key_lookup", "access").await {
+                    Ok(scope) => scope,
+                    Err(err) => {
+                        tracing::error!(error = %err, "role key lookup failed");
+                        return None;
+                    }
+                };
+                let key = match roles
+                    .find_by_id(&mut scope, sanvi_access::domain::RoleId::from_uuid(role_id))
+                    .await
+                {
+                    Ok(Some(role)) => Some(role.key().to_string()),
+                    Ok(None) => None,
+                    Err(err) => {
+                        tracing::error!(error = %err, "role key lookup failed");
+                        None
+                    }
+                };
+                let _ = scope.commit().await;
+                key
+            })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        }
+    };
+    let access_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let access_consumer_metrics = Arc::new(ConsumerMetrics::new("access"));
+    if let Err(err) = access_consumer_metrics.register(registry) {
+        eprintln!("failed to register access consumer metrics: {err}");
+        return ExitCode::from(1);
+    }
+    let access_consumer = access_consumer.with_metrics(access_consumer_metrics);
+    let access_consumer_name = format!("access-{}", uuid::Uuid::now_v7());
+    let access_handler =
+        sanvi_access::adapters::sync::access_sync_handler(access_store, None, role_key_resolver);
+
     // --- scheduler: purge sweep + idempotency sweep -------------------------
     let events = Arc::new(OutboxEventPublisher::new());
     let clock = Arc::new(SystemClock);
@@ -267,14 +343,29 @@ async fn main() -> ExitCode {
     );
 
     let consumer_shutdown = shutdown_rx.clone();
+    let tenancy_stream = format!("{}.tenancy", config.outbox.stream);
     let consumer_task = tokio::spawn(async move {
         consumer
             .run_until_shutdown(
-                &format!("{}.tenancy", config.outbox.stream),
+                &tenancy_stream,
                 "tenancy",
                 &consumer_name,
                 tenant_event_handler(invalidate),
                 consumer_shutdown,
+            )
+            .await;
+    });
+
+    let access_shutdown = shutdown_rx.clone();
+    let identity_stream = format!("{}.identity", config.outbox.stream);
+    let access_task = tokio::spawn(async move {
+        access_consumer
+            .run_until_shutdown(
+                &identity_stream,
+                "access",
+                &access_consumer_name,
+                access_handler,
+                access_shutdown,
             )
             .await;
     });
@@ -293,7 +384,7 @@ async fn main() -> ExitCode {
             .await;
     });
 
-    let _ = tokio::join!(dispatcher_task, consumer_task, scheduler_task);
+    let _ = tokio::join!(dispatcher_task, consumer_task, access_task, scheduler_task);
 
     telemetry_guard.shutdown();
     ExitCode::SUCCESS

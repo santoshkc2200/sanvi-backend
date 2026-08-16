@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO identity.users\n               (id, kratos_identity_id, primary_email, email_verified, status, locale,\n                created_at, deactivated_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n             ON CONFLICT (id) DO UPDATE SET\n               kratos_identity_id = EXCLUDED.kratos_identity_id,\n               primary_email = EXCLUDED.primary_email,\n               email_verified = EXCLUDED.email_verified,\n               status = EXCLUDED.status,\n               locale = EXCLUDED.locale,\n               deactivated_at = EXCLUDED.deactivated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9fb3ddcbf62dd97a90f2802836f515a314d82c39c5c115c641f0937c2ab7f40"
+}

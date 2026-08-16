@@ -1,6 +1,6 @@
 # Threat model v0 (STRIDE)
 
-Scope: the backend platform as delivered by phase 00 (workspace, API,
+Scope: the backend platform as delivered by phase 02 (workspace, API,
 worker, CLI, local stack, CI/CD). Refreshed at the end of every phase.
 
 | # | Threat | STRIDE | Likelihood | Impact | Mitigation (phase 00) |
@@ -18,12 +18,45 @@ worker, CLI, local stack, CI/CD). Refreshed at the end of every phase.
 | T11 | Migrator/API role privilege escalation | Elevation of privilege | Low | High | Least-privilege role split; app role cannot create tables or bypass RLS; migrations run as a separate pre-deploy job |
 | T12 | Forged request correlation / request smuggling | Spoofing | Low | Medium | Request-id accepted only as a UUIDv7; actix normalizes paths; body/head limits |
 | T13 | Rate limiter outage opens the floodgates (or closes the API) | DoS | Low | Medium | Fail-open/fail-closed per environment (`rate_limit.fail_open`); production fails closed |
-| T14 | Unauthenticated access to privileged endpoints (future) | Spoofing | — | Critical | Phase 02 (Ory Kratos sessions); the "no route without a permission check" test ships with phase 03 |
+| T14 | Unauthenticated access to privileged endpoints | Spoofing | Low | Critical | Phase 02: Kratos session verification on every non-public route (401 via extractors) + the permission-catalog CI test (no route without a declared permission) |
+| T15 | Account takeover via auto-linking an unverified provider email | Spoofing | Low | Critical | Auto-link requires the provider on `trusted_email_verified_providers` AND both sides verified; everything else gets the proof-of-ownership challenge (single-use, 10-minute, session-bound nonce); `AccountLinkRejected` audit events |
+| T16 | Forged Kratos webhook creating/merging projections | Spoofing | Low | High | `/internal/kratos/*` is not public: constant-time shared-secret header + client-IP allow-list; handlers parse defensively; a colliding registration email never binds |
+| T17 | Session replay after logout/revocation | Spoofing | Low | High | Session cache TTL ≤ 60 s; revocation invalidates by session id; revoke via the API also revokes in Kratos |
+| T18 | Cross-tenant membership escalation | Elevation of privilege | Low | Critical | RLS FORCE on `identity.memberships*`, invitations; scoped transactions by construction; RLS matrix test in CI |
+| T19 | Invitation token abuse (replay/guess) | Elevation of privilege | Low | High | 256-bit random tokens, SHA-256 at rest, single use, expiry, email must match the session; acceptance idempotent |
+| T20 | Authorization cache serves stale grants after revocation | Elevation of privilege | Low | High | Decision cache TTL ≤ 30 s; worker deletes Keto tuples on `MembershipRevoked` within seconds; acceptance criterion tested |
+| T21 | Keto outage grants/denies incorrectly | DoS / Elevation | Low | High | Fail closed: the gate maps backend errors to 503, never to Allowed; decision cache never caches errors |
 
-## Residual risks accepted in phase 00
+## Residual risks accepted in phase 02
 
-- Ory containers run in the local stack but no authentication exists yet —
-  the API is dev-only; production deploy is gated on phase 02.
-- `Migrations run as a pre-deploy job` uses staging credentials from GitHub
-  secrets; secret rotation is manual until the secret manager integration
-  lands.
+- Platform-role *assignments* live in Keto tuples only (`cli membership
+  grant --platform`); a full `seed access` rebuild wipes them — re-run the
+  grant. Phase 03 gives platform memberships a database home with audit.
+- The registration webhook runs post-persist and cannot interrupt the flow
+  (v26 hook semantics: interrupting registration hooks fire pre-persist,
+  where the identity id does not exist yet). The login webhook is
+  interrupting; projection drift is backstopped by the ≤ 60 s session-cache
+  TTL, the login hook, and the CLI rebuild (`seed access`).
+- Kratos v26's logout flow has no webhook support; session-cache
+  invalidation on logout happens via `DELETE /api/v1/me/sessions/{id}` with
+  the cache TTL as the backstop.
+- Operator CLI writes (`cli membership grant`) use the CLI's environment;
+  command-line auditing of those actions is manual until the platform admin
+  console (phase 03).
+
+## Residual risks accepted in phase 02
+
+- Platform-role *assignments* live in Keto tuples only (`cli membership
+  grant --platform`); a full `seed access` rebuild wipes them — re-run the
+  grant. Phase 03 gives platform memberships a database home with audit.
+- The registration webhook runs post-persist and cannot interrupt the flow
+  (v26 hook semantics: interrupting registration hooks fire pre-persist,
+  where the identity id does not exist yet). The login webhook is
+  interrupting; projection drift is backstopped by the ≤ 60 s session-cache
+  TTL, the login hook, and the CLI rebuild (`seed access`).
+- Kratos v26's logout flow has no webhook support; session-cache
+  invalidation on logout happens via `DELETE /api/v1/me/sessions/{id}` with
+  the cache TTL as the backstop.
+- Operator CLI writes (`cli membership grant`) use the CLI's environment;
+  command-line auditing of those actions is manual until the platform admin
+  console (phase 03).

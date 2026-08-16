@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 figment.workspace = true
+sanvi-access.workspace = true
 sanvi-http.workspace = true
 sanvi-messaging.workspace = true
 sanvi-persistence.workspace = true

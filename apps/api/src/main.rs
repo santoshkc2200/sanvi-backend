@@ -12,8 +12,13 @@ use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
-use sanvi_api::{AppConfig, build_app, build_system_state, build_tenancy_state};
+use sanvi_access::adapters::SqlxRoleCatalog;
+use sanvi_api::{
+    AppConfig, build_access_state, build_app, build_identity_state, build_system_state,
+    build_tenancy_state,
+};
 use sanvi_http::{bind, run};
+use sanvi_identity::domain::RoleCatalog;
 use sanvi_messaging::connect_redis;
 use sanvi_persistence::build_pool;
 use sanvi_system::domain::BuildInfo;
@@ -91,7 +96,32 @@ async fn main() -> ExitCode {
         config.readiness_probe_secs,
     );
 
-    let tenancy = build_tenancy_state(pool, redis.clone(), &config.tenancy);
+    let tenancy = build_tenancy_state(pool.clone(), redis.clone(), &config.tenancy);
+
+    // The role catalog bridges identity → access in-process; it needs only
+    // a TxManager and the role repository, so there is no wiring cycle.
+    let catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let role_repository: std::sync::Arc<dyn sanvi_access::domain::RoleRepository> =
+        std::sync::Arc::new(sanvi_access::adapters::SqlxRoleRepository::new());
+    let role_catalog: std::sync::Arc<dyn RoleCatalog> =
+        std::sync::Arc::new(SqlxRoleCatalog::new(catalog_tx, role_repository));
+
+    let identity = build_identity_state(
+        pool.clone(),
+        redis.clone(),
+        &config.identity,
+        &config.ory.kratos_public_url,
+        &config.ory.kratos_admin_url,
+        role_catalog,
+    );
+
+    let access = build_access_state(
+        pool,
+        &config.access,
+        &config.ory.keto_read_url,
+        &config.ory.keto_write_url,
+        identity.memberships.clone(),
+    );
 
     let bind_config = config.clone();
     let factory_config = config.clone();
@@ -101,6 +131,8 @@ async fn main() -> ExitCode {
             metrics.clone(),
             system.clone(),
             tenancy.clone(),
+            identity.clone(),
+            access.clone(),
             redis.clone(),
         )
     }) {

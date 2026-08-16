@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO identity.membership_roles (tenant_id, user_id, role_id)\n                 VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27dda7cc64a7c8f7a5b419449f5e4446e728538b17fab3440e6ed232d9f6318b"
+}

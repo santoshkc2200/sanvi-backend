@@ -8,6 +8,7 @@
 //! - `openapi [--check]` — prints the merged OpenAPI document; `--check`
 //!   fails when the committed per-context specs in `api/` have drifted.
 
+mod access;
 mod config;
 mod healthcheck;
 mod migrate;
@@ -47,8 +48,17 @@ enum Command {
         #[command(subcommand)]
         action: TenantAction,
     },
-    /// Seed reference data (nothing to seed in phase 00).
-    Seed,
+    /// Seed reference data: the role catalog (`roles`) and the Keto tuple
+    /// rebuild (`access`).
+    Seed {
+        #[command(subcommand)]
+        kind: SeedKind,
+    },
+    /// Grant platform/tenant memberships to registered users.
+    Membership {
+        #[command(subcommand)]
+        action: MembershipAction,
+    },
     /// Load, validate and print the configuration.
     Config,
     /// Print or verify the OpenAPI contract.
@@ -70,6 +80,34 @@ enum Command {
         path: String,
         #[arg(long, default_value_t = 3)]
         timeout_secs: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum SeedKind {
+    /// Seed the system role catalog (idempotent).
+    Roles,
+    /// Rebuild every Keto relation tuple from the catalog + memberships.
+    Access,
+}
+
+#[derive(Subcommand)]
+enum MembershipAction {
+    /// Make a registered user a tenant member (or assign a platform role).
+    Grant {
+        /// The user's email (they must have registered already).
+        #[arg(long)]
+        email: String,
+        /// Role key (e.g. `tenant_owner`, `platform_owner`).
+        #[arg(long)]
+        role: String,
+        /// Tenant slug for tenant roles.
+        #[arg(long)]
+        tenant: Option<String>,
+        /// Assign a platform role (Keto tuple; phase 03 gives these a DB
+        /// home).
+        #[arg(long)]
+        platform: bool,
     },
 }
 
@@ -198,9 +236,43 @@ async fn main() -> ExitCode {
                 }
             }
         }
-        Command::Seed => {
-            println!("no seeds are defined in phase 00");
-            ExitCode::SUCCESS
+        Command::Seed { kind } => {
+            let kind = match kind {
+                SeedKind::Roles => access::SeedKind::Roles,
+                SeedKind::Access => access::SeedKind::Access,
+            };
+            match access::seed(&cli.env, kind).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("seed failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Membership { action } => {
+            let MembershipAction::Grant {
+                email,
+                role,
+                tenant,
+                platform,
+            } = action;
+            match access::membership_grant(
+                &cli.env,
+                access::MembershipGrantArgs {
+                    email,
+                    role,
+                    tenant_slug: tenant,
+                    platform,
+                },
+            )
+            .await
+            {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("membership grant failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         Command::Config => match config::check(&cli.env) {
             Ok(()) => ExitCode::SUCCESS,

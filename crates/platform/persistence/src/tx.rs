@@ -152,6 +152,12 @@ impl TxManager {
     /// `reason` and `actor` are recorded in `platform.audit_log` inside the
     /// same transaction, so the audit trail commits atomically with whatever
     /// the caller does next.
+    ///
+    /// The transaction also sets `sanvi.platform_scope`, the audited
+    /// escape hatch in the shared RLS policy: tenant-scoped tables admit
+    /// platform-scoped reads/writes only when this GUC is on, so
+    /// cross-tenant maintenance (reconciliation, seeding) stays confined to
+    /// code paths that reached this audited entry point.
     pub async fn begin_unscoped(&self, reason: &str, actor: &str) -> Result<PlatformScope<'_>> {
         let mut tx = self.begin().await?;
         sqlx::query!(
@@ -163,6 +169,10 @@ impl TxManager {
         .execute(&mut **tx.as_inner())
         .await
         .context("failed to write platform scope audit record")?;
+        sqlx::query("SELECT set_config('sanvi.platform_scope', 'on', true)")
+            .execute(&mut **tx.as_inner())
+            .await
+            .context("failed to set platform scope for RLS bypass")?;
         debug!(reason, actor, "unscoped platform transaction started");
         Ok(PlatformScope { inner: tx })
     }

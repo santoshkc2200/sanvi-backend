@@ -17,6 +17,44 @@ selfservice:
     password:
       enabled: true
     code:
+      enabled: true
+      config:
+        # Email OTP ("continue with email"): single use, time-boxed by Kratos.
+        lifespan: 10m
+    oidc:
+      enabled: true
+      config:
+        providers:
+          # Google and Microsoft ship configured; adding a provider is config
+          # + secrets only (see docs/runbooks/add-oidc-provider.md). Empty
+          # client ids keep the local stack bootable without OIDC secrets —
+          # fill them from your .env via SANVI__… or compose environment.
+          - id: google
+            provider: google
+            client_id: ${GOOGLE_CLIENT_ID}
+            client_secret: ${GOOGLE_CLIENT_SECRET}
+            scope:
+              - openid
+              - email
+              - profile
+            mapper_url: file:///etc/config/kratos/oidc.google.jsonnet
+            requested_claims:
+              id_token:
+                email_verified:
+                  essential: true
+          - id: microsoft
+            provider: microsoft
+            client_id: ${MICROSOFT_CLIENT_ID}
+            client_secret: ${MICROSOFT_CLIENT_SECRET}
+            microsoft_tenant: common
+            scope:
+              - openid
+              - email
+              - profile
+            mapper_url: file:///etc/config/kratos/oidc.microsoft.jsonnet
+    totp:
+      enabled: false
+    webauthn:
       enabled: false
 
   flows:
@@ -25,9 +63,25 @@ selfservice:
     settings:
       ui_url: http://127.0.0.1:4455/settings
       privileged_session_max_age: 15m
-      # `lowest_available` was removed from the schema; `aal1` is the
-      # equivalent here since only the password method (AAL1) is enabled.
       required_aal: aal1
+      after:
+        hooks:
+          # can_interrupt=false routes this to the POST-persist phase (the
+          # interrupting variant fires BEFORE the change is persisted, with
+          # the stale identity state) — the projection must see the new
+          # state, so this one is fire-and-forget with the login hook and
+          # the nightly reconciliation as backstops.
+          - hook: web_hook
+            config: &settings_webhook
+              can_interrupt: false
+              url: http://host.docker.internal:8080/internal/kratos/settings
+              method: POST
+              body: file:///etc/config/kratos/webhook.settings.jsonnet
+              response:
+                ignore: false
+                parse: false
+              headers:
+                X-Sanvi-Webhook: webhook-local-dev-secret
     recovery:
       enabled: true
       ui_url: http://127.0.0.1:4455/recovery
@@ -39,9 +93,31 @@ selfservice:
     logout:
       after:
         default_browser_return_url: http://127.0.0.1:4455/login
+        # NOTE: v26's logout flow has no webhook support (the config schema
+        # forbids `after.hooks`). Session-cache invalidation on logout
+        # happens through the API's own `DELETE /api/v1/me/sessions/{id}`
+        # (which revokes in Kratos *and* invalidates the cache), with the
+        # ≤ 60 s cache TTL as the backstop. `/internal/kratos/logout` stays
+        # mounted for forward compatibility.
     login:
       ui_url: http://127.0.0.1:4455/login
       lifespan: 10m
+      after:
+        hooks:
+          # Kratos consults strategy-specific hook lists first and ignores
+          # the global list whenever one is non-empty, so the projection
+          # webhook is attached to every login strategy explicitly.
+          - hook: web_hook
+            config: &login_webhook
+              can_interrupt: true
+              url: http://host.docker.internal:8080/internal/kratos/login
+              method: POST
+              body: file:///etc/config/kratos/webhook.login.jsonnet
+              response:
+                ignore: false
+                parse: false
+              headers:
+                X-Sanvi-Webhook: webhook-local-dev-secret
     registration:
       lifespan: 10m
       ui_url: http://127.0.0.1:4455/registration
@@ -49,6 +125,30 @@ selfservice:
         password:
           hooks:
             - hook: session
+            - hook: web_hook
+              config: &registration_webhook
+                # can_interrupt=false routes this to the POST-persist phase,
+                # where the identity carries its real id. The interrupting
+                # variant fires pre-persist (identity id still zero) and
+                # cannot create the projection; the login hook + nightly
+                # reconciliation are the backstops for the rare miss.
+                can_interrupt: false
+                url: http://host.docker.internal:8080/internal/kratos/registration
+                method: POST
+                body: file:///etc/config/kratos/webhook.registration.jsonnet
+                response:
+                  ignore: false
+                  parse: false
+                headers:
+                  X-Sanvi-Webhook: webhook-local-dev-secret
+        code:
+          hooks:
+            - hook: web_hook
+              config: *registration_webhook
+        oidc:
+          hooks:
+            - hook: web_hook
+              config: *registration_webhook
 
 log:
   level: info

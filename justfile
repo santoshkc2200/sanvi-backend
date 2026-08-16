@@ -30,6 +30,18 @@ migrate-down:
 seed:
     ./scripts/seed.sh
 
+seed-roles:
+    cargo run -p sanvi-cli -- seed roles
+
+seed-access:
+    cargo run -p sanvi-cli -- seed access
+
+membership-grant:
+    cargo run -p sanvi-cli -- membership grant --email {{email}} --role {{role}} --tenant {{tenant}}
+
+platform-grant:
+    cargo run -p sanvi-cli -- membership grant --email {{email}} --role {{role}} --platform
+
 api:
     cargo run -p sanvi-api
 

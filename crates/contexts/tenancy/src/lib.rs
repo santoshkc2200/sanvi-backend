@@ -22,5 +22,7 @@ pub use domain::{
 
 /// Wire tenant-scoped routes into an actix `ServiceConfig`.
 pub mod routes {
-    pub use crate::adapters::http::{platform_routes, public_routes, tenant_routes};
+    pub use crate::adapters::http::{
+        platform_routes, public_routes, tenant_routes, tenant_scope_routes,
+    };
 }

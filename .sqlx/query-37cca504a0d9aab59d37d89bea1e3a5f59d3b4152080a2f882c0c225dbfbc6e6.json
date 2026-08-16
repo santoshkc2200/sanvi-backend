@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO identity.memberships (tenant_id, user_id, status, invited_by, created_at)\n             VALUES ($1, $2, $3, $4, $5)\n             ON CONFLICT (tenant_id, user_id) DO UPDATE SET\n               status = EXCLUDED.status,\n               invited_by = EXCLUDED.invited_by",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37cca504a0d9aab59d37d89bea1e3a5f59d3b4152080a2f882c0c225dbfbc6e6"
+}

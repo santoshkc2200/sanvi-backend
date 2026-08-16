@@ -21,11 +21,28 @@ use utoipa::OpenApi;
         sanvi_tenancy::adapters::http::put_settings,
         sanvi_tenancy::adapters::http::slug_availability,
         sanvi_tenancy::adapters::http::public_tenant_context,
+        sanvi_identity::adapters::http::get_me,
+        sanvi_identity::adapters::http::list_sessions,
+        sanvi_identity::adapters::http::revoke_session,
+        sanvi_identity::adapters::http::start_link_challenge,
+        sanvi_identity::adapters::http::complete_link_challenge,
+        sanvi_identity::adapters::http::list_members,
+        sanvi_identity::adapters::http::grant_member,
+        sanvi_identity::adapters::http::update_member_roles,
+        sanvi_identity::adapters::http::remove_member,
+        sanvi_identity::adapters::http::list_invitations,
+        sanvi_identity::adapters::http::invite_member,
+        sanvi_identity::adapters::http::accept_invitation,
+        sanvi_identity::adapters::http::resend_invitation,
+        sanvi_identity::adapters::http::revoke_invitation,
+        sanvi_access::adapters::http::list_permissions,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
         (name = "system", description = "System, health and build information"),
-        (name = "tenancy", description = "Tenants, lifecycle, settings and context resolution")
+        (name = "tenancy", description = "Tenants, lifecycle, settings and context resolution"),
+        (name = "identity", description = "Users, memberships, invitations and account linking"),
+        (name = "access", description = "Permissions, roles and authorization")
     ),
     info(
         title = "Sanvi API",
@@ -58,5 +75,18 @@ mod tests {
         assert!(json.contains("/api/v1/public/tenant-context"));
         assert!(json.contains("TenantView"));
         assert!(json.contains("TenantContext"));
+    }
+
+    #[test]
+    fn doc_contains_the_identity_and_access_contracts() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/me"));
+        assert!(json.contains("/api/v1/tenant/members"));
+        assert!(json.contains("/api/v1/tenant/invitations"));
+        assert!(json.contains("/api/v1/auth/link/challenge"));
+        assert!(json.contains("/api/v1/access/permissions"));
+        assert!(json.contains("MeView"));
+        assert!(json.contains("MemberView"));
+        assert!(json.contains("PermissionView"));
     }
 }

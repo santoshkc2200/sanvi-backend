@@ -1,25 +1,31 @@
 use serde::{Deserialize, Serialize};
 
+use sanvi_access::AccessConfig;
 use sanvi_http::ServerConfig;
+use sanvi_identity::IdentityConfig;
 use sanvi_messaging::RedisConfig;
 use sanvi_persistence::DatabaseConfig;
 use sanvi_telemetry::TelemetryConfig;
 use sanvi_tenancy::TenancyConfig;
 
-/// Ory endpoints. The containers run from phase 00; nothing consumes them
-/// until phase 02 (identity) and phase 03 (access).
+/// Ory endpoints. Kratos public (flows/sessions), Kratos admin (identity
+/// metadata), Keto read (checks) and write (tuple admin).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct OryConfig {
     pub kratos_public_url: String,
+    pub kratos_admin_url: String,
     pub keto_read_url: String,
+    pub keto_write_url: String,
 }
 
 impl Default for OryConfig {
     fn default() -> Self {
         Self {
             kratos_public_url: "http://localhost:4433".to_string(),
+            kratos_admin_url: "http://localhost:4434".to_string(),
             keto_read_url: "http://localhost:4466".to_string(),
+            keto_write_url: "http://localhost:4467".to_string(),
         }
     }
 }
@@ -32,6 +38,11 @@ pub struct FeaturesConfig {
     /// when enabled.
     #[serde(default = "default_true")]
     pub tenancy: bool,
+    /// Phase-02 gate: mounts authentication middleware and the permission
+    /// gate. When disabled, every route behaves public (documented
+    /// phase-gate semantics).
+    #[serde(default = "default_true")]
+    pub identity: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -52,6 +63,8 @@ pub struct AppConfig {
     pub ory: OryConfig,
     pub features: FeaturesConfig,
     pub tenancy: TenancyConfig,
+    pub identity: IdentityConfig,
+    pub access: AccessConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -66,6 +79,8 @@ impl Default for AppConfig {
             ory: OryConfig::default(),
             features: FeaturesConfig::default(),
             tenancy: TenancyConfig::default(),
+            identity: IdentityConfig::default(),
+            access: AccessConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -88,6 +103,12 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.tenancy.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.identity.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.access.validate() {
             problems.push(err.to_string());
         }
         if self.readiness_probe_secs == 0 {

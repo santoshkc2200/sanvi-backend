@@ -14,15 +14,20 @@ Prerequisites: Rust 1.93+ (`rust-toolchain.toml` pins the exact toolchain),
 Docker with Compose, `just` (optional).
 
 ```bash
-# 1. Start the core stack (Postgres + Redis)
-./scripts/dev.sh up
+# 1. Start the stack (Postgres + Redis; --full adds Ory Kratos/Keto,
+#    Mailpit, MinIO, OpenObserve)
+./scripts/dev.sh up --full
 
 # 2. Apply migrations (runs under the migrator role; the API role is
 #    NOBYPASSRLS and cannot change the schema)
 ./scripts/migrate.sh
 
-# 3. Run the API
+# 3. Seed the system role catalog + Keto relation tuples
+cargo run -p sanvi-cli -- seed roles
+
+# 4. Run the API (and the worker, which keeps Keto in sync with events)
 cargo run -p sanvi-api
+cargo run -p sanvi-worker
 
 # In another shell:
 curl http://localhost:8080/healthz
@@ -56,6 +61,42 @@ constructed from tenant-scoped transactions (`TxManager::begin_for`), and
 Postgres RLS (`FORCE ROW LEVEL SECURITY` on every `tenant_id`-carrying table)
 filters rows by `SET LOCAL sanvi.tenant_id` — covered by the RLS matrix test.
 
+### Identity & access (phase 02)
+
+Sign in happens in Ory Kratos (Google, Microsoft, or email OTP); the API
+verifies Kratos sessions (whoami + a ≤ 60 s Redis cache) and authorizes
+every non-public route through a permission declared in the central
+registry (Keto relation tuples + a ≤ 30 s decision cache). The
+"no route without a permission" catalog test fails CI on any undeclared
+route.
+
+```bash
+# 1. A user registers/signs in through Kratos (http://localhost:4433);
+#    the webhooks create the local projection in identity.users.
+
+# 2. Grant the first tenant owner (after they registered):
+cargo run -p sanvi-cli -- membership grant --email owner@example.com --role tenant_owner --tenant acme
+
+# 3. Platform operators (control plane) get a platform role — Keto-only
+#    until phase 03 gives platform memberships a database home:
+cargo run -p sanvi-cli -- membership grant --email operator@example.com --role platform_owner --platform
+
+# 4. Rebuild every Keto tuple from the catalog + memberships (safe to
+#    re-run; wipes Keto-only platform assignments — re-run step 3 after):
+cargo run -p sanvi-cli -- seed access
+
+# 5. Invite members through the API (requires a session token):
+curl -X POST http://localhost:8080/api/v1/tenant/invitations \
+  -H "Authorization: Bearer <session-token>" -H 'Host: acme.localhost' \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "bob@example.com", "role_ids": ["<tenant_member role id>"]}'
+```
+
+Webhook receivers live under `/internal/kratos/*` and are protected by a
+shared secret (`SANVI__IDENTITY__WEBHOOK_SECRET`, must match the Kratos
+config) plus a client-IP allow-list. Adding an OIDC provider is
+configuration-only: [`docs/runbooks/add-oidc-provider.md`](docs/runbooks/add-oidc-provider.md).
+
 The full stack (Ory Kratos + Keto, Mailpit, MinIO, OpenObserve) starts with
 `./scripts/dev.sh up --full`. Ory containers run from day one but nothing
 consumes them until phase 02.
@@ -80,7 +121,7 @@ hours later in an export batch is worse than a failure at boot.
 crates/
   kernel/                  # shared kernel: ids, time, pagination, event envelope
   platform/
-    http/                  # actix server, middleware, tenant resolution, problem+json, OpenAPI
+    http/                  # actix server, middleware, tenant resolution, authn/authz, problem+json, OpenAPI
     persistence/           # pool, TxManager (scoped transactions), migrations, idempotency
     messaging/             # outbox writer/dispatcher, stream consumers, scheduler, Redis
     cache/                 # tenant-namespaced caching (prefix enforced by construction)
@@ -88,13 +129,15 @@ crates/
   contexts/
     system/                # reference context (health, version, build info)
     tenancy/               # tenants, lifecycle, settings, resolution (phase 01)
+    identity/              # users, memberships, invitations, account linking (phase 02)
+    access/                # permission registry, roles, authorization (phase 02)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher + consumers + scheduler
-  cli/                     # migrate, tenant, config check, openapi
+  worker/                  # outbox dispatcher + consumers (tenancy cache, access→Keto) + scheduler
+  cli/                     # migrate, tenant, seed roles/access, membership grant, config, openapi
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)
-configs/                   # base.toml + per-env overlays (no secrets)
+configs/                   # base.toml + per-env overlays + Ory configs (no secrets)
 scripts/                   # dev, migrate, seed, lint, smoke helpers
 ```
 

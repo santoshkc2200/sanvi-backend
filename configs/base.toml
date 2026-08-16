@@ -39,6 +39,10 @@ public_prefixes = [
   "/scalar",
   "/api/v1/platform",
   "/api/v1/public",
+  "/api/v1/auth",
+  "/api/v1/me",
+  "/api/v1/access",
+  "/internal",
 ]
 suspended_allowlist = ["/api/v1/billing"]
 
@@ -98,11 +102,30 @@ auth_token = ""           # env only: SANVI__TELEMETRY__OTLP__AUTH_TOKEN
 
 [ory]
 kratos_public_url = "http://localhost:4433"
+kratos_admin_url = "http://localhost:4434"
 keto_read_url = "http://localhost:4466"
+keto_write_url = "http://localhost:4467"
+
+[identity]
+session_cache_ttl_secs = 60
+link_intent_ttl_secs = 600
+invitation_ttl_days = 7
+session_cookie_name = "ory_kratos_session"
+webhook_secret = ""                 # env only: SANVI__IDENTITY__WEBHOOK_SECRET
+# Providers whose `email_verified` claim may auto-link a provider account
+# to an existing verified account. Anything not listed can never auto-link.
+trusted_email_verified_providers = ["google", "microsoft"]
+# Client IPs allowed to call /internal/kratos/* (comma-separated CIDRs).
+webhook_allowed_clients = ["127.0.0.1", "::1", "172.16.0.0/12", "192.168.0.0/16"]
+
+[access]
+decision_cache_ttl_secs = 30
+decision_cache_max_entries = 10000
 
 [features]
 # Phase gates live here from phase 01 onward.
 tenancy = true
+identity = true
 
 [outbox]
 poll_interval_ms = 1000

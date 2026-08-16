@@ -5,10 +5,19 @@
 //! shape, headers, rate limiting (disabled) and the OpenAPI endpoint.
 
 use actix_web::{http::StatusCode, test};
-use sanvi_api::{AppConfig, build_app, build_system_state};
+use sanvi_api::{
+    AppConfig, build_access_state, build_app, build_identity_state, build_system_state,
+};
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
 use sanvi_tenancy::adapters::http::state_for_tests as tenancy_state_for_tests;
+
+/// A lazy pool that never connects: the readiness probe is not part of this
+/// test suite (covered by the context's own tests).
+fn pool_stub() -> sanvi_persistence::PgPool {
+    sanvi_persistence::PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
+        .expect("lazy pool construction never connects")
+}
 
 fn test_config() -> AppConfig {
     let mut config = AppConfig::default();
@@ -38,14 +47,40 @@ fn test_app() -> actix_web::App<
         "sanvi-api-test".into(),
     );
     let system = build_system_state(build_info, pool_stub(), None, 1);
-    build_app(config, metrics, system, tenancy_state_for_tests(), None)
-}
 
-/// A lazy pool that never connects: the readiness probe is not part of this
-/// test suite (covered by the context's own tests).
-fn pool_stub() -> sanvi_persistence::PgPool {
-    sanvi_persistence::PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
-        .expect("lazy pool construction never connects")
+    // Identity/access wiring: real adapter construction with the lazy pool
+    // (nothing connects until a route actually exercises it).
+    let pool = pool_stub();
+    let role_catalog: std::sync::Arc<dyn sanvi_identity::domain::RoleCatalog> =
+        std::sync::Arc::new(sanvi_access::adapters::SqlxRoleCatalog::new(
+            sanvi_persistence::TxManager::new(pool.clone()),
+            std::sync::Arc::new(sanvi_access::adapters::SqlxRoleRepository::new()),
+        ));
+    let identity = build_identity_state(
+        pool.clone(),
+        None,
+        &config.identity,
+        &config.ory.kratos_public_url,
+        &config.ory.kratos_admin_url,
+        role_catalog,
+    );
+    let access = build_access_state(
+        pool,
+        &config.access,
+        &config.ory.keto_read_url,
+        &config.ory.keto_write_url,
+        identity.memberships.clone(),
+    );
+
+    build_app(
+        config,
+        metrics,
+        system,
+        tenancy_state_for_tests(),
+        identity,
+        access,
+        None,
+    )
 }
 
 #[actix_web::test]

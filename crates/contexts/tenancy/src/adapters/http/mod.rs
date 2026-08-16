@@ -12,7 +12,9 @@ pub use handlers::{
     list_tenants, provision_tenant, public_tenant_context, put_settings, resume_tenant,
     slug_availability, state_for_tests, suspend_tenant,
 };
-pub use routes::{platform_routes, public_routes, tenant_routes};
+pub use routes::{
+    PERMISSIONED_ROUTES, platform_routes, public_routes, tenant_routes, tenant_scope_routes,
+};
 
 use utoipa::OpenApi;
 

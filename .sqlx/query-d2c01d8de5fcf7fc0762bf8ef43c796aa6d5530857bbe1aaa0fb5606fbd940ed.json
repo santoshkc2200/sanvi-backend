@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO access.role_permissions (role_id, permission) VALUES ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d2c01d8de5fcf7fc0762bf8ef43c796aa6d5530857bbe1aaa0fb5606fbd940ed"
+}

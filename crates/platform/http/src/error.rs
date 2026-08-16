@@ -51,6 +51,12 @@ pub enum ApiError {
     #[error("{detail}")]
     Conflict { detail: String },
 
+    #[error("resource is gone: {detail}")]
+    Gone { detail: String },
+
+    #[error("upstream service rejected the request: {detail}")]
+    BadGateway { detail: String },
+
     #[error("tenant is suspended")]
     TenantSuspended,
 
@@ -76,6 +82,8 @@ impl ApiError {
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::Gone { .. } => StatusCode::GONE,
+            Self::BadGateway { .. } => StatusCode::BAD_GATEWAY,
             Self::TenantSuspended => StatusCode::LOCKED,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::RequestTimeout => StatusCode::GATEWAY_TIMEOUT,
@@ -92,6 +100,8 @@ impl ApiError {
             Self::Forbidden { .. } => "forbidden",
             Self::NotFound { .. } => "not-found",
             Self::Conflict { .. } => "conflict",
+            Self::Gone { .. } => "gone",
+            Self::BadGateway { .. } => "bad-gateway",
             Self::TenantSuspended => "tenant-suspended",
             Self::TooManyRequests { .. } => "too-many-requests",
             Self::RequestTimeout => "request-timeout",
@@ -107,6 +117,8 @@ impl ApiError {
             Self::Forbidden { .. } => "Forbidden",
             Self::NotFound { .. } => "Not Found",
             Self::Conflict { .. } => "Conflict",
+            Self::Gone { .. } => "Gone",
+            Self::BadGateway { .. } => "Bad Gateway",
             Self::TenantSuspended => "Tenant Suspended",
             Self::TooManyRequests { .. } => "Too Many Requests",
             Self::RequestTimeout => "Gateway Timeout",

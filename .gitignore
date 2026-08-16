@@ -1,4 +1,5 @@
 /target
+*.rlib
 **/*.rs.bk
 *.log
 .env

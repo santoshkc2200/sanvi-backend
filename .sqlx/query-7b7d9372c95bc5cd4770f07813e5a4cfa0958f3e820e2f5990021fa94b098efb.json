@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM identity.link_intents WHERE nonce_hash = $1\n             RETURNING nonce_hash, payload, expires_at, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "nonce_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "nonce_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "payload",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "payload"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7b7d9372c95bc5cd4770f07813e5a4cfa0958f3e820e2f5990021fa94b098efb"
+}

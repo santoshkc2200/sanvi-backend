@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT r.id, r.scope, r.tenant_id, r.key, r.name, r.is_system, r.created_at\n             FROM access.roles r\n             JOIN access.role_permissions p ON p.role_id = r.id\n             WHERE p.permission = $1\n               AND (\n                 -- platform roles apply everywhere\n                 r.scope = 'platform'\n                 -- system tenant templates apply to every tenant\n                 OR (r.scope = 'tenant' AND r.tenant_id IS NULL AND r.is_system)\n                 -- custom roles apply to their own tenant only\n                 OR (r.scope = 'tenant' AND r.tenant_id IS NOT NULL AND r.tenant_id = $2)\n               )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "access.roles",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "scope",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access.roles",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "access.roles",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access.roles",
+            "name": "key"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access.roles",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "access.roles",
+            "name": "is_system"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "access.roles",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1645dba4d1fbf1be1b24b8cf437b3fa51d06763d2679a79483c4ff24d1f986eb"
+}

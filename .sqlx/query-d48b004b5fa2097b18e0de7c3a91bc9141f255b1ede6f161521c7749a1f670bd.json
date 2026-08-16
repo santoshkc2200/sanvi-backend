@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM access.role_permissions WHERE role_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d48b004b5fa2097b18e0de7c3a91bc9141f255b1ede6f161521c7749a1f670bd"
+}

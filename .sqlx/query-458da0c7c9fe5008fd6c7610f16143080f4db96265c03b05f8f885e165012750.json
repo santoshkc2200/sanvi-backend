@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO access.roles (id, scope, tenant_id, key, name, is_system, created_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7)\n             ON CONFLICT (id) DO UPDATE SET\n               scope = EXCLUDED.scope,\n               tenant_id = EXCLUDED.tenant_id,\n               key = EXCLUDED.key,\n               name = EXCLUDED.name,\n               is_system = EXCLUDED.is_system",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "458da0c7c9fe5008fd6c7610f16143080f4db96265c03b05f8f885e165012750"
+}

@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, web};
-use sanvi_http::{ApiError, CurrentTenant, ProblemDetail, TenantContext};
+use sanvi_http::{
+    ApiError, CurrentTenant, OptionalSubject, ProblemDetail, RequiredPermission, TenantContext,
+};
 use sanvi_persistence::IdempotencyStore;
 use serde::Deserialize;
 
@@ -100,6 +102,7 @@ pub async fn provision_tenant(
     state: web::Data<TenancyState>,
     body: web::Json<ProvisionTenantCommand>,
     req: HttpRequest,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let cmd = body.into_inner();
     let request_id = req
@@ -182,6 +185,7 @@ pub async fn provision_tenant(
 pub async fn list_tenants(
     state: web::Data<TenancyState>,
     query: web::Query<ListQuery>,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let status = match query.status.as_deref() {
         Some(raw) => match TenantStatus::parse(raw) {
@@ -233,7 +237,11 @@ pub struct ListQuery {
         (status = 500, description = "Internal error", body = ProblemDetail)
     )
 )]
-pub async fn get_tenant(state: web::Data<TenancyState>, path: web::Path<String>) -> impl Responder {
+pub async fn get_tenant(
+    state: web::Data<TenancyState>,
+    path: web::Path<String>,
+    _guard: RequiredPermission,
+) -> impl Responder {
     let id = match tenant_id(&path) {
         Ok(id) => id,
         Err(err) => return HttpResponse::BadRequest().json(err.problem()),
@@ -264,6 +272,7 @@ pub async fn get_tenant(state: web::Data<TenancyState>, path: web::Path<String>)
 pub async fn activate_tenant(
     state: web::Data<TenancyState>,
     path: web::Path<String>,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let id = match tenant_id(&path) {
         Ok(id) => id,
@@ -291,6 +300,7 @@ pub async fn suspend_tenant(
     state: web::Data<TenancyState>,
     path: web::Path<String>,
     body: web::Json<SuspendBody>,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let id = match tenant_id(&path) {
         Ok(id) => id,
@@ -320,6 +330,7 @@ pub async fn suspend_tenant(
 pub async fn resume_tenant(
     state: web::Data<TenancyState>,
     path: web::Path<String>,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let id = match tenant_id(&path) {
         Ok(id) => id,
@@ -345,6 +356,7 @@ pub async fn resume_tenant(
 pub async fn archive_tenant(
     state: web::Data<TenancyState>,
     path: web::Path<String>,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let id = match tenant_id(&path) {
         Ok(id) => id,
@@ -366,7 +378,8 @@ fn lifecycle_response(
 }
 
 /// `GET /api/v1/tenant/context` — the current tenant's self-description
-/// (resolved by the middleware; the frontend bootstrap endpoint).
+/// (resolved by the middleware; the frontend bootstrap endpoint). Public,
+/// with the signed-in subject attached when a session exists.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/context",
@@ -377,7 +390,7 @@ fn lifecycle_response(
         (status = 404, description = "No tenant resolved", body = ProblemDetail)
     )
 )]
-pub async fn get_context(current: CurrentTenant) -> impl Responder {
+pub async fn get_context(current: CurrentTenant, _subject: OptionalSubject) -> impl Responder {
     HttpResponse::Ok().json(current.0)
 }
 
@@ -389,6 +402,8 @@ pub async fn get_context(current: CurrentTenant) -> impl Responder {
     operation_id = "get_tenant_settings",
     responses(
         (status = 200, description = "Tenant settings", body = TenantSettingsOutput),
+        (status = 401, description = "Not authenticated", body = ProblemDetail),
+        (status = 403, description = "Permission denied", body = ProblemDetail),
         (status = 404, description = "No tenant resolved", body = ProblemDetail),
         (status = 500, description = "Internal error", body = ProblemDetail)
     )
@@ -396,6 +411,7 @@ pub async fn get_context(current: CurrentTenant) -> impl Responder {
 pub async fn get_settings(
     state: web::Data<TenancyState>,
     current: CurrentTenant,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let id = TenantId::from_uuid(current.0.tenant_id);
     match state.get_settings.execute(id).await {
@@ -417,6 +433,8 @@ pub async fn get_settings(
     responses(
         (status = 200, description = "Updated settings", body = TenantSettingsOutput),
         (status = 400, description = "Invalid settings", body = ProblemDetail),
+        (status = 401, description = "Not authenticated", body = ProblemDetail),
+        (status = 403, description = "Permission denied", body = ProblemDetail),
         (status = 404, description = "No tenant resolved", body = ProblemDetail),
         (status = 500, description = "Internal error", body = ProblemDetail)
     )
@@ -425,6 +443,7 @@ pub async fn put_settings(
     state: web::Data<TenancyState>,
     current: CurrentTenant,
     body: web::Json<SettingsBody>,
+    _guard: RequiredPermission,
 ) -> impl Responder {
     let id = TenantId::from_uuid(current.0.tenant_id);
     match state

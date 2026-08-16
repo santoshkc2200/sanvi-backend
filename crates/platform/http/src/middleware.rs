@@ -9,6 +9,7 @@ use actix_web::{
 use futures_util::FutureExt as _;
 use uuid::Uuid;
 
+use crate::authn::AuthnLayer;
 use crate::config::{CorsConfig, RateLimitConfig, ServerConfig};
 use crate::metrics::{HttpInstruments, context_from_path};
 use crate::rate_limit::RateLimiter;
@@ -31,11 +32,14 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 ///
 /// Outermost → innermost:
 /// metrics → request id → tracing span → concurrency limit → panic catch →
-/// rate limit → tenant resolution → tenant rate limit → request timeout →
-/// body normalize → CORS → security headers → error handlers.
+/// rate limit → tenant resolution → authentication → tenant rate limit →
+/// request timeout → body normalize → CORS → security headers → error
+/// handlers.
 ///
 /// `tenant` is `None` until the tenancy context is wired (phase 01+); without
-/// it every route behaves as a public route.
+/// it every route behaves as a public route. `authn` is `None` until the
+/// identity context is wired (phase 02+); the extractors then treat every
+/// route as unauthenticated.
 ///
 /// The tracing span wraps every protective middleware, so one span covers a
 /// request from accept to first byte; `tracing-actix-web` maps response
@@ -45,6 +49,7 @@ pub fn stack<T>(
     config: ServerConfig,
     redis: Option<redis::aio::ConnectionManager>,
     tenant: Option<std::sync::Arc<TenantMiddleware>>,
+    authn: Option<std::sync::Arc<crate::authn::AuthnMiddleware>>,
 ) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -83,6 +88,7 @@ where
             duration: Duration::from_secs(config.request_timeout_secs),
         })
         .wrap(TenantRateLimitLayer::new(tenant_limiter))
+        .wrap(AuthnLayer::new(authn))
         .wrap(TenantResolutionLayer::new(tenant))
         .wrap(RateLimit {
             limiter,

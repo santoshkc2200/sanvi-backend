@@ -14,8 +14,25 @@ log:
   level: info
   format: text
 
+# Phase 02 defines the real namespaces. Tuple shapes:
+#   role:{tenant_id|platform}:{key}#member@user:{user_id}
+#   tenant:{tenant_id}#member@user:{user_id}
+#   permission:{permission_key}#granted@role:{...}#member
+# Later phases add their resource namespaces.
 namespaces:
-  # Phase 03 authors relations here; the namespace exists so the containers
-  # are live from phase 00 without a consumer.
   - id: 0
-    name: sanvi
+    name: user
+  - id: 1
+    name: tenant
+  - id: 2
+    name: role
+  - id: 3
+    name: permission
+  - id: 4
+    name: subscription
+  - id: 5
+    name: domain
+  - id: 6
+    name: campaign
+  - id: 7
+    name: theme

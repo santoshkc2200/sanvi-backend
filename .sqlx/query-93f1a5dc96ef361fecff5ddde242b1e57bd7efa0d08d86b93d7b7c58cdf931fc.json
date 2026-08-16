@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM identity.membership_roles WHERE tenant_id = $1 AND user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93f1a5dc96ef361fecff5ddde242b1e57bd7efa0d08d86b93d7b7c58cdf931fc"
+}

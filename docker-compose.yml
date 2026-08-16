@@ -23,7 +23,10 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 stores data in a major-version-specific subdirectory and
+      # requires the mount at the parent (`/var/lib/postgresql`), not at
+      # `data/` — mounting data/ directly refuses to start.
+      - pgdata:/var/lib/postgresql
       - ./scripts/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -62,9 +65,20 @@ services:
     ports:
       - "4433:4433"
       - "4434:4434"
+    extra_hosts:
+      # The API runs on the host; webhooks reach it through the gateway.
+      - "host.docker.internal:host-gateway"
     environment:
       DSN: postgres://postgres:postgres-local-dev@postgres:5432/postgres
       LOG_LEVEL: trace
+      # OIDC provider secrets: v26 reads them from configx environment
+      # overrides (underscores separate nesting, arrays are indexed), not
+      # from ${VAR} substitution in the file — empty by default (OIDC
+      # buttons fail until filled). See docs/runbooks/add-oidc-provider.md.
+      SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS_0_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS_0_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS_1_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      SELFSERVICE_METHODS_OIDC_CONFIG_PROVIDERS_1_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
     volumes:
       - ./configs/ory:/etc/config/kratos:ro
     command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier

@@ -101,6 +101,7 @@ fn build_app(
             resolver: Arc::new(resolver),
             policy,
         })),
+        None,
     )
 }
 
@@ -205,6 +206,7 @@ async fn suspended_tenant_allowlist_still_serves() {
             resolver: Arc::new(resolver),
             policy,
         })),
+        None,
     );
     let app = test::init_service(app).await;
 

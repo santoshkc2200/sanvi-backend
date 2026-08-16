@@ -10,6 +10,8 @@
 //!   single place where domain errors map to HTTP status codes.
 //! - [`openapi`] hosts the generated OpenAPI document and Scalar UI.
 
+pub mod authn;
+pub mod authz;
 pub mod config;
 pub mod error;
 pub mod metrics;
@@ -20,6 +22,12 @@ pub mod server;
 pub mod tenancy;
 pub mod tracing;
 
+pub use authn::{
+    AuthnMiddleware, CurrentSubject, OptionalSubject, SessionToken, SessionVerifier, Subject,
+};
+pub use authz::{
+    Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,
+};
 pub use config::{CorsConfig, RateLimitConfig, ServerConfig, TenantPolicyConfig};
 pub use error::{ApiError, ProblemDetail};
 pub use metrics::{HttpInstruments, TenantResolutionInstruments};

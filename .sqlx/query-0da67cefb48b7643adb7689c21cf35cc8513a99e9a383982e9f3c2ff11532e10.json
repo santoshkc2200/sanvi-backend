@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT nonce_hash, payload, expires_at, created_at\n             FROM identity.link_intents WHERE nonce_hash = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "nonce_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "nonce_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "payload",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "payload"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "identity.link_intents",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0da67cefb48b7643adb7689c21cf35cc8513a99e9a383982e9f3c2ff11532e10"
+}
