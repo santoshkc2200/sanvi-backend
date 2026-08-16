@@ -80,6 +80,18 @@ fn catalogs() -> Vec<(&'static str, Vec<(&'static str, String, &'static str)>)> 
             .collect(),
     ));
     all.push((
+        "privacy",
+        sanvi_privacy::catalog::PERMISSIONED_ROUTES
+            .iter()
+            .filter_map(|route| match route.requirement {
+                sanvi_privacy::catalog::Requirement::Permission(key, _) => {
+                    Some((route.path, route.method.as_str().to_string(), key))
+                }
+                _ => None,
+            })
+            .collect(),
+    ));
+    all.push((
         "tenancy",
         TENANCY_ROUTES
             .iter()

@@ -67,6 +67,19 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
         Ok(())
     }
 
+    async fn remove_all(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<usize, IdentityError> {
+        let result = sqlx::query("DELETE FROM identity.linked_accounts WHERE user_id = $1")
+            .bind(user_id.as_uuid())
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn list_for_user(
         &self,
         scope: &mut PlatformScope<'_>,

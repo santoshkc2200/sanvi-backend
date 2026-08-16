@@ -8,6 +8,7 @@ pub mod features_repo;
 pub mod http;
 pub mod keto;
 pub mod membership_source;
+pub mod privacy_provider;
 pub mod role_catalog;
 pub mod roles_repo;
 pub mod sync;

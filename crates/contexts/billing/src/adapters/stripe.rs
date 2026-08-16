@@ -467,6 +467,44 @@ impl StripeClient for HttpStripeClient {
         })
     }
 
+    async fn delete_customer(&self, stripe_customer_id: &str) -> Result<(), BillingError> {
+        let response = self
+            .http
+            .delete(format!(
+                "{}/v1/customers/{}",
+                self.api_base.trim_end_matches('/'),
+                stripe_customer_id
+            ))
+            .bearer_auth(&self.api_key)
+            .header("Stripe-Version", &self.api_version)
+            .send()
+            .await
+            .map_err(|err| BillingError::StripeConnection {
+                detail: err.to_string(),
+            })?;
+        let status = response.status();
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+        // A deleted (or already-gone) customer is the desired end state.
+        if status.is_success() || (body.get("deleted").and_then(|d| d.as_bool()) == Some(true)) {
+            return Ok(());
+        }
+        let code = status.as_u16();
+        match code {
+            404 => Ok(()),
+            401 | 403 => Err(BillingError::StripeUnauthorized),
+            429 => Err(BillingError::StripeRateLimited),
+            400 => Err(BillingError::StripeBadRequest {
+                detail: stripe_message(&body).to_string(),
+            }),
+            _ => Err(BillingError::StripeService {
+                detail: stripe_message(&body).to_string(),
+            }),
+        }
+    }
+
     async fn list_active_tax_registrations(&self) -> Result<Vec<TaxRegistration>, BillingError> {
         let body = self
             .get_json(

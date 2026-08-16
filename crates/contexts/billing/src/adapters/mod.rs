@@ -5,6 +5,7 @@ pub mod http;
 pub mod lifecycle;
 pub mod metrics;
 pub mod notifications;
+pub mod privacy_provider;
 pub mod repos;
 pub mod stripe;
 pub mod sync;

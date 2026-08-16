@@ -179,6 +179,41 @@ impl EntitlementRepository for SqlxEntitlementRepository {
         .map_err(|err| AccessError::Storage(err.to_string()))?;
         rows.into_iter().map(to_entitlement).collect()
     }
+
+    async fn list_by_granted_by(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: Uuid,
+    ) -> Result<Vec<Entitlement>, AccessError> {
+        let rows: Vec<EntitlementRow> = sqlx::query_as(
+            "SELECT tenant_id, feature_key, enabled, \"limit\", source,
+                    expires_at, granted_by, granted_reason, updated_at
+             FROM access.entitlements WHERE granted_by = $1",
+        )
+        .bind(user_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| AccessError::Storage(err.to_string()))?;
+        rows.into_iter().map(to_entitlement).collect()
+    }
+
+    async fn anonymise_granted_by(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: Uuid,
+    ) -> Result<usize, AccessError> {
+        let result = sqlx::query(
+            "UPDATE access.entitlements
+             SET granted_by = NULL,
+                 granted_reason = 'redacted by privacy erasure (phase 05)'
+             WHERE granted_by = $1",
+        )
+        .bind(user_id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| AccessError::Storage(err.to_string()))?;
+        Ok(result.rows_affected() as usize)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

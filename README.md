@@ -135,9 +135,10 @@ crates/
     audit/                 # append-only hash-chained audit trail (phase 03)
     platform_admin/        # operator control plane, impersonation, four-eyes (phase 03)
     billing/               # plans, subscriptions, invoices, Stripe, dunning (phase 04)
+    privacy/               # jurisdiction profiles, consent/opt-out directives, DSRs, retention, breach (phase 05)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing) + scheduler (phase 01–04 jobs)
+  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing) + scheduler (phase 01–05 jobs: DSR saga, retention, opt-out propagation)
   cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval/billing, config, openapi
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)

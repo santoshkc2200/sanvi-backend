@@ -3,6 +3,7 @@
 pub mod events;
 pub mod gates;
 pub mod http;
+pub mod privacy_provider;
 pub mod repo;
 pub mod system;
 pub mod verifier;

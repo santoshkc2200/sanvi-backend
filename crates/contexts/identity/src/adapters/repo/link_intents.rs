@@ -66,6 +66,19 @@ impl LinkIntentRepository for SqlxLinkIntentRepository {
         .transpose()
     }
 
+    async fn remove_by_email_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        email: &str,
+    ) -> Result<usize, IdentityError> {
+        let result = sqlx::query("DELETE FROM identity.link_intents WHERE payload->>'email' = $1")
+            .bind(email.to_ascii_lowercase())
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn take(
         &self,
         scope: &mut PlatformScope<'_>,

@@ -40,6 +40,7 @@ public_prefixes = [
   "/scalar",
   "/api/v1/platform",
   "/api/v1/public",
+  "/api/v1/privacy",
   "/api/v1/auth",
   "/api/v1/me",
   "/api/v1/access",
@@ -152,12 +153,39 @@ webhook_tolerance_secs = 300
 webhook_allowed_clients = ["127.0.0.1", "::1", "172.16.0.0/12", "192.168.0.0/16"]
 integration_identifier_suffix_len = 8
 
+[privacy]
+# Phase 05: privacy & compliance (GDPR / UK GDPR / APPI / US state laws).
+# Envelope-encryption KEK (32 bytes, base64) — env only:
+# SANVI__PRIVACY__KEK. Empty disables envelope encryption and fails closed
+# (export packaging and crypto-shred refuse to run).
+kek = ""
+kek_id = "kek-1"
+verification_ttl_secs = 600
+verification_max_attempts = 5
+verification_otp_digits = 6
+export_ttl_days = 7
+export_max_downloads = 3
+export_dir = "./var/privacy-exports"
+# The documented backup retention window, published in the privacy notice.
+backup_retention_days = 30
+# Internal SLA every DSR should complete within (alerting drives off this,
+# not the legal maximum).
+internal_sla_days = 14
+# Dry-run is mandatory in production until the first verified run.
+retention_dry_run = true
+retention_sweep_batch_size = 500
+notice_version = "2026-08-19"
+device_cookie_name = "sanvi_gpc_device"
+device_cookie_ttl_days = 30
+subprocessor_notice_days = 30
+
 [features]
 # Phase gates live here from phase 01 onward.
 tenancy = true
 identity = true
 platform_admin = true
 billing = true
+privacy = true
 
 [outbox]
 poll_interval_ms = 1000
@@ -179,3 +207,9 @@ dunning_sweep_interval_secs = 3600
 reconciliation_interval_secs = 86400
 tax_check_interval_secs = 86400
 billing_metrics_interval_secs = 60
+# Phase 05 jobs
+dsr_advance_interval_secs = 30
+optout_propagation_interval_secs = 60
+retention_sweep_interval_secs = 86400
+export_cleanup_interval_secs = 3600
+privacy_metrics_interval_secs = 86400

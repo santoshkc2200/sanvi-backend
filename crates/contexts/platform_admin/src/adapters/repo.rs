@@ -138,6 +138,60 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
         rows.into_iter().map(to_grant).collect()
     }
 
+    async fn list_by_actor(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        actor_id: Uuid,
+    ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError> {
+        let rows: Vec<GrantRow> = sqlx::query_as(
+            "SELECT id, actor_id, tenant_id, target_user_id, reason, mode,
+                    created_at, expires_at, revoked_at, revoked_by
+             FROM platform_admin.impersonation_grants WHERE actor_id = $1
+             ORDER BY created_at DESC",
+        )
+        .bind(actor_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(to_grant).collect()
+    }
+
+    async fn list_by_target(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        target_user_id: Uuid,
+    ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError> {
+        let rows: Vec<GrantRow> = sqlx::query_as(
+            "SELECT id, actor_id, tenant_id, target_user_id, reason, mode,
+                    created_at, expires_at, revoked_at, revoked_by
+             FROM platform_admin.impersonation_grants WHERE target_user_id = $1
+             ORDER BY created_at DESC",
+        )
+        .bind(target_user_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(to_grant).collect()
+    }
+
+    async fn revoke_all_for_actor(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        actor_id: Uuid,
+    ) -> Result<usize, PlatformAdminError> {
+        let result = sqlx::query(
+            "UPDATE platform_admin.impersonation_grants
+             SET revoked_at = now(), revoked_by = $1
+             WHERE actor_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(Uuid::nil())
+        .bind(actor_id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn count_active(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -241,6 +295,42 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
         .await
         .map_err(storage)?;
         row.map(to_approval).transpose()
+    }
+
+    async fn list_by_requester(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        requested_by: Uuid,
+    ) -> Result<Vec<PendingApproval>, PlatformAdminError> {
+        let rows: Vec<ApprovalRow> = sqlx::query_as(
+            "SELECT id, requested_by, action_type, payload, status, requested_at,
+                    decided_by, decided_at
+             FROM platform_admin.pending_approvals WHERE requested_by = $1
+             ORDER BY requested_at DESC",
+        )
+        .bind(requested_by)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(to_approval).collect()
+    }
+
+    async fn anonymise_for_user(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: Uuid,
+    ) -> Result<usize, PlatformAdminError> {
+        let result = sqlx::query(
+            "UPDATE platform_admin.pending_approvals
+             SET requested_by = $2, decided_by = COALESCE(decided_by, $2)
+             WHERE requested_by = $1 OR decided_by = $1",
+        )
+        .bind(user_id)
+        .bind(Uuid::nil())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(result.rows_affected() as usize)
     }
 
     async fn list_pending(

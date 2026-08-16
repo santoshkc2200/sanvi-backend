@@ -84,6 +84,14 @@ pub trait MembershipRepository: Send + Sync {
         user_id: UserId,
     ) -> Result<(), IdentityError>;
 
+    /// Phase-05 erasure: delete every membership (and membership role) of
+    /// one user across all tenants, under the audited platform scope.
+    async fn remove_all_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<usize, IdentityError>;
+
     /// Cross-context read for the access context's Keto sync: every active
     /// membership with its roles, read under the audited platform scope.
     async fn list_all_platform(
@@ -124,6 +132,13 @@ pub trait LinkedAccountRepository: Send + Sync {
         account: &LinkedAccount,
     ) -> Result<(), IdentityError>;
 
+    /// Phase-05 erasure: unlink every provider account of one user.
+    async fn remove_all(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<usize, IdentityError>;
+
     async fn list_for_user(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -160,6 +175,14 @@ pub trait InvitationRepository: Send + Sync {
         tenant_id: Uuid,
     ) -> Result<Vec<Invitation>, IdentityError>;
 
+    /// Phase-05 erasure: delete invitations carrying this email address
+    /// across all tenants, under the audited platform scope.
+    async fn remove_by_email_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        email: &str,
+    ) -> Result<usize, IdentityError>;
+
     async fn remove(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -191,6 +214,14 @@ pub trait LinkIntentRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         nonce_hash: &str,
     ) -> Result<Option<LinkIntent>, IdentityError>;
+
+    /// Phase-05 erasure: delete link intents whose payload carries this
+    /// email address.
+    async fn remove_by_email_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        email: &str,
+    ) -> Result<usize, IdentityError>;
 }
 
 /// The Kratos REST surface this context uses (driven adapter).
@@ -219,6 +250,11 @@ pub trait KratosClient: Send + Sync {
         &self,
         kratos_identity_id: Uuid,
     ) -> Result<Option<SessionInfo>, IdentityError>;
+
+    /// DELETE /admin/identities/{id} — the phase-05 erasure tombstone. A
+    /// missing identity (or no admin URL) is success: the identity is gone
+    /// either way.
+    async fn delete_identity(&self, kratos_identity_id: Uuid) -> Result<(), IdentityError>;
 }
 
 /// What the session verifier needs to know about a session.

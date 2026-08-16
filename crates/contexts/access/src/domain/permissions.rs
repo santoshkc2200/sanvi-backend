@@ -258,6 +258,112 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Platform,
         description: "Grant and revoke subscription overrides",
     },
+    // --- privacy (phase 05) --------------------------------------------------
+    PermissionDef {
+        key: "privacy.request.submit",
+        scope: PermissionScope::Authenticated,
+        description: "Submit data subject requests for the signed-in subject",
+    },
+    PermissionDef {
+        key: "privacy.request.read",
+        scope: PermissionScope::Authenticated,
+        description: "Read the signed-in subject's own requests",
+    },
+    PermissionDef {
+        key: "privacy.consent.read",
+        scope: PermissionScope::Authenticated,
+        description: "Read the signed-in subject's consent ledger",
+    },
+    PermissionDef {
+        key: "privacy.consent.update",
+        scope: PermissionScope::Authenticated,
+        description: "Grant or withdraw consent for the signed-in subject",
+    },
+    PermissionDef {
+        key: "privacy.directive.read",
+        scope: PermissionScope::Authenticated,
+        description: "Read the resolved purpose directives for the signed-in subject",
+    },
+    PermissionDef {
+        key: "privacy.appeal.create",
+        scope: PermissionScope::Authenticated,
+        description: "Appeal a refused request (the subject's own)",
+    },
+    PermissionDef {
+        key: "privacy.request.rectify",
+        scope: PermissionScope::Authenticated,
+        description: "Apply rectification corrections to the signed-in subject's data",
+    },
+    PermissionDef {
+        key: "platform.privacy.request.read",
+        scope: PermissionScope::Platform,
+        description: "Read the DSR operator view",
+    },
+    PermissionDef {
+        key: "platform.privacy.request.write",
+        scope: PermissionScope::Platform,
+        description: "Extend deadlines and reject data subject requests",
+    },
+    PermissionDef {
+        key: "platform.privacy.appeal.read",
+        scope: PermissionScope::Platform,
+        description: "List open appeals",
+    },
+    PermissionDef {
+        key: "platform.privacy.appeal.write",
+        scope: PermissionScope::Platform,
+        description: "Decide appeals (second-operator review)",
+    },
+    PermissionDef {
+        key: "platform.privacy.jurisdiction.read",
+        scope: PermissionScope::Platform,
+        description: "Read jurisdiction profiles",
+    },
+    PermissionDef {
+        key: "platform.privacy.jurisdiction.write",
+        scope: PermissionScope::Platform,
+        description: "Update jurisdiction profiles (audited configuration)",
+    },
+    PermissionDef {
+        key: "platform.privacy.hold.read",
+        scope: PermissionScope::Platform,
+        description: "List legal holds",
+    },
+    PermissionDef {
+        key: "platform.privacy.hold.write",
+        scope: PermissionScope::Platform,
+        description: "Apply and release legal holds",
+    },
+    PermissionDef {
+        key: "platform.privacy.incident.read",
+        scope: PermissionScope::Platform,
+        description: "Read breach incidents and obligations",
+    },
+    PermissionDef {
+        key: "platform.privacy.incident.write",
+        scope: PermissionScope::Platform,
+        description: "Record breach incidents and discharges",
+    },
+    PermissionDef {
+        key: "platform.privacy.governance.read",
+        scope: PermissionScope::Platform,
+        description: "Read sub-processors, processing activities, assessments and retention rules",
+    },
+    PermissionDef {
+        key: "platform.privacy.governance.write",
+        scope: PermissionScope::Platform,
+        description: "Manage sub-processors, processing activities, assessments and retention rules",
+    },
+    PermissionDef {
+        key: "tenant.privacy.request.write",
+        scope: PermissionScope::Tenant,
+        description: "Submit data subject requests for the tenant's end users (processor role)",
+    },
+    PermissionDef {
+        key: "tenant.privacy.request.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the tenant's data subject requests",
+    },
 ];
 
 /// Registry lookup.

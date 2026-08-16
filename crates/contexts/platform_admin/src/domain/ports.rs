@@ -35,6 +35,28 @@ pub trait ImpersonationGrantRepository: Send + Sync {
         limit: u32,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError>;
 
+    /// Phase-05: grants a user created as the impersonating actor.
+    async fn list_by_actor(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        actor_id: Uuid,
+    ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError>;
+
+    /// Phase-05: grants into which a user was the impersonation target.
+    async fn list_by_target(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        target_user_id: Uuid,
+    ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError>;
+
+    /// Phase-05 erasure: revoke every grant a user authored (soft revoke —
+    /// the table has no DELETE grant).
+    async fn revoke_all_for_actor(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        actor_id: Uuid,
+    ) -> Result<usize, PlatformAdminError>;
+
     /// How many active grants exist into a tenant (admin view summary).
     async fn count_active(
         &self,
@@ -65,6 +87,21 @@ pub trait PendingApprovalRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         limit: u32,
     ) -> Result<Vec<PendingApproval>, PlatformAdminError>;
+
+    /// Phase-05: approvals requested by a user.
+    async fn list_by_requester(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        requested_by: Uuid,
+    ) -> Result<Vec<PendingApproval>, PlatformAdminError>;
+
+    /// Phase-05 erasure: replace the requester/decider references with
+    /// pseudonyms (rows themselves are compliance records).
+    async fn anonymise_for_user(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: Uuid,
+    ) -> Result<usize, PlatformAdminError>;
 }
 
 /// The operator tenant read model: tenancy basics + member/entitlement/

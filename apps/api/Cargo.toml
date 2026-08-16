@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 actix-web.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 figment.workspace = true
@@ -24,6 +25,7 @@ sanvi-kernel.workspace = true
 sanvi-messaging.workspace = true
 sanvi-persistence.workspace = true
 sanvi-platform-admin.workspace = true
+sanvi-privacy.workspace = true
 sanvi-system.workspace = true
 sanvi-telemetry.workspace = true
 sanvi-tenancy.workspace = true

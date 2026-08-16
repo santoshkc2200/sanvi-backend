@@ -60,3 +60,32 @@ worker, CLI, local stack, CI/CD). Refreshed at the end of every phase.
 - Operator CLI writes (`cli membership grant`) use the CLI's environment;
   command-line auditing of those actions is manual until the platform admin
   console (phase 03).
+
+## Phase 05: privacy & compliance
+
+Threats introduced by the privacy context, with their mitigations:
+
+| # | Threat | STRIDE | Likelihood | Impact | Mitigation (phase 05) |
+|---|--------|--------|-----------|--------|-----------------------|
+| T31 | DSR disclosure to the wrong person (export/status exfiltration) | Information disclosure | Medium | Critical | Verification before disclosure (session auth or hashed OTP + token); "not found" for unowned requests (no existence oracle); token/passphrase stored hashed (HMAC-peppered); download TTL + download cap |
+| T32 | An opt-out is silently dropped or gated on verification | Repudiation | Low | High | Opt-out path has no verification gate; ledger row + directive materialisation in the submitting transaction; propagation sweep re-asserts to downstream processors |
+| T33 | Crypto-shred is ineffective (key survives, ciphertext recoverable) | Tampering | Low | Critical | Per-subject DEK wrapped by a KEK outside the DB; shred deletes the wrapped DEK; decrypt returns the typed `KeyShredded` error; integration test proves post-erasure decrypt fails |
+| T34 | A jurisdiction misresolved toward a permissive default | Information disclosure | Medium | Critical | Evidence chain stored per resolution; unknown ⇒ most protective profile; matrix test pins every profile's defaults |
+| T35 | Consent/opt-out ledger forged or edited | Tampering | Low | High | Append-only ledger (no UPDATE paths); every privacy action lands in the phase-03 hash-chained audit trail |
+| T36 | GPC honoured in UI but not enforced server-side | Information disclosure | Medium | High | `Sec-GPC` recorded pre-auth in the backend directive engine and bound to the subject on the next authenticated request; integration test proves the denial survives binding |
+| T37 | Tenant operator abuses processor-mode requests against other tenants' subjects | Information disclosure | Low | High | Requests scoped by RLS to the tenant's own end-user subjects; submission audited with the operator id |
+
+## Residual risks accepted in phase 05
+
+- Bound GPC signals influence directives but are not (yet) re-asserted into
+  the session itself on every request; the directive engine re-reads the
+  ledger per resolution, which is the enforcement point.
+- Export artifacts are stored on local disk (encrypted) rather than object
+  storage in the tenant's region; the region pinning is enforced by
+  deployment topology, not yet by the artifact layer.
+- The `#[personal_data]` attribute macro from the plan is delivered as the
+  per-context `data_classes()` registry instead; the CI gate (every context
+  registers a provider) is the enforcement mechanism that keeps the map
+  from rotting.
+- Jurisdiction-profile seeds are operating defaults pending counsel review;
+  the `source_note` column records this until the review happens.

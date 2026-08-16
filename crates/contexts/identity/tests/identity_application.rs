@@ -238,6 +238,17 @@ impl UserRepository for World {
 
 #[async_trait::async_trait]
 impl MembershipRepository for World {
+    async fn remove_all_platform(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<usize, IdentityError> {
+        let mut memory = self.memory.lock().unwrap();
+        let before = memory.memberships.len();
+        memory.memberships.retain(|m| m.user_id() != user_id);
+        Ok(before - memory.memberships.len())
+    }
+
     async fn save(
         &self,
         _scope: &mut ScopedTx<'_>,
@@ -361,6 +372,17 @@ impl MembershipRepository for World {
 
 #[async_trait::async_trait]
 impl LinkedAccountRepository for World {
+    async fn remove_all(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<usize, IdentityError> {
+        let mut memory = self.memory.lock().unwrap();
+        let before = memory.links.len();
+        memory.links.retain(|a| a.user_id() != user_id);
+        Ok(before - memory.links.len())
+    }
+
     async fn find(
         &self,
         _scope: &mut PlatformScope<'_>,
@@ -405,6 +427,19 @@ impl LinkedAccountRepository for World {
 
 #[async_trait::async_trait]
 impl InvitationRepository for World {
+    async fn remove_by_email_platform(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+        email: &str,
+    ) -> Result<usize, IdentityError> {
+        let mut memory = self.memory.lock().unwrap();
+        let before = memory.invitations.len();
+        memory
+            .invitations
+            .retain(|invitation| invitation.email().as_str() != email);
+        Ok(before - memory.invitations.len())
+    }
+
     async fn save(
         &self,
         _scope: &mut ScopedTx<'_>,
@@ -487,6 +522,23 @@ impl InvitationRepository for World {
 
 #[async_trait::async_trait]
 impl LinkIntentRepository for World {
+    async fn remove_by_email_platform(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+        email: &str,
+    ) -> Result<usize, IdentityError> {
+        let mut memory = self.memory.lock().unwrap();
+        let before = memory.intents.len();
+        memory.intents.retain(|intent| {
+            intent
+                .payload()
+                .email()
+                .as_ref()
+                .is_none_or(|e| e.as_str() != email)
+        });
+        Ok(before - memory.intents.len())
+    }
+
     async fn save(
         &self,
         _scope: &mut PlatformScope<'_>,
@@ -626,6 +678,10 @@ impl RoleCatalog for FakeRoleCatalog {
 
 #[async_trait::async_trait]
 impl sanvi_identity::domain::KratosClient for World {
+    async fn delete_identity(&self, _kratos_identity_id: uuid::Uuid) -> Result<(), IdentityError> {
+        Ok(())
+    }
+
     async fn whoami(&self, _session_token: &str) -> Result<Option<SessionInfo>, IdentityError> {
         Ok(None)
     }

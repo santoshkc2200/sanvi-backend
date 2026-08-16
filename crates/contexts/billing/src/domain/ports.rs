@@ -102,6 +102,15 @@ pub trait SubscriptionRepository: Send + Sync {
         subscription: &Subscription,
     ) -> Result<(), BillingError>;
 
+    /// Phase-05 erasure: null the Stripe identifiers on the tenant's
+    /// subscription projection (the row itself is an account/entitlement
+    /// record, not personal data once the pointers are gone).
+    async fn anonymise_stripe_ids(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<usize, BillingError>;
+
     /// The tenant's own row (RLS sees only them).
     async fn find_by_tenant(
         &self,
@@ -219,6 +228,15 @@ pub trait WebhookEventRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         record: &WebhookEventRecord,
     ) -> Result<bool, BillingError>;
+
+    /// Phase-05 erasure: scrub every stored webhook payload that mentions
+    /// this Stripe customer id (the raw payloads are the real local
+    /// personal-data leak: they contain email, name and address).
+    async fn scrub_payloads_for_customer(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stripe_customer_id: &str,
+    ) -> Result<usize, BillingError>;
 
     /// Unprocessed events (not yet `processed_at`, attempts < max), oldest
     /// first — the webhook dispatcher's work queue.
@@ -354,6 +372,10 @@ pub trait StripeClient: Send + Sync {
 
     /// Active Stripe Tax registrations (the tax gate's source of truth).
     async fn list_active_tax_registrations(&self) -> Result<Vec<TaxRegistration>, BillingError>;
+
+    /// Phase-05 erasure: delete the Stripe customer (and its cards, sources
+    /// and subscriptions). A missing customer is success — gone either way.
+    async fn delete_customer(&self, stripe_customer_id: &str) -> Result<(), BillingError>;
 }
 
 /// The access context's entitlement administration, called by webhook

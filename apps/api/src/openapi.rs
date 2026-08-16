@@ -70,6 +70,46 @@ use utoipa::OpenApi;
         sanvi_billing::adapters::http::handlers::set_plan_entitlements,
         sanvi_billing::adapters::http::handlers::apply_subscription_override,
         sanvi_billing::adapters::http::handlers::revoke_subscription_override,
+        sanvi_privacy::adapters::http::handlers::submit_dsr,
+        sanvi_privacy::adapters::http::handlers::verify_dsr,
+        sanvi_privacy::adapters::http::handlers::get_dsr_status,
+        sanvi_privacy::adapters::http::handlers::download_export,
+        sanvi_privacy::adapters::http::handlers::record_opt_out,
+        sanvi_privacy::adapters::http::handlers::limit_sensitive_use,
+        sanvi_privacy::adapters::http::handlers::get_consents,
+        sanvi_privacy::adapters::http::handlers::update_consents,
+        sanvi_privacy::adapters::http::handlers::get_directives,
+        sanvi_privacy::adapters::http::handlers::appeal_request,
+        sanvi_privacy::adapters::http::handlers::rectify_request,
+        sanvi_privacy::adapters::http::handlers::get_privacy_notice,
+        sanvi_privacy::adapters::http::handlers::get_notice_at_collection,
+        sanvi_privacy::adapters::http::handlers::get_public_metrics,
+        sanvi_privacy::adapters::http::handlers::list_public_subprocessors,
+        sanvi_privacy::adapters::http::handlers::submit_tenant_dsr,
+        sanvi_privacy::adapters::http::handlers::list_tenant_dsrs,
+        sanvi_privacy::adapters::http::handlers::list_dsrs,
+        sanvi_privacy::adapters::http::handlers::reject_dsr,
+        sanvi_privacy::adapters::http::handlers::extend_dsr,
+        sanvi_privacy::adapters::http::handlers::list_appeals,
+        sanvi_privacy::adapters::http::handlers::decide_appeal,
+        sanvi_privacy::adapters::http::handlers::list_jurisdictions,
+        sanvi_privacy::adapters::http::handlers::upsert_jurisdiction,
+        sanvi_privacy::adapters::http::handlers::list_holds,
+        sanvi_privacy::adapters::http::handlers::apply_hold,
+        sanvi_privacy::adapters::http::handlers::release_hold,
+        sanvi_privacy::adapters::http::handlers::list_incidents,
+        sanvi_privacy::adapters::http::handlers::record_incident,
+        sanvi_privacy::adapters::http::handlers::list_obligations,
+        sanvi_privacy::adapters::http::handlers::mark_obligation_notified,
+        sanvi_privacy::adapters::http::handlers::list_subprocessors,
+        sanvi_privacy::adapters::http::handlers::upsert_subprocessor,
+        sanvi_privacy::adapters::http::handlers::remove_subprocessor,
+        sanvi_privacy::adapters::http::handlers::list_activities,
+        sanvi_privacy::adapters::http::handlers::upsert_activity,
+        sanvi_privacy::adapters::http::handlers::list_assessments,
+        sanvi_privacy::adapters::http::handlers::upsert_assessment,
+        sanvi_privacy::adapters::http::handlers::list_retention_rules,
+        sanvi_privacy::adapters::http::handlers::upsert_retention_rule,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
@@ -79,7 +119,8 @@ use utoipa::OpenApi;
         (name = "access", description = "Permissions, roles, features and entitlements"),
         (name = "audit", description = "Append-only, hash-chained audit trail"),
         (name = "platform_admin", description = "Operator control plane: tenants, impersonation, approvals"),
-        (name = "billing", description = "Platform billing: plans, subscriptions, invoices, checkout and portal")
+        (name = "billing", description = "Platform billing: plans, subscriptions, invoices, checkout and portal"),
+        (name = "privacy", description = "Privacy & compliance: jurisdiction profiles, consent/opt-out directives, data subject requests (export/erasure/appeals), retention, processing records, sub-processors and breach obligations")
     ),
     info(
         title = "Sanvi API",
@@ -143,6 +184,26 @@ mod tests {
         assert!(json.contains("ImpersonationGrantView"));
         assert!(json.contains("AuditPageView"));
         assert!(json.contains("ApprovalView"));
+    }
+
+    #[test]
+    fn doc_contains_the_privacy_contract() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/privacy/requests"));
+        assert!(json.contains("/api/v1/privacy/opt-out"));
+        assert!(json.contains("/api/v1/privacy/directives"));
+        assert!(json.contains("/api/v1/privacy/consents"));
+        assert!(json.contains("/api/v1/public/privacy/notice"));
+        assert!(json.contains("/api/v1/public/privacy/notice-at-collection"));
+        assert!(json.contains("/api/v1/public/privacy/metrics"));
+        assert!(json.contains("/api/v1/public/subprocessors"));
+        assert!(json.contains("/api/v1/platform/privacy/jurisdictions"));
+        assert!(json.contains("/api/v1/platform/privacy/holds"));
+        assert!(json.contains("/api/v1/platform/privacy/incidents"));
+        assert!(json.contains("/api/v1/tenant/privacy/requests"));
+        assert!(json.contains("PurposeDirective"));
+        assert!(json.contains("SubmitDsrCommand"));
+        assert!(json.contains("JurisdictionProfile"));
     }
 
     #[test]

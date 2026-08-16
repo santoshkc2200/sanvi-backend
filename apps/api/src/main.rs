@@ -16,13 +16,19 @@ use figment::{
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
-    build_billing_state, build_identity_state, build_platform_admin_state, build_system_state,
-    build_tenancy_state,
+    build_billing_state, build_identity_state, build_platform_admin_state, build_privacy_state,
+    build_system_state, build_tenancy_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::RoleCatalog;
 use sanvi_messaging::connect_redis;
 use sanvi_persistence::build_pool;
+use sanvi_privacy::adapters::PrivacyContextProvider;
+use sanvi_privacy::adapters::repos::{
+    SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository, SqlxSignalRepository,
+    SqlxSubjectRepository,
+};
+use sanvi_privacy::domain::ProviderRegistry;
 use sanvi_system::domain::BuildInfo;
 
 /// Load configuration: `configs/base.toml` → `configs/{env}.toml` (selected
@@ -147,6 +153,21 @@ async fn main() -> ExitCode {
             access.list_tenant_overrides.clone(),
         ));
 
+    // Phase 05: the privacy lock is built first because the impersonation
+    // flow consumes it; with the privacy feature off it stays a no-op.
+    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let privacy_requests: Arc<dyn sanvi_privacy::domain::DsrRepository> =
+        Arc::new(SqlxDsrRepository::new());
+    let privacy_lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock> =
+        if config.features.privacy {
+            Arc::new(sanvi_api::DsrPrivacyLock::new(
+                privacy_tx.clone(),
+                privacy_requests.clone(),
+            ))
+        } else {
+            Arc::new(sanvi_platform_admin::adapters::NoopPrivacyLock)
+        };
+
     let platform_admin = build_platform_admin_state(
         pool.clone(),
         &config.platform_admin,
@@ -155,6 +176,7 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
         entitlement_admin,
         audit.writer.clone(),
+        privacy_lock.clone(),
     );
 
     // Phase 04: the billing context consumes the access context's
@@ -173,6 +195,95 @@ async fn main() -> ExitCode {
         None
     };
 
+    // Phase 05: every context crate registers a PersonalDataProvider; the
+    // registry the DSR saga fans out over and the CI test proves complete.
+    let privacy = if config.features.privacy {
+        let privacy_providers: ProviderRegistry = vec![
+            Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
+            Arc::new(
+                sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
+                    privacy_tx.clone(),
+                    Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+                ),
+            ),
+            Arc::new(
+                sanvi_identity::adapters::privacy_provider::IdentityPrivacyProvider::new(
+                    privacy_tx.clone(),
+                    Arc::new(sanvi_identity::adapters::repo::SqlxUserRepository::new()),
+                    Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),
+                    Arc::new(sanvi_identity::adapters::repo::SqlxLinkedAccountRepository::new()),
+                    Arc::new(sanvi_identity::adapters::repo::SqlxInvitationRepository::new()),
+                    Arc::new(sanvi_identity::adapters::repo::SqlxLinkIntentRepository::new()),
+                    Arc::new(
+                        sanvi_identity::adapters::HttpKratosClient::new(
+                            config.ory.kratos_public_url.clone(),
+                            Some(config.ory.kratos_admin_url.clone()),
+                        )
+                        .expect("kratos client construction is infallible"),
+                    ),
+                    Arc::new(sanvi_identity::adapters::SystemClock),
+                ),
+            ),
+            Arc::new(
+                sanvi_access::adapters::privacy_provider::AccessPrivacyProvider::new(
+                    privacy_tx.clone(),
+                    Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
+                    Arc::new(
+                        sanvi_access::adapters::HttpKetoClient::new(
+                            config.ory.keto_read_url.clone(),
+                            config.ory.keto_write_url.clone(),
+                        )
+                        .expect("keto client construction is infallible"),
+                    ),
+                ),
+            ),
+            Arc::new(sanvi_audit::adapters::AuditPrivacyProvider::new(
+                privacy_tx.clone(),
+                Arc::new(sanvi_audit::adapters::SqlxAuditReader::new()),
+                audit.writer.clone(),
+            )),
+            Arc::new(
+                sanvi_platform_admin::adapters::privacy_provider::PlatformAdminPrivacyProvider::new(
+                    privacy_tx.clone(),
+                    Arc::new(
+                        sanvi_platform_admin::adapters::SqlxImpersonationGrantRepository::new(),
+                    ),
+                    Arc::new(sanvi_platform_admin::adapters::SqlxPendingApprovalRepository::new()),
+                    privacy_lock.clone(),
+                ),
+            ),
+            Arc::new(
+                sanvi_billing::adapters::privacy_provider::BillingPrivacyProvider::new(
+                    privacy_tx.clone(),
+                    Arc::new(sanvi_billing::adapters::SqlxSubscriptionRepository::new()),
+                    Arc::new(sanvi_billing::adapters::SqlxInvoiceRepository::new()),
+                    Arc::new(sanvi_billing::adapters::SqlxWebhookEventRepository::new()),
+                    Arc::new(sanvi_billing::adapters::HttpStripeClient::new(
+                        config.billing.stripe_api_base.clone(),
+                        config.billing.stripe_api_key.clone(),
+                        config.billing.stripe_api_version.clone(),
+                        None,
+                    )),
+                ),
+            ),
+            Arc::new(PrivacyContextProvider::new(
+                privacy_tx.clone(),
+                Arc::new(SqlxSubjectRepository::new()),
+                Arc::new(SqlxConsentRepository::new()),
+                Arc::new(SqlxSignalRepository::new()),
+                Arc::new(SqlxDirectiveRepository::new()),
+            )),
+        ];
+        Some(build_privacy_state(
+            pool.clone(),
+            &config.privacy,
+            privacy_providers,
+            audit.writer.clone(),
+        ))
+    } else {
+        None
+    };
+
     let bind_config = config.clone();
     let factory_config = config.clone();
     let server = match bind(&bind_config.server, move || {
@@ -186,6 +297,7 @@ async fn main() -> ExitCode {
             audit.clone(),
             platform_admin.clone(),
             billing.clone(),
+            privacy.clone(),
             redis.clone(),
         )
     }) {

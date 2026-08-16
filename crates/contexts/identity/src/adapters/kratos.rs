@@ -387,6 +387,28 @@ impl KratosClient for HttpKratosClient {
             ))),
         }
     }
+
+    async fn delete_identity(&self, kratos_identity_id: uuid::Uuid) -> Result<(), IdentityError> {
+        let Some(admin_url) = &self.admin_url else {
+            // Without the admin API the tombstone is a best-effort no-op;
+            // the caller records it in the erasure report.
+            return Ok(());
+        };
+        let response = self
+            .http
+            .delete(format!("{admin_url}/admin/identities/{kratos_identity_id}"))
+            .send()
+            .await
+            .map_err(|err| IdentityError::KratosUnreachable(err.to_string()))?;
+        match response.status() {
+            reqwest::StatusCode::NO_CONTENT
+            | reqwest::StatusCode::OK
+            | reqwest::StatusCode::NOT_FOUND => Ok(()),
+            other => Err(IdentityError::KratosRejected(format!(
+                "identity deletion returned {other}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]

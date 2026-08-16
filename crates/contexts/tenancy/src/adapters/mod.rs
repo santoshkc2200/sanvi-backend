@@ -2,6 +2,7 @@
 
 pub mod events;
 pub mod http;
+pub mod privacy_provider;
 pub mod repo;
 pub mod resolution;
 

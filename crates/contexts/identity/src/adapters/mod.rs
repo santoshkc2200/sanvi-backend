@@ -4,6 +4,7 @@ pub mod events;
 pub mod http;
 pub mod kratos;
 pub mod notifications;
+pub mod privacy_provider;
 pub mod repo;
 pub mod session_cache;
 pub mod verifier;

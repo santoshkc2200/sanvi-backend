@@ -62,6 +62,32 @@ use sanvi_messaging::{
     StreamConsumer, StreamName, StreamsClient, connect_redis,
 };
 use sanvi_persistence::{DatabaseConfig, build_pool};
+use sanvi_privacy::{
+    PrivacyConfig,
+    adapters::{
+        DisabledEnvelopeCrypto, LoggingNotifications as PrivacyLoggingNotifications,
+        LoggingSubProcessorNotifier, OutboxEventPublisher as PrivacyEvents, PrivacyContextProvider,
+        Sha256Hasher, SqlxAppealRepository, SqlxAuthorizedAgentRepository, SqlxBreachRepository,
+        SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository, SqlxEnvelopeCrypto,
+        SqlxExportArtifactRepository, SqlxJurisdictionRepository, SqlxLegalHoldRepository,
+        SqlxParticipantRepository, SqlxRequestMetricsRepository, SqlxRetentionRuleRepository,
+        SqlxSignalRepository, SqlxSubProcessorRepository, SqlxSubjectKeyRepository,
+        SqlxSubjectRepository, SqlxVerificationRepository, SystemClock as PrivacySystemClock,
+        ZipPackager,
+    },
+    application::{
+        CleanupExpiredExports, GenerateAnnualMetrics, ProcessDsrBatch, PropagateOptOuts,
+        RetentionSweep,
+    },
+    domain::{
+        AppealRepository, AuthorizedAgentRepository, BreachRepository, ConsentRepository,
+        DirectiveRepository, DsrRepository, EnvelopeCrypto, ExportArtifactRepository, Hasher,
+        JurisdictionRepository, LegalHoldRepository, Notifications as PrivacyNotificationsTrait,
+        ParticipantRepository, ProviderRegistry, RequestMetricsRepository, RetentionRuleRepository,
+        SignalRepository, SubProcessorNotifier, SubProcessorRepository, SubjectKeyRepository,
+        SubjectRepository, VerificationRepository,
+    },
+};
 use sanvi_telemetry::TelemetryConfig;
 use sanvi_tenancy::{
     TenancyConfig,
@@ -122,6 +148,16 @@ pub struct SchedulerConfig {
     pub tax_check_interval_secs: u64,
     /// Billing gauges refresh (phase 04).
     pub billing_metrics_interval_secs: u64,
+    /// DSR saga advancement pass (phase 05).
+    pub dsr_advance_interval_secs: u64,
+    /// Opt-out propagation to downstream processors (phase 05).
+    pub optout_propagation_interval_secs: u64,
+    /// Retention sweep (dry-run by default; phase 05).
+    pub retention_sweep_interval_secs: u64,
+    /// Expired export cleanup (phase 05).
+    pub export_cleanup_interval_secs: u64,
+    /// Annual request-metrics generation (phase 05).
+    pub privacy_metrics_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -138,6 +174,11 @@ impl Default for SchedulerConfig {
             reconciliation_interval_secs: 86400,
             tax_check_interval_secs: 86400,
             billing_metrics_interval_secs: 60,
+            dsr_advance_interval_secs: 30,
+            optout_propagation_interval_secs: 60,
+            retention_sweep_interval_secs: 86400,
+            export_cleanup_interval_secs: 3600,
+            privacy_metrics_interval_secs: 86400,
         }
     }
 }
@@ -173,6 +214,7 @@ pub struct WorkerConfig {
     pub access: AccessConfig,
     pub audit: AuditConfig,
     pub billing: BillingConfig,
+    pub privacy: PrivacyConfig,
 }
 
 impl WorkerConfig {
@@ -184,6 +226,7 @@ impl WorkerConfig {
         self.access.validate()?;
         self.audit.validate()?;
         self.billing.validate()?;
+        self.privacy.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -464,6 +507,216 @@ async fn main() -> ExitCode {
     let billing_event_handler =
         sanvi_billing::adapters::billing_event_handler(entitlement_cache.clone());
 
+    // --- privacy context (phase 05): DSR saga + compliance jobs --------------
+    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let privacy_subjects: std::sync::Arc<dyn SubjectRepository> =
+        std::sync::Arc::new(SqlxSubjectRepository::new());
+    let privacy_jurisdictions: std::sync::Arc<dyn JurisdictionRepository> =
+        std::sync::Arc::new(SqlxJurisdictionRepository::new());
+    let privacy_requests: std::sync::Arc<dyn DsrRepository> =
+        std::sync::Arc::new(SqlxDsrRepository::new());
+    let privacy_appeals: std::sync::Arc<dyn AppealRepository> =
+        std::sync::Arc::new(SqlxAppealRepository::new());
+    let privacy_participants: std::sync::Arc<dyn ParticipantRepository> =
+        std::sync::Arc::new(SqlxParticipantRepository::new());
+    let privacy_consents: std::sync::Arc<dyn ConsentRepository> =
+        std::sync::Arc::new(SqlxConsentRepository::new());
+    let privacy_signals: std::sync::Arc<dyn SignalRepository> =
+        std::sync::Arc::new(SqlxSignalRepository::new());
+    let privacy_directives: std::sync::Arc<dyn DirectiveRepository> =
+        std::sync::Arc::new(SqlxDirectiveRepository::new());
+    let privacy_holds: std::sync::Arc<dyn LegalHoldRepository> =
+        std::sync::Arc::new(SqlxLegalHoldRepository::new());
+    let privacy_keys: std::sync::Arc<dyn SubjectKeyRepository> =
+        std::sync::Arc::new(SqlxSubjectKeyRepository::new());
+    let privacy_artifacts: std::sync::Arc<dyn ExportArtifactRepository> =
+        std::sync::Arc::new(SqlxExportArtifactRepository::new());
+    let privacy_challenges: std::sync::Arc<dyn VerificationRepository> =
+        std::sync::Arc::new(SqlxVerificationRepository::new());
+    let privacy_agents: std::sync::Arc<dyn AuthorizedAgentRepository> =
+        std::sync::Arc::new(SqlxAuthorizedAgentRepository::new());
+    let privacy_processors: std::sync::Arc<dyn SubProcessorRepository> =
+        std::sync::Arc::new(SqlxSubProcessorRepository::new());
+    let privacy_breaches: std::sync::Arc<dyn BreachRepository> =
+        std::sync::Arc::new(SqlxBreachRepository::new());
+    let privacy_rules: std::sync::Arc<dyn RetentionRuleRepository> =
+        std::sync::Arc::new(SqlxRetentionRuleRepository::new());
+    let privacy_metrics: std::sync::Arc<dyn RequestMetricsRepository> =
+        std::sync::Arc::new(SqlxRequestMetricsRepository::new());
+    let privacy_events = std::sync::Arc::new(PrivacyEvents::new());
+    let privacy_notifications: std::sync::Arc<dyn PrivacyNotificationsTrait> =
+        std::sync::Arc::new(PrivacyLoggingNotifications);
+    let privacy_clock = std::sync::Arc::new(PrivacySystemClock);
+    let privacy_hasher: std::sync::Arc<dyn Hasher> =
+        std::sync::Arc::new(Sha256Hasher::new(if config.privacy.kek.is_empty() {
+            "dev-pepper-insecure".to_string()
+        } else {
+            config.privacy.kek.clone()
+        }));
+    let privacy_crypto: std::sync::Arc<dyn EnvelopeCrypto> = if config.privacy.encryption_enabled()
+    {
+        let kek: [u8; 32] = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &config.privacy.kek,
+        )
+        .expect("validated by PrivacyConfig")
+        .try_into()
+        .expect("validated length");
+        std::sync::Arc::new(SqlxEnvelopeCrypto::new(
+            privacy_tx.clone(),
+            privacy_keys.clone(),
+            kek,
+            config.privacy.kek_id.clone(),
+        ))
+    } else {
+        std::sync::Arc::new(DisabledEnvelopeCrypto)
+    };
+    let privacy_notifier: std::sync::Arc<dyn SubProcessorNotifier> =
+        std::sync::Arc::new(LoggingSubProcessorNotifier);
+
+    // The provider registry: the same eight contexts the CI test enforces.
+    // The worker rebuilds it (providers are stateless ZSTs + repos).
+    let privacy_providers: ProviderRegistry = vec![
+        std::sync::Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
+        std::sync::Arc::new(
+            sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
+                privacy_tx.clone(),
+                std::sync::Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+            ),
+        ),
+        std::sync::Arc::new(
+            sanvi_identity::adapters::privacy_provider::IdentityPrivacyProvider::new(
+                privacy_tx.clone(),
+                std::sync::Arc::new(sanvi_identity::adapters::repo::SqlxUserRepository::new()),
+                std::sync::Arc::new(
+                    sanvi_identity::adapters::repo::SqlxMembershipRepository::new(),
+                ),
+                std::sync::Arc::new(
+                    sanvi_identity::adapters::repo::SqlxLinkedAccountRepository::new(),
+                ),
+                std::sync::Arc::new(
+                    sanvi_identity::adapters::repo::SqlxInvitationRepository::new(),
+                ),
+                std::sync::Arc::new(
+                    sanvi_identity::adapters::repo::SqlxLinkIntentRepository::new(),
+                ),
+                std::sync::Arc::new(
+                    sanvi_identity::adapters::HttpKratosClient::new(
+                        "http://localhost:4433".to_string(),
+                        Some("http://localhost:4434".to_string()),
+                    )
+                    .expect("kratos client construction is infallible"),
+                ),
+                std::sync::Arc::new(sanvi_identity::adapters::SystemClock),
+            ),
+        ),
+        std::sync::Arc::new(
+            sanvi_access::adapters::privacy_provider::AccessPrivacyProvider::new(
+                privacy_tx.clone(),
+                std::sync::Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
+                match sanvi_access::adapters::HttpKetoClient::new(
+                    config.ory.keto_read_url.clone(),
+                    config.ory.keto_write_url.clone(),
+                ) {
+                    Ok(client) => std::sync::Arc::new(client),
+                    Err(err) => {
+                        eprintln!("failed to build the keto client: {err}");
+                        return ExitCode::from(2);
+                    }
+                },
+            ),
+        ),
+        std::sync::Arc::new(sanvi_audit::adapters::AuditPrivacyProvider::new(
+            privacy_tx.clone(),
+            std::sync::Arc::new(SqlxAuditReader::new()),
+            std::sync::Arc::new(SqlxAuditWriter::new()),
+        )),
+        std::sync::Arc::new(
+            sanvi_platform_admin::adapters::privacy_provider::PlatformAdminPrivacyProvider::new(
+                privacy_tx.clone(),
+                std::sync::Arc::new(
+                    sanvi_platform_admin::adapters::SqlxImpersonationGrantRepository::new(),
+                ),
+                std::sync::Arc::new(
+                    sanvi_platform_admin::adapters::SqlxPendingApprovalRepository::new(),
+                ),
+                std::sync::Arc::new(sanvi_platform_admin::adapters::NoopPrivacyLock),
+            ),
+        ),
+        std::sync::Arc::new(
+            sanvi_billing::adapters::privacy_provider::BillingPrivacyProvider::new(
+                privacy_tx.clone(),
+                std::sync::Arc::new(sanvi_billing::adapters::SqlxSubscriptionRepository::new()),
+                std::sync::Arc::new(sanvi_billing::adapters::SqlxInvoiceRepository::new()),
+                std::sync::Arc::new(sanvi_billing::adapters::SqlxWebhookEventRepository::new()),
+                billing_stripe.clone(),
+            ),
+        ),
+        std::sync::Arc::new(PrivacyContextProvider::new(
+            privacy_tx.clone(),
+            privacy_subjects.clone(),
+            privacy_consents.clone(),
+            privacy_signals.clone(),
+            privacy_directives.clone(),
+        )),
+    ];
+
+    let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(
+        privacy_tx.clone(),
+        privacy_requests.clone(),
+        privacy_participants.clone(),
+        privacy_holds.clone(),
+        privacy_artifacts.clone(),
+        privacy_providers.clone(),
+        std::sync::Arc::new(ZipPackager::new()),
+        privacy_crypto.clone(),
+        privacy_notifications.clone(),
+        privacy_events.clone(),
+        privacy_hasher.clone(),
+        privacy_clock.clone(),
+        config.privacy.export_dir.clone(),
+        config.privacy.export_ttl_days,
+        config.privacy.export_max_downloads,
+        config.privacy.backup_retention_days,
+    ));
+    let optout_propagation = std::sync::Arc::new(PropagateOptOuts::new(
+        privacy_tx.clone(),
+        privacy_consents.clone(),
+        privacy_processors.clone(),
+        privacy_notifier,
+    ));
+    let retention_sweep = std::sync::Arc::new(RetentionSweep::new(
+        privacy_tx.clone(),
+        privacy_rules.clone(),
+        privacy_consents.clone(),
+        privacy_signals.clone(),
+        privacy_clock.clone(),
+        std::sync::Arc::new(sanvi_audit::adapters::PrivacyAuditWriterAdapter::new(
+            std::sync::Arc::new(SqlxAuditWriter::new()),
+        )),
+        config.privacy.retention_dry_run,
+        config.privacy.retention_sweep_batch_size,
+    ));
+    let export_cleanup = std::sync::Arc::new(CleanupExpiredExports::new(
+        privacy_tx.clone(),
+        privacy_artifacts.clone(),
+    ));
+    let annual_metrics = std::sync::Arc::new(GenerateAnnualMetrics::new(
+        privacy_tx.clone(),
+        privacy_requests.clone(),
+        privacy_metrics.clone(),
+        privacy_clock.clone(),
+    ));
+    let _ = (
+        privacy_jurisdictions,
+        privacy_appeals,
+        privacy_challenges,
+        privacy_agents,
+        privacy_breaches,
+        privacy_rules,
+        privacy_metrics,
+    );
+
     // --- scheduler: purge + idempotency + quota rollover + expiry + audit ----
     let events = Arc::new(TenancyEventPublisher::new());
     let clock = Arc::new(TenancySystemClock);
@@ -728,6 +981,122 @@ async fn main() -> ExitCode {
                                 .set(count);
                         }
                         scope.commit().await.map_err(|err| anyhow::anyhow!(err))?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        // --- phase 05: privacy --------------------------------------------------
+        Arc::new(FnJob::new(
+            "privacy.dsr_advance",
+            Duration::from_secs(config.scheduler.dsr_advance_interval_secs),
+            {
+                let process = dsr_process.clone();
+                move || {
+                    let process = process.clone();
+                    Box::pin(async move {
+                        let report = process
+                            .execute(100)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.advanced > 0 || report.escalated > 0 {
+                            tracing::info!(
+                                advanced = report.advanced,
+                                completed = report.completed,
+                                partially_complete = report.partially_complete,
+                                failed = report.failed,
+                                escalated = report.escalated,
+                                shreds = report.shreds,
+                                exports = report.exports_packaged,
+                                "privacy DSR saga pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "privacy.optout_propagation",
+            Duration::from_secs(config.scheduler.optout_propagation_interval_secs),
+            {
+                let propagate = optout_propagation.clone();
+                move || {
+                    let propagate = propagate.clone();
+                    Box::pin(async move {
+                        let report = propagate
+                            .execute(100)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.propagated > 0 || report.failed > 0 {
+                            tracing::info!(
+                                propagated = report.propagated,
+                                failed = report.failed,
+                                "opt-out propagation pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "privacy.retention_sweep",
+            Duration::from_secs(config.scheduler.retention_sweep_interval_secs),
+            {
+                let sweep = retention_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep.execute().await.map_err(|err| anyhow::anyhow!(err))?;
+                        tracing::info!(
+                            dry_run = report.dry_run,
+                            scanned_consents = report.scanned.consents,
+                            deleted_consents = report.deleted.consents,
+                            deleted_signals = report.deleted.preference_signals,
+                            anonymised = report.deleted.anonymised,
+                            "retention sweep pass",
+                        );
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "privacy.export_cleanup",
+            Duration::from_secs(config.scheduler.export_cleanup_interval_secs),
+            {
+                let cleanup = export_cleanup.clone();
+                move || {
+                    let cleanup = cleanup.clone();
+                    Box::pin(async move {
+                        let removed = cleanup
+                            .execute(500)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if removed > 0 {
+                            tracing::info!(removed, "expired export artifacts removed");
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "privacy.annual_metrics",
+            Duration::from_secs(config.scheduler.privacy_metrics_interval_secs),
+            {
+                let generate = annual_metrics.clone();
+                move || {
+                    let generate = generate.clone();
+                    Box::pin(async move {
+                        let rows = generate
+                            .execute(None)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if rows > 0 {
+                            tracing::info!(rows, "annual request metrics generated");
+                        }
                         Ok(())
                     })
                 }

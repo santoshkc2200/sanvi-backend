@@ -97,7 +97,7 @@ use sanvi_identity::{
 use sanvi_platform_admin::{
     PlatformAdminConfig,
     adapters::{
-        ApprovalGateAdapter, NoopPrivacyLock, OutboxEventPublisher as PlatformAdminEvents,
+        ApprovalGateAdapter, OutboxEventPublisher as PlatformAdminEvents,
         SqlxImpersonationGrantRepository, SqlxImpersonationVerifier, SqlxPendingApprovalRepository,
         SqlxTenantAdminViewRepository, SystemClock as PlatformAdminClock,
         SystemIdGenerator as PlatformAdminIds,
@@ -114,6 +114,47 @@ use sanvi_platform_admin::{
         TenantAdminViewRepository,
     },
     routes as platform_admin_routes,
+};
+use sanvi_privacy::{
+    PrivacyConfig,
+    adapters::{
+        DisabledEnvelopeCrypto, GpcSignalMiddleware,
+        LoggingNotifications as PrivacyLoggingNotifications, LoggingSubProcessorNotifier,
+        OutboxEventPublisher as PrivacyEvents, RuleBasedObligationCalculator, Sha256Hasher,
+        SqlxAppealRepository, SqlxAuthorizedAgentRepository, SqlxBreachRepository,
+        SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository, SqlxEnvelopeCrypto,
+        SqlxExportArtifactRepository, SqlxJurisdictionRepository, SqlxLegalHoldRepository,
+        SqlxParticipantRepository, SqlxProcessingActivityRepository, SqlxRequestMetricsRepository,
+        SqlxRetentionRuleRepository, SqlxRiskAssessmentRepository, SqlxSignalRepository,
+        SqlxSubProcessorRepository, SqlxSubjectKeyRepository, SqlxSubjectRepository,
+        SqlxVerificationRepository, SystemClock as PrivacySystemClock,
+        SystemIdGenerator as PrivacySystemIdGenerator, ZipPackager,
+    },
+    application::{
+        AppealRequest, ApplyLegalHold, CleanupExpiredExports, DecideAppeal, DownloadExport,
+        ExtendDeadline, GenerateAnnualMetrics, GetDirectives, GetRequestStatus, ListActivities,
+        ListAssessments, ListHolds, ListIncidents, ListJurisdictions, ListObligations,
+        ListOpenAppeals, ListRequestsOperator, ListRetentionRules, ListSubProcessors,
+        MarkBreachNotified, NoticeService, PatchRequest, PersistedDirectiveResolver,
+        ProcessDsrBatch, PropagateOptOuts, PublicMetrics, RecordBreachIncident,
+        RecordConsentChange, RecordLimitSensitive, RecordOptOut,
+        RejectRequest as PrivacyRejectRequest, ReleaseLegalHold, RemoveSubProcessor,
+        RetentionSweep, SubmitDsr, SubmitTenantRequest, UpsertActivity, UpsertAssessment,
+        UpsertJurisdiction, UpsertRetentionRule, UpsertSubProcessor, VerifyRequest,
+    },
+    domain::{
+        AppealRepository, AuditWriter as PrivacyAuditWriter, AuthorizedAgentRepository,
+        BreachObligationCalculator, BreachRepository, Clock as PrivacyClock, ConsentRepository,
+        DirectiveRepository, DirectiveResolver, DsrRepository, EnvelopeCrypto,
+        EventPublisher as PrivacyEventPublisher, ExportArtifactRepository, ExportPackager, Hasher,
+        IdGenerator as PrivacyIds, JurisdictionRepository,
+        LegalHoldRepository as PrivacyLegalHoldRepository, Notifications as PrivacyNotifications,
+        ParticipantRepository, ProcessingActivityRepository as PrivacyActivityRepository,
+        ProviderRegistry, RequestMetricsRepository, RetentionRuleRepository,
+        RiskAssessmentRepository as PrivacyAssessmentRepository, SignalRepository,
+        SubProcessorNotifier, SubProcessorRepository, SubjectKeyRepository, SubjectRepository,
+        VerificationRepository,
+    },
 };
 use sanvi_system::{
     SystemState,
@@ -958,6 +999,7 @@ pub fn build_platform_admin_state(
     entitlements: Arc<dyn EntitlementRepository>,
     entitlement_admin: Arc<dyn EntitlementAdmin>,
     audit_writer: Arc<dyn AuditWriter>,
+    privacy_lock: Arc<dyn PrivacyLock>,
 ) -> PlatformAdminWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
     let grants: Arc<dyn ImpersonationGrantRepository> =
@@ -967,7 +1009,6 @@ pub fn build_platform_admin_state(
     let clock: Arc<dyn PlatformAdminClockTrait> = Arc::new(PlatformAdminClock);
     let ids: Arc<dyn PlatformAdminIdsTrait> = Arc::new(PlatformAdminIds);
     let events: Arc<dyn PlatformAdminEventsTrait> = Arc::new(PlatformAdminEvents::new());
-    let privacy_lock: Arc<dyn PrivacyLock> = Arc::new(NoopPrivacyLock);
 
     let views: Arc<dyn TenantAdminViewRepository> = Arc::new(SqlxTenantAdminViewRepository::new(
         tenants,
@@ -1046,6 +1087,467 @@ pub fn build_platform_admin_state(
         state,
         impersonation,
         approval_gate,
+    }
+}
+
+/// The privacy context's cross-context wiring: HTTP state, the GPC
+/// middleware, the directive resolver every other context consults, the
+/// provider registry the DSR saga fans out over, the worker jobs and the
+/// jurisdiction-driven impersonation lock.
+#[derive(Clone)]
+pub struct PrivacyWiring {
+    pub state: sanvi_privacy::adapters::http::PrivacyState,
+    pub gpc: GpcSignalMiddleware,
+    pub resolver: Arc<dyn DirectiveResolver>,
+    pub registry: ProviderRegistry,
+    pub process_dsr: Arc<ProcessDsrBatch>,
+    pub propagate_opt_outs: Arc<PropagateOptOuts>,
+    pub retention_sweep: Arc<RetentionSweep>,
+    pub cleanup_exports: Arc<CleanupExpiredExports>,
+    pub generate_metrics: Arc<GenerateAnnualMetrics>,
+    pub lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock>,
+}
+
+/// The jurisdiction-driven privacy lock (phase 05 wires the real
+/// implementation): a tenant with an open erasure request cannot be
+/// impersonated.
+pub struct DsrPrivacyLock {
+    tx_manager: sanvi_persistence::TxManager,
+    requests: Arc<dyn DsrRepository>,
+}
+
+impl DsrPrivacyLock {
+    pub fn new(tx_manager: sanvi_persistence::TxManager, requests: Arc<dyn DsrRepository>) -> Self {
+        Self {
+            tx_manager,
+            requests,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
+    async fn is_locked(
+        &self,
+        tenant_id: uuid::Uuid,
+    ) -> Result<bool, sanvi_platform_admin::domain::PlatformAdminError> {
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("privacy_lock_check", "privacy")
+            .await
+            .map_err(|err| {
+                sanvi_platform_admin::domain::PlatformAdminError::Storage(err.to_string())
+            })?;
+        let locked = self
+            .requests
+            .has_open_erasure_for_tenant(&mut scope, tenant_id)
+            .await
+            .map_err(|err| {
+                sanvi_platform_admin::domain::PlatformAdminError::Storage(err.to_string())
+            })?;
+        scope.commit().await.map_err(|err| {
+            sanvi_platform_admin::domain::PlatformAdminError::Storage(err.to_string())
+        })?;
+        Ok(locked)
+    }
+}
+
+/// Build the privacy context's application state. `providers` is the
+/// registry built from every context crate's provider (missing one fails
+/// the CI registry test); the audit adapter records every privacy action in
+/// the phase-03 audit chain.
+#[allow(clippy::too_many_arguments)]
+pub fn build_privacy_state(
+    pool: sanvi_persistence::PgPool,
+    config: &PrivacyConfig,
+    providers: ProviderRegistry,
+    audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter>,
+) -> PrivacyWiring {
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let audit: Arc<dyn PrivacyAuditWriter> = Arc::new(
+        sanvi_audit::adapters::PrivacyAuditWriterAdapter::new(audit_writer.clone()),
+    );
+
+    let subjects: Arc<dyn SubjectRepository> = Arc::new(SqlxSubjectRepository::new());
+    let jurisdictions: Arc<dyn JurisdictionRepository> =
+        Arc::new(SqlxJurisdictionRepository::new());
+    let requests: Arc<dyn DsrRepository> = Arc::new(SqlxDsrRepository::new());
+    let appeals: Arc<dyn AppealRepository> = Arc::new(SqlxAppealRepository::new());
+    let participants: Arc<dyn ParticipantRepository> = Arc::new(SqlxParticipantRepository::new());
+    let consents: Arc<dyn ConsentRepository> = Arc::new(SqlxConsentRepository::new());
+    let signals: Arc<dyn SignalRepository> = Arc::new(SqlxSignalRepository::new());
+    let directives: Arc<dyn DirectiveRepository> = Arc::new(SqlxDirectiveRepository::new());
+    let holds: Arc<dyn PrivacyLegalHoldRepository> = Arc::new(SqlxLegalHoldRepository::new());
+    let keys: Arc<dyn SubjectKeyRepository> = Arc::new(SqlxSubjectKeyRepository::new());
+    let artifacts: Arc<dyn ExportArtifactRepository> =
+        Arc::new(SqlxExportArtifactRepository::new());
+    let challenges: Arc<dyn VerificationRepository> = Arc::new(SqlxVerificationRepository::new());
+    let agents: Arc<dyn AuthorizedAgentRepository> = Arc::new(SqlxAuthorizedAgentRepository::new());
+    let processors: Arc<dyn SubProcessorRepository> = Arc::new(SqlxSubProcessorRepository::new());
+    let breaches: Arc<dyn BreachRepository> = Arc::new(SqlxBreachRepository::new());
+    let rules: Arc<dyn RetentionRuleRepository> = Arc::new(SqlxRetentionRuleRepository::new());
+    let metrics: Arc<dyn RequestMetricsRepository> = Arc::new(SqlxRequestMetricsRepository::new());
+    let activities: Arc<dyn PrivacyActivityRepository> =
+        Arc::new(SqlxProcessingActivityRepository::new());
+    let assessments: Arc<dyn PrivacyAssessmentRepository> =
+        Arc::new(SqlxRiskAssessmentRepository::new());
+
+    let events: Arc<dyn PrivacyEventPublisher> = Arc::new(PrivacyEvents::new());
+    let notifications: Arc<dyn PrivacyNotifications> = Arc::new(PrivacyLoggingNotifications);
+    let clock: Arc<dyn PrivacyClock> = Arc::new(PrivacySystemClock);
+    let ids: Arc<dyn PrivacyIds> = Arc::new(PrivacySystemIdGenerator);
+    let hasher: Arc<dyn Hasher> = Arc::new(Sha256Hasher::new(if config.kek.is_empty() {
+        "dev-pepper-insecure".to_string()
+    } else {
+        config.kek.clone()
+    }));
+    let crypto: Arc<dyn EnvelopeCrypto> = if config.encryption_enabled() {
+        let kek: [u8; 32] =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &config.kek)
+                .expect("validated by PrivacyConfig")
+                .try_into()
+                .expect("validated length");
+        Arc::new(SqlxEnvelopeCrypto::new(
+            tx_manager.clone(),
+            keys.clone(),
+            kek,
+            config.kek_id.clone(),
+        ))
+    } else {
+        Arc::new(DisabledEnvelopeCrypto)
+    };
+    let packager: Arc<dyn ExportPackager> = Arc::new(ZipPackager::new());
+    let calculator: Arc<dyn BreachObligationCalculator> =
+        Arc::new(RuleBasedObligationCalculator::new());
+    let notifier: Arc<dyn SubProcessorNotifier> = Arc::new(LoggingSubProcessorNotifier);
+
+    let resolver: Arc<dyn DirectiveResolver> = Arc::new(PersistedDirectiveResolver::new(
+        tx_manager.clone(),
+        subjects.clone(),
+        jurisdictions.clone(),
+        consents.clone(),
+        signals.clone(),
+        directives.clone(),
+        clock.clone(),
+    ));
+
+    let submit_dsr = Arc::new(SubmitDsr::new(
+        tx_manager.clone(),
+        subjects.clone(),
+        jurisdictions.clone(),
+        requests.clone(),
+        participants.clone(),
+        challenges.clone(),
+        agents.clone(),
+        consents.clone(),
+        directives.clone(),
+        signals.clone(),
+        events.clone(),
+        notifications.clone(),
+        audit.clone(),
+        hasher.clone(),
+        ids.clone(),
+        clock.clone(),
+        providers.clone(),
+        config.notice_version.clone(),
+        config.verification_otp_digits,
+        config.verification_ttl_secs,
+    ));
+    let submit_tenant = Arc::new(SubmitTenantRequest::new((*submit_dsr).clone()));
+    let verify = Arc::new(VerifyRequest::new(
+        tx_manager.clone(),
+        requests.clone(),
+        challenges.clone(),
+        participants.clone(),
+        hasher.clone(),
+        clock.clone(),
+        providers.clone(),
+        audit.clone(),
+        config.verification_max_attempts,
+    ));
+    let get_status = Arc::new(GetRequestStatus::new(
+        tx_manager.clone(),
+        requests.clone(),
+        appeals.clone(),
+        challenges.clone(),
+        hasher.clone(),
+    ));
+    let list_requests = Arc::new(ListRequestsOperator::new(
+        tx_manager.clone(),
+        requests.clone(),
+    ));
+    let extend = Arc::new(ExtendDeadline::new(
+        tx_manager.clone(),
+        requests.clone(),
+        jurisdictions.clone(),
+        clock.clone(),
+        audit.clone(),
+    ));
+    let reject = Arc::new(PrivacyRejectRequest::new(
+        tx_manager.clone(),
+        requests.clone(),
+        events.clone(),
+        clock.clone(),
+        audit.clone(),
+    ));
+    let patch = Arc::new(PatchRequest::new(
+        tx_manager.clone(),
+        requests.clone(),
+        providers.clone(),
+        audit.clone(),
+    ));
+    let appeal = Arc::new(AppealRequest::new(
+        tx_manager.clone(),
+        requests.clone(),
+        appeals.clone(),
+        jurisdictions.clone(),
+        events.clone(),
+        audit.clone(),
+        ids.clone(),
+        clock.clone(),
+    ));
+    let decide_appeal = Arc::new(DecideAppeal::new(
+        tx_manager.clone(),
+        requests.clone(),
+        appeals.clone(),
+        events.clone(),
+        audit.clone(),
+        clock.clone(),
+    ));
+    let list_appeals = Arc::new(ListOpenAppeals::new(tx_manager.clone(), appeals.clone()));
+    let get_directives = Arc::new(GetDirectives::new(
+        resolver.clone(),
+        signals.clone(),
+        subjects.clone(),
+        tx_manager.clone(),
+    ));
+    let record_consent = Arc::new(RecordConsentChange::new(
+        tx_manager.clone(),
+        subjects.clone(),
+        jurisdictions.clone(),
+        consents.clone(),
+        directives.clone(),
+        events.clone(),
+        clock.clone(),
+    ));
+    let record_opt_out = Arc::new(RecordOptOut::new(
+        tx_manager.clone(),
+        subjects.clone(),
+        jurisdictions.clone(),
+        consents.clone(),
+        signals.clone(),
+        directives.clone(),
+        events.clone(),
+        clock.clone(),
+        config.notice_version.clone(),
+    ));
+    let limit_sensitive = Arc::new(RecordLimitSensitive::new((*record_opt_out).clone()));
+    let download = Arc::new(DownloadExport::new(
+        tx_manager.clone(),
+        requests.clone(),
+        artifacts.clone(),
+        hasher.clone(),
+        clock.clone(),
+    ));
+    let list_jurisdictions = Arc::new(ListJurisdictions::new(
+        tx_manager.clone(),
+        jurisdictions.clone(),
+    ));
+    let upsert_jurisdiction = Arc::new(UpsertJurisdiction::new(
+        tx_manager.clone(),
+        jurisdictions.clone(),
+        audit.clone(),
+        clock.clone(),
+    ));
+    let apply_hold = Arc::new(ApplyLegalHold::new(
+        tx_manager.clone(),
+        holds.clone(),
+        events.clone(),
+        audit.clone(),
+        ids.clone(),
+        clock.clone(),
+    ));
+    let release_hold = Arc::new(ReleaseLegalHold::new(
+        tx_manager.clone(),
+        holds.clone(),
+        events.clone(),
+        audit.clone(),
+    ));
+    let list_holds = Arc::new(ListHolds::new(tx_manager.clone(), holds.clone()));
+    let record_incident = Arc::new(RecordBreachIncident::new(
+        tx_manager.clone(),
+        breaches.clone(),
+        jurisdictions.clone(),
+        calculator,
+        events.clone(),
+        audit.clone(),
+        ids.clone(),
+        clock.clone(),
+    ));
+    let list_incidents = Arc::new(ListIncidents::new(tx_manager.clone(), breaches.clone()));
+    let list_obligations = Arc::new(ListObligations::new(tx_manager.clone(), breaches.clone()));
+    let mark_notified = Arc::new(MarkBreachNotified::new(
+        tx_manager.clone(),
+        breaches.clone(),
+        audit.clone(),
+    ));
+    let list_subprocessors = Arc::new(ListSubProcessors::new(
+        tx_manager.clone(),
+        processors.clone(),
+    ));
+    let upsert_subprocessor = Arc::new(UpsertSubProcessor::new(
+        tx_manager.clone(),
+        processors.clone(),
+        audit.clone(),
+        clock.clone(),
+    ));
+    let remove_subprocessor = Arc::new(RemoveSubProcessor::new(
+        tx_manager.clone(),
+        processors.clone(),
+        notifier.clone(),
+        audit.clone(),
+    ));
+    let list_activities = Arc::new(ListActivities::new(tx_manager.clone(), activities.clone()));
+    let upsert_activity = Arc::new(UpsertActivity::new(
+        tx_manager.clone(),
+        activities.clone(),
+        audit.clone(),
+        ids.clone(),
+    ));
+    let list_assessments = Arc::new(ListAssessments::new(
+        tx_manager.clone(),
+        assessments.clone(),
+    ));
+    let upsert_assessment = Arc::new(UpsertAssessment::new(
+        tx_manager.clone(),
+        assessments.clone(),
+        audit.clone(),
+        ids.clone(),
+    ));
+    let list_rules = Arc::new(ListRetentionRules::new(tx_manager.clone(), rules.clone()));
+    let upsert_rule = Arc::new(UpsertRetentionRule::new(
+        tx_manager.clone(),
+        rules.clone(),
+        audit.clone(),
+    ));
+    let public_metrics = Arc::new(PublicMetrics::new(tx_manager.clone(), metrics.clone()));
+    let notices = Arc::new(NoticeService::new(
+        tx_manager.clone(),
+        rules.clone(),
+        processors.clone(),
+        jurisdictions.clone(),
+    ));
+
+    // Worker jobs (the worker builds its own copies from the same config).
+    let process_dsr = Arc::new(ProcessDsrBatch::new(
+        tx_manager.clone(),
+        requests.clone(),
+        participants.clone(),
+        holds.clone(),
+        artifacts.clone(),
+        providers.clone(),
+        packager,
+        crypto.clone(),
+        notifications.clone(),
+        events.clone(),
+        hasher.clone(),
+        clock.clone(),
+        config.export_dir.clone(),
+        config.export_ttl_days,
+        config.export_max_downloads,
+        config.backup_retention_days,
+    ));
+    let propagate_opt_outs = Arc::new(PropagateOptOuts::new(
+        tx_manager.clone(),
+        consents.clone(),
+        processors.clone(),
+        notifier,
+    ));
+    let retention_sweep = Arc::new(RetentionSweep::new(
+        tx_manager.clone(),
+        rules.clone(),
+        consents.clone(),
+        signals.clone(),
+        clock.clone(),
+        audit.clone(),
+        config.retention_dry_run,
+        config.retention_sweep_batch_size,
+    ));
+    let cleanup_exports = Arc::new(CleanupExpiredExports::new(
+        tx_manager.clone(),
+        artifacts.clone(),
+    ));
+    let generate_metrics = Arc::new(GenerateAnnualMetrics::new(
+        tx_manager.clone(),
+        requests.clone(),
+        metrics.clone(),
+        clock.clone(),
+    ));
+
+    let gpc = GpcSignalMiddleware::new(
+        tx_manager.clone(),
+        signals.clone(),
+        clock.clone(),
+        config.device_cookie_name.clone(),
+        config.device_cookie_ttl_days,
+    );
+
+    let lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock> =
+        Arc::new(DsrPrivacyLock::new(tx_manager.clone(), requests.clone()));
+
+    let state = sanvi_privacy::adapters::http::PrivacyState {
+        submit_dsr,
+        submit_tenant_request: submit_tenant,
+        verify_request: verify,
+        get_request_status: get_status,
+        list_requests,
+        extend_deadline: extend,
+        reject_request: reject,
+        patch_request: patch,
+        appeal_request: appeal,
+        decide_appeal,
+        list_appeals,
+        get_directives,
+        record_consent,
+        record_opt_out,
+        limit_sensitive,
+        download_export: download,
+        list_jurisdictions,
+        upsert_jurisdiction,
+        apply_hold,
+        release_hold,
+        list_holds,
+        record_incident,
+        list_incidents,
+        list_obligations,
+        mark_notified,
+        list_subprocessors,
+        upsert_subprocessor,
+        remove_subprocessor,
+        list_activities,
+        upsert_activity,
+        list_assessments,
+        upsert_assessment,
+        list_retention_rules: list_rules,
+        upsert_retention_rule: upsert_rule,
+        public_metrics,
+        notices,
+        directive_resolver: resolver.clone(),
+        notice_version: config.notice_version.clone(),
+        backup_retention_days: config.backup_retention_days,
+    };
+
+    PrivacyWiring {
+        state,
+        gpc,
+        resolver,
+        registry: providers,
+        process_dsr,
+        propagate_opt_outs,
+        retention_sweep,
+        cleanup_exports,
+        generate_metrics,
+        lock,
     }
 }
 
@@ -1199,6 +1701,7 @@ pub fn build_app(
     audit: AuditWiring,
     platform_admin: PlatformAdminWiring,
     billing: Option<sanvi_billing::adapters::http::BillingState>,
+    privacy: Option<PrivacyWiring>,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -1224,6 +1727,10 @@ pub fn build_app(
         .configure(identity_routes::tenant_scope_routes);
     let tenant_scope = match &billing {
         Some(_) => tenant_scope.configure(billing_routes::tenant_scope_routes),
+        None => tenant_scope,
+    };
+    let tenant_scope = match &privacy {
+        Some(_) => tenant_scope.configure(sanvi_privacy::routes::tenant_scope_routes),
         None => tenant_scope,
     };
 
@@ -1266,6 +1773,22 @@ pub fn build_app(
         None => app,
     };
 
+    // Phase-05 gate: privacy routes (subject-scoped scope wrapped with the
+    // GPC middleware, public disclosures, platform control plane).
+    let privacy_wiring = privacy.clone();
+    let app = match privacy {
+        Some(wiring) => app
+            .app_data(web::Data::new(wiring.state))
+            .configure(sanvi_privacy::routes::public_routes)
+            .configure(sanvi_privacy::routes::privacy_platform_routes)
+            .service(
+                web::scope("/api/v1/privacy")
+                    .wrap(wiring.gpc)
+                    .configure(sanvi_privacy::routes::privacy_routes),
+            ),
+        None => app,
+    };
+
     // The phase-01 feature gate: with the flag off, no resolution middleware
     // and (by the classification below) no tenant-scoped routes either.
     let tenant_middleware = if config.features.tenancy {
@@ -1284,15 +1807,23 @@ pub fn build_app(
         Some(Arc::new(AuthnMiddleware {
             verifier: identity.verifier.clone(),
             session_cookie_name: config.identity.session_cookie_name.clone(),
-            exempt_prefixes: vec![
-                "/healthz".to_string(),
-                "/readyz".to_string(),
-                "/metrics".to_string(),
-                "/openapi.json".to_string(),
-                "/scalar".to_string(),
-                "/api/v1/public".to_string(),
-                "/internal".to_string(),
-            ],
+            exempt_prefixes: {
+                let mut prefixes = vec![
+                    "/healthz".to_string(),
+                    "/readyz".to_string(),
+                    "/metrics".to_string(),
+                    "/openapi.json".to_string(),
+                    "/scalar".to_string(),
+                    "/api/v1/public".to_string(),
+                    "/internal".to_string(),
+                ];
+                // Self-service privacy endpoints are their own credential:
+                // opt-outs may never be gated on authentication.
+                if privacy_wiring.is_some() {
+                    prefixes.push("/api/v1/privacy".to_string());
+                }
+                prefixes
+            },
         }))
     } else {
         None

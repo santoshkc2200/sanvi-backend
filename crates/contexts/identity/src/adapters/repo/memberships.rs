@@ -182,6 +182,24 @@ impl MembershipRepository for SqlxMembershipRepository {
         Ok(())
     }
 
+    async fn remove_all_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<usize, IdentityError> {
+        sqlx::query("DELETE FROM identity.membership_roles WHERE user_id = $1")
+            .bind(user_id.as_uuid())
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        let result = sqlx::query("DELETE FROM identity.memberships WHERE user_id = $1")
+            .bind(user_id.as_uuid())
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn list_all_platform(
         &self,
         scope: &mut PlatformScope<'_>,

@@ -406,6 +406,23 @@ impl SqlxSubscriptionRepository {
 
 #[async_trait]
 impl SubscriptionRepository for SqlxSubscriptionRepository {
+    async fn anonymise_stripe_ids(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<usize, BillingError> {
+        let result = sqlx::query(
+            "UPDATE billing.subscriptions
+             SET stripe_customer_id = NULL, stripe_subscription_id = NULL, updated_at = now()
+             WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn save(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -768,6 +785,26 @@ impl SqlxWebhookEventRepository {
 
 #[async_trait]
 impl WebhookEventRepository for SqlxWebhookEventRepository {
+    async fn scrub_payloads_for_customer(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stripe_customer_id: &str,
+    ) -> Result<usize, BillingError> {
+        // Raw event payloads mention the customer in several shapes; the
+        // payload itself is Stripe's, not ours — replace any payload that
+        // references the customer id with a redaction marker.
+        let result = sqlx::query(
+            "UPDATE billing.webhook_events
+             SET payload = '{\"redacted\": true}'::jsonb, error = 'redacted by privacy erasure (phase 05)'
+             WHERE payload::text LIKE '%' || $1 || '%'",
+        )
+        .bind(stripe_customer_id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn insert_ignore(
         &self,
         scope: &mut PlatformScope<'_>,

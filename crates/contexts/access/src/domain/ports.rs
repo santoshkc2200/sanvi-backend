@@ -235,6 +235,20 @@ pub trait EntitlementRepository: Send + Sync {
         source: EntitlementSource,
     ) -> Result<(), AccessError>;
 
+    /// Phase-05: the operator override rows a user granted (granted_by).
+    async fn list_by_granted_by(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: Uuid,
+    ) -> Result<Vec<Entitlement>, AccessError>;
+
+    /// Phase-05 erasure: clear `granted_by` references on override rows.
+    async fn anonymise_granted_by(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: Uuid,
+    ) -> Result<usize, AccessError>;
+
     /// Non-expired override rows (the operator console's entitlement count).
     async fn count_active(
         &self,

@@ -1,0 +1,878 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.6.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/privacy/activities:
+    get:
+      operationId: list_activities
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ProcessingActivity'
+                type: array
+          description: Processing activities
+      summary: '`GET /api/v1/platform/privacy/activities` — Art. 30 records.'
+      tags:
+      - privacy
+    post:
+      operationId: upsert_activity
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertActivityCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            text/plain:
+              schema:
+                format: uuid
+                type: string
+          description: Recorded
+      summary: |-
+        `POST /api/v1/platform/privacy/activities` — record a processing
+        activity.
+      tags:
+      - privacy
+  /api/v1/platform/privacy/appeals:
+    get:
+      operationId: list_appeals
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/Appeal'
+                type: array
+          description: Open appeals
+      summary: '`GET /api/v1/platform/privacy/appeals` — open appeals.'
+      tags:
+      - privacy
+  /api/v1/platform/privacy/appeals/{id}/decision:
+    post:
+      operationId: decide_appeal
+      parameters:
+      - description: The appeal id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecideAppealRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecideAppealOutput'
+          description: Decision recorded
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Self-review refused
+      summary: |-
+        `POST /api/v1/platform/privacy/appeals/{id}/decision` — second-operator
+        review.
+      tags:
+      - privacy
+  /api/v1/platform/privacy/assessments:
+    get:
+      operationId: list_assessments
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/RiskAssessment'
+                type: array
+          description: Assessments
+      summary: |-
+        `GET /api/v1/platform/privacy/assessments` — risk assessments (DPIA +
+        US state data-protection assessments).
+      tags:
+      - privacy
+    post:
+      operationId: upsert_assessment
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertAssessmentCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            text/plain:
+              schema:
+                format: uuid
+                type: string
+          description: Recorded
+      summary: '`POST /api/v1/platform/privacy/assessments` — record an assessment.'
+      tags:
+      - privacy
+  /api/v1/platform/privacy/holds:
+    get:
+      operationId: list_holds
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/LegalHold'
+                type: array
+          description: Legal holds
+      summary: '`GET /api/v1/platform/privacy/holds` — legal holds.'
+      tags:
+      - privacy
+    post:
+      operationId: apply_hold
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyLegalHoldCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            text/plain:
+              schema:
+                format: uuid
+                type: string
+          description: Hold applied
+      summary: |-
+        `POST /api/v1/platform/privacy/holds` — apply a legal hold (blocks
+        erasure; audited).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/holds/{id}/release:
+    post:
+      operationId: release_hold
+      parameters:
+      - description: The hold id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          description: Hold released
+      summary: '`POST /api/v1/platform/privacy/holds/{id}/release` — release a hold.'
+      tags:
+      - privacy
+  /api/v1/platform/privacy/incidents:
+    get:
+      operationId: list_incidents
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/BreachIncident'
+                type: array
+          description: Incidents
+      summary: '`GET /api/v1/platform/privacy/incidents` — breach incidents.'
+      tags:
+      - privacy
+    post:
+      operationId: record_incident
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordBreachIncidentCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordBreachIncidentOutput'
+          description: Incident + obligations
+      summary: |-
+        `POST /api/v1/platform/privacy/incidents` — record an incident; the
+        response includes the computed per-jurisdiction obligations.
+      tags:
+      - privacy
+  /api/v1/platform/privacy/incidents/{id}/notify:
+    post:
+      operationId: mark_obligation_notified
+      parameters:
+      - description: The incident id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkBreachNotifiedCommand'
+        required: true
+      responses:
+        '200':
+          description: Recorded
+      summary: |-
+        `POST /api/v1/platform/privacy/incidents/{id}/notify` — record a
+        discharged obligation.
+      tags:
+      - privacy
+  /api/v1/platform/privacy/incidents/{id}/obligations:
+    get:
+      operationId: list_obligations
+      parameters:
+      - description: The incident id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/NotificationObligation'
+                type: array
+          description: Obligations
+      summary: |-
+        `GET /api/v1/platform/privacy/incidents/{id}/obligations` — computed
+        obligations.
+      tags:
+      - privacy
+  /api/v1/platform/privacy/jurisdictions:
+    get:
+      operationId: list_jurisdictions
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/JurisdictionProfile'
+                type: array
+          description: Jurisdiction profiles
+      summary: '`GET /api/v1/platform/privacy/jurisdictions` — profiles.'
+      tags:
+      - privacy
+    put:
+      operationId: upsert_jurisdiction
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertJurisdictionCommand'
+        required: true
+      responses:
+        '200':
+          description: Profile saved
+      summary: |-
+        `PUT /api/v1/platform/privacy/jurisdictions` — upsert a profile (audited
+        configuration; a new state law is this call plus a matrix-test row).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/requests:
+    get:
+      operationId: list_dsrs
+      parameters:
+      - description: Filter by status
+        in: query
+        name: status
+        required: false
+        schema:
+          $ref: '#/components/schemas/DsrStatus'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/RequestOperatorView'
+                type: array
+          description: Requests
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/platform/privacy/requests` — operator view.'
+      tags:
+      - privacy
+  /api/v1/platform/privacy/requests/{id}/extend:
+    post:
+      operationId: extend_dsr
+      parameters:
+      - description: The request id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            text/plain:
+              schema:
+                format: date-time
+                type: string
+          description: New deadline
+      summary: |-
+        `POST /api/v1/platform/privacy/requests/{id}/extend` — one deadline
+        extension (jurisdiction rules apply).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/requests/{id}/reject:
+    post:
+      operationId: reject_dsr
+      parameters:
+      - description: The request id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectRequestRequest'
+        required: true
+      responses:
+        '200':
+          description: Rejected
+      summary: |-
+        `POST /api/v1/platform/privacy/requests/{id}/reject` — reject with
+        reason (US subjects get the appeal route in the response).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/retention-rules:
+    get:
+      operationId: list_retention_rules
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/RetentionRule'
+                type: array
+          description: Retention rules
+      summary: |-
+        `GET /api/v1/platform/privacy/retention-rules` — retention rules (the
+        notice's retention table comes from these rows).
+      tags:
+      - privacy
+    put:
+      operationId: upsert_retention_rule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertRetentionRuleCommand'
+        required: true
+      responses:
+        '200':
+          description: Saved
+      summary: |-
+        `PUT /api/v1/platform/privacy/retention-rules` — adjust a rule (counsel
+        changes periods without a release).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/subprocessors:
+    get:
+      operationId: list_subprocessors
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/SubProcessor'
+                type: array
+          description: Sub-processors
+      summary: '`GET /api/v1/platform/privacy/subprocessors` — registry (incl. removed).'
+      tags:
+      - privacy
+    post:
+      operationId: upsert_subprocessor
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertSubProcessorCommand'
+        required: true
+      responses:
+        '200':
+          description: Saved
+      summary: |-
+        `POST /api/v1/platform/privacy/subprocessors` — upsert (role is
+        required: it decides what is a "sale" under US law).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/subprocessors/{name}:
+    delete:
+      operationId: remove_subprocessor
+      parameters:
+      - description: The sub-processor name
+        in: path
+        name: name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Removed
+      summary: '`DELETE /api/v1/platform/privacy/subprocessors/{name}` — remove.'
+      tags:
+      - privacy
+  /api/v1/privacy/consents:
+    get:
+      operationId: get_consents
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ConsentRecord'
+                type: array
+          description: Consent ledger rows for the subject
+      summary: '`GET /api/v1/privacy/consents` — own consent ledger (proof view).'
+      tags:
+      - privacy
+    put:
+      operationId: update_consents
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsentChangeRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordConsentChangeOutput'
+          description: Recorded and materialised
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Essential is not consentable
+      summary: '`PUT /api/v1/privacy/consents` — grant/withdraw one consent.'
+      tags:
+      - privacy
+  /api/v1/privacy/directives:
+    get:
+      operationId: get_directives
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetDirectivesOutput'
+          description: Resolved directives
+      summary: |-
+        `GET /api/v1/privacy/directives` — the resolved state per purpose, with
+        source and jurisdiction (what the privacy centre renders). Binding
+        unbound GPC signals happens here.
+      tags:
+      - privacy
+  /api/v1/privacy/limit-sensitive:
+    post:
+      operationId: limit_sensitive_use
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LimitSensitiveRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordOptOutOutput'
+          description: Sensitive use limited
+      summary: |-
+        `POST /api/v1/privacy/limit-sensitive` — CPRA "limit the use of my
+        sensitive personal information".
+      tags:
+      - privacy
+  /api/v1/privacy/opt-out:
+    post:
+      operationId: record_opt_out
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordOptOutCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordOptOutOutput'
+          description: Directives flipped immediately
+      summary: |-
+        `POST /api/v1/privacy/opt-out` — sale/share, targeted advertising,
+        profiling. NO verification gate; accepts `Sec-GPC`.
+      tags:
+      - privacy
+  /api/v1/privacy/requests:
+    post:
+      operationId: submit_dsr
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitDsrCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitDsrOutput'
+          description: Request accepted; clocks and jurisdiction resolved
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Conflict
+      summary: |-
+        `POST /api/v1/privacy/requests` — self-service DSR. Authenticated users
+        are verified by their session; email requesters receive an OTP.
+      tags:
+      - privacy
+  /api/v1/privacy/requests/{id}:
+    get:
+      operationId: get_dsr_status
+      parameters:
+      - description: The request id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Challenge token (for unauthenticated requesters)
+        in: query
+        name: token
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetRequestStatusOutput'
+          description: Status incl. ack time and due date
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown request
+      summary: |-
+        `GET /api/v1/privacy/requests/{id}` — status for the subject (owned by
+        session or challenge token).
+      tags:
+      - privacy
+  /api/v1/privacy/requests/{id}/appeal:
+    post:
+      operationId: appeal_request
+      parameters:
+      - description: The refused request id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppealRequestRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppealRequestOutput'
+          description: Appeal accepted; authority contact included
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Not appealable
+      summary: '`POST /api/v1/privacy/requests/{id}/appeal` — appeal a refusal (US).'
+      tags:
+      - privacy
+  /api/v1/privacy/requests/{id}/download:
+    get:
+      operationId: download_export
+      parameters:
+      - description: The request id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Download token
+        in: query
+        name: token
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/octet-stream:
+              schema:
+                items:
+                  format: int32
+                  minimum: 0
+                  type: integer
+                type: array
+          description: The encrypted export archive
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown artifact
+        '410':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Expired or exhausted
+      summary: |-
+        `GET /api/v1/privacy/requests/{id}/download` — one-time, TTL-bound export
+        download. The passphrase was delivered out of band; the token is the
+        download link's secret.
+      tags:
+      - privacy
+  /api/v1/privacy/requests/{id}/rectify:
+    patch:
+      operationId: rectify_request
+      parameters:
+      - description: The rectification request id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RectifyRequest'
+        required: true
+      responses:
+        '200':
+          description: Corrections applied
+      summary: '`PATCH /api/v1/privacy/requests/{id}/rectify` — apply corrections.'
+      tags:
+      - privacy
+  /api/v1/privacy/requests/{id}/verify:
+    post:
+      operationId: verify_dsr
+      parameters:
+      - description: The request id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequestRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyRequestOutput'
+          description: Verified
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Challenge not found
+      summary: '`POST /api/v1/privacy/requests/{id}/verify` — consume the OTP.'
+      tags:
+      - privacy
+  /api/v1/public/privacy/metrics:
+    get:
+      operationId: get_public_metrics
+      parameters:
+      - description: 'Disclosure year (default: previous year)'
+        in: query
+        name: year
+        required: false
+        schema:
+          format: int32
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/PublicMetricsRow'
+                type: array
+          description: Annual metrics
+      summary: |-
+        `GET /api/v1/public/privacy/metrics` — annual request metrics (CCPA
+        disclosure), generated from the request ledger.
+      tags:
+      - privacy
+  /api/v1/public/privacy/notice:
+    get:
+      operationId: get_privacy_notice
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivacyNoticeView'
+          description: The privacy notice
+      summary: |-
+        `GET /api/v1/public/privacy/notice` — the current notice + version,
+        generated from live configuration (jurisdiction sections and the
+        retention table).
+      tags:
+      - privacy
+  /api/v1/public/privacy/notice-at-collection:
+    get:
+      operationId: get_notice_at_collection
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoticeAtCollectionView'
+          description: Notice at collection
+      summary: |-
+        `GET /api/v1/public/privacy/notice-at-collection` — categories, purposes,
+        retention and sale/share status, served before any collection.
+      tags:
+      - privacy
+  /api/v1/public/subprocessors:
+    get:
+      operationId: list_public_subprocessors
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/SubProcessor'
+                type: array
+          description: Sub-processors
+      summary: |-
+        `GET /api/v1/public/subprocessors` — the public sub-processor list with
+        role and transfer mechanism.
+      tags:
+      - privacy
+  /api/v1/tenant/privacy/requests:
+    get:
+      operationId: list_tenant_dsrs
+      parameters:
+      - description: Filter by status
+        in: query
+        name: status
+        required: false
+        schema:
+          $ref: '#/components/schemas/DsrStatus'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/RequestOperatorView'
+                type: array
+          description: Tenant's requests
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/tenant/privacy/requests` — the tenant''s own requests.'
+      tags:
+      - privacy
+    post:
+      operationId: submit_tenant_dsr
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitDsrCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitDsrOutput'
+          description: Request accepted
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: |-
+        `POST /api/v1/tenant/privacy/requests` — tenant admin acting for their
+        end users (processor / service-provider role).
+      tags:
+      - privacy

@@ -1,7 +1,7 @@
 //! Tenant-scoped invitation storage (`identity.invitations`).
 
 use async_trait::async_trait;
-use sanvi_persistence::ScopedTx;
+use sanvi_persistence::{PlatformScope, ScopedTx};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -139,6 +139,19 @@ impl InvitationRepository for SqlxInvitationRepository {
         .await
         .map_err(|err| IdentityError::Storage(err.to_string()))?;
         rows.into_iter().map(invitation_from_row).collect()
+    }
+
+    async fn remove_by_email_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        email: &str,
+    ) -> Result<usize, IdentityError> {
+        let result = sqlx::query("DELETE FROM identity.invitations WHERE email = $1")
+            .bind(email.to_ascii_lowercase())
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        Ok(result.rows_affected() as usize)
     }
 
     async fn remove(

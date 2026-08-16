@@ -25,6 +25,7 @@ tracing.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
 
+sanvi-privacy.workspace = true
 [dev-dependencies]
 actix-http.workspace = true
 futures-util.workspace = true

@@ -28,12 +28,12 @@ use sanvi_billing::{
         WebhookReceiver,
     },
     domain::{
-        CheckoutSessionRequest, CheckoutSessionResult, Clock, CollectionState, EntitlementSyncer,
-        EventPublisher, IdGenerator, InvoiceRepository, Notifications, PlanEntitlementRepository,
-        PlanId, PlanPriceRepository, PlanRepository, PortalSessionRequest, PortalSessionResult,
-        PriceId, StripeClient, StripeCustomer, StripeSubscriptionView, SubscriptionRepository,
-        SubscriptionSource, SubscriptionStatus, TaxGate, TaxRegistration, TenantLifecycle,
-        WebhookEventRepository,
+        BillingError, CheckoutSessionRequest, CheckoutSessionResult, Clock, CollectionState,
+        EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRepository, Notifications,
+        PlanEntitlementRepository, PlanId, PlanPriceRepository, PlanRepository,
+        PortalSessionRequest, PortalSessionResult, PriceId, StripeClient, StripeCustomer,
+        StripeSubscriptionView, SubscriptionRepository, SubscriptionSource, SubscriptionStatus,
+        TaxGate, TaxRegistration, TenantLifecycle, WebhookEventRepository,
     },
 };
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
@@ -154,6 +154,10 @@ impl FakeStripe {
 
 #[async_trait]
 impl StripeClient for FakeStripe {
+    async fn delete_customer(&self, _stripe_customer_id: &str) -> Result<(), BillingError> {
+        Ok(())
+    }
+
     async fn ensure_customer(
         &self,
         _tenant_id: Uuid,

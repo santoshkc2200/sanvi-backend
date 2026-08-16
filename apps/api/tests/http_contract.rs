@@ -92,6 +92,7 @@ fn test_app() -> actix_web::App<
         std::sync::Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
         entitlement_admin,
         audit.writer.clone(),
+        std::sync::Arc::new(sanvi_platform_admin::adapters::NoopPrivacyLock),
     );
 
     build_app(
@@ -103,6 +104,7 @@ fn test_app() -> actix_web::App<
         access,
         audit,
         platform_admin,
+        None,
         None,
         None,
     )
