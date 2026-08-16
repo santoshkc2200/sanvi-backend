@@ -6,7 +6,8 @@
 
 use actix_web::{http::StatusCode, test};
 use sanvi_api::{
-    AppConfig, build_access_state, build_app, build_identity_state, build_system_state,
+    AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
+    build_identity_state, build_platform_admin_state, build_system_state,
 };
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
@@ -64,12 +65,33 @@ fn test_app() -> actix_web::App<
         &config.ory.kratos_admin_url,
         role_catalog,
     );
+    let audit = build_audit_state(pool.clone(), &config.audit);
     let access = build_access_state(
-        pool,
+        pool.clone(),
         &config.access,
         &config.ory.keto_read_url,
         &config.ory.keto_write_url,
         identity.memberships.clone(),
+        audit.writer.clone(),
+        build_approval_gate_stub(),
+        metrics.prometheus_registry(),
+        None,
+    );
+
+    let entitlement_admin: std::sync::Arc<dyn sanvi_platform_admin::domain::EntitlementAdmin> =
+        std::sync::Arc::new(AccessEntitlementAdmin::new(
+            access.grant_entitlement.clone(),
+            access.revoke_entitlement.clone(),
+            access.list_tenant_overrides.clone(),
+        ));
+    let platform_admin = build_platform_admin_state(
+        pool.clone(),
+        &config.platform_admin,
+        std::sync::Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+        identity.memberships.clone(),
+        std::sync::Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
+        entitlement_admin,
+        audit.writer.clone(),
     );
 
     build_app(
@@ -79,8 +101,16 @@ fn test_app() -> actix_web::App<
         tenancy_state_for_tests(),
         identity,
         access,
+        audit,
+        platform_admin,
         None,
     )
+}
+
+/// The four-eyes gate for contract tests: never requires approval (the
+/// endpoints that would record approvals are not exercised here).
+fn build_approval_gate_stub() -> std::sync::Arc<dyn sanvi_access::domain::ApprovalGate> {
+    std::sync::Arc::new(sanvi_platform_admin::adapters::NoopApprovalGate)
 }
 
 #[actix_web::test]

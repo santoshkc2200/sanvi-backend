@@ -27,6 +27,40 @@ pub enum AccessError {
     #[error("permission {permission} is not assignable in scope {scope}")]
     PermissionScopeMismatch { permission: String, scope: String },
 
+    #[error("cannot grant {permission}: the actor does not hold it")]
+    Escalation { permission: String },
+
+    #[error("invalid feature key: {0}")]
+    InvalidFeatureKey(String),
+
+    #[error("invalid feature definition: {0}")]
+    InvalidFeatureDefinition(String),
+
+    #[error("feature {key} already exists")]
+    FeatureAlreadyExists { key: String },
+
+    #[error("feature {key} not found")]
+    FeatureNotFound { key: String },
+
+    #[error("invalid entitlement: {0}")]
+    InvalidEntitlement(String),
+
+    #[error("invalid quota limit: {0}")]
+    InvalidLimit(String),
+
+    #[error("entitlement for {feature} not found")]
+    EntitlementNotFound { feature: String },
+
+    #[error("quota exceeded for {feature}: limit {limit}, attempted {attempted}")]
+    QuotaExceeded {
+        feature: String,
+        limit: i64,
+        attempted: i64,
+    },
+
+    #[error("entitlement backend is unavailable: {0}")]
+    EntitlementBackendUnavailable(String),
+
     #[error("authorization backend is unreachable: {0}")]
     BackendUnreachable(String),
 

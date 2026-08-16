@@ -1,16 +1,21 @@
-//! `access` — the context that answers "what may you do?".
+//! `access` — the context that answers "what may you do?" — and, since
+//! phase 03, "what does this tenant have?".
 //!
-//! Domain: the central permission registry, the role catalog and the
-//! `Authorizer` port. Application: the cached permission check every other
-//! context calls, role seeding, and the Keto tuple rebuild/sync. Adapters:
-//! the sqlx role repository, the Keto REST client (relation tuples), the
-//! short-TTL decision cache, the event consumer that keeps Keto in sync
-//! with identity/tenancy events, and the permissions endpoint.
+//! Domain: the central permission registry, the role catalog, the feature
+//! catalog, entitlements with their resolution rules, and the
+//! `Authorizer`/`FeatureGate` ports. Application: the cached permission
+//! check every other context calls, role seeding and authoring, the Keto
+//! tuple rebuild/sync, entitlement resolution/granting, and the feature
+//! gate. Adapters: the sqlx repositories, the Keto REST client (relation
+//! tuples), the decision and entitlement caches, the event consumers that
+//! keep Keto and caches in sync, and the permissions/roles/features
+//! endpoints.
 //!
 //! Keto (Ory) is the source of truth for "user X is a member of role Y";
-//! the role → permission mapping lives here in Postgres. Nothing under
-//! `src/domain/` imports infrastructure crates — enforced by
-//! `scripts/check-layering.sh`.
+//! the role → permission mapping lives here in Postgres. Entitlement
+//! resolution composes `access.entitlements` overrides with
+//! `access.features` defaults. Nothing under `src/domain/` imports
+//! infrastructure crates — enforced by `scripts/check-layering.sh`.
 
 pub mod adapters;
 pub mod application;
@@ -19,7 +24,9 @@ pub mod domain;
 
 pub use config::AccessConfig;
 pub use domain::{
-    AccessError, Decision, Permission, PermissionDef, PermissionScope, Role, RoleId, RoleScope,
+    AccessError, Decision, Entitlement, EntitlementCache, EntitlementRepository, EntitlementSource,
+    Feature, FeatureGate, FeatureKey, FeatureKind, FeatureRepository, Permission, PermissionDef,
+    PermissionScope, QuotaUsageStore, ResolvedEntitlement, Role, RoleId, RoleScope, Visibility,
 };
 
 /// Wire access routes into an actix `ServiceConfig`.

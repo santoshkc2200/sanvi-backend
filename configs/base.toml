@@ -121,11 +121,24 @@ webhook_allowed_clients = ["127.0.0.1", "::1", "172.16.0.0/12", "192.168.0.0/16"
 [access]
 decision_cache_ttl_secs = 30
 decision_cache_max_entries = 10000
+entitlement_cache_ttl_secs = 300
+# Four-eyes: overrides whose limit exceeds this need a second admin's
+# approval. Omit (or set via env) to disable four-eyes for overrides.
+# entitlement_approval_threshold = 1000
+
+[platform_admin]
+impersonation_max_minutes = 30
+fresh_aal2_max_age_secs = 300
+
+[audit]
+verify_batch_size = 1000
+retention_months = 12
 
 [features]
 # Phase gates live here from phase 01 onward.
 tenancy = true
 identity = true
+platform_admin = true
 
 [outbox]
 poll_interval_ms = 1000
@@ -137,3 +150,7 @@ stream = "sanvi.events"
 purge_sweep_interval_secs = 3600
 purge_retention_days = 30
 idempotency_sweep_interval_secs = 3600
+# Phase 03 jobs
+quota_rollover_interval_secs = 86400
+entitlement_expiry_sweep_interval_secs = 3600
+audit_verify_interval_secs = 86400

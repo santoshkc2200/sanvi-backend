@@ -100,9 +100,44 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         description: "Provision and run tenant lifecycle (activate/suspend/resume/archive)",
     },
     PermissionDef {
+        key: "platform.tenant.read",
+        scope: PermissionScope::Platform,
+        description: "Search tenants and read the operator tenant views",
+    },
+    PermissionDef {
         key: "platform.role.manage",
         scope: PermissionScope::Platform,
         description: "Author roles and permissions",
+    },
+    PermissionDef {
+        key: "platform.entitlement.write",
+        scope: PermissionScope::Platform,
+        description: "Grant and revoke entitlement overrides",
+    },
+    PermissionDef {
+        key: "platform.feature.write",
+        scope: PermissionScope::Platform,
+        description: "Define, update and deprecate the feature catalog",
+    },
+    PermissionDef {
+        key: "platform.impersonate",
+        scope: PermissionScope::Platform,
+        description: "Start, list and revoke impersonation grants",
+    },
+    PermissionDef {
+        key: "platform.audit.read",
+        scope: PermissionScope::Platform,
+        description: "Read the platform audit trail",
+    },
+    PermissionDef {
+        key: "platform.approval.read",
+        scope: PermissionScope::Platform,
+        description: "List four-eyes pending approvals",
+    },
+    PermissionDef {
+        key: "platform.approval.write",
+        scope: PermissionScope::Platform,
+        description: "Approve or reject four-eyes pending approvals",
     },
     // --- identity & membership ---------------------------------------------
     PermissionDef {
@@ -166,6 +201,31 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         key: "access.permission.list",
         scope: PermissionScope::Authenticated,
         description: "List the permission registry",
+    },
+    PermissionDef {
+        key: "access.role.read",
+        scope: PermissionScope::Tenant,
+        description: "List roles assignable in the tenant",
+    },
+    PermissionDef {
+        key: "access.role.create",
+        scope: PermissionScope::Tenant,
+        description: "Create custom tenant roles",
+    },
+    PermissionDef {
+        key: "access.role.update",
+        scope: PermissionScope::Tenant,
+        description: "Update custom tenant roles",
+    },
+    PermissionDef {
+        key: "access.role.delete",
+        scope: PermissionScope::Tenant,
+        description: "Delete custom tenant roles",
+    },
+    PermissionDef {
+        key: "tenant.entitlement.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the tenant's resolved entitlements",
     },
     // --- billing (phase 04) ---------------------------------------------------
     PermissionDef {

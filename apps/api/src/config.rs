@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use sanvi_access::AccessConfig;
+use sanvi_audit::AuditConfig;
 use sanvi_http::ServerConfig;
 use sanvi_identity::IdentityConfig;
 use sanvi_messaging::RedisConfig;
 use sanvi_persistence::DatabaseConfig;
+use sanvi_platform_admin::PlatformAdminConfig;
 use sanvi_telemetry::TelemetryConfig;
 use sanvi_tenancy::TenancyConfig;
 
@@ -43,6 +45,10 @@ pub struct FeaturesConfig {
     /// phase-gate semantics).
     #[serde(default = "default_true")]
     pub identity: bool,
+    /// Phase-03 gate: mounts the platform_admin/audit contexts, the feature
+    /// gate and the impersonation middleware.
+    #[serde(default = "default_true")]
+    pub platform_admin: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -65,6 +71,8 @@ pub struct AppConfig {
     pub tenancy: TenancyConfig,
     pub identity: IdentityConfig,
     pub access: AccessConfig,
+    pub platform_admin: PlatformAdminConfig,
+    pub audit: AuditConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -81,6 +89,8 @@ impl Default for AppConfig {
             tenancy: TenancyConfig::default(),
             identity: IdentityConfig::default(),
             access: AccessConfig::default(),
+            platform_admin: PlatformAdminConfig::default(),
+            audit: AuditConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -109,6 +119,12 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.access.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.platform_admin.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.audit.validate() {
             problems.push(err.to_string());
         }
         if self.readiness_probe_secs == 0 {

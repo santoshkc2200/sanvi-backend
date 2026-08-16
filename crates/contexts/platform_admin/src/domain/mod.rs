@@ -1,0 +1,20 @@
+//! Domain: entities, value objects, events, errors, ports.
+//! No infrastructure imports allowed here (enforced by scripts/check-layering.sh).
+
+pub mod approvals;
+pub mod error;
+pub mod events;
+pub mod impersonation;
+pub mod ports;
+pub mod views;
+
+pub use approvals::{ApprovalId, ApprovalStatus, PendingApproval};
+pub use error::PlatformAdminError;
+pub use events::{PlatformAdminEvent, PlatformAdminEventName};
+pub use impersonation::{ImpersonationGrant, ImpersonationGrantId, ImpersonationMode};
+pub use ports::{
+    Clock, EntitlementAdmin, EventPublisher, GrantOverrideOutcome, IdGenerator,
+    ImpersonationGrantRepository, PendingApprovalRepository, PrivacyLock,
+    TenantAdminViewRepository,
+};
+pub use views::{TenantAdminView, TenantViewCursor, TenantViewSearch};

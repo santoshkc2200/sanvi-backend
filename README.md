@@ -22,8 +22,9 @@ Docker with Compose, `just` (optional).
 #    NOBYPASSRLS and cannot change the schema)
 ./scripts/migrate.sh
 
-# 3. Seed the system role catalog + Keto relation tuples
+# 3. Seed the system role catalog + Keto relation tuples + feature catalog
 cargo run -p sanvi-cli -- seed roles
+cargo run -p sanvi-cli -- seed features
 
 # 4. Run the API (and the worker, which keeps Keto in sync with events)
 cargo run -p sanvi-api
@@ -130,11 +131,13 @@ crates/
     system/                # reference context (health, version, build info)
     tenancy/               # tenants, lifecycle, settings, resolution (phase 01)
     identity/              # users, memberships, invitations, account linking (phase 02)
-    access/                # permission registry, roles, authorization (phase 02)
+    access/                # permission registry, roles, authorization, features/entitlements (phase 02/03)
+    audit/                 # append-only hash-chained audit trail (phase 03)
+    platform_admin/        # operator control plane, impersonation, four-eyes (phase 03)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher + consumers (tenancy cache, access→Keto) + scheduler
-  cli/                     # migrate, tenant, seed roles/access, membership grant, config, openapi
+  worker/                  # outbox dispatcher + consumers (tenancy/identity/access) + scheduler (phase 01–03 jobs)
+  cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval, config, openapi
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)
 configs/                   # base.toml + per-env overlays + Ory configs (no secrets)

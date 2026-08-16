@@ -1,0 +1,409 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.4.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/admin/tenants:
+    get:
+      operationId: search_tenant_admin_views
+      parameters:
+      - description: Substring match on slug/display name
+        in: query
+        name: query
+        required: false
+        schema:
+          type: string
+      - description: Tenant status filter
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+      - description: 'Cursor: created_at of the last row'
+        in: query
+        name: after_created_at
+        required: false
+        schema:
+          format: date-time
+          type: string
+      - description: 'Cursor: tenant id of the last row'
+        in: query
+        name: after_id
+        required: false
+        schema:
+          format: uuid
+          type: string
+      - description: Page size (1..=100, default 25)
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantAdminPageView'
+          description: One page of tenant views
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid filter
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/platform/admin/tenants` — operator tenant search.'
+      tags:
+      - platform_admin
+  /api/v1/platform/admin/tenants/{id}:
+    get:
+      operationId: get_tenant_admin_view
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantAdminView'
+          description: The tenant view
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+      summary: '`GET /api/v1/platform/admin/tenants/{id}` — one tenant admin view.'
+      tags:
+      - platform_admin
+  /api/v1/platform/approvals:
+    get:
+      operationId: list_pending_approvals
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ApprovalView'
+                type: array
+          description: Pending requests
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/platform/approvals` — pending four-eyes requests.'
+      tags:
+      - platform_admin
+  /api/v1/platform/approvals/{id}/approve:
+    post:
+      operationId: approve_request
+      parameters:
+      - description: Approval id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalView'
+          description: Approved and executed
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied, self-approval, or fresh MFA missing
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Approval not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Approval no longer pending
+      summary: |-
+        `POST /api/v1/platform/approvals/{id}/approve` — approve (executes the
+        recorded action) and record both identities.
+      tags:
+      - platform_admin
+  /api/v1/platform/approvals/{id}/reject:
+    post:
+      operationId: reject_request
+      parameters:
+      - description: Approval id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalView'
+          description: Rejected
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied, self-approval, or fresh MFA missing
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Approval not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Approval no longer pending
+      summary: '`POST /api/v1/platform/approvals/{id}/reject` — reject a request.'
+      tags:
+      - platform_admin
+  /api/v1/platform/impersonations:
+    get:
+      operationId: list_impersonations
+      parameters:
+      - description: Restrict to one tenant
+        in: query
+        name: tenant_id
+        required: false
+        schema:
+          format: uuid
+          type: string
+      - description: Maximum grants (default 100)
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ImpersonationGrantView'
+                type: array
+          description: Active grants
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/platform/impersonations` — active grants.'
+      tags:
+      - platform_admin
+    post:
+      operationId: create_impersonation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateImpersonationRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImpersonationGrantView'
+          description: Grant created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid request
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied, target not a member, or fresh MFA missing
+      summary: |-
+        `POST /api/v1/platform/impersonations` — create a time-boxed grant
+        (requires fresh MFA). Exchange the returned id via the
+        `x-sanvi-impersonate` header.
+      tags:
+      - platform_admin
+  /api/v1/platform/impersonations/{id}:
+    delete:
+      operationId: revoke_impersonation
+      parameters:
+      - description: Grant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImpersonationGrantView'
+          description: Revoked grant
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied or fresh MFA missing
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Grant not found
+      summary: '`DELETE /api/v1/platform/impersonations/{id}` — revoke (immediate).'
+      tags:
+      - platform_admin
+  /api/v1/platform/tenants/{id}/entitlements:
+    get:
+      operationId: list_entitlement_overrides
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/OverrideView'
+                type: array
+          description: Override rows
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: |-
+        `GET /api/v1/platform/tenants/{id}/entitlements` — a tenant's stored
+        override rows.
+      tags:
+      - platform_admin
+    post:
+      operationId: grant_entitlement_override
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantEntitlementRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantEntitlementResultView'
+          description: Granted (or approval required)
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid request
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: |-
+        `POST /api/v1/platform/tenants/{id}/entitlements` — grant an override.
+        Overrides above the configured threshold require four-eyes approval and
+        return `approval_required` with the pending request id.
+      tags:
+      - platform_admin
+  /api/v1/platform/tenants/{id}/entitlements/{feature}:
+    delete:
+      operationId: revoke_entitlement_override
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Feature key
+        in: path
+        name: feature
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Revoked
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied or fresh MFA missing
+      summary: |-
+        `DELETE /api/v1/platform/tenants/{id}/entitlements/{feature}` — revoke
+        an override (fresh MFA required).
+      tags:
+      - platform_admin

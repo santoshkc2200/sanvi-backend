@@ -6,7 +6,7 @@ use sanvi_kernel::EventEnvelope;
 use sanvi_messaging::ConsumerHandler;
 
 use crate::domain::AccessError;
-use crate::domain::ports::{DecisionCache, PermissionStore, Tuple};
+use crate::domain::ports::{DecisionCache, EntitlementCache, PermissionStore, Tuple};
 
 /// A consumer for the `sanvi.events.identity` stream.
 ///
@@ -167,4 +167,164 @@ async fn membership_tuples(
         }
     }
     tuples
+}
+
+// ---------------------------------------------------------------------------
+// The access-event consumer (sanvi.events.access): entitlement cache
+// invalidation, feature-catalog cache invalidation, and Keto sync for role
+// authoring.
+// ---------------------------------------------------------------------------
+
+/// Build the consumer for the `sanvi.events.access` stream. Three
+/// responsibilities:
+///
+/// 1. Entitlement events → drop the affected tenant's cached resolution.
+/// 2. Feature definitions → drop every cached resolution (defaults may have
+///    changed for tenants without their own rows).
+/// 3. Role authoring events → keep Keto's `permission#granted` tuples in
+///    sync with the new/updated/deleted role, and invalidate cached
+///    authorization decisions (a role change affects everyone holding it).
+pub fn entitlement_sync_handler(
+    cache: Option<std::sync::Arc<dyn EntitlementCache>>,
+    decision_cache: Option<std::sync::Arc<dyn DecisionCache>>,
+    store: Option<std::sync::Arc<dyn PermissionStore>>,
+) -> ConsumerHandler {
+    std::sync::Arc::new(move |envelope: EventEnvelope| {
+        let cache = cache.clone();
+        let decision_cache = decision_cache.clone();
+        let store = store.clone();
+        Box::pin(async move {
+            if let Err(err) = apply_access_event(&envelope, &cache, &decision_cache, &store).await {
+                tracing::error!(error = %err, event_type = %envelope.event_type, "access sync failed");
+                return Err(anyhow::anyhow!(err.to_string()));
+            }
+            Ok(())
+        })
+    })
+}
+
+async fn apply_access_event(
+    envelope: &EventEnvelope,
+    cache: &Option<std::sync::Arc<dyn EntitlementCache>>,
+    decision_cache: &Option<std::sync::Arc<dyn DecisionCache>>,
+    store: &Option<std::sync::Arc<dyn PermissionStore>>,
+) -> Result<(), AccessError> {
+    let tenant_id = envelope
+        .metadata
+        .get("tenant_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<uuid::Uuid>().ok());
+
+    match envelope.event_type.as_str() {
+        "access.entitlement_granted"
+        | "access.entitlement_revoked"
+        | "access.entitlement_expired" => {
+            if let (Some(cache), Some(tenant_id)) = (cache, tenant_id) {
+                cache.invalidate(tenant_id).await;
+            }
+        }
+        "access.feature_defined" => {
+            if let Some(cache) = cache {
+                cache.invalidate_all().await;
+            }
+        }
+        "access.quota_exceeded" => {
+            // Already recorded in the database (the failed consumption
+            // committed the event); the metric comes from the Prometheus
+            // counters the gate increments. Nothing to sync.
+            tracing::warn!(?tenant_id, "quota exceeded event observed");
+        }
+        "access.role_created" => {
+            let role_object = role_object(envelope);
+            let permissions = string_list(&envelope.payload, "permissions");
+            if let Some(store) = store {
+                let tuples: Vec<Tuple> = permissions
+                    .iter()
+                    .map(|permission| Tuple::permission_grant(permission, &role_object))
+                    .collect();
+                store.write(&tuples).await?;
+            }
+            if let Some(cache) = decision_cache {
+                cache.invalidate_all().await;
+            }
+        }
+        "access.role_updated" => {
+            let role_object = role_object(envelope);
+            let added = string_list(&envelope.payload, "added_permissions");
+            let removed = string_list(&envelope.payload, "removed_permissions");
+            if let Some(store) = store {
+                let to_write: Vec<Tuple> = added
+                    .iter()
+                    .map(|permission| Tuple::permission_grant(permission, &role_object))
+                    .collect();
+                if !to_write.is_empty() {
+                    store.write(&to_write).await?;
+                }
+                let to_delete: Vec<Tuple> = removed
+                    .iter()
+                    .map(|permission| Tuple::permission_grant(permission, &role_object))
+                    .collect();
+                if !to_delete.is_empty() {
+                    store.delete(&to_delete).await?;
+                }
+            }
+            if let Some(cache) = decision_cache {
+                cache.invalidate_all().await;
+            }
+        }
+        "access.role_deleted" => {
+            let role_object = role_object(envelope);
+            let permissions = string_list(&envelope.payload, "permissions");
+            if let Some(store) = store {
+                let tuples: Vec<Tuple> = permissions
+                    .iter()
+                    .map(|permission| Tuple::permission_grant(permission, &role_object))
+                    .collect();
+                store.delete(&tuples).await?;
+            }
+            if let Some(cache) = decision_cache {
+                cache.invalidate_all().await;
+            }
+        }
+        other => {
+            tracing::debug!(
+                event_type = other,
+                "access sync: not an access-relevant event"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The Keto role object for a role event: `platform:{key}` for platform
+/// roles, `{tenant_id}:{key}` for tenant roles.
+fn role_object(envelope: &EventEnvelope) -> String {
+    let key = envelope
+        .payload
+        .get("key")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let tenant_id = envelope
+        .payload
+        .get("tenant_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<uuid::Uuid>().ok());
+    match tenant_id {
+        Some(tenant_id) => format!("{tenant_id}:{key}"),
+        None => format!("platform:{key}"),
+    }
+}
+
+fn string_list(payload: &serde_json::Value, field: &str) -> Vec<String> {
+    payload
+        .get(field)
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }

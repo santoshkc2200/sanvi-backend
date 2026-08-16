@@ -10,6 +10,7 @@
 
 mod access;
 mod config;
+mod control;
 mod healthcheck;
 mod migrate;
 mod openapi;
@@ -59,6 +60,33 @@ enum Command {
         #[command(subcommand)]
         action: MembershipAction,
     },
+    /// Phase-03 control plane: feature catalog and entitlement overrides.
+    Feature {
+        #[command(subcommand)]
+        action: FeatureAction,
+    },
+    /// Phase-03 control plane: entitlement overrides (operator grants).
+    Entitlement {
+        #[command(subcommand)]
+        action: EntitlementAction,
+    },
+    /// Phase-03: role catalog listing.
+    RoleList,
+    /// Phase-03: impersonation grant review.
+    Impersonation {
+        #[command(subcommand)]
+        action: ImpersonationAction,
+    },
+    /// Phase-03: audit chain verification and queries.
+    Audit {
+        #[command(subcommand)]
+        action: AuditAction,
+    },
+    /// Phase-03: four-eyes approval review.
+    Approval {
+        #[command(subcommand)]
+        action: ApprovalAction,
+    },
     /// Load, validate and print the configuration.
     Config,
     /// Print or verify the OpenAPI contract.
@@ -89,6 +117,107 @@ enum SeedKind {
     Roles,
     /// Rebuild every Keto relation tuple from the catalog + memberships.
     Access,
+    /// Seed the feature catalog (idempotent).
+    Features,
+}
+
+#[derive(Subcommand)]
+enum FeatureAction {
+    /// List the feature catalog.
+    List,
+    /// Define a new feature.
+    Define {
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        name: String,
+        /// boolean | quota
+        #[arg(long)]
+        kind: String,
+        #[arg(long, default_value_t = false)]
+        default_enabled: bool,
+        #[arg(long)]
+        default_limit: Option<i64>,
+        /// public | hidden
+        #[arg(long, default_value = "public")]
+        visibility: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum EntitlementAction {
+    /// Grant an override to a tenant.
+    Grant {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        feature: String,
+        #[arg(long, default_value_t = true)]
+        enabled: bool,
+        #[arg(long)]
+        limit: Option<i64>,
+        #[arg(long)]
+        expires_at: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Revoke an override.
+    Revoke {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        feature: String,
+    },
+    /// List a tenant's stored override rows.
+    List {
+        #[arg(long)]
+        tenant: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImpersonationAction {
+    /// List active grants (optionally for one tenant).
+    List {
+        #[arg(long)]
+        tenant: Option<String>,
+    },
+    /// Revoke a grant (immediate).
+    Revoke {
+        #[arg(long)]
+        id: uuid::Uuid,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuditAction {
+    /// Verify the hash chain (fails on any mismatch).
+    Verify,
+    /// List recent entries (optionally filtered).
+    List {
+        #[arg(long)]
+        tenant_id: Option<uuid::Uuid>,
+        #[arg(long)]
+        action: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+}
+
+#[derive(Subcommand)]
+enum ApprovalAction {
+    /// List pending four-eyes requests.
+    List,
+    /// Approve a request (executes the recorded action).
+    Approve {
+        #[arg(long)]
+        id: uuid::Uuid,
+    },
+    /// Reject a request.
+    Reject {
+        #[arg(long)]
+        id: uuid::Uuid,
+    },
 }
 
 #[derive(Subcommand)]
@@ -240,11 +369,152 @@ async fn main() -> ExitCode {
             let kind = match kind {
                 SeedKind::Roles => access::SeedKind::Roles,
                 SeedKind::Access => access::SeedKind::Access,
+                SeedKind::Features => access::SeedKind::Features,
             };
             match access::seed(&cli.env, kind).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("seed failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Feature { action } => {
+            let result = match action {
+                FeatureAction::List => control::feature_list(&cli.env).await,
+                FeatureAction::Define {
+                    key,
+                    name,
+                    kind,
+                    default_enabled,
+                    default_limit,
+                    visibility,
+                } => {
+                    control::feature_define(
+                        &cli.env,
+                        control::FeatureDefineArgs {
+                            key: &key,
+                            name: &name,
+                            kind: &kind,
+                            default_enabled,
+                            default_limit,
+                            visibility: &visibility,
+                        },
+                    )
+                    .await
+                }
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("feature command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Entitlement { action } => {
+            let result = match action {
+                EntitlementAction::Grant {
+                    tenant,
+                    feature,
+                    enabled,
+                    limit,
+                    expires_at,
+                    reason,
+                } => {
+                    let expires_at = match expires_at {
+                        Some(raw) => match chrono::DateTime::parse_from_rfc3339(&raw) {
+                            Ok(parsed) => Some(parsed.with_timezone(&chrono::Utc)),
+                            Err(err) => {
+                                eprintln!("invalid --expires-at value: {err:#}");
+                                return ExitCode::FAILURE;
+                            }
+                        },
+                        None => None,
+                    };
+                    control::entitlement_grant(
+                        &cli.env,
+                        control::EntitlementGrantArgs {
+                            tenant_slug: tenant,
+                            feature,
+                            enabled,
+                            limit,
+                            expires_at,
+                            reason,
+                        },
+                    )
+                    .await
+                }
+                EntitlementAction::Revoke { tenant, feature } => {
+                    control::entitlement_revoke(&cli.env, &tenant, &feature).await
+                }
+                EntitlementAction::List { tenant } => {
+                    control::entitlement_list(&cli.env, &tenant).await
+                }
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("entitlement command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::RoleList => match control::role_list(&cli.env).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("role list failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Impersonation { action } => {
+            let result = match action {
+                ImpersonationAction::List { tenant } => {
+                    control::impersonation_list(&cli.env, tenant.as_deref()).await
+                }
+                ImpersonationAction::Revoke { id } => {
+                    control::impersonation_revoke(&cli.env, id).await
+                }
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("impersonation command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Audit { action } => {
+            let result = match action {
+                AuditAction::Verify => control::audit_verify(&cli.env).await,
+                AuditAction::List {
+                    tenant_id,
+                    action,
+                    limit,
+                } => control::audit_list(&cli.env, tenant_id, action, limit).await,
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("audit command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Approval { action } => {
+            let result = match action {
+                ApprovalAction::List => control::approval_list(&cli.env).await,
+                ApprovalAction::Approve { id } => {
+                    control::approval_decide(&cli.env, id, true).await
+                }
+                ApprovalAction::Reject { id } => {
+                    control::approval_decide(&cli.env, id, false).await
+                }
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("approval command failed: {err:#}");
                     ExitCode::FAILURE
                 }
             }

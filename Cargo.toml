@@ -11,6 +11,8 @@ members = [
     "crates/contexts/tenancy",
     "crates/contexts/identity",
     "crates/contexts/access",
+    "crates/contexts/audit",
+    "crates/contexts/platform_admin",
     "apps/api",
     "apps/worker",
     "apps/cli",
@@ -18,7 +20,7 @@ members = [
 default-members = ["apps/api", "apps/worker", "apps/cli"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -41,6 +43,8 @@ sanvi-system = { path = "crates/contexts/system" }
 sanvi-tenancy = { path = "crates/contexts/tenancy" }
 sanvi-identity = { path = "crates/contexts/identity" }
 sanvi-access = { path = "crates/contexts/access" }
+sanvi-audit = { path = "crates/contexts/audit" }
+sanvi-platform-admin = { path = "crates/contexts/platform_admin" }
 sanvi-api = { path = "apps/api" }
 
 actix-web = "4"
@@ -76,6 +80,7 @@ sqlx = { version = "0.9", default-features = false, features = [
     "json",
     "migrate",
     "macros",
+    "ipnetwork",
 ] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs", "io-util"] }

@@ -17,20 +17,44 @@ use actix_web::{
     dev::{ServiceRequest, ServiceResponse},
     web,
 };
+use chrono::{DateTime, Utc};
 use sanvi_access::{
     AccessConfig,
-    adapters::{HttpKetoClient, InMemoryDecisionCache, SqlxMembershipSource, SqlxRoleRepository},
-    application::{CachedAuthorizer, CheckPermission, ListPermissions, RebuildAccessTuples},
-    domain::{Authorizer, DecisionCache, PermissionStore, RoleRepository},
+    adapters::{
+        HttpKetoClient, InMemoryDecisionCache, InMemoryEntitlementCache, OutboxEventPublisher,
+        RedisEntitlementCache, SqlxEntitlementRepository, SqlxFeatureRepository,
+        SqlxMembershipSource, SqlxQuotaUsageStore, SqlxRoleRepository,
+    },
+    application::entitlements::EntitlementPolicy,
+    application::{
+        CachedAuthorizer, CheckPermission, CreateCustomRole, DefineFeature, DeleteCustomRole,
+        DeprecateFeature, EntitlementFeatureGate, EntitlementResolver, ExpireEntitlements,
+        GrantEntitlement, GrantEntitlementOutput, ListFeatures, ListPermissions, ListRoles,
+        ListTenantEntitlements, ListTenantOverrides, RebuildAccessTuples, RevokeEntitlement,
+        SeedFeatures, UpdateCustomRole, UpdateFeature,
+    },
+    domain::{
+        ApprovalGate, Authorizer, DecisionCache, EntitlementCache, EntitlementRepository,
+        EventPublisher as AccessEventPublisher, FeatureGate, FeatureRepository, PermissionStore,
+        QuotaUsageStore, RoleRepository,
+    },
+};
+use sanvi_audit::{
+    AuditConfig,
+    adapters::{SqlxAuditReader, SqlxAuditWriter},
+    application::{ListAuditLog, VerifyAuditChain},
+    domain::{AuditReader, AuditWriter},
 };
 use sanvi_http::{
-    AuthnMiddleware, PermissionGate, ProblemDetail, ResourceRef, Subject, middleware,
+    AuthnMiddleware, FeatureGate as HttpFeatureGatePort, PermissionGate, ProblemDetail,
+    ResourceRef, Subject, middleware,
 };
 use sanvi_identity::{
     IdentityConfig,
     adapters::{
-        HttpKratosClient, KratosSessionVerifier, LoggingNotifications, OutboxEventPublisher,
-        RedisSessionCache, SystemClock, SystemIdGenerator,
+        HttpKratosClient, KratosSessionVerifier, LoggingNotifications,
+        OutboxEventPublisher as IdentityEventPublisher, RedisSessionCache, SystemClock,
+        SystemIdGenerator,
         http::IdentityState,
         repo::{
             SqlxInvitationRepository, SqlxLinkIntentRepository, SqlxLinkedAccountRepository,
@@ -49,6 +73,27 @@ use sanvi_identity::{
         UserRepository,
     },
     routes as identity_routes,
+};
+use sanvi_platform_admin::{
+    PlatformAdminConfig,
+    adapters::{
+        ApprovalGateAdapter, NoopPrivacyLock, OutboxEventPublisher as PlatformAdminEvents,
+        SqlxImpersonationGrantRepository, SqlxImpersonationVerifier, SqlxPendingApprovalRepository,
+        SqlxTenantAdminViewRepository, SystemClock as PlatformAdminClock,
+        SystemIdGenerator as PlatformAdminIds,
+    },
+    application::approvals::{DecideApproval, RecordApprovalRequest},
+    application::{
+        ApproveRequest, CreateImpersonation, GetTenantAdminView, ListImpersonations,
+        ListPendingApprovals, RejectRequest, RevokeImpersonation, SearchTenantAdminViews,
+    },
+    domain::{
+        Clock as PlatformAdminClockTrait, EntitlementAdmin,
+        EventPublisher as PlatformAdminEventsTrait, IdGenerator as PlatformAdminIdsTrait,
+        ImpersonationGrantRepository, PendingApprovalRepository, PrivacyLock,
+        TenantAdminViewRepository,
+    },
+    routes as platform_admin_routes,
 };
 use sanvi_system::{
     SystemState,
@@ -78,6 +123,7 @@ use sanvi_tenancy::{
     },
     routes as tenancy_routes,
 };
+use uuid::Uuid;
 
 pub use config::AppConfig;
 pub use openapi::ApiDoc;
@@ -219,7 +265,7 @@ pub fn build_identity_state(
     let linked: Arc<dyn LinkedAccountRepository> = Arc::new(SqlxLinkedAccountRepository::new());
     let invitations: Arc<dyn InvitationRepository> = Arc::new(SqlxInvitationRepository::new());
     let link_intents: Arc<dyn LinkIntentRepository> = Arc::new(SqlxLinkIntentRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(IdentityEventPublisher::new());
     let notifications: Arc<dyn Notifications> = Arc::new(LoggingNotifications::new());
     let ids: Arc<dyn sanvi_identity::domain::IdGenerator> = Arc::new(SystemIdGenerator);
     let clock: Arc<dyn sanvi_identity::domain::Clock> = Arc::new(SystemClock);
@@ -357,18 +403,31 @@ pub fn build_identity_state(
     }
 }
 
-/// The access context's gate + state, implementing the platform's
-/// `PermissionGate` port.
+/// The access context's gates + state, implementing the platform's
+/// `PermissionGate` and `FeatureGate` ports.
 #[derive(Clone)]
 pub struct AccessWiring {
     pub gate: Arc<dyn PermissionGate>,
+    pub feature_gate: Arc<dyn HttpFeatureGatePort>,
     pub state: sanvi_access::adapters::http::AccessState,
     pub authorizer: Arc<dyn Authorizer>,
     pub role_repository: Arc<dyn RoleRepository>,
     pub permission_store: Arc<dyn PermissionStore>,
     pub decision_cache: Arc<dyn DecisionCache>,
+    pub entitlement_cache: Arc<dyn EntitlementCache>,
     pub tx_manager: sanvi_persistence::TxManager,
     pub rebuild: Arc<RebuildAccessTuples>,
+    /// The domain-level gate (worker/jobs consume it directly).
+    pub domain_feature_gate: Arc<dyn FeatureGate>,
+    pub grant_entitlement: Arc<GrantEntitlement>,
+    pub revoke_entitlement: Arc<RevokeEntitlement>,
+    pub list_tenant_overrides: Arc<ListTenantOverrides>,
+    pub expire_entitlements: Arc<ExpireEntitlements>,
+    pub seed_features: Arc<SeedFeatures>,
+    pub features_repo: Arc<dyn FeatureRepository>,
+    pub entitlements_repo: Arc<dyn EntitlementRepository>,
+    pub quota_store: Arc<dyn QuotaUsageStore>,
+    pub access_events: Arc<dyn AccessEventPublisher>,
 }
 
 /// The `PermissionGate` port implementation: converts between the platform's
@@ -417,13 +476,84 @@ impl PermissionGate for AccessGate {
     }
 }
 
+/// The HTTP-level `FeatureGate` port implementation over the access
+/// context's domain gate, with the phase-03 metrics
+/// (`entitlement_check_duration`, `feature_gate_denied_total`).
+pub struct AccessFeatureGate {
+    gate: Arc<dyn FeatureGate>,
+    denied: prometheus::IntCounterVec,
+    duration: prometheus::Histogram,
+}
+
+impl AccessFeatureGate {
+    pub fn new(gate: Arc<dyn FeatureGate>, registry: &prometheus::Registry) -> Self {
+        let denied = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "feature_gate_denied_total",
+                "Feature gate checks that denied, per feature",
+            ),
+            &["feature"],
+        )
+        .expect("feature gate metric construction is infallible");
+        let duration = prometheus::Histogram::with_opts(prometheus::HistogramOpts::new(
+            "entitlement_check_duration",
+            "Duration of entitlement gate checks",
+        ))
+        .expect("entitlement check histogram construction is infallible");
+        let _ = registry.register(Box::new(denied.clone()));
+        let _ = registry.register(Box::new(duration.clone()));
+        Self {
+            gate,
+            denied,
+            duration,
+        }
+    }
+}
+
+impl HttpFeatureGatePort for AccessFeatureGate {
+    fn check<'a>(
+        &'a self,
+        tenant_id: Uuid,
+        feature: &'a str,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<bool, sanvi_http::ApiError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let started = std::time::Instant::now();
+            let key = match sanvi_access::domain::FeatureKey::parse(feature) {
+                Ok(key) => key,
+                Err(err) => {
+                    tracing::warn!(error = %err, "gate received an unparsable feature key");
+                    self.denied.with_label_values(&[feature]).inc();
+                    return Ok(false);
+                }
+            };
+            let enabled = self.gate.is_enabled(tenant_id, &key).await.map_err(|err| {
+                tracing::error!(error = %err, "entitlement backend failure");
+                sanvi_http::ApiError::ServiceUnavailable {
+                    detail: "entitlements are temporarily unavailable".to_string(),
+                }
+            })?;
+            self.duration.observe(started.elapsed().as_secs_f64());
+            if !enabled {
+                self.denied.with_label_values(&[feature]).inc();
+            }
+            Ok(enabled)
+        })
+    }
+}
+
 /// Build the access context's application state.
+#[allow(clippy::too_many_arguments)]
 pub fn build_access_state(
     pool: sanvi_persistence::PgPool,
     config: &AccessConfig,
     keto_read_url: &str,
     keto_write_url: &str,
     memberships: Arc<dyn MembershipRepository>,
+    audit_writer: Arc<dyn AuditWriter>,
+    approval_gate: Arc<dyn ApprovalGate>,
+    registry: &prometheus::Registry,
+    redis: Option<redis::aio::ConnectionManager>,
 ) -> AccessWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
     let roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
@@ -434,6 +564,13 @@ pub fn build_access_state(
     let cache: Arc<dyn DecisionCache> = Arc::new(InMemoryDecisionCache::new(
         config.decision_cache_max_entries,
     ));
+    let features: Arc<dyn FeatureRepository> = Arc::new(SqlxFeatureRepository::new());
+    let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
+    let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());
+    let events: Arc<dyn AccessEventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let clock: Arc<dyn sanvi_access::domain::Clock> = Arc::new(sanvi_access::adapters::SystemClock);
+    let ids: Arc<dyn sanvi_access::domain::IdGenerator> =
+        Arc::new(sanvi_access::adapters::SystemRoleIdGenerator);
 
     let check = Arc::new(CheckPermission::new(
         tx_manager.clone(),
@@ -460,17 +597,435 @@ pub fn build_access_state(
         membership_source,
     ));
 
+    let entitlement_cache: Arc<dyn EntitlementCache> = match &redis {
+        Some(manager) => Arc::new(RedisEntitlementCache::new(
+            manager.clone(),
+            config.entitlement_cache_ttl_secs,
+        )),
+        None => Arc::new(InMemoryEntitlementCache::new(
+            std::time::Duration::from_secs(config.entitlement_cache_ttl_secs),
+            10_000,
+        )),
+    };
+
+    let resolver = Arc::new(EntitlementResolver::new(
+        tx_manager.clone(),
+        features.clone(),
+        entitlements.clone(),
+        entitlement_cache.clone(),
+        clock.clone(),
+        config.entitlement_cache_ttl_secs,
+    ));
+    let domain_gate: Arc<dyn FeatureGate> = Arc::new(EntitlementFeatureGate::new(
+        resolver.clone(),
+        tx_manager.clone(),
+        quota.clone(),
+        events.clone(),
+        clock.clone(),
+    ));
+    let http_gate: Arc<dyn HttpFeatureGatePort> =
+        Arc::new(AccessFeatureGate::new(domain_gate.clone(), registry));
+
+    let grant_entitlement = Arc::new(GrantEntitlement::new(
+        tx_manager.clone(),
+        features.clone(),
+        entitlements.clone(),
+        events.clone(),
+        clock.clone(),
+        audit_writer.clone(),
+        approval_gate,
+        EntitlementPolicy {
+            approval_threshold: config.entitlement_approval_threshold,
+        },
+    ));
+    let revoke_entitlement = Arc::new(RevokeEntitlement::new(
+        tx_manager.clone(),
+        entitlements.clone(),
+        entitlement_cache.clone(),
+        events.clone(),
+        clock.clone(),
+        audit_writer.clone(),
+    ));
+    let list_tenant_overrides = Arc::new(ListTenantOverrides::new(
+        tx_manager.clone(),
+        entitlements.clone(),
+    ));
+    let list_tenant_entitlements = Arc::new(ListTenantEntitlements::new(resolver.clone()));
+    let expire_entitlements = Arc::new(ExpireEntitlements::new(
+        tx_manager.clone(),
+        entitlements.clone(),
+        entitlement_cache.clone(),
+        events.clone(),
+        clock.clone(),
+    ));
+    let seed_features = Arc::new(SeedFeatures::new(tx_manager.clone(), features.clone()));
+
+    let state = sanvi_access::adapters::http::AccessState {
+        list_permissions: Arc::new(ListPermissions::new()),
+        list_roles: Arc::new(ListRoles::new(tx_manager.clone(), roles.clone())),
+        create_role: Arc::new(CreateCustomRole::new(
+            tx_manager.clone(),
+            roles.clone(),
+            authorizer.clone(),
+            events.clone(),
+            ids,
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        update_role: Arc::new(UpdateCustomRole::new(
+            tx_manager.clone(),
+            roles.clone(),
+            authorizer.clone(),
+            events.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        delete_role: Arc::new(DeleteCustomRole::new(
+            tx_manager.clone(),
+            roles.clone(),
+            events.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        list_features: Arc::new(ListFeatures::new(tx_manager.clone(), features.clone())),
+        define_feature: Arc::new(DefineFeature::new(
+            tx_manager.clone(),
+            features.clone(),
+            events.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        update_feature: Arc::new(UpdateFeature::new(
+            tx_manager.clone(),
+            features.clone(),
+            events.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        deprecate_feature: Arc::new(DeprecateFeature::new(
+            tx_manager.clone(),
+            features.clone(),
+            events.clone(),
+            clock.clone(),
+            audit_writer.clone(),
+        )),
+        list_tenant_entitlements,
+    };
+
     AccessWiring {
         gate,
-        state: sanvi_access::adapters::http::AccessState {
-            list_permissions: Arc::new(ListPermissions::new()),
-        },
+        feature_gate: http_gate,
+        state,
         authorizer,
         role_repository: roles,
         permission_store: store,
         decision_cache: cache,
+        entitlement_cache,
         tx_manager,
         rebuild,
+        domain_feature_gate: domain_gate,
+        grant_entitlement,
+        revoke_entitlement,
+        list_tenant_overrides,
+        expire_entitlements,
+        seed_features,
+        features_repo: features,
+        entitlements_repo: entitlements,
+        quota_store: quota,
+        access_events: events,
+    }
+}
+
+/// The audit context's state: writer/reader ports and use cases.
+#[derive(Clone)]
+pub struct AuditWiring {
+    pub writer: Arc<dyn AuditWriter>,
+    pub reader: Arc<dyn AuditReader>,
+    pub state: sanvi_audit::adapters::http::AuditState,
+    pub verify: Arc<VerifyAuditChain>,
+}
+
+/// Build the audit context's application state.
+pub fn build_audit_state(pool: sanvi_persistence::PgPool, config: &AuditConfig) -> AuditWiring {
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let writer: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new());
+    let reader: Arc<dyn AuditReader> = Arc::new(SqlxAuditReader::new());
+    let list = Arc::new(ListAuditLog::new(tx_manager.clone(), reader.clone()));
+    let verify = Arc::new(VerifyAuditChain::new(
+        tx_manager,
+        reader.clone(),
+        config.verify_batch_size,
+    ));
+    AuditWiring {
+        writer,
+        reader,
+        state: sanvi_audit::adapters::http::AuditState { list },
+        verify,
+    }
+}
+
+/// The `EntitlementAdmin` port implementation over the access context's
+/// use cases (composition root only).
+pub struct AccessEntitlementAdmin {
+    grant: Arc<GrantEntitlement>,
+    revoke: Arc<RevokeEntitlement>,
+    list: Arc<ListTenantOverrides>,
+}
+
+impl AccessEntitlementAdmin {
+    pub fn new(
+        grant: Arc<GrantEntitlement>,
+        revoke: Arc<RevokeEntitlement>,
+        list: Arc<ListTenantOverrides>,
+    ) -> Self {
+        Self {
+            grant,
+            revoke,
+            list,
+        }
+    }
+}
+
+fn map_access_err(
+    err: sanvi_access::domain::AccessError,
+) -> sanvi_platform_admin::domain::PlatformAdminError {
+    use sanvi_access::domain::AccessError as A;
+    use sanvi_platform_admin::domain::PlatformAdminError as P;
+    match err {
+        A::FeatureNotFound { key } => P::FeatureNotFound(key),
+        A::InvalidFeatureKey(detail) | A::InvalidLimit(detail) | A::InvalidEntitlement(detail) => {
+            P::InvalidEntitlement(detail)
+        }
+        A::QuotaExceeded {
+            feature,
+            limit,
+            attempted,
+        } => P::EntitlementConflict(format!(
+            "quota exceeded for {feature}: limit {limit}, attempted {attempted}"
+        )),
+        other => P::InvalidEntitlement(other.to_string()),
+    }
+}
+
+#[async_trait::async_trait]
+impl EntitlementAdmin for AccessEntitlementAdmin {
+    async fn grant_override(
+        &self,
+        actor_id: Uuid,
+        tenant_id: Uuid,
+        feature_key: String,
+        enabled: bool,
+        limit: Option<i64>,
+        expires_at: Option<DateTime<Utc>>,
+        reason: Option<String>,
+    ) -> Result<
+        sanvi_platform_admin::domain::GrantOverrideOutcome,
+        sanvi_platform_admin::domain::PlatformAdminError,
+    > {
+        let feature =
+            sanvi_access::domain::FeatureKey::parse(&feature_key).map_err(map_access_err)?;
+        match self
+            .grant
+            .execute(
+                actor_id,
+                None,
+                sanvi_access::application::GrantEntitlementCommand {
+                    tenant_id,
+                    feature_key: feature,
+                    enabled,
+                    limit,
+                    expires_at,
+                    reason,
+                    skip_approval: false,
+                },
+            )
+            .await
+        {
+            Ok(GrantEntitlementOutput::Granted) => {
+                Ok(sanvi_platform_admin::domain::GrantOverrideOutcome::Granted)
+            }
+            Ok(GrantEntitlementOutput::ApprovalRequired { approval_id }) => Ok(
+                sanvi_platform_admin::domain::GrantOverrideOutcome::ApprovalRequired {
+                    approval_id,
+                },
+            ),
+            Err(err) => Err(map_access_err(err)),
+        }
+    }
+
+    async fn grant_override_approved(
+        &self,
+        requested_by: Uuid,
+        tenant_id: Uuid,
+        feature_key: String,
+        enabled: bool,
+        limit: Option<i64>,
+        expires_at: Option<DateTime<Utc>>,
+        reason: Option<String>,
+    ) -> Result<(), sanvi_platform_admin::domain::PlatformAdminError> {
+        let feature =
+            sanvi_access::domain::FeatureKey::parse(&feature_key).map_err(map_access_err)?;
+        self.grant
+            .execute(
+                requested_by,
+                None,
+                sanvi_access::application::GrantEntitlementCommand {
+                    tenant_id,
+                    feature_key: feature,
+                    enabled,
+                    limit,
+                    expires_at,
+                    reason,
+                    skip_approval: true,
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(map_access_err)
+    }
+
+    async fn revoke_override(
+        &self,
+        actor_id: Uuid,
+        tenant_id: Uuid,
+        feature_key: String,
+    ) -> Result<(), sanvi_platform_admin::domain::PlatformAdminError> {
+        let feature =
+            sanvi_access::domain::FeatureKey::parse(&feature_key).map_err(map_access_err)?;
+        self.revoke
+            .execute(
+                actor_id,
+                None,
+                sanvi_access::application::RevokeEntitlementCommand {
+                    tenant_id,
+                    feature_key: feature,
+                },
+            )
+            .await
+            .map_err(map_access_err)
+    }
+
+    async fn list_overrides(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<
+        Vec<sanvi_access::domain::Entitlement>,
+        sanvi_platform_admin::domain::PlatformAdminError,
+    > {
+        self.list.execute(tenant_id).await.map_err(map_access_err)
+    }
+}
+
+/// The platform_admin context's state + the impersonation middleware parts.
+#[derive(Clone)]
+pub struct PlatformAdminWiring {
+    pub state: sanvi_platform_admin::adapters::http::PlatformAdminState,
+    pub impersonation: Arc<sanvi_http::ImpersonationMiddleware>,
+    /// The four-eyes gate the access context consumes (records pending
+    /// approvals when its policy requires them).
+    pub approval_gate: Arc<dyn ApprovalGate>,
+}
+
+/// Build the platform_admin context's application state. `entitlement_admin`
+/// is the composition root's adapter over the access context's use cases;
+/// the returned `approval_gate` is the same adapter the access context's
+/// `GrantEntitlement` consumes.
+pub fn build_platform_admin_state(
+    pool: sanvi_persistence::PgPool,
+    config: &PlatformAdminConfig,
+    tenants: Arc<dyn TenantRepository>,
+    memberships: Arc<dyn MembershipRepository>,
+    entitlements: Arc<dyn EntitlementRepository>,
+    entitlement_admin: Arc<dyn EntitlementAdmin>,
+    audit_writer: Arc<dyn AuditWriter>,
+) -> PlatformAdminWiring {
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let grants: Arc<dyn ImpersonationGrantRepository> =
+        Arc::new(SqlxImpersonationGrantRepository::new());
+    let approvals: Arc<dyn PendingApprovalRepository> =
+        Arc::new(SqlxPendingApprovalRepository::new());
+    let clock: Arc<dyn PlatformAdminClockTrait> = Arc::new(PlatformAdminClock);
+    let ids: Arc<dyn PlatformAdminIdsTrait> = Arc::new(PlatformAdminIds);
+    let events: Arc<dyn PlatformAdminEventsTrait> = Arc::new(PlatformAdminEvents::new());
+    let privacy_lock: Arc<dyn PrivacyLock> = Arc::new(NoopPrivacyLock);
+
+    let views: Arc<dyn TenantAdminViewRepository> = Arc::new(SqlxTenantAdminViewRepository::new(
+        tenants,
+        memberships.clone(),
+        entitlements,
+        grants.clone(),
+        clock.clone(),
+    ));
+
+    let create_impersonation = Arc::new(CreateImpersonation::new(
+        tx_manager.clone(),
+        grants.clone(),
+        memberships.clone(),
+        privacy_lock,
+        events.clone(),
+        ids.clone(),
+        clock.clone(),
+        audit_writer.clone(),
+        config.impersonation_max_minutes,
+    ));
+    let list_impersonations = Arc::new(ListImpersonations::new(
+        tx_manager.clone(),
+        grants.clone(),
+        clock.clone(),
+    ));
+    let revoke_impersonation = Arc::new(RevokeImpersonation::new(
+        tx_manager.clone(),
+        grants.clone(),
+        events.clone(),
+        clock.clone(),
+        audit_writer.clone(),
+    ));
+
+    let record_approval = Arc::new(RecordApprovalRequest::new(
+        approvals.clone(),
+        ids.clone(),
+        clock.clone(),
+    ));
+    let decide = Arc::new(DecideApproval::new(
+        tx_manager.clone(),
+        approvals.clone(),
+        entitlement_admin.clone(),
+        clock.clone(),
+        audit_writer.clone(),
+    ));
+
+    let verifier = Arc::new(SqlxImpersonationVerifier::new(
+        grants.clone(),
+        memberships,
+        tx_manager.clone(),
+        clock,
+    ));
+    let impersonation = Arc::new(sanvi_http::ImpersonationMiddleware { verifier });
+
+    let state = sanvi_platform_admin::adapters::http::PlatformAdminState {
+        search_tenants: Arc::new(SearchTenantAdminViews::new(
+            tx_manager.clone(),
+            views.clone(),
+        )),
+        get_tenant: Arc::new(GetTenantAdminView::new(tx_manager.clone(), views)),
+        create_impersonation,
+        list_impersonations,
+        revoke_impersonation,
+        entitlements: entitlement_admin,
+        list_approvals: Arc::new(ListPendingApprovals::new(
+            tx_manager.clone(),
+            approvals.clone(),
+        )),
+        approve: Arc::new(ApproveRequest::new(decide.clone())),
+        reject: Arc::new(RejectRequest::new(decide)),
+    };
+
+    let approval_gate: Arc<dyn ApprovalGate> = Arc::new(ApprovalGateAdapter::new(record_approval));
+
+    PlatformAdminWiring {
+        state,
+        impersonation,
+        approval_gate,
     }
 }
 
@@ -478,6 +1033,7 @@ pub fn build_access_state(
 ///
 /// This is the factory `HttpServer` clones per worker; everything captured
 /// is cheap to clone (pools, `Arc`s, plain data).
+#[allow(clippy::too_many_arguments)]
 pub fn build_app(
     config: AppConfig,
     metrics: Arc<MetricsRegistry>,
@@ -485,6 +1041,8 @@ pub fn build_app(
     tenancy: TenancyState,
     identity: IdentityWiring,
     access: AccessWiring,
+    audit: AuditWiring,
+    platform_admin: PlatformAdminWiring,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -511,6 +1069,12 @@ pub fn build_app(
         .app_data(web::Data::new(access.state.clone()))
         .app_data(web::Data::new(identity.webhook.as_ref().clone()))
         .app_data(web::Data::new(access.gate.clone()))
+        .app_data(web::Data::new(access.feature_gate.clone()))
+        .app_data(sanvi_http::FreshAal2Policy {
+            max_age_secs: config.platform_admin.fresh_aal2_max_age_secs,
+        })
+        .app_data(web::Data::new(audit.state.clone()))
+        .app_data(web::Data::new(platform_admin.state.clone()))
         .app_data(web::JsonConfig::default().limit(server_config.max_body_bytes))
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)
@@ -525,6 +1089,8 @@ pub fn build_app(
         .configure(identity_routes::identity_routes)
         .configure(identity_routes::internal_routes)
         .configure(sanvi_access::routes::access_routes)
+        .configure(sanvi_audit::routes::audit_routes)
+        .configure(platform_admin_routes::platform_admin_routes)
         .service(web::scope("/api/v1/system").configure(api_routes));
 
     // The phase-01 feature gate: with the flag off, no resolution middleware
@@ -559,7 +1125,22 @@ pub fn build_app(
         None
     };
 
-    middleware::stack(app, server_config, redis, tenant_middleware, authn)
+    // The phase-03 feature gate: with the flag off, no impersonation
+    // resolution (the platform_admin context is not wired).
+    let impersonation = if config.features.platform_admin {
+        Some(platform_admin.impersonation.clone())
+    } else {
+        None
+    };
+
+    middleware::stack(
+        app,
+        server_config,
+        redis,
+        tenant_middleware,
+        authn,
+        impersonation,
+    )
 }
 
 /// Platform-level routes that belong to no single context.

@@ -104,18 +104,25 @@ so two concurrent requests cannot both take the last unit.
 `FeatureGate` is injected into every context that has optional capability, and there is a single
 `#[feature("domains.custom")]` route attribute so gating is declarative and enumerable.
 
-### API surface (`api/platform-admin.yaml`, `api/access.yaml`)
+### API surface (`api/platform-admin.yaml`, `api/access.yaml`, `api/audit.yaml`)
+
+> Note: the operator tenant search is mounted at `/api/v1/platform/admin/tenants`
+> (not `/api/v1/platform/tenants`, which the tenancy context already serves with
+> its basic cursor list); the two paths coexist without route shadowing.
 
 | Method | Path | Permission |
 |---|---|---|
-| GET | `/api/v1/platform/tenants` (rich search, filters, sort) | `platform.tenant.read` |
+| GET | `/api/v1/platform/admin/tenants` (rich search, filters, sort) | `platform.tenant.read` |
+| GET | `/api/v1/platform/admin/tenants/{id}` | `platform.tenant.read` |
+| GET | `/api/v1/platform/tenants/{id}/entitlements` | `platform.entitlement.write` |
 | POST | `/api/v1/platform/tenants/{id}/entitlements` | `platform.entitlement.write` |
-| DELETE | `/api/v1/platform/tenants/{id}/entitlements/{feature}` | `platform.entitlement.write` |
+| DELETE | `/api/v1/platform/tenants/{id}/entitlements/{feature}` | `platform.entitlement.write` (+ fresh MFA) |
 | GET/POST/PATCH/DELETE | `/api/v1/platform/features` | `platform.feature.write` |
-| POST | `/api/v1/platform/impersonations` / `DELETE .../{id}` | `platform.impersonate` (+ fresh MFA) |
+| POST | `/api/v1/platform/impersonations` / `GET` / `DELETE .../{id}` | `platform.impersonate` (+ fresh MFA on create/revoke) |
+| GET/POST | `/api/v1/platform/approvals` (`/{id}/approve|reject`) | `platform.approval.read` / `platform.approval.write` (+ fresh MFA on decide) |
 | GET | `/api/v1/platform/audit` | `platform.audit.read` |
 | GET/POST/PATCH/DELETE | `/api/v1/tenant/roles` | `access.role.*` |
-| GET | `/api/v1/tenant/entitlements` | `tenant.entitlement.read` |
+| GET | `/api/v1/tenant/entitlements` | `tenant.entitlement.read` (feature-gated on `access.tenant_entitlements`) |
 
 ### Guardrails on dangerous actions
 
@@ -163,12 +170,12 @@ Alert immediately on any audit chain failure or impersonation exceeding the max 
 
 ## Acceptance criteria
 
-- [ ] An operator can grant `advertising.google_ads` to one tenant and the gate flips for that tenant
+- [x] An operator can grant `advertising.google_ads` to one tenant and the gate flips for that tenant
       only, within 5 s, with an audit entry.
-- [ ] A tenant admin can create a custom role, assign it, and cannot escalate beyond their own grants.
-- [ ] Impersonation produces a session that is time-boxed, read-only, banner-flagged, and audited.
-- [ ] Every optional capability in the codebase is declared in the feature catalog (CI test).
-- [ ] Audit log is provably append-only and chain-verified.
+- [x] A tenant admin can create a custom role, assign it, and cannot escalate beyond their own grants.
+- [x] Impersonation produces a session that is time-boxed, read-only, banner-flagged, and audited.
+- [x] Every optional capability in the codebase is declared in the feature catalog (CI test).
+- [x] Audit log is provably append-only and chain-verified.
 
 ## Risks
 

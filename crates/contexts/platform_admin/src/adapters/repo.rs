@@ -1,0 +1,397 @@
+//! The sqlx repositories for `platform_admin`: impersonation grants,
+//! pending approvals, and the tenant admin read model (assembled over the
+//! tenancy/identity/access ports under one audited transaction).
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sanvi_access::domain::EntitlementRepository;
+use sanvi_identity::domain::MembershipRepository;
+use sanvi_persistence::PlatformScope;
+use sanvi_tenancy::domain::{TenantRepository, TenantSearch, TenantSearchCursor, TenantStatus};
+use sqlx::FromRow;
+use uuid::Uuid;
+
+use crate::domain::PlatformAdminError;
+use crate::domain::approvals::{ApprovalId, ApprovalStatus, PendingApproval};
+use crate::domain::impersonation::{ImpersonationGrant, ImpersonationGrantId, ImpersonationMode};
+use crate::domain::ports::{
+    Clock, ImpersonationGrantRepository, PendingApprovalRepository, TenantAdminViewRepository,
+};
+use crate::domain::views::{TenantAdminView, TenantViewCursor, TenantViewSearch};
+
+fn storage(err: impl std::fmt::Display) -> PlatformAdminError {
+    PlatformAdminError::Storage(err.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Impersonation grants
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, FromRow)]
+struct GrantRow {
+    id: Uuid,
+    actor_id: Uuid,
+    tenant_id: Uuid,
+    target_user_id: Uuid,
+    reason: String,
+    mode: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
+    revoked_by: Option<Uuid>,
+}
+
+fn to_grant(row: GrantRow) -> Result<ImpersonationGrant, PlatformAdminError> {
+    Ok(ImpersonationGrant::from_parts(
+        ImpersonationGrantId::from_uuid(row.id),
+        row.actor_id,
+        row.tenant_id,
+        row.target_user_id,
+        row.reason,
+        ImpersonationMode::parse(&row.mode)?,
+        row.created_at,
+        row.expires_at,
+        row.revoked_at,
+        row.revoked_by,
+    ))
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxImpersonationGrantRepository;
+
+impl SqlxImpersonationGrantRepository {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
+    async fn save(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        grant: &ImpersonationGrant,
+    ) -> Result<(), PlatformAdminError> {
+        sqlx::query(
+            "INSERT INTO platform_admin.impersonation_grants
+               (id, actor_id, tenant_id, target_user_id, reason, mode,
+                created_at, expires_at, revoked_at, revoked_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             ON CONFLICT (id) DO UPDATE SET
+               revoked_at = EXCLUDED.revoked_at,
+               revoked_by = EXCLUDED.revoked_by",
+        )
+        .bind(grant.id().as_uuid())
+        .bind(grant.actor_id())
+        .bind(grant.tenant_id())
+        .bind(grant.target_user_id())
+        .bind(grant.reason())
+        .bind(grant.mode().as_str())
+        .bind(grant.created_at())
+        .bind(grant.expires_at())
+        .bind(grant.revoked_at())
+        .bind(grant.revoked_by())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn find_by_id(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: ImpersonationGrantId,
+    ) -> Result<Option<ImpersonationGrant>, PlatformAdminError> {
+        let row: Option<GrantRow> = sqlx::query_as(
+            "SELECT id, actor_id, tenant_id, target_user_id, reason, mode,
+                    created_at, expires_at, revoked_at, revoked_by
+             FROM platform_admin.impersonation_grants WHERE id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(to_grant).transpose()
+    }
+
+    async fn list_active(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Option<Uuid>,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError> {
+        let rows: Vec<GrantRow> = sqlx::query_as(
+            "SELECT id, actor_id, tenant_id, target_user_id, reason, mode,
+                    created_at, expires_at, revoked_at, revoked_by
+             FROM platform_admin.impersonation_grants
+             WHERE revoked_at IS NULL AND expires_at > $1
+               AND ($2::uuid IS NULL OR tenant_id = $2)
+             ORDER BY created_at DESC LIMIT $3",
+        )
+        .bind(now)
+        .bind(tenant_id)
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(to_grant).collect()
+    }
+
+    async fn count_active(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<u32, PlatformAdminError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM platform_admin.impersonation_grants
+             WHERE tenant_id = $1 AND revoked_at IS NULL AND expires_at > $2",
+        )
+        .bind(tenant_id)
+        .bind(now)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(count as u32)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pending approvals
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, FromRow)]
+struct ApprovalRow {
+    id: Uuid,
+    requested_by: Uuid,
+    action_type: String,
+    payload: serde_json::Value,
+    status: String,
+    requested_at: DateTime<Utc>,
+    decided_by: Option<Uuid>,
+    decided_at: Option<DateTime<Utc>>,
+}
+
+fn to_approval(row: ApprovalRow) -> Result<PendingApproval, PlatformAdminError> {
+    Ok(PendingApproval::from_parts(
+        ApprovalId::from_uuid(row.id),
+        row.requested_by,
+        row.action_type,
+        row.payload,
+        ApprovalStatus::parse(&row.status)?,
+        row.requested_at,
+        row.decided_by,
+        row.decided_at,
+    ))
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxPendingApprovalRepository;
+
+impl SqlxPendingApprovalRepository {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl PendingApprovalRepository for SqlxPendingApprovalRepository {
+    async fn save(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        approval: &PendingApproval,
+    ) -> Result<(), PlatformAdminError> {
+        sqlx::query(
+            "INSERT INTO platform_admin.pending_approvals
+               (id, requested_by, action_type, payload, status, requested_at,
+                decided_by, decided_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (id) DO UPDATE SET
+               status = EXCLUDED.status,
+               decided_by = EXCLUDED.decided_by,
+               decided_at = EXCLUDED.decided_at",
+        )
+        .bind(approval.id().as_uuid())
+        .bind(approval.requested_by())
+        .bind(approval.action_type())
+        .bind(approval.payload())
+        .bind(approval.status().as_str())
+        .bind(approval.requested_at())
+        .bind(approval.decided_by())
+        .bind(approval.decided_at())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn find_by_id(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: ApprovalId,
+    ) -> Result<Option<PendingApproval>, PlatformAdminError> {
+        let row: Option<ApprovalRow> = sqlx::query_as(
+            "SELECT id, requested_by, action_type, payload, status, requested_at,
+                    decided_by, decided_at
+             FROM platform_admin.pending_approvals WHERE id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(to_approval).transpose()
+    }
+
+    async fn list_pending(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: u32,
+    ) -> Result<Vec<PendingApproval>, PlatformAdminError> {
+        let rows: Vec<ApprovalRow> = sqlx::query_as(
+            "SELECT id, requested_by, action_type, payload, status, requested_at,
+                    decided_by, decided_at
+             FROM platform_admin.pending_approvals
+             WHERE status = 'pending'
+             ORDER BY requested_at
+             LIMIT $1",
+        )
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(to_approval).collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tenant admin read model
+// ---------------------------------------------------------------------------
+
+/// The read model assembles tenancy basics (via tenancy's `TenantRepository`
+/// search), member counts (identity's `MembershipRepository`), override
+/// counts (access's `EntitlementRepository`) and active impersonations
+/// (this context's grants) — over ports, one audited transaction, no
+/// cross-schema SQL.
+#[derive(Clone)]
+pub struct SqlxTenantAdminViewRepository {
+    tenants: std::sync::Arc<dyn TenantRepository>,
+    memberships: std::sync::Arc<dyn MembershipRepository>,
+    entitlements: std::sync::Arc<dyn EntitlementRepository>,
+    grants: std::sync::Arc<dyn ImpersonationGrantRepository>,
+    clock: std::sync::Arc<dyn Clock>,
+}
+
+impl SqlxTenantAdminViewRepository {
+    pub fn new(
+        tenants: std::sync::Arc<dyn TenantRepository>,
+        memberships: std::sync::Arc<dyn MembershipRepository>,
+        entitlements: std::sync::Arc<dyn EntitlementRepository>,
+        grants: std::sync::Arc<dyn ImpersonationGrantRepository>,
+        clock: std::sync::Arc<dyn Clock>,
+    ) -> Self {
+        Self {
+            tenants,
+            memberships,
+            entitlements,
+            grants,
+            clock,
+        }
+    }
+}
+
+#[async_trait]
+impl TenantAdminViewRepository for SqlxTenantAdminViewRepository {
+    async fn search(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        search: &TenantViewSearch,
+    ) -> Result<(Vec<TenantAdminView>, Option<TenantViewCursor>), PlatformAdminError> {
+        let status = match search.status.as_deref() {
+            Some(raw) => Some(
+                TenantStatus::parse(raw)
+                    .map_err(|err| PlatformAdminError::InvalidSearch(err.to_string()))?,
+            ),
+            None => None,
+        };
+        let (tenants, next_cursor) = self
+            .tenants
+            .search(
+                scope,
+                &TenantSearch {
+                    query: search.query.clone(),
+                    status,
+                    after: search.after.map(|cursor| TenantSearchCursor {
+                        created_at: cursor.created_at,
+                        id: sanvi_tenancy::domain::TenantId::from_uuid(cursor.tenant_id),
+                    }),
+                    limit: search.limit,
+                },
+            )
+            .await
+            .map_err(|err| PlatformAdminError::Storage(err.to_string()))?;
+        let views = self.assemble(scope, &tenants).await?;
+        let cursor = next_cursor.map(|cursor| TenantViewCursor {
+            created_at: cursor.created_at,
+            tenant_id: cursor.id.as_uuid(),
+        });
+        Ok((views, cursor))
+    }
+
+    async fn get(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Option<TenantAdminView>, PlatformAdminError> {
+        let Some(tenant) = self
+            .tenants
+            .find_by_id(scope, sanvi_tenancy::domain::TenantId::from_uuid(tenant_id))
+            .await
+            .map_err(|err| PlatformAdminError::Storage(err.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let views = self.assemble(scope, &[tenant]).await?;
+        Ok(views.into_iter().next())
+    }
+}
+
+impl SqlxTenantAdminViewRepository {
+    async fn assemble(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenants: &[sanvi_tenancy::domain::Tenant],
+    ) -> Result<Vec<TenantAdminView>, PlatformAdminError> {
+        let mut views = Vec::with_capacity(tenants.len());
+        for tenant in tenants {
+            let tenant_id = tenant.id().as_uuid();
+            let member_count = self
+                .memberships
+                .count_members_platform(scope, tenant_id)
+                .await
+                .map_err(|err| PlatformAdminError::Storage(err.to_string()))?;
+            let override_count = self
+                .entitlements
+                .count_active(scope, tenant_id, self.clock.now())
+                .await
+                .map_err(|err| PlatformAdminError::Storage(err.to_string()))?;
+            let active_impersonations = self
+                .grants
+                .count_active(scope, tenant_id, self.clock.now())
+                .await?;
+            views.push(TenantAdminView {
+                tenant_id,
+                slug: tenant.slug().to_string(),
+                display_name: tenant.display_name().to_string(),
+                status: tenant.status().as_str().to_string(),
+                region: tenant.region().to_string(),
+                default_locale: tenant.default_locale().to_string(),
+                created_at: tenant.created_at(),
+                member_count,
+                override_count,
+                active_impersonations,
+            });
+        }
+        Ok(views)
+    }
+}

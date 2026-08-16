@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenancy.tenants (id, slug, display_name, status, region)\n             VALUES ($1, $2, $3, 'active', 'us')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b49f8fbcd384c2eeda5986f60b5552b530e979dfa24aa315be038457878838e2"
+}

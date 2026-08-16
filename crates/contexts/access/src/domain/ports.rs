@@ -1,11 +1,15 @@
 //! Ports (traits) implemented by driven adapters.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use sanvi_persistence::PlatformScope;
+use chrono::{DateTime, NaiveDate, Utc};
+use sanvi_persistence::{PlatformScope, ScopedTx};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::entitlements::{Entitlement, EntitlementSource, ResolvedEntitlement};
 use crate::domain::error::AccessError;
+use crate::domain::events::AccessEvent;
+use crate::domain::features::{Feature, FeatureKey};
 use crate::domain::permissions::Permission;
 use crate::domain::roles::{Role, RoleId, RoleScope};
 
@@ -57,6 +61,11 @@ pub trait RoleRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         id: RoleId,
     ) -> Result<Option<Role>, AccessError>;
+
+    /// Delete a role (custom tenant roles only; system roles are rejected
+    /// by the use case). Cascades to `role_permissions` and the identity
+    /// context's `membership_roles`.
+    async fn delete(&self, scope: &mut PlatformScope<'_>, id: RoleId) -> Result<(), AccessError>;
 
     /// Roles granting `permission` that could apply to `tenant_id`: the
     /// platform roles (scope Platform), the system tenant templates, and the
@@ -161,6 +170,8 @@ pub trait DecisionCache: Send + Sync {
     async fn get(&self, key: &str) -> Option<Decision>;
     async fn put(&self, key: &str, decision: Decision, ttl_secs: u64);
     async fn invalidate_user(&self, user_id: Uuid);
+    /// Drop everything (role authoring changed grants for arbitrary users).
+    async fn invalidate_all(&self);
 }
 
 /// Source of new role ids (tests substitute deterministic generators).
@@ -171,4 +182,191 @@ pub trait IdGenerator: Send + Sync {
 /// The system clock (tests substitute fixed times).
 pub trait Clock: Send + Sync {
     fn now(&self) -> DateTime<Utc>;
+}
+
+/// The feature catalog's storage (global, not tenant-scoped).
+#[async_trait]
+pub trait FeatureRepository: Send + Sync {
+    async fn save(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        feature: &Feature,
+    ) -> Result<(), AccessError>;
+
+    async fn find(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        key: &FeatureKey,
+    ) -> Result<Option<Feature>, AccessError>;
+
+    async fn list_all(&self, scope: &mut PlatformScope<'_>) -> Result<Vec<Feature>, AccessError>;
+}
+
+/// Entitlement rows. Tenant-scoped reads run under `ScopedTx` (RLS-filtered
+/// by construction); writes and cross-tenant maintenance run under the
+/// audited `PlatformScope`.
+#[async_trait]
+pub trait EntitlementRepository: Send + Sync {
+    /// The tenant's own rows (RLS sees only them).
+    async fn list_for_tenant(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<Entitlement>, AccessError>;
+
+    /// The same rows, read under the audited platform scope.
+    async fn list_for_tenant_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<Entitlement>, AccessError>;
+
+    async fn save(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        entitlement: &Entitlement,
+    ) -> Result<(), AccessError>;
+
+    async fn delete(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        feature: &FeatureKey,
+        source: EntitlementSource,
+    ) -> Result<(), AccessError>;
+
+    /// Non-expired override rows (the operator console's entitlement count).
+    async fn count_active(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<u32, AccessError>;
+
+    /// Expired override rows due for the sweep job.
+    async fn expired(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<Vec<Entitlement>, AccessError>;
+}
+
+/// Quota counters. Consumption is atomic in the database
+/// (`INSERT ... ON CONFLICT DO UPDATE ... WHERE used + n <= limit
+/// RETURNING`), so two concurrent requests cannot both take the last unit.
+#[async_trait]
+pub trait QuotaUsageStore: Send + Sync {
+    /// Atomically consume `amount` against the period. Returns the new
+    /// total, or `None` when the quota is exhausted.
+    async fn consume(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        feature: &FeatureKey,
+        period: NaiveDate,
+        amount: i64,
+        limit: i64,
+    ) -> Result<Option<i64>, AccessError>;
+
+    /// The current usage for a period.
+    async fn usage(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        feature: &FeatureKey,
+        period: NaiveDate,
+    ) -> Result<i64, AccessError>;
+
+    /// Delete periods that start before `before` (the rollover job);
+    /// returns the number of rows removed.
+    async fn rollover(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        before: NaiveDate,
+    ) -> Result<u64, AccessError>;
+}
+
+/// The resolved entitlement set for one tenant, as served from the cache.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CachedEntitlements {
+    pub entries: Vec<ResolvedEntitlement>,
+    pub cached_at: DateTime<Utc>,
+}
+
+/// The entitlement cache (`sanvi:{tenant}:entitlements` in Redis, TTL 300 s
+/// by default). Invalidation is event-driven: any entitlement or feature
+/// event deletes the affected keys. Quota *consumption* never goes through
+/// the cache — the atomic counter is always authoritative.
+#[async_trait]
+pub trait EntitlementCache: Send + Sync {
+    async fn get(&self, tenant_id: Uuid) -> Option<CachedEntitlements>;
+    async fn put(&self, tenant_id: Uuid, entries: &[ResolvedEntitlement], ttl_secs: u64);
+    async fn invalidate(&self, tenant_id: Uuid);
+    async fn invalidate_all(&self);
+}
+
+/// Publishes access events into the transactional outbox (same transaction
+/// as the state change they describe).
+#[async_trait]
+pub trait EventPublisher: Send + Sync {
+    async fn publish(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        events: &[AccessEvent],
+    ) -> Result<(), AccessError>;
+
+    async fn publish_scoped(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        events: &[AccessEvent],
+    ) -> Result<(), AccessError>;
+}
+
+/// The outcome of the four-eyes check on a dangerous action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    /// The action may proceed immediately.
+    NotRequired,
+    /// The action was recorded as a pending approval; a second platform
+    /// admin must approve it before it executes.
+    Required { approval_id: Uuid },
+}
+
+/// The four-eyes gate: an action marked `requires_approval` becomes a
+/// pending request a second platform admin must approve. Implemented by the
+/// `platform_admin` context; wired at the composition root.
+#[async_trait]
+pub trait ApprovalGate: Send + Sync {
+    async fn request_if_required(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        requested_by: Uuid,
+        action_type: &str,
+        payload: serde_json::Value,
+    ) -> Result<ApprovalOutcome, AccessError>;
+}
+
+/// The entitlement gate every context with optional capability consumes:
+/// `is_enabled` for booleans, `remaining`/`consume` for quotas.
+#[async_trait]
+pub trait FeatureGate: Send + Sync {
+    async fn is_enabled(&self, tenant_id: Uuid, feature: &FeatureKey) -> Result<bool, AccessError>;
+
+    /// Units left in the current period (`None` for boolean features or
+    /// unlimited quotas).
+    async fn remaining(
+        &self,
+        tenant_id: Uuid,
+        feature: &FeatureKey,
+    ) -> Result<Option<i64>, AccessError>;
+
+    /// Atomically consume `amount` units; fails with
+    /// [`AccessError::QuotaExceeded`] when the period's limit is exhausted.
+    async fn consume(
+        &self,
+        tenant_id: Uuid,
+        feature: &FeatureKey,
+        amount: i64,
+    ) -> Result<(), AccessError>;
 }

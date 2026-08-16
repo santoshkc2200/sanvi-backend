@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::tenant::{Tenant, TenantId, TenantStatus, TenantTimestamps};
 use crate::domain::values::{DataRegion, Locale, SuspensionReason, TenantName, TenantSlug};
-use crate::domain::{TenancyError, TenantRepository};
+use crate::domain::{TenancyError, TenantRepository, TenantSearch, TenantSearchCursor};
 
 /// Row shape of `tenancy.tenants` (sqlx maps citext to String).
 #[derive(Debug, Clone, FromRow)]
@@ -179,6 +179,51 @@ impl TenantRepository for SqlxTenantRepository {
             rows.truncate(limit as usize);
         }
         let next_cursor = rows.last().map(|row| TenantId::from_uuid(row.id));
+        let tenants = rows
+            .into_iter()
+            .map(TenantRow::into_tenant)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((tenants, if has_more { next_cursor } else { None }))
+    }
+
+    async fn search(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        search: &TenantSearch,
+    ) -> Result<(Vec<Tenant>, Option<TenantSearchCursor>), TenancyError> {
+        let rows = sqlx::query_as!(
+            TenantRow,
+            "SELECT id, slug, display_name, status, region, default_locale, suspended_reason,
+                    created_at, updated_at, archived_at, purge_requested_at
+             FROM tenancy.tenants
+             WHERE ($1::text IS NULL
+                    OR slug ILIKE '%' || $1 || '%'
+                    OR display_name ILIKE '%' || $1 || '%')
+               AND ($2::text IS NULL OR status = $2)
+               AND ($3::timestamptz IS NULL
+                    OR created_at < $3
+                    OR (created_at = $3 AND id < $4))
+             ORDER BY created_at DESC, id DESC
+             LIMIT $5",
+            search.query.as_deref(),
+            search.status.map(|status| status.as_str()),
+            search.after.map(|cursor| cursor.created_at),
+            search.after.map(|cursor| cursor.id.as_uuid()),
+            i64::from(search.limit) + 1
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| TenancyError::Storage(err.to_string()))?;
+
+        let has_more = rows.len() > search.limit as usize;
+        let mut rows = rows;
+        if has_more {
+            rows.truncate(search.limit as usize);
+        }
+        let next_cursor = rows.last().map(|row| TenantSearchCursor {
+            created_at: row.created_at,
+            id: TenantId::from_uuid(row.id),
+        });
         let tenants = rows
             .into_iter()
             .map(TenantRow::into_tenant)

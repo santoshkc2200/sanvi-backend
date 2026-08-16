@@ -8,6 +8,8 @@ architecture, PostgreSQL via compile-time-checked SQLx, Redis, docker-compose fo
 - [`architecture-overview.md`](architecture-overview.md) — the invariants every phase must respect.
 - `phase-NN-<slug>/implementation-plan.md` — one plan per delivery phase. Each plan is
   self-contained: scope, decisions, deliverables, task breakdown, data model, tests, DoD.
+- [`runbooks/`](runbooks/) — operator procedures (impersonation, entitlement grants,
+  audit chain incidents, …).
 - The cross-project phase map lives in [`../../docs/roadmap.md`](../../docs/roadmap.md).
 
 ## Phases

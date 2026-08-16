@@ -18,8 +18,8 @@ use sanvi_identity::domain::values::{Email, ProviderId, ProviderSubject};
 use sanvi_identity::domain::{
     Clock, EventPublisher, IdGenerator, IdentityError, Invitation, InvitationId,
     InvitationRepository, LinkIntentRepository, LinkedAccount, LinkedAccountRepository, Membership,
-    MembershipRepository, Notifications, RoleCatalog, SessionCache, SessionInfo, User, UserId,
-    UserRepository, UserStatus,
+    MembershipRepository, MembershipStatus, Notifications, RoleCatalog, SessionCache, SessionInfo,
+    User, UserId, UserRepository, UserStatus,
 };
 
 use sanvi_persistence::{DatabaseConfig, Migrator, PlatformScope, ScopedTx, TxManager, build_pool};
@@ -325,6 +325,21 @@ impl MembershipRepository for World {
         _scope: &mut PlatformScope<'_>,
     ) -> Result<Vec<Membership>, IdentityError> {
         Ok(self.memory.lock().unwrap().memberships.clone())
+    }
+
+    async fn count_members_platform(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+        tenant_id: uuid::Uuid,
+    ) -> Result<u32, IdentityError> {
+        Ok(self
+            .memory
+            .lock()
+            .unwrap()
+            .memberships
+            .iter()
+            .filter(|m| m.tenant_id() == tenant_id && m.status() == MembershipStatus::Active)
+            .count() as u32)
     }
 
     async fn count_role_holders(

@@ -13,6 +13,7 @@ actix-http.workspace = true
 actix-service.workspace = true
 actix-web.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 futures-util.workspace = true
 opentelemetry.workspace = true
 redis.workspace = true

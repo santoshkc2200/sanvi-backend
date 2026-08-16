@@ -129,6 +129,15 @@ impl RoleRepository for SqlxRoleRepository {
         self.hydrate(scope, row).await.map(Some)
     }
 
+    async fn delete(&self, scope: &mut PlatformScope<'_>, id: RoleId) -> Result<(), AccessError> {
+        sqlx::query("DELETE FROM access.roles WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| AccessError::Storage(err.to_string()))?;
+        Ok(())
+    }
+
     async fn granting(
         &self,
         scope: &mut PlatformScope<'_>,

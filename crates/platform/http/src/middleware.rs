@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::authn::AuthnLayer;
 use crate::config::{CorsConfig, RateLimitConfig, ServerConfig};
+use crate::impersonation::ImpersonationLayer;
 use crate::metrics::{HttpInstruments, context_from_path};
 use crate::rate_limit::RateLimiter;
 use crate::tenancy::{TenantMiddleware, TenantRateLimitLayer, TenantResolutionLayer};
@@ -32,14 +33,17 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 ///
 /// Outermost → innermost:
 /// metrics → request id → tracing span → concurrency limit → panic catch →
-/// rate limit → tenant resolution → authentication → tenant rate limit →
-/// request timeout → body normalize → CORS → security headers → error
-/// handlers.
+/// rate limit → tenant resolution → authentication → impersonation →
+/// tenant rate limit → request timeout → body normalize → CORS → security
+/// headers → error handlers.
 ///
 /// `tenant` is `None` until the tenancy context is wired (phase 01+); without
 /// it every route behaves as a public route. `authn` is `None` until the
 /// identity context is wired (phase 02+); the extractors then treat every
-/// route as unauthenticated.
+/// route as unauthenticated. `impersonation` is `None` until the
+/// platform_admin context is wired (phase 03+); it runs immediately after
+/// authentication so the *effective* subject is what permission checks and
+/// handlers see.
 ///
 /// The tracing span wraps every protective middleware, so one span covers a
 /// request from accept to first byte; `tracing-actix-web` maps response
@@ -50,6 +54,7 @@ pub fn stack<T>(
     redis: Option<redis::aio::ConnectionManager>,
     tenant: Option<std::sync::Arc<TenantMiddleware>>,
     authn: Option<std::sync::Arc<crate::authn::AuthnMiddleware>>,
+    impersonation: Option<std::sync::Arc<crate::impersonation::ImpersonationMiddleware>>,
 ) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -88,6 +93,7 @@ where
             duration: Duration::from_secs(config.request_timeout_secs),
         })
         .wrap(TenantRateLimitLayer::new(tenant_limiter))
+        .wrap(ImpersonationLayer::new(impersonation))
         .wrap(AuthnLayer::new(authn))
         .wrap(TenantResolutionLayer::new(tenant))
         .wrap(RateLimit {

@@ -80,6 +80,10 @@ impl DecisionCache for InMemoryDecisionCache {
             .expect("cache mutex poisoned")
             .retain(|key, _| !key.starts_with(&prefix));
     }
+
+    async fn invalidate_all(&self) {
+        self.entries.lock().expect("cache mutex poisoned").clear();
+    }
 }
 
 /// A cache that never stores (used when the identity feature flag is off or
@@ -96,6 +100,8 @@ impl DecisionCache for NoopDecisionCache {
     async fn put(&self, _key: &str, _decision: Decision, _ttl_secs: u64) {}
 
     async fn invalidate_user(&self, _user_id: Uuid) {}
+
+    async fn invalidate_all(&self) {}
 }
 
 #[cfg(test)]

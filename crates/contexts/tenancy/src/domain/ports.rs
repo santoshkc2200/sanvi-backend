@@ -47,6 +47,15 @@ pub trait TenantRepository: Send + Sync {
         status: Option<TenantStatus>,
     ) -> Result<(Vec<Tenant>, Option<TenantId>), TenancyError>;
 
+    /// Rich operator search (phase 03 platform admin console): text match
+    /// on slug/display name, status filter, newest-first with a
+    /// `(created_at, id)` cursor.
+    async fn search(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        search: &TenantSearch,
+    ) -> Result<(Vec<Tenant>, Option<TenantSearchCursor>), TenancyError>;
+
     /// Archived tenants whose purge has not been requested and whose
     /// retention window has passed (for the scheduled purge sweep).
     async fn due_for_purge_request(
@@ -131,6 +140,26 @@ pub trait EventPublisher: Send + Sync {
 /// Source of new tenant ids (tests substitute deterministic generators).
 pub trait IdGenerator: Send + Sync {
     fn next_tenant_id(&self) -> TenantId;
+}
+
+/// The query shape for the operator tenant search (see
+/// [`TenantRepository::search`]).
+#[derive(Debug, Clone, Default)]
+pub struct TenantSearch {
+    /// Case-insensitive substring match on slug or display name.
+    pub query: Option<String>,
+    pub status: Option<TenantStatus>,
+    /// Cursor of the last row of the previous page.
+    pub after: Option<TenantSearchCursor>,
+    pub limit: u32,
+}
+
+/// The search cursor: the `(created_at, id)` of the last returned row
+/// (ordering is `created_at DESC, id DESC`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TenantSearchCursor {
+    pub created_at: DateTime<Utc>,
+    pub id: TenantId,
 }
 
 /// The system clock (tests substitute fixed times).

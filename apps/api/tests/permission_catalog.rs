@@ -11,6 +11,71 @@ use sanvi_access::domain::PERMISSIONS;
 use sanvi_identity::adapters::http::catalog::{ROUTES as IDENTITY_ROUTES, Requirement};
 use sanvi_tenancy::adapters::http::PERMISSIONED_ROUTES as TENANCY_ROUTES;
 
+/// Collect every catalog the CI gate checks: the same structures route
+/// registration iterates.
+fn catalogs() -> Vec<(&'static str, Vec<(&'static str, String, &'static str)>)> {
+    let mut all = Vec::new();
+    all.push((
+        "identity",
+        IDENTITY_ROUTES
+            .iter()
+            .filter_map(|route| match route.requirement {
+                Requirement::Permission(key, _) => {
+                    Some((route.path, route.method.as_str().to_string(), key))
+                }
+                _ => None,
+            })
+            .collect(),
+    ));
+    all.push((
+        "access",
+        sanvi_access::adapters::http::catalog::ROUTES
+            .iter()
+            .map(|route| {
+                (
+                    route.path,
+                    route.method.as_str().to_string(),
+                    route.permission,
+                )
+            })
+            .collect(),
+    ));
+    all.push((
+        "audit",
+        sanvi_audit::catalog::PERMISSIONED_ROUTES
+            .iter()
+            .map(|route| {
+                (
+                    route.path,
+                    route.method.as_str().to_string(),
+                    route.permission,
+                )
+            })
+            .collect(),
+    ));
+    all.push((
+        "platform_admin",
+        sanvi_platform_admin::catalog::PERMISSIONED_ROUTES
+            .iter()
+            .map(|route| {
+                (
+                    route.path,
+                    route.method.as_str().to_string(),
+                    route.permission,
+                )
+            })
+            .collect(),
+    ));
+    all.push((
+        "tenancy",
+        TENANCY_ROUTES
+            .iter()
+            .map(|(path, method, permission, _)| (*path, method.as_str().to_string(), *permission))
+            .collect(),
+    ));
+    all
+}
+
 #[test]
 fn identity_catalog_declares_everything() {
     let registry: std::collections::BTreeSet<&str> =
@@ -55,29 +120,22 @@ fn identity_catalog_declares_everything() {
 }
 
 #[test]
-fn access_catalog_declares_everything() {
+fn every_catalog_declares_only_registered_permissions() {
     let registry: std::collections::BTreeSet<&str> =
         PERMISSIONS.iter().map(|def| def.key).collect();
-    for route in sanvi_access::adapters::http::catalog::ROUTES {
-        assert!(
-            registry.contains(route.permission),
-            "access catalog declares permission {:?} for {} {} but it is not in the registry",
-            route.permission,
-            route.method,
-            route.path
-        );
-    }
-}
-
-#[test]
-fn tenancy_catalog_declares_everything() {
-    let registry: std::collections::BTreeSet<&str> =
-        PERMISSIONS.iter().map(|def| def.key).collect();
-    for (_path, _method, permission, _resource) in TENANCY_ROUTES {
-        assert!(
-            registry.contains(permission),
-            "tenancy declares permission {permission:?} but it is not in the access registry"
-        );
+    for (context, routes) in catalogs() {
+        let mut seen: std::collections::BTreeSet<(&str, String)> =
+            std::collections::BTreeSet::new();
+        for (path, method, permission) in &routes {
+            assert!(
+                seen.insert((path, method.clone())),
+                "duplicate catalog entry in {context}: {method} {path}"
+            );
+            assert!(
+                registry.contains(permission),
+                "{context} declares permission {permission:?} for {method} {path} but it is not in the access registry"
+            );
+        }
     }
 }
 
@@ -98,27 +156,12 @@ fn registry_has_no_undeclared_orphans() {
 fn every_declared_permission_is_enforceable() {
     // The extractor machinery only accepts keys that parse; a typo'd
     // catalog entry would fail at runtime — prove the full set parses.
-    let mut keys: Vec<&str> = IDENTITY_ROUTES
-        .iter()
-        .filter_map(|route| match route.requirement {
-            Requirement::Permission(key, _) => Some(key),
-            _ => None,
-        })
-        .collect();
-    keys.extend(
-        sanvi_access::adapters::http::catalog::ROUTES
-            .iter()
-            .map(|route| route.permission),
-    );
-    keys.extend(
-        TENANCY_ROUTES
-            .iter()
-            .map(|(_path, _method, permission, _resource)| *permission),
-    );
-    for key in keys {
-        assert!(
-            sanvi_access::domain::Permission::parse(key).is_ok(),
-            "declared permission must parse: {key}"
-        );
+    for (_context, routes) in catalogs() {
+        for (_path, _method, permission) in &routes {
+            assert!(
+                sanvi_access::domain::Permission::parse(permission).is_ok(),
+                "declared permission must parse: {permission}"
+            );
+        }
     }
 }

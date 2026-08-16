@@ -33,6 +33,9 @@ pub struct Subject {
     /// Roles held in the *current* tenant (empty on platform routes).
     pub tenant_id: Option<Uuid>,
     pub role_ids: Vec<Uuid>,
+    /// When the session was (re)authenticated — the freshness clock for
+    /// the fresh-MFA requirement.
+    pub authenticated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Port for session verification, implemented by the identity context.
@@ -233,6 +236,56 @@ impl actix_web::FromRequest for SessionToken {
         match session_token_from_request(req, &cookie_name) {
             Some(token) => std::future::ready(Ok(Self(token))),
             None => std::future::ready(Err(ApiError::Unauthorized)),
+        }
+    }
+}
+
+/// The fresh-MFA policy: how recent a `aal2` authentication must be for
+/// dangerous actions (impersonation, role grants, large overrides).
+#[derive(Debug, Clone, Copy)]
+pub struct FreshAal2Policy {
+    pub max_age_secs: i64,
+}
+
+impl Default for FreshAal2Policy {
+    fn default() -> Self {
+        Self { max_age_secs: 300 }
+    }
+}
+
+/// Extractor for dangerous-action guardrails: the subject must have
+/// re-authenticated at AAL2 within the policy window.
+#[derive(Clone)]
+pub struct FreshAal2Required;
+
+impl actix_web::FromRequest for FreshAal2Required {
+    type Error = ApiError;
+    type Future = std::future::Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &actix_web::HttpRequest, _: &mut actix_web::dev::Payload) -> Self::Future {
+        let extensions = req.extensions();
+        let subject = extensions.get::<Subject>();
+        let policy = req
+            .app_data::<FreshAal2Policy>()
+            .copied()
+            .unwrap_or_default();
+
+        let fresh = match subject {
+            Some(subject) => {
+                subject.aal == "aal2"
+                    && subject.authenticated_at.is_some_and(|at| {
+                        chrono::Utc::now().signed_duration_since(at).num_seconds()
+                            <= policy.max_age_secs
+                    })
+            }
+            None => false,
+        };
+        if fresh {
+            std::future::ready(Ok(Self))
+        } else {
+            std::future::ready(Err(ApiError::Forbidden {
+                detail: "fresh aal2 re-authentication required".to_string(),
+            }))
         }
     }
 }

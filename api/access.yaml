@@ -4,7 +4,7 @@ info:
     identifier: MIT
     name: MIT
   title: Sanvi API
-  version: 0.3.0
+  version: 0.4.0
 openapi: 3.1.0
 paths:
   /api/v1/access/permissions:
@@ -34,5 +34,291 @@ paths:
       summary: |-
         `GET /api/v1/access/permissions` — the central permission registry,
         for the admin/UI contracts. Readable by any authenticated subject.
+      tags:
+      - access
+  /api/v1/platform/features:
+    get:
+      operationId: list_features
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/FeatureView'
+                type: array
+          description: Feature catalog
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/platform/features` — the feature catalog.'
+      tags:
+      - access
+    post:
+      operationId: define_feature
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DefineFeatureRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeatureView'
+          description: Feature defined
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid definition
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Feature key already exists
+      summary: '`POST /api/v1/platform/features` — define a new feature.'
+      tags:
+      - access
+  /api/v1/platform/features/{key}:
+    delete:
+      operationId: deprecate_feature
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeatureView'
+          description: Feature deprecated
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Feature not found
+      summary: |-
+        `DELETE /api/v1/platform/features/{key}` — deprecate a feature (it stays
+        resolvable; it stops appearing in tenant-facing catalogs).
+      tags:
+      - access
+    patch:
+      operationId: update_feature
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateFeatureRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeatureView'
+          description: Feature updated
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid definition
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Feature not found
+      summary: '`PATCH /api/v1/platform/features/{key}` — update a feature''s defaults.'
+      tags:
+      - access
+  /api/v1/platform/roles:
+    get:
+      operationId: list_roles_platform
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/RoleView'
+                type: array
+          description: Role catalog
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/platform/roles` — the full role catalog (operator console).'
+      tags:
+      - access
+  /api/v1/tenant/entitlements:
+    get:
+      operationId: list_tenant_entitlements
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ResolvedEntitlementView'
+                type: array
+          description: Resolved entitlements
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied or feature not enabled
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No tenant context
+      summary: |-
+        `GET /api/v1/tenant/entitlements` — the tenant's own resolved
+        entitlements (feature-gated on `access.tenant_entitlements`).
+      tags:
+      - access
+  /api/v1/tenant/roles:
+    get:
+      operationId: list_roles_tenant
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/RoleView'
+                type: array
+          description: Assignable roles
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: '`GET /api/v1/tenant/roles` — roles assignable in the current tenant.'
+      tags:
+      - access
+    post:
+      operationId: create_role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoleRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleView'
+          description: Role created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid role definition
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Escalation or permission denied
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Role key already exists
+      summary: |-
+        `POST /api/v1/tenant/roles` — create a custom tenant role. The role may
+        only grant permissions the caller already holds (no escalation).
+      tags:
+      - access
+  /api/v1/tenant/roles/{id}:
+    delete:
+      operationId: delete_role
+      responses:
+        '204':
+          description: Role deleted
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: System role or permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Role not found
+      summary: '`DELETE /api/v1/tenant/roles/{id}` — delete a custom tenant role.'
+      tags:
+      - access
+    patch:
+      operationId: update_role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoleRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleView'
+          description: Role updated
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid role definition
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Escalation or permission denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Role not found
+      summary: '`PATCH /api/v1/tenant/roles/{id}` — update a custom tenant role.'
       tags:
       - access

@@ -15,7 +15,7 @@ pub use error::TenancyError;
 pub use events::{TenantEvent, TenantEventName};
 pub use ports::{
     Clock, EventPublisher, IdGenerator, SlugReservationPort, TenantRepository,
-    TenantResolutionCache, TenantSettingsRepository,
+    TenantResolutionCache, TenantSearch, TenantSearchCursor, TenantSettingsRepository,
 };
 pub use tenant::{Tenant, TenantId, TenantStatus, TenantTag, TenantTimestamps};
 pub use values::{DataRegion, Locale, SuspensionReason, TenantName, TenantSlug};

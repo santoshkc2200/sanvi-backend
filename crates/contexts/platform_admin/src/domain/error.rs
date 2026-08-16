@@ -1,0 +1,60 @@
+use thiserror::Error;
+use uuid::Uuid;
+
+/// Domain errors for the `platform_admin` context.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PlatformAdminError {
+    #[error("impersonation reason is required")]
+    MissingReason,
+
+    #[error("impersonation duration exceeds the maximum of {max_minutes} minutes")]
+    DurationTooLong { max_minutes: u32 },
+
+    #[error("impersonation duration must be positive")]
+    InvalidDuration,
+
+    #[error("impersonation grant {id} not found")]
+    GrantNotFound { id: Uuid },
+
+    #[error("impersonation grant {id} has been revoked")]
+    GrantRevoked { id: Uuid },
+
+    #[error("impersonation grant {id} has expired")]
+    GrantExpired { id: Uuid },
+
+    #[error("impersonation target {user_id} is not an active member of tenant {tenant_id}")]
+    TargetNotMember { user_id: Uuid, tenant_id: Uuid },
+
+    #[error("impersonation is refused: tenant {tenant_id} has an active privacy lock")]
+    PrivacyLocked { tenant_id: Uuid },
+
+    #[error("tenant {id} not found")]
+    TenantNotFound { id: Uuid },
+
+    #[error("approval {id} not found")]
+    ApprovalNotFound { id: Uuid },
+
+    #[error("approval {id} is not pending")]
+    ApprovalNotPending { id: Uuid },
+
+    #[error("the requester cannot decide their own approval request")]
+    SelfApproval,
+
+    #[error("invalid approval action type: {0}")]
+    InvalidActionType(String),
+
+    #[error("invalid entitlement request: {0}")]
+    InvalidEntitlement(String),
+
+    #[error("feature {0} not found")]
+    FeatureNotFound(String),
+
+    #[error("entitlement change rejected: {0}")]
+    EntitlementConflict(String),
+
+    #[error("invalid search: {0}")]
+    InvalidSearch(String),
+
+    #[error("storage failure")]
+    Storage(String),
+}

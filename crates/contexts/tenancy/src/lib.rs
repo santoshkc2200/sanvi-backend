@@ -16,8 +16,8 @@ pub mod domain;
 
 pub use config::TenancyConfig;
 pub use domain::{
-    DataRegion, Locale, SuspensionReason, Tenant, TenantId, TenantName, TenantSlug, TenantStatus,
-    TenantTag,
+    DataRegion, Locale, SuspensionReason, Tenant, TenantId, TenantName, TenantSearch,
+    TenantSearchCursor, TenantSlug, TenantStatus, TenantTag,
 };
 
 /// Wire tenant-scoped routes into an actix `ServiceConfig`.

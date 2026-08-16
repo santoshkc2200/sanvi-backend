@@ -36,6 +36,33 @@ seed-roles:
 seed-access:
     cargo run -p sanvi-cli -- seed access
 
+seed-features:
+    cargo run -p sanvi-cli -- seed features
+
+feature-list:
+    cargo run -p sanvi-cli -- feature list
+
+entitlement-grant tenant feature:
+    cargo run -p sanvi-cli -- entitlement grant --tenant {{tenant}} --feature {{feature}}
+
+entitlement-revoke tenant feature:
+    cargo run -p sanvi-cli -- entitlement revoke --tenant {{tenant}} --feature {{feature}}
+
+entitlement-list tenant:
+    cargo run -p sanvi-cli -- entitlement list --tenant {{tenant}}
+
+impersonation-list:
+    cargo run -p sanvi-cli -- impersonation list
+
+audit-verify:
+    cargo run -p sanvi-cli -- audit verify
+
+audit-list:
+    cargo run -p sanvi-cli -- audit list
+
+approval-list:
+    cargo run -p sanvi-cli -- approval list
+
 membership-grant:
     cargo run -p sanvi-cli -- membership grant --email {{email}} --role {{role}} --tenant {{tenant}}
 

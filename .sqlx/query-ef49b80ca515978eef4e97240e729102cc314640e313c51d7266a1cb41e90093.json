@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO access.roles (id, scope, tenant_id, key, name, is_system)\n             VALUES ($1, 'tenant', NULL, 'rls_test_role', 'RLS Test Role', true)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ef49b80ca515978eef4e97240e729102cc314640e313c51d7266a1cb41e90093"
+}

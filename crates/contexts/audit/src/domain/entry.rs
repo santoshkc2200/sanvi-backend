@@ -1,0 +1,294 @@
+//! One entry of the audit chain: a canonical, hash-linked record of an
+//! action. The hash covers the previous entry's hash plus the canonical
+//! serialization of this entry's fields, so modifying any historical row
+//! breaks the recomputed chain.
+
+use std::net::IpAddr;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use utoipa::ToSchema;
+use uuid::Uuid;
+
+use crate::domain::AuditError;
+
+/// The chain's origin: the first entry's `prev_hash`.
+pub const GENESIS_HASH: [u8; 32] = [0u8; 32];
+
+/// Who performed the action. `User` is a tenant user; `PlatformAdmin` is an
+/// operator on the platform host; `System` is an automated process (jobs,
+/// lifecycle sweeps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ActorType {
+    User,
+    PlatformAdmin,
+    System,
+}
+
+impl ActorType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::PlatformAdmin => "platform_admin",
+            Self::System => "system",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, AuditError> {
+        match raw {
+            "user" => Ok(Self::User),
+            "platform_admin" => Ok(Self::PlatformAdmin),
+            "system" => Ok(Self::System),
+            other => Err(AuditError::InvalidActorType(other.to_string())),
+        }
+    }
+}
+
+/// The content of an audit entry before it is chained (id and hashes are
+/// filled in by [`AuditEntry::new`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditEntryData {
+    pub occurred_at: DateTime<Utc>,
+    pub actor_type: ActorType,
+    pub actor_id: Option<Uuid>,
+    /// Impersonation: the actor performing on behalf of this user.
+    pub on_behalf_of: Option<Uuid>,
+    pub tenant_id: Option<Uuid>,
+    pub action: String,
+    pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
+    pub before: Option<serde_json::Value>,
+    pub after: Option<serde_json::Value>,
+    pub request_id: Option<String>,
+    pub ip: Option<IpAddr>,
+    pub user_agent: Option<String>,
+}
+
+/// A chained audit entry.
+///
+/// `seq` is the chain's ordering authority (assigned by the database on
+/// INSERT); it is deliberately *not* covered by the hash because the
+/// database assigns it after the hash is computed. Ordering integrity comes
+/// from the append-only grants + trigger; content and link integrity from
+/// the hash chain.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AuditEntry {
+    pub seq: i64,
+    pub id: Uuid,
+    pub occurred_at: DateTime<Utc>,
+    pub actor_type: ActorType,
+    pub actor_id: Option<Uuid>,
+    pub on_behalf_of: Option<Uuid>,
+    pub tenant_id: Option<Uuid>,
+    pub action: String,
+    pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
+    pub before: Option<serde_json::Value>,
+    pub after: Option<serde_json::Value>,
+    pub request_id: Option<String>,
+    #[schema(value_type = String)]
+    pub ip: Option<IpAddr>,
+    #[schema(value_type = String)]
+    pub user_agent: Option<String>,
+    pub prev_hash: [u8; 32],
+    pub hash: [u8; 32],
+}
+
+impl AuditEntry {
+    /// Seal the data with the previous entry's hash, computing this entry's
+    /// hash over the canonical serialization. `seq` is 0 until the database
+    /// assigns it (the writer refreshes it from `RETURNING seq`).
+    pub fn new(data: AuditEntryData, prev_hash: [u8; 32]) -> Result<Self, AuditError> {
+        if data.action.trim().is_empty() {
+            return Err(AuditError::InvalidAction(data.action));
+        }
+        let id = Uuid::now_v7();
+        let hash = compute_hash(&data, &prev_hash, id);
+        Ok(Self {
+            seq: 0,
+            id,
+            occurred_at: data.occurred_at,
+            actor_type: data.actor_type,
+            actor_id: data.actor_id,
+            on_behalf_of: data.on_behalf_of,
+            tenant_id: data.tenant_id,
+            action: data.action,
+            resource_type: data.resource_type,
+            resource_id: data.resource_id,
+            before: data.before,
+            after: data.after,
+            request_id: data.request_id,
+            ip: data.ip,
+            user_agent: data.user_agent,
+            prev_hash,
+            hash,
+        })
+    }
+
+    /// The database-assigned sequence number (0 only before INSERT).
+    pub fn with_seq(mut self, seq: i64) -> Self {
+        self.seq = seq;
+        self
+    }
+
+    /// Re-hydration constructor (no recomputation; the verifier re-checks).
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        seq: i64,
+        id: Uuid,
+        occurred_at: DateTime<Utc>,
+        actor_type: ActorType,
+        actor_id: Option<Uuid>,
+        on_behalf_of: Option<Uuid>,
+        tenant_id: Option<Uuid>,
+        action: String,
+        resource_type: Option<String>,
+        resource_id: Option<String>,
+        before: Option<serde_json::Value>,
+        after: Option<serde_json::Value>,
+        request_id: Option<String>,
+        ip: Option<IpAddr>,
+        user_agent: Option<String>,
+        prev_hash: [u8; 32],
+        hash: [u8; 32],
+    ) -> Self {
+        Self {
+            seq,
+            id,
+            occurred_at,
+            actor_type,
+            actor_id,
+            on_behalf_of,
+            tenant_id,
+            action,
+            resource_type,
+            resource_id,
+            before,
+            after,
+            request_id,
+            ip,
+            user_agent,
+            prev_hash,
+            hash,
+        }
+    }
+
+    /// Recompute this entry's hash over its own fields and `prev_hash`.
+    pub fn verify(&self) -> bool {
+        let recomputed = compute_hash(
+            &AuditEntryData {
+                occurred_at: self.occurred_at,
+                actor_type: self.actor_type,
+                actor_id: self.actor_id,
+                on_behalf_of: self.on_behalf_of,
+                tenant_id: self.tenant_id,
+                action: self.action.clone(),
+                resource_type: self.resource_type.clone(),
+                resource_id: self.resource_id.clone(),
+                before: self.before.clone(),
+                after: self.after.clone(),
+                request_id: self.request_id.clone(),
+                ip: self.ip,
+                user_agent: self.user_agent.clone(),
+            },
+            &self.prev_hash,
+            self.id,
+        );
+        recomputed == self.hash
+    }
+}
+
+/// The canonical serialization `hash = sha256(canonical_json(fields) ||
+/// prev_hash)`. Field order is fixed here; `serde_json` objects serialize
+/// keys in sorted order, so the result is deterministic.
+fn compute_hash(data: &AuditEntryData, prev_hash: &[u8; 32], id: Uuid) -> [u8; 32] {
+    let canonical = serde_json::json!({
+        "id": id,
+        "occurred_at": data.occurred_at.to_rfc3339(),
+        "actor_type": data.actor_type.as_str(),
+        "actor_id": data.actor_id,
+        "on_behalf_of": data.on_behalf_of,
+        "tenant_id": data.tenant_id,
+        "action": data.action,
+        "resource_type": data.resource_type,
+        "resource_id": data.resource_id,
+        "before": data.before,
+        "after": data.after,
+        "request_id": data.request_id,
+        "ip": data.ip,
+        "user_agent": data.user_agent,
+        "prev_hash": hex(prev_hash),
+    });
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.to_string().as_bytes());
+    hasher.finalize().into()
+}
+
+fn hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data(action: &str) -> AuditEntryData {
+        AuditEntryData {
+            occurred_at: Utc::now(),
+            actor_type: ActorType::PlatformAdmin,
+            actor_id: Some(Uuid::now_v7()),
+            on_behalf_of: None,
+            tenant_id: Some(Uuid::now_v7()),
+            action: action.to_string(),
+            resource_type: Some("tenant".to_string()),
+            resource_id: Some(Uuid::now_v7().to_string()),
+            before: Some(serde_json::json!({ "status": "active" })),
+            after: Some(serde_json::json!({ "status": "suspended" })),
+            request_id: None,
+            ip: None,
+            user_agent: None,
+        }
+    }
+
+    #[test]
+    fn entry_hashes_over_its_content_and_prev_hash() {
+        let entry = AuditEntry::new(data("tenancy.suspend"), GENESIS_HASH).unwrap();
+        assert!(entry.verify());
+        assert_eq!(entry.prev_hash, GENESIS_HASH);
+        assert_ne!(entry.hash, GENESIS_HASH);
+    }
+
+    #[test]
+    fn verification_detects_tampering() {
+        let mut entry = AuditEntry::new(data("tenancy.suspend"), GENESIS_HASH).unwrap();
+        assert!(entry.verify());
+        entry.action = "tenancy.resume".to_string();
+        assert!(!entry.verify(), "mutating a field must break the hash");
+    }
+
+    #[test]
+    fn prev_hash_is_covered() {
+        let mut entry = AuditEntry::new(data("tenancy.suspend"), GENESIS_HASH).unwrap();
+        assert!(entry.verify());
+        entry.prev_hash = [7u8; 32];
+        assert!(!entry.verify(), "mutating prev_hash must break the hash");
+    }
+
+    #[test]
+    fn empty_actions_are_rejected() {
+        assert!(matches!(
+            AuditEntry::new(data("  "), GENESIS_HASH),
+            Err(AuditError::InvalidAction(_))
+        ));
+    }
+
+    #[test]
+    fn actor_type_parses_the_stored_representation() {
+        for raw in ["user", "platform_admin", "system"] {
+            assert_eq!(ActorType::parse(raw).unwrap().as_str(), raw);
+        }
+        assert!(ActorType::parse("root").is_err());
+    }
+}

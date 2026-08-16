@@ -9,13 +9,16 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 figment.workspace = true
 sanvi-access.workspace = true
 sanvi-api.workspace = true
+sanvi-audit.workspace = true
 sanvi-http.workspace = true
 sanvi-identity.workspace = true
 sanvi-persistence.workspace = true
+sanvi-platform-admin.workspace = true
 sanvi-system.workspace = true
 sanvi-telemetry.workspace = true
 sanvi-tenancy.workspace = true

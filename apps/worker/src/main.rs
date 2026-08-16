@@ -3,10 +3,13 @@
 //!
 //! - Outbox dispatcher relays unpublished domain events to per-context
 //!   Redis Streams, dead-lettering rows that exhaust retries.
-//! - Consumers process `sanvi.events.tenancy` (cache invalidation) with
+//! - Consumers process `sanvi.events.tenancy` (cache invalidation),
+//!   `sanvi.events.identity` (Keto sync) and `sanvi.events.access`
+//!   (entitlement cache invalidation, role → Keto tuple sync) with
 //!   exactly-once semantics via `platform.processed_events`.
-//! - The scheduler runs periodic jobs (purge sweep, idempotency sweep) on
-//!   the elected leader only.
+//! - The scheduler runs periodic jobs (purge sweep, idempotency sweep,
+//!   quota rollover, entitlement expiry sweep, audit chain verification)
+//!   on the elected leader only.
 //! - Graceful shutdown: SIGTERM/SIGINT stops polling, in-flight batches
 //!   complete, pools close.
 
@@ -19,8 +22,24 @@ use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
-use sanvi_access::adapters::{HttpKetoClient, SqlxRoleRepository};
-use sanvi_access::domain::{PermissionStore, RoleRepository};
+use sanvi_access::{
+    AccessConfig,
+    adapters::{
+        HttpKetoClient, InMemoryDecisionCache, OutboxEventPublisher as AccessEventPublisher,
+        RedisEntitlementCache, SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleRepository,
+        sync::entitlement_sync_handler,
+    },
+    application::ExpireEntitlements,
+    domain::{
+        Clock, EntitlementCache, EntitlementRepository, EventPublisher, PermissionStore,
+        QuotaUsageStore, RoleRepository,
+    },
+};
+use sanvi_audit::{
+    AuditConfig,
+    adapters::{SqlxAuditReader, SqlxAuditWriter},
+    application::VerifyAuditChain,
+};
 use sanvi_messaging::{
     ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
     StreamConsumer, StreamName, StreamsClient, connect_redis,
@@ -30,7 +49,7 @@ use sanvi_telemetry::TelemetryConfig;
 use sanvi_tenancy::{
     TenancyConfig,
     adapters::{
-        OutboxEventPublisher, SystemClock, events::tenant_event_handler,
+        OutboxEventPublisher as TenancyEventPublisher, SystemClock, events::tenant_event_handler,
         repo::SqlxTenantRepository, resolution::RedisTenantResolutionCache,
     },
     application::{PurgeSweep, ResolveTenant},
@@ -68,6 +87,13 @@ pub struct SchedulerConfig {
     pub purge_retention_days: u32,
     /// Idempotency-key sweep interval.
     pub idempotency_sweep_interval_secs: u64,
+    /// Quota counter period rollover (drops usage rows older than the
+    /// current period).
+    pub quota_rollover_interval_secs: u64,
+    /// Entitlement expiry sweep (deletes expired overrides + events).
+    pub entitlement_expiry_sweep_interval_secs: u64,
+    /// Audit hash-chain verification.
+    pub audit_verify_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -76,6 +102,9 @@ impl Default for SchedulerConfig {
             purge_sweep_interval_secs: 3600,
             purge_retention_days: 30,
             idempotency_sweep_interval_secs: 3600,
+            quota_rollover_interval_secs: 86400,
+            entitlement_expiry_sweep_interval_secs: 3600,
+            audit_verify_interval_secs: 86400,
         }
     }
 }
@@ -108,6 +137,8 @@ pub struct WorkerConfig {
     pub tenancy: TenancyConfig,
     #[serde(default)]
     pub ory: OryConfig,
+    pub access: AccessConfig,
+    pub audit: AuditConfig,
 }
 
 impl WorkerConfig {
@@ -116,6 +147,8 @@ impl WorkerConfig {
         self.redis.validate()?;
         self.telemetry.validate()?;
         self.tenancy.validate()?;
+        self.access.validate()?;
+        self.audit.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -178,11 +211,6 @@ async fn main() -> ExitCode {
         eprintln!("failed to register outbox metrics: {err}");
         return ExitCode::from(1);
     }
-    let consumer_metrics = Arc::new(ConsumerMetrics::new("tenancy"));
-    if let Err(err) = consumer_metrics.register(registry) {
-        eprintln!("failed to register consumer metrics: {err}");
-        return ExitCode::from(1);
-    }
 
     let streams = StreamsClient::new(redis.clone());
 
@@ -217,9 +245,14 @@ async fn main() -> ExitCode {
             });
         }
     };
-    let consumer =
-        StreamConsumer::new(pool.clone(), streams.clone()).with_metrics(consumer_metrics.clone());
-    let consumer_name = format!("tenancy-{}", uuid::Uuid::now_v7());
+    let tenancy_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let tenancy_consumer_metrics = Arc::new(ConsumerMetrics::new("tenancy"));
+    if let Err(err) = tenancy_consumer_metrics.register(registry) {
+        eprintln!("failed to register tenancy consumer metrics: {err}");
+        return ExitCode::from(1);
+    }
+    let tenancy_consumer = tenancy_consumer.with_metrics(tenancy_consumer_metrics);
+    let tenancy_consumer_name = format!("tenancy-{}", uuid::Uuid::now_v7());
 
     // --- access consumer: keeps Keto in sync with identity events -----------
     let access_store: Arc<dyn PermissionStore> = match HttpKetoClient::new(
@@ -273,11 +306,39 @@ async fn main() -> ExitCode {
     }
     let access_consumer = access_consumer.with_metrics(access_consumer_metrics);
     let access_consumer_name = format!("access-{}", uuid::Uuid::now_v7());
-    let access_handler =
-        sanvi_access::adapters::sync::access_sync_handler(access_store, None, role_key_resolver);
+    let access_handler = sanvi_access::adapters::sync::access_sync_handler(
+        access_store.clone(),
+        None,
+        role_key_resolver,
+    );
 
-    // --- scheduler: purge sweep + idempotency sweep -------------------------
-    let events = Arc::new(OutboxEventPublisher::new());
+    // --- access events consumer: entitlement cache + role authoring sync ----
+    let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
+    let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());
+    let access_events: Arc<dyn EventPublisher> = Arc::new(AccessEventPublisher::new());
+    let entitlement_cache: Arc<dyn EntitlementCache> = Arc::new(RedisEntitlementCache::new(
+        redis.clone(),
+        config.access.entitlement_cache_ttl_secs,
+    ));
+
+    let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> =
+        Arc::new(InMemoryDecisionCache::new(10_000));
+    let entitlement_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let entitlement_consumer_metrics = Arc::new(ConsumerMetrics::new("access-entitlements"));
+    if let Err(err) = entitlement_consumer_metrics.register(registry) {
+        eprintln!("failed to register access-entitlements consumer metrics: {err}");
+        return ExitCode::from(1);
+    }
+    let entitlement_consumer = entitlement_consumer.with_metrics(entitlement_consumer_metrics);
+    let entitlement_consumer_name = format!("access-entitlements-{}", uuid::Uuid::now_v7());
+    let entitlement_handler = entitlement_sync_handler(
+        Some(entitlement_cache.clone()),
+        Some(decision_cache),
+        Some(access_store),
+    );
+
+    // --- scheduler: purge + idempotency + quota rollover + expiry + audit ----
+    let events = Arc::new(TenancyEventPublisher::new());
     let clock = Arc::new(SystemClock);
     let purge_sweep = Arc::new(PurgeSweep::new(
         tx_manager.clone(),
@@ -287,6 +348,20 @@ async fn main() -> ExitCode {
         config.scheduler.purge_retention_days,
     ));
     let idempotency = Arc::new(sanvi_persistence::IdempotencyStore::new(pool.clone()));
+    let expire_entitlements = Arc::new(ExpireEntitlements::new(
+        tx_manager.clone(),
+        entitlements.clone(),
+        entitlement_cache.clone(),
+        access_events.clone(),
+        Arc::new(sanvi_access::adapters::SystemClock),
+    ));
+    let audit_reader = Arc::new(SqlxAuditReader::new());
+    let _audit_writer = SqlxAuditWriter::new();
+    let verify_audit = Arc::new(VerifyAuditChain::new(
+        tx_manager.clone(),
+        audit_reader,
+        config.audit.verify_batch_size,
+    ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
         Arc::new(FnJob::new(
@@ -323,6 +398,80 @@ async fn main() -> ExitCode {
                 }
             },
         )),
+        Arc::new(FnJob::new(
+            "access.quota_rollover",
+            Duration::from_secs(config.scheduler.quota_rollover_interval_secs),
+            {
+                let quota = quota.clone();
+                let tx = tx_manager.clone();
+                move || {
+                    let quota = quota.clone();
+                    let tx = tx.clone();
+                    Box::pin(async move {
+                        // Keep only the current period: usage resets monthly.
+                        let now = sanvi_access::domain::period_start(
+                            sanvi_access::adapters::SystemClock.now(),
+                        );
+                        let mut scope = tx.begin_unscoped("quota_rollover", "access").await?;
+                        let removed = quota.rollover(&mut scope, now).await?;
+                        scope.commit().await?;
+                        if removed > 0 {
+                            tracing::info!(removed, "quota rollover removed old periods");
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "access.entitlement_expiry_sweep",
+            Duration::from_secs(config.scheduler.entitlement_expiry_sweep_interval_secs),
+            {
+                let sweep = expire_entitlements.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let expired = sweep
+                            .execute(500)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if expired > 0 {
+                            tracing::info!(expired, "entitlement sweep removed expired overrides");
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "audit.verify_chain",
+            Duration::from_secs(config.scheduler.audit_verify_interval_secs),
+            {
+                let verify = verify_audit.clone();
+                move || {
+                    let verify = verify.clone();
+                    Box::pin(async move {
+                        let report = verify.execute().await.map_err(|err| anyhow::anyhow!(err))?;
+                        if report.verified {
+                            tracing::info!(
+                                entries = report.entries_checked,
+                                "audit chain verified"
+                            );
+                        } else {
+                            // A tampered chain is a security incident: alert
+                            // immediately (the log level + metric fire the
+                            // alerting rule).
+                            tracing::error!(
+                                entries = report.entries_checked,
+                                mismatch = %report.first_mismatch.unwrap_or_default(),
+                                "AUDIT CHAIN VERIFICATION FAILED — possible tampering"
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
     ];
     let scheduler = Scheduler::new(
         redis.clone(),
@@ -342,16 +491,16 @@ async fn main() -> ExitCode {
         "sanvi-worker starting",
     );
 
-    let consumer_shutdown = shutdown_rx.clone();
+    let tenancy_shutdown = shutdown_rx.clone();
     let tenancy_stream = format!("{}.tenancy", config.outbox.stream);
-    let consumer_task = tokio::spawn(async move {
-        consumer
+    let tenancy_task = tokio::spawn(async move {
+        tenancy_consumer
             .run_until_shutdown(
                 &tenancy_stream,
                 "tenancy",
-                &consumer_name,
+                &tenancy_consumer_name,
                 tenant_event_handler(invalidate),
-                consumer_shutdown,
+                tenancy_shutdown,
             )
             .await;
     });
@@ -370,6 +519,20 @@ async fn main() -> ExitCode {
             .await;
     });
 
+    let entitlement_shutdown = shutdown_rx.clone();
+    let access_stream = format!("{}.access", config.outbox.stream);
+    let entitlement_task = tokio::spawn(async move {
+        entitlement_consumer
+            .run_until_shutdown(
+                &access_stream,
+                "access-entitlements",
+                &entitlement_consumer_name,
+                entitlement_handler,
+                entitlement_shutdown,
+            )
+            .await;
+    });
+
     let scheduler_shutdown = shutdown_rx.clone();
     let scheduler_task = tokio::spawn(async move {
         scheduler.run_until_shutdown(scheduler_shutdown).await;
@@ -384,7 +547,13 @@ async fn main() -> ExitCode {
             .await;
     });
 
-    let _ = tokio::join!(dispatcher_task, consumer_task, access_task, scheduler_task);
+    let _ = tokio::join!(
+        dispatcher_task,
+        tenancy_task,
+        access_task,
+        entitlement_task,
+        scheduler_task
+    );
 
     telemetry_guard.shutdown();
     ExitCode::SUCCESS

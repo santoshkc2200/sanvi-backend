@@ -168,6 +168,7 @@ impl SessionVerifier for KratosSessionVerifier {
                 methods: session.methods,
                 tenant_id,
                 role_ids,
+                authenticated_at: session.authenticated_at,
             }))
         })
     }

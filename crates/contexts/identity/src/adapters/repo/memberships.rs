@@ -226,6 +226,22 @@ impl MembershipRepository for SqlxMembershipRepository {
             .collect()
     }
 
+    async fn count_members_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<u32, IdentityError> {
+        let count = sqlx::query!(
+            "SELECT count(*)::int4 AS count FROM identity.memberships
+             WHERE tenant_id = $1 AND status = 'active'",
+            tenant_id,
+        )
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        Ok(count.count.unwrap_or(0) as u32)
+    }
+
     async fn count_role_holders(
         &self,
         scope: &mut ScopedTx<'_>,

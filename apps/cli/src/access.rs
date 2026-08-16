@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use sanvi_access::{
     adapters::{HttpKetoClient, SqlxMembershipSource, SqlxRoleCatalog, SqlxRoleRepository},
-    application::{RebuildAccessTuples, SeedRoles},
+    application::{RebuildAccessTuples, SeedFeatures, SeedRoles},
     domain::{Clock, IdGenerator, PermissionStore, RoleRepository, Tuple},
 };
 use sanvi_identity::{
@@ -32,6 +32,7 @@ use crate::config::load as load_config;
 pub enum SeedKind {
     Roles,
     Access,
+    Features,
 }
 
 pub async fn seed(environment: &str, kind: SeedKind) -> anyhow::Result<()> {
@@ -60,6 +61,14 @@ pub async fn seed(environment: &str, kind: SeedKind) -> anyhow::Result<()> {
             let use_case = RebuildAccessTuples::new(tx_manager, roles, store, source);
             let tuples = use_case.execute().await?;
             println!("access tuples rebuilt ({tuples} tuples written)");
+        }
+        SeedKind::Features => {
+            let use_case = SeedFeatures::new(
+                tx_manager,
+                Arc::new(sanvi_access::adapters::SqlxFeatureRepository::new()),
+            );
+            let created = use_case.execute().await?;
+            println!("seeded features ({created} created)");
         }
     }
     Ok(())

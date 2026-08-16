@@ -1,0 +1,88 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.4.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/audit:
+    get:
+      description: |-
+        Supports filters (`tenant_id`, `actor_id`, `action`, `since`, `until`)
+        and cursor pagination (`after` = the `seq` of the last entry of the
+        previous page).
+      operationId: list_audit
+      parameters:
+      - description: Restrict to one tenant
+        in: query
+        name: tenant_id
+        required: false
+        schema:
+          format: uuid
+          type: string
+      - description: Restrict to one actor
+        in: query
+        name: actor_id
+        required: false
+        schema:
+          format: uuid
+          type: string
+      - description: Exact action name, e.g. tenancy.suspend
+        in: query
+        name: action
+        required: false
+        schema:
+          type: string
+      - description: Inclusive lower bound
+        in: query
+        name: since
+        required: false
+        schema:
+          format: date-time
+          type: string
+      - description: Exclusive upper bound
+        in: query
+        name: until
+        required: false
+        schema:
+          format: date-time
+          type: string
+      - description: 'Cursor: seq of the last entry of the previous page'
+        in: query
+        name: after
+        required: false
+        schema:
+          format: int64
+          type: integer
+      - description: Page size (1..=200, default 50)
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPageView'
+          description: One page of audit entries, newest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid filter value
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing platform.audit.read
+      summary: List the platform audit trail (operator console).
+      tags:
+      - audit

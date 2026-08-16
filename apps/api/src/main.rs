@@ -6,6 +6,7 @@
 //! the configured window, close pools).
 
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::Context;
 use figment::{
@@ -14,8 +15,8 @@ use figment::{
 };
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
-    AppConfig, build_access_state, build_app, build_identity_state, build_system_state,
-    build_tenancy_state,
+    AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
+    build_identity_state, build_platform_admin_state, build_system_state, build_tenancy_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::RoleCatalog;
@@ -101,10 +102,10 @@ async fn main() -> ExitCode {
     // The role catalog bridges identity → access in-process; it needs only
     // a TxManager and the role repository, so there is no wiring cycle.
     let catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
-    let role_repository: std::sync::Arc<dyn sanvi_access::domain::RoleRepository> =
-        std::sync::Arc::new(sanvi_access::adapters::SqlxRoleRepository::new());
-    let role_catalog: std::sync::Arc<dyn RoleCatalog> =
-        std::sync::Arc::new(SqlxRoleCatalog::new(catalog_tx, role_repository));
+    let role_repository: Arc<dyn sanvi_access::domain::RoleRepository> =
+        Arc::new(sanvi_access::adapters::SqlxRoleRepository::new());
+    let role_catalog: Arc<dyn RoleCatalog> =
+        Arc::new(SqlxRoleCatalog::new(catalog_tx, role_repository));
 
     let identity = build_identity_state(
         pool.clone(),
@@ -115,12 +116,44 @@ async fn main() -> ExitCode {
         role_catalog,
     );
 
+    // The audit writer/reader are shared by the access and platform_admin
+    // contexts (they record; the audit context owns the schema).
+    let audit = build_audit_state(pool.clone(), &config.audit);
+
+    // Construction order matters: platform_admin owns the approval gate the
+    // access context consumes, but its `EntitlementAdmin` port is *the
+    // access context's own use cases*. So: build the approval gate first,
+    // then access (which takes the gate), then wrap access's use cases into
+    // the `EntitlementAdmin` adapter and finish platform_admin.
+    let approval_gate = build_approval_gate(pool.clone());
+
     let access = build_access_state(
-        pool,
+        pool.clone(),
         &config.access,
         &config.ory.keto_read_url,
         &config.ory.keto_write_url,
         identity.memberships.clone(),
+        audit.writer.clone(),
+        approval_gate.clone(),
+        metrics.prometheus_registry(),
+        redis.clone(),
+    );
+
+    let entitlement_admin: Arc<dyn sanvi_platform_admin::domain::EntitlementAdmin> =
+        Arc::new(AccessEntitlementAdmin::new(
+            access.grant_entitlement.clone(),
+            access.revoke_entitlement.clone(),
+            access.list_tenant_overrides.clone(),
+        ));
+
+    let platform_admin = build_platform_admin_state(
+        pool.clone(),
+        &config.platform_admin,
+        Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+        identity.memberships.clone(),
+        Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
+        entitlement_admin,
+        audit.writer.clone(),
     );
 
     let bind_config = config.clone();
@@ -133,6 +166,8 @@ async fn main() -> ExitCode {
             tenancy.clone(),
             identity.clone(),
             access.clone(),
+            audit.clone(),
+            platform_admin.clone(),
             redis.clone(),
         )
     }) {
@@ -154,4 +189,26 @@ async fn main() -> ExitCode {
 
     telemetry_guard.shutdown();
     ExitCode::SUCCESS
+}
+
+/// The four-eyes approval gate: the access context's `GrantEntitlement`
+/// records pending approvals through it. Built before access because
+/// access consumes it.
+fn build_approval_gate(
+    pool: sanvi_persistence::PgPool,
+) -> Arc<dyn sanvi_access::domain::ApprovalGate> {
+    use sanvi_platform_admin::{
+        adapters::{
+            ApprovalGateAdapter, SqlxPendingApprovalRepository, SystemClock, SystemIdGenerator,
+        },
+        application::approvals::RecordApprovalRequest,
+    };
+    let approvals = Arc::new(SqlxPendingApprovalRepository::new());
+    let record = Arc::new(RecordApprovalRequest::new(
+        approvals,
+        Arc::new(SystemIdGenerator),
+        Arc::new(SystemClock),
+    ));
+    let _tx = sanvi_persistence::TxManager::new(pool);
+    Arc::new(ApprovalGateAdapter::new(record))
 }

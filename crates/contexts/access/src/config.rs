@@ -10,6 +10,14 @@ pub struct AccessConfig {
     pub decision_cache_ttl_secs: u64,
     /// Maximum decisions the local cache retains.
     pub decision_cache_max_entries: usize,
+    /// TTL of the cached entitlement resolution (`sanvi:{tenant}:entitlements`).
+    /// 300 s per the plan; event-driven invalidation keeps staleness far
+    /// below the bound in practice.
+    pub entitlement_cache_ttl_secs: u64,
+    /// Four-eyes policy: entitlement overrides whose limit exceeds this
+    /// value require a second platform admin's approval. `None` disables
+    /// four-eyes for overrides.
+    pub entitlement_approval_threshold: Option<i64>,
 }
 
 impl Default for AccessConfig {
@@ -17,6 +25,8 @@ impl Default for AccessConfig {
         Self {
             decision_cache_ttl_secs: 30,
             decision_cache_max_entries: 10_000,
+            entitlement_cache_ttl_secs: 300,
+            entitlement_approval_threshold: None,
         }
     }
 }
@@ -28,6 +38,14 @@ impl AccessConfig {
         }
         if self.decision_cache_max_entries == 0 {
             anyhow::bail!("access.decision_cache_max_entries must be >= 1");
+        }
+        if self.entitlement_cache_ttl_secs == 0 || self.entitlement_cache_ttl_secs > 3600 {
+            anyhow::bail!("access.entitlement_cache_ttl_secs must be 1..=3600");
+        }
+        if let Some(threshold) = self.entitlement_approval_threshold
+            && threshold < 0
+        {
+            anyhow::bail!("access.entitlement_approval_threshold must be >= 0");
         }
         Ok(())
     }
@@ -46,6 +64,15 @@ mod tests {
     fn cache_ttl_is_bounded_by_the_plan() {
         let config = AccessConfig {
             decision_cache_ttl_secs: 45,
+            ..AccessConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn entitlement_cache_ttl_is_bounded() {
+        let config = AccessConfig {
+            entitlement_cache_ttl_secs: 7200,
             ..AccessConfig::default()
         };
         assert!(config.validate().is_err());

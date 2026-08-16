@@ -91,6 +91,14 @@ pub trait MembershipRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
     ) -> Result<Vec<Membership>, IdentityError>;
 
+    /// Active member count for a tenant (the platform admin read model;
+    /// read under the audited platform scope).
+    async fn count_members_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<u32, IdentityError>;
+
     /// True when `user_id` holds `role_key` in `tenant_id` (last-owner guard).
     async fn count_role_holders(
         &self,

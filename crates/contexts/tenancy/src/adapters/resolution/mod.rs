@@ -287,6 +287,14 @@ mod tests {
         ) -> Result<Vec<Tenant>, TenancyError> {
             unreachable!()
         }
+        async fn search(
+            &self,
+            _scope: &mut sanvi_persistence::PlatformScope<'_>,
+            _search: &crate::domain::TenantSearch,
+        ) -> Result<(Vec<Tenant>, Option<crate::domain::TenantSearchCursor>), TenancyError>
+        {
+            unreachable!()
+        }
     }
 
     struct UnreachableCache;
