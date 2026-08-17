@@ -1,0 +1,16 @@
+{
+  "emails.invitation.subject": "You''re invited to join {tenant}",
+  "emails.invitation.body": "Hi {name},\n\nYou have been invited to join {tenant}. Accept your invitation here:\n{url}\n\nThis invitation expires in {days, plural, one {1 day} other {# days}}.",
+  "emails.verification.subject": "Your verification code",
+  "emails.verification.body": "Your verification code is {code}. It expires soon.",
+  "emails.security_notice.subject": "Security notice for your {tenant} account",
+  "emails.security_notice.body": "We detected the following activity on your account: {detail}.",
+  "emails.export_passphrase.subject": "Your data export passphrase",
+  "emails.export_passphrase.body": "Request {request_id}: your export passphrase is {passphrase}. It can be used once.",
+  "emails.payment_failed.subject": "Payment failed for your {tenant} subscription",
+  "emails.payment_failed.body": "Your latest payment for {tenant} failed. Please update your billing details to avoid interruption.",
+  "emails.subscription_canceled.subject": "Your {tenant} subscription was canceled",
+  "emails.subscription_canceled.body": "Your {tenant} subscription has been canceled.",
+  "emails.trial_ending.subject": "Your {tenant} trial ends soon",
+  "emails.trial_ending.body": "Your {tenant} trial ends on {date}."
+}

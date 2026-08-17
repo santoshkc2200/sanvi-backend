@@ -113,4 +113,13 @@ test:
 openapi:
     cargo run -p sanvi-cli -- openapi --check
 
-ci: fmt clippy layering test openapi
+i18n:
+    cargo run -p sanvi-cli -- i18n check
+
+i18n-report:
+    cargo run -p sanvi-cli -- i18n report
+
+i18n-extract:
+    cargo run -p sanvi-cli -- i18n extract
+
+ci: fmt clippy layering test openapi i18n

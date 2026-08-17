@@ -110,6 +110,14 @@ use utoipa::OpenApi;
         sanvi_privacy::adapters::http::handlers::upsert_assessment,
         sanvi_privacy::adapters::http::handlers::list_retention_rules,
         sanvi_privacy::adapters::http::handlers::upsert_retention_rule,
+        sanvi_localization::adapters::http::handlers::get_public_locales,
+        sanvi_localization::adapters::http::handlers::get_public_messages,
+        sanvi_localization::adapters::http::handlers::get_localization_settings,
+        sanvi_localization::adapters::http::handlers::put_localization_settings,
+        sanvi_localization::adapters::http::handlers::get_localization_overrides,
+        sanvi_localization::adapters::http::handlers::put_localization_overrides,
+        sanvi_localization::adapters::http::handlers::get_platform_translations,
+        sanvi_localization::adapters::http::handlers::put_platform_translations,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
@@ -120,7 +128,8 @@ use utoipa::OpenApi;
         (name = "audit", description = "Append-only, hash-chained audit trail"),
         (name = "platform_admin", description = "Operator control plane: tenants, impersonation, approvals"),
         (name = "billing", description = "Platform billing: plans, subscriptions, invoices, checkout and portal"),
-        (name = "privacy", description = "Privacy & compliance: jurisdiction profiles, consent/opt-out directives, data subject requests (export/erasure/appeals), retention, processing records, sub-processors and breach obligations")
+        (name = "privacy", description = "Privacy & compliance: jurisdiction profiles, consent/opt-out directives, data subject requests (export/erasure/appeals), retention, processing records, sub-processors and breach obligations"),
+        (name = "localization", description = "Locales, message catalogs, tenant locale settings and copy overrides")
     ),
     info(
         title = "Sanvi API",
@@ -220,5 +229,18 @@ mod tests {
         assert!(json.contains("PlanAdminView"));
         assert!(json.contains("SubscriptionView"));
         assert!(json.contains("InvoiceView"));
+    }
+
+    #[test]
+    fn doc_contains_the_localization_contract() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/public/locales"));
+        assert!(json.contains("/api/v1/public/messages/{domain}"));
+        assert!(json.contains("/api/v1/tenant/localization/settings"));
+        assert!(json.contains("/api/v1/tenant/localization/overrides"));
+        assert!(json.contains("/api/v1/platform/localization/translations"));
+        assert!(json.contains("LocalizationSettingsView"));
+        assert!(json.contains("CatalogView"));
+        assert!(json.contains("TranslationView"));
     }
 }

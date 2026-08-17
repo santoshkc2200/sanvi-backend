@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT code, name_native, name_en, sort_order\n             FROM localization.supported_locales\n             WHERE enabled\n             ORDER BY sort_order",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "localization.supported_locales",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name_native",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "localization.supported_locales",
+            "name": "name_native"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name_en",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "localization.supported_locales",
+            "name": "name_en"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sort_order",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "localization.supported_locales",
+            "name": "sort_order"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "db9dc91b435e7e3be89e9f8a6f261bf01a15e5e9c390970efaca76c1b1f95495"
+}

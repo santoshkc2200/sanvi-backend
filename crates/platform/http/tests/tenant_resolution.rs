@@ -103,6 +103,7 @@ fn build_app(
         })),
         None,
         None,
+        None,
     )
 }
 
@@ -207,6 +208,7 @@ async fn suspended_tenant_allowlist_still_serves() {
             resolver: Arc::new(resolver),
             policy,
         })),
+        None,
         None,
         None,
     );

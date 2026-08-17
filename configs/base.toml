@@ -179,6 +179,19 @@ device_cookie_name = "sanvi_gpc_device"
 device_cookie_ttl_days = 30
 subprocessor_notice_days = 30
 
+[localization]
+# Phase 06: internationalization & localization (en + ja ship in the
+# binary; a third locale is a data change in localization.supported_locales,
+# never a code change).
+default_locale = "en"
+# Allow-list for the explicit ?locale= query parameter (untrusted input;
+# anything not listed is ignored by negotiation).
+explicit_locale_allowlist = ["en", "ja"]
+# TTLs for the negotiation and merged-catalog caches (seconds).
+merge_cache_ttl_secs = 30
+tenant_settings_cache_ttl_secs = 30
+user_locale_cache_ttl_secs = 60
+
 [features]
 # Phase gates live here from phase 01 onward.
 tenancy = true
@@ -186,6 +199,7 @@ identity = true
 platform_admin = true
 billing = true
 privacy = true
+localization = true
 
 [outbox]
 poll_interval_ms = 1000

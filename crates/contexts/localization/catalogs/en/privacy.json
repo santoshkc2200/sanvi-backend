@@ -1,0 +1,8 @@
+{
+  "privacy.notice.updated": "Privacy notice updated",
+  "privacy.export.label": "Data export",
+  "privacy.export.generated_at": "Generated at {date}",
+  "privacy.export.contains": "Contains your personal data across {count, plural, one {# service} other {# services}}.",
+  "privacy.verification.code": "Verification code",
+  "privacy.request.received": "Your request has been received"
+}

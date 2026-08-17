@@ -102,7 +102,7 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy -p sanvi-billing -p sanvi-privacy
+      - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy -p sanvi-billing -p sanvi-privacy -p sanvi-localization
 
   openapi:
     name: OpenAPI contract drift
@@ -113,6 +113,16 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo run -p sanvi-cli -- openapi --check
+
+  i18n:
+    name: i18n catalog gate (100 % ja coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run -p sanvi-cli -- i18n check
 
   audit:
     name: cargo audit

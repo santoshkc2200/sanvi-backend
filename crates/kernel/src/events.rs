@@ -49,6 +49,16 @@ impl EventEnvelope {
             .map(|m| m.insert(key.into(), value));
         self
     }
+
+    /// Record the locale the event happened under.
+    ///
+    /// Every event that produces user-visible text downstream (notifications,
+    /// invoices, exports) must carry this; workers never re-negotiate a
+    /// locale from a missing request. The key is the stable contract:
+    /// `metadata.locale` (canonical BCP-47, e.g. `ja` or `en-GB`).
+    pub fn with_locale(self, locale: impl Into<String>) -> Self {
+        self.with_metadata("locale", serde_json::json!(locale.into()))
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +94,17 @@ mod tests {
         let json = serde_json::to_string(&envelope).unwrap();
         let back: EventEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back, envelope);
+    }
+
+    #[test]
+    fn with_locale_records_the_canonical_metadata_key() {
+        let envelope = EventEnvelope::new(
+            "privacy.dsr",
+            Uuid::now_v7(),
+            "privacy.dsr_submitted",
+            serde_json::json!({}),
+        )
+        .with_locale("ja");
+        assert_eq!(envelope.metadata["locale"], serde_json::json!("ja"));
     }
 }

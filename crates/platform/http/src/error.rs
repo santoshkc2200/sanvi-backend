@@ -182,6 +182,17 @@ impl ResponseError for ApiError {
     }
 }
 
+/// Port for localizing problem details (phase 06). Implemented by the
+/// localization context; absent when localization is not wired, in which
+/// case problem bodies stay in the English defaults.
+pub trait ProblemTranslator: Send + Sync {
+    /// Translate the stable title of a problem class. `type_slug` is the
+    /// path segment of the `type` URI (e.g. `bad-request`, `tenant-suspended`,
+    /// `error` for the fallback). Returns `None` when no translation is
+    /// known — callers keep the English default.
+    fn title(&self, type_slug: &str, locale: &str) -> Option<String>;
+}
+
 impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
         Self::Internal {
@@ -207,9 +218,15 @@ use actix_web::{
     HttpMessage,
     body::BoxBody,
     dev::{ServiceRequest, ServiceResponse},
+    web,
 };
 
+use crate::locale::LocaleContext;
 use crate::middleware::RequestId;
+
+/// App-data carrier for the optional [`ProblemTranslator`]. Registered by
+/// the composition root when the localization context is wired.
+pub struct ProblemTranslatorData(pub std::sync::Arc<dyn ProblemTranslator>);
 
 /// Mountable error handler enriching every error response. Sits innermost in
 /// the middleware chain (wrapping routes), where the body type is `BoxBody`.
@@ -292,6 +309,11 @@ async fn enrich(res: ServiceResponse<BoxBody>) -> ServiceResponse<BoxBody> {
         problem
     };
 
+    // Phase 06: localize the stable title when a translator is wired and the
+    // request negotiated a locale. `type`/`status`/`reason` stay
+    // machine-readable; only the human-facing title changes.
+    let problem = localize_title(req.extensions().get::<LocaleContext>(), &req, problem);
+
     let bytes = serde_json::to_vec(&problem).unwrap_or_default();
     let body = BoxBody::new(actix_http::body::SizedStream::new(
         bytes.len() as u64,
@@ -323,6 +345,30 @@ fn fallback_problem(
         trace_id,
         reason: None,
     }
+}
+
+/// Replace the title of `problem` with a localized one when the request has
+/// a negotiated locale and a [`ProblemTranslator`] is registered.
+fn localize_title(
+    locale: Option<&LocaleContext>,
+    req: &actix_web::HttpRequest,
+    mut problem: ProblemDetail,
+) -> ProblemDetail {
+    let Some(context) = locale else {
+        return problem;
+    };
+    let Some(translator) = req.app_data::<web::Data<ProblemTranslatorData>>() else {
+        return problem;
+    };
+    let type_slug = problem
+        .r#type
+        .strip_prefix(PROBLEM_TYPE_BASE)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or("error");
+    if let Some(title) = translator.0.title(type_slug, &context.locale) {
+        problem.title = title;
+    }
+    problem
 }
 
 #[cfg(test)]
@@ -389,5 +435,29 @@ mod tests {
         assert!(text.get("title").is_some());
         assert!(text.get("status").is_some());
         assert!(text.get("detail").is_some());
+    }
+
+    struct FakeTranslator;
+
+    impl ProblemTranslator for FakeTranslator {
+        fn title(&self, type_slug: &str, locale: &str) -> Option<String> {
+            match (type_slug, locale) {
+                ("bad-request", "ja") => Some("不正なリクエスト".to_string()),
+                _ => None,
+            }
+        }
+    }
+
+    #[test]
+    fn localize_title_translates_and_keeps_machine_readable_fields() {
+        let mut problem = ApiError::bad_request("x").problem();
+        assert_eq!(problem.title, "Bad Request");
+
+        let translated = FakeTranslator.title("bad-request", "ja").unwrap();
+        problem.title = translated;
+        assert_eq!(problem.title, "不正なリクエスト");
+        // The stable fields are untouched by localization.
+        assert_eq!(problem.r#type, "https://sanvi.dev/problems/bad-request");
+        assert_eq!(problem.status, 400);
     }
 }

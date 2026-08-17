@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE localization.translations SET updated_by = NULL WHERE updated_by = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1c64e5e8624f2406c80458d89777968bdfa95c1b29bdd0c68a1dfc411a388147"
+}

@@ -1,0 +1,18 @@
+{
+  "billing.invoice.label": "Invoice",
+  "billing.invoice.paid": "Paid",
+  "billing.invoice.unpaid": "Unpaid",
+  "billing.invoice.open": "Open",
+  "billing.invoice.void": "Void",
+  "billing.invoice.amount_due": "Amount due",
+  "billing.invoice.subtotal": "Subtotal",
+  "billing.invoice.tax": "Tax",
+  "billing.invoice.total": "Total",
+  "billing.invoice.due_date": "Due {date}",
+  "billing.invoice.items": "{count, plural, one {# item} other {# items}}",
+  "billing.receipt.label": "Receipt",
+  "billing.receipt.paid_at": "Paid on {date}",
+  "billing.plans.per_month": "per month",
+  "billing.checkout.button": "Subscribe",
+  "billing.portal.manage": "Manage subscription"
+}

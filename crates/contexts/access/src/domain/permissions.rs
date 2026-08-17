@@ -364,6 +364,37 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Read the tenant's data subject requests",
     },
+    // --- localization (phase 06) ---------------------------------------------
+    PermissionDef {
+        key: "tenant.localization.settings.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the tenant's locale settings",
+    },
+    PermissionDef {
+        key: "tenant.localization.settings.update",
+        scope: PermissionScope::Tenant,
+        description: "Change the tenant's default locale, enabled locales and timezone",
+    },
+    PermissionDef {
+        key: "tenant.localization.overrides.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the tenant's copy overrides",
+    },
+    PermissionDef {
+        key: "tenant.localization.overrides.update",
+        scope: PermissionScope::Tenant,
+        description: "Edit the tenant's copy overrides",
+    },
+    PermissionDef {
+        key: "platform.localization.translations.read",
+        scope: PermissionScope::Platform,
+        description: "Read the platform catalog overrides",
+    },
+    PermissionDef {
+        key: "platform.localization.translations.write",
+        scope: PermissionScope::Platform,
+        description: "Edit the platform catalog overrides",
+    },
 ];
 
 /// Registry lookup.

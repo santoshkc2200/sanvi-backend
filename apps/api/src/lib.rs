@@ -94,6 +94,25 @@ use sanvi_identity::{
     },
     routes as identity_routes,
 };
+use sanvi_localization::{
+    LocalizationConfig,
+    adapters::{
+        LocaleResolverService, LocalizationCache, LocalizationMetrics, LocalizationService,
+        OutboxEventPublisher as LocalizationEvents, PoolUserLocaleProvider,
+        SqlxSupportedLocaleRepository, SqlxTenantLocaleRepository, SqlxTranslationRepository,
+        SystemClock as LocalizationClock,
+    },
+    application::{
+        CatalogService, GetLocalizationSettings, GetPlatformTranslations, GetTenantOverrides,
+        UpdateLocalizationSettings, UpdatePlatformTranslations, UpdateTenantOverrides,
+    },
+    domain::{
+        Clock as LocalizationClockTrait, EventPublisher as LocalizationEventPublisher,
+        SupportedLocaleRepository, TenantLocaleRepository, TranslationRepository,
+        Translator as LocalizationTranslator,
+    },
+    routes as localization_routes,
+};
 use sanvi_platform_admin::{
     PlatformAdminConfig,
     adapters::{
@@ -1686,6 +1705,111 @@ pub fn build_billing_state(
     }
 }
 
+/// The localization context's wiring: the negotiation middleware resolver,
+/// the shared service (merged catalogs + cache + metrics), the synchronous
+/// translator, the problem-body translator and the HTTP state.
+#[derive(Clone)]
+pub struct LocalizationWiring {
+    pub state: sanvi_localization::adapters::http::LocalizationState,
+    pub resolver: Arc<dyn sanvi_http::LocaleResolver>,
+    pub translator: Arc<dyn LocalizationTranslator>,
+    pub problem_translator: Arc<dyn sanvi_http::ProblemTranslator>,
+    pub service: Arc<LocalizationService>,
+    pub cache: Arc<LocalizationCache>,
+}
+
+/// Build the localization context's application state. The `LocaleResolver`
+/// consumes the tenant settings repository, the supported-locale table and
+/// the identity users table (via [`PoolUserLocaleProvider`]) — all cached —
+/// so negotiation never hits the database on the hot path.
+pub fn build_localization_state(
+    pool: sanvi_persistence::PgPool,
+    config: &LocalizationConfig,
+    registry: &prometheus::Registry,
+) -> LocalizationWiring {
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tenant_locales: Arc<dyn TenantLocaleRepository> =
+        Arc::new(SqlxTenantLocaleRepository::new());
+    let supported: Arc<dyn SupportedLocaleRepository> =
+        Arc::new(SqlxSupportedLocaleRepository::new());
+    let translations: Arc<dyn TranslationRepository> = Arc::new(SqlxTranslationRepository::new());
+    let events: Arc<dyn LocalizationEventPublisher> = Arc::new(LocalizationEvents::new());
+    let clock: Arc<dyn LocalizationClockTrait> = Arc::new(LocalizationClock);
+    let users = Arc::new(PoolUserLocaleProvider::new(pool.clone()));
+
+    let cache = Arc::new(LocalizationCache::new());
+    let metrics = Arc::new(LocalizationMetrics::new(registry));
+    let service = Arc::new(LocalizationService::new(
+        pool.clone(),
+        translations.clone(),
+        cache.clone(),
+        metrics.clone(),
+        config.clone(),
+    ));
+
+    let resolver: Arc<dyn sanvi_http::LocaleResolver> = Arc::new(LocaleResolverService::new(
+        tx_manager,
+        tenant_locales.clone(),
+        supported.clone(),
+        users,
+        cache.clone(),
+        metrics,
+        service.clone(),
+        config.clone(),
+    ));
+    let translator: Arc<dyn LocalizationTranslator> = service.clone();
+    let problem_translator: Arc<dyn sanvi_http::ProblemTranslator> = service.clone();
+
+    let catalog = Arc::new(CatalogService::new(
+        pool.clone(),
+        service.clone(),
+        supported.clone(),
+        config.default_locale.clone(),
+    ));
+
+    let state = sanvi_localization::adapters::http::LocalizationState {
+        resolver: resolver.clone(),
+        service: service.clone(),
+        translator: translator.clone(),
+        problem_translator: problem_translator.clone(),
+        catalog: catalog.clone(),
+        supported: supported.clone(),
+        pool: pool.clone(),
+        get_settings: Arc::new(GetLocalizationSettings::new(tenant_locales.clone())),
+        update_settings: Arc::new(UpdateLocalizationSettings::new(
+            tenant_locales,
+            supported.clone(),
+            pool.clone(),
+            events.clone(),
+            clock.clone(),
+        )),
+        get_overrides: Arc::new(GetTenantOverrides::new(translations.clone())),
+        update_overrides: Arc::new(UpdateTenantOverrides::new(
+            translations.clone(),
+            events.clone(),
+            clock.clone(),
+        )),
+        get_platform_translations: Arc::new(GetPlatformTranslations::new(
+            translations.clone(),
+            pool.clone(),
+        )),
+        update_platform_translations: Arc::new(UpdatePlatformTranslations::new(
+            translations,
+            events,
+            clock,
+        )),
+    };
+
+    LocalizationWiring {
+        state,
+        resolver,
+        translator,
+        problem_translator,
+        service,
+        cache,
+    }
+}
+
 /// Assemble the actix `App`: middleware stack, routes, OpenAPI, metrics.
 ///
 /// This is the factory `HttpServer` clones per worker; everything captured
@@ -1702,6 +1826,7 @@ pub fn build_app(
     platform_admin: PlatformAdminWiring,
     billing: Option<sanvi_billing::adapters::http::BillingState>,
     privacy: Option<PrivacyWiring>,
+    localization: Option<LocalizationWiring>,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -1731,6 +1856,10 @@ pub fn build_app(
     };
     let tenant_scope = match &privacy {
         Some(_) => tenant_scope.configure(sanvi_privacy::routes::tenant_scope_routes),
+        None => tenant_scope,
+    };
+    let tenant_scope = match &localization {
+        Some(_) => tenant_scope.configure(localization_routes::localization_tenant_scope_routes),
         None => tenant_scope,
     };
 
@@ -1789,6 +1918,20 @@ pub fn build_app(
         None => app,
     };
 
+    // Phase-06 gate: localization routes plus the problem-body translator
+    // the error layer consumes. With the flag off, no locale negotiation
+    // and English-only problem bodies.
+    let app = match localization.clone() {
+        Some(wiring) => app
+            .app_data(web::Data::new(wiring.state))
+            .app_data(web::Data::new(sanvi_http::error::ProblemTranslatorData(
+                wiring.problem_translator.clone(),
+            )))
+            .configure(localization_routes::localization_public_routes)
+            .configure(localization_routes::localization_platform_routes),
+        None => app,
+    };
+
     // The phase-01 feature gate: with the flag off, no resolution middleware
     // and (by the classification below) no tenant-scoped routes either.
     let tenant_middleware = if config.features.tenancy {
@@ -1837,6 +1980,18 @@ pub fn build_app(
         None
     };
 
+    // The phase-06 feature gate: with the flag off, no locale negotiation
+    // and no localized problem bodies (every response stays English).
+    let locale_middleware = if config.features.localization {
+        localization.as_ref().map(|wiring| {
+            Arc::new(sanvi_http::LocaleMiddleware {
+                resolver: wiring.resolver.clone(),
+            })
+        })
+    } else {
+        None
+    };
+
     middleware::stack(
         app,
         server_config,
@@ -1844,6 +1999,7 @@ pub fn build_app(
         tenant_middleware,
         authn,
         impersonation,
+        locale_middleware,
     )
 }
 

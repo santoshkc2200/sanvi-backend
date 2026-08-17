@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO localization.translations\n                 (scope, key, locale, value, updated_by, updated_at)\n             VALUES ($1, $2, $3, $4, $5, now())\n             ON CONFLICT (scope, key, locale) DO UPDATE\n                 SET value = EXCLUDED.value,\n                     updated_by = EXCLUDED.updated_by,\n                     updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6b58d04ae89bcb5d3f949ace01b205622f59f2577f6d29dd23978058f086ab9"
+}

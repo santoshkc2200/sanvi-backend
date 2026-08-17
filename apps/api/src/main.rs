@@ -16,8 +16,8 @@ use figment::{
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
-    build_billing_state, build_identity_state, build_platform_admin_state, build_privacy_state,
-    build_system_state, build_tenancy_state,
+    build_billing_state, build_identity_state, build_localization_state,
+    build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::RoleCatalog;
@@ -273,12 +273,27 @@ async fn main() -> ExitCode {
                 Arc::new(SqlxSignalRepository::new()),
                 Arc::new(SqlxDirectiveRepository::new()),
             )),
+            Arc::new(
+                sanvi_localization::adapters::LocalizationPrivacyProvider::new(privacy_tx.clone()),
+            ),
         ];
         Some(build_privacy_state(
             pool.clone(),
             &config.privacy,
             privacy_providers,
             audit.writer.clone(),
+        ))
+    } else {
+        None
+    };
+
+    // Phase 06: locale negotiation, localized problem bodies and the
+    // localization control plane (settings, overrides, catalog delivery).
+    let localization = if config.features.localization {
+        Some(build_localization_state(
+            pool.clone(),
+            &config.localization,
+            metrics.prometheus_registry(),
         ))
     } else {
         None
@@ -298,6 +313,7 @@ async fn main() -> ExitCode {
             platform_admin.clone(),
             billing.clone(),
             privacy.clone(),
+            localization.clone(),
             redis.clone(),
         )
     }) {

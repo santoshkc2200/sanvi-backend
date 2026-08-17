@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO localization.tenant_locales\n                 (tenant_id, default_locale, enabled_locales, timezone, updated_at)\n             VALUES ($1, $2, $3, $4, now())\n             ON CONFLICT (tenant_id) DO UPDATE\n                 SET default_locale = EXCLUDED.default_locale,\n                     enabled_locales = EXCLUDED.enabled_locales,\n                     timezone = EXCLUDED.timezone,\n                     updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "TextArray",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f2232af42821566bbd395bdac6c43c79dc0b1067fca4cfe138add11ce4ec2e32"
+}

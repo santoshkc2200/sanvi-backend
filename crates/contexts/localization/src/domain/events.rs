@@ -1,0 +1,107 @@
+//! Localization domain events.
+//!
+//! Every event that can trigger a user-visible render downstream carries
+//! the locale it happened under via `EventEnvelope::with_locale` — workers
+//! never re-negotiate a locale from a missing request.
+
+use sanvi_kernel::events::EventEnvelope;
+use serde::Serialize;
+use uuid::Uuid;
+
+use crate::domain::locale::Locale;
+
+pub const TENANT_LOCALES_AGGREGATE: &str = "localization.tenant_locales";
+pub const TRANSLATION_AGGREGATE: &str = "localization.translation";
+pub const CATALOG_AGGREGATE: &str = "localization.catalog";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalizationEventName {
+    TenantLocalesChanged,
+    TranslationUpdated,
+    CatalogPublished,
+}
+
+impl LocalizationEventName {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TenantLocalesChanged => "localization.tenant_locales_changed",
+            Self::TranslationUpdated => "localization.translation_updated",
+            Self::CatalogPublished => "localization.catalog_published",
+        }
+    }
+}
+
+/// The events the localization context publishes.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LocalizationEvent {
+    /// A tenant changed its default locale, enabled locales or timezone.
+    TenantLocalesChanged {
+        tenant_id: Uuid,
+        default_locale: String,
+        enabled_locales: Vec<String>,
+        timezone: String,
+        /// The locale the change was made under (the admin's negotiated
+        /// locale) — carried into async work.
+        locale: String,
+    },
+    /// A copy override was updated (tenant or platform scope).
+    TranslationUpdated {
+        scope: String,
+        key: String,
+        locale: String,
+        value: String,
+        /// The locale the change was made under.
+        acting_locale: String,
+    },
+    /// The static catalog was released (informational).
+    CatalogPublished { version: String },
+}
+
+impl LocalizationEvent {
+    pub fn name(&self) -> LocalizationEventName {
+        match self {
+            Self::TenantLocalesChanged { .. } => LocalizationEventName::TenantLocalesChanged,
+            Self::TranslationUpdated { .. } => LocalizationEventName::TranslationUpdated,
+            Self::CatalogPublished { .. } => LocalizationEventName::CatalogPublished,
+        }
+    }
+
+    pub fn aggregate_id(&self) -> Uuid {
+        match self {
+            Self::TenantLocalesChanged { tenant_id, .. } => *tenant_id,
+            Self::TranslationUpdated { scope, .. } => scope.parse().unwrap_or_else(|_| Uuid::nil()),
+            Self::CatalogPublished { .. } => Uuid::nil(),
+        }
+    }
+
+    pub fn envelope(&self) -> EventEnvelope {
+        let aggregate = match self {
+            Self::TenantLocalesChanged { .. } => TENANT_LOCALES_AGGREGATE,
+            Self::TranslationUpdated { .. } => TRANSLATION_AGGREGATE,
+            Self::CatalogPublished { .. } => CATALOG_AGGREGATE,
+        };
+        EventEnvelope::new(
+            aggregate,
+            self.aggregate_id(),
+            self.name().as_str(),
+            serde_json::to_value(self).expect("localization events serialize"),
+        )
+        .with_metadata(
+            "tenant_id",
+            serde_json::json!(match self {
+                Self::TenantLocalesChanged { tenant_id, .. } => tenant_id.to_string(),
+                Self::TranslationUpdated { scope, .. } => scope.clone(),
+                Self::CatalogPublished { .. } => "platform".to_string(),
+            }),
+        )
+        .with_locale(match self {
+            Self::TenantLocalesChanged { locale, .. }
+            | Self::TranslationUpdated {
+                acting_locale: locale,
+                ..
+            } => locale.clone(),
+            Self::CatalogPublished { .. } => Locale::DEFAULT.to_string(),
+        })
+    }
+}

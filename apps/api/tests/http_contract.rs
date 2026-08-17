@@ -107,6 +107,7 @@ fn test_app() -> actix_web::App<
         None,
         None,
         None,
+        None,
     )
 }
 

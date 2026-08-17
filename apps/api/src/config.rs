@@ -5,6 +5,7 @@ use sanvi_audit::AuditConfig;
 use sanvi_billing::BillingConfig;
 use sanvi_http::ServerConfig;
 use sanvi_identity::IdentityConfig;
+use sanvi_localization::LocalizationConfig;
 use sanvi_messaging::RedisConfig;
 use sanvi_persistence::DatabaseConfig;
 use sanvi_platform_admin::PlatformAdminConfig;
@@ -59,6 +60,10 @@ pub struct FeaturesConfig {
     /// impersonation flow.
     #[serde(default = "default_true")]
     pub privacy: bool,
+    /// Phase-06 gate: mounts locale negotiation, localized problem bodies
+    /// and the localization context's routes.
+    #[serde(default = "default_true")]
+    pub localization: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -85,6 +90,7 @@ pub struct AppConfig {
     pub audit: AuditConfig,
     pub billing: BillingConfig,
     pub privacy: PrivacyConfig,
+    pub localization: LocalizationConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -105,6 +111,7 @@ impl Default for AppConfig {
             audit: AuditConfig::default(),
             billing: BillingConfig::default(),
             privacy: PrivacyConfig::default(),
+            localization: LocalizationConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -145,6 +152,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.privacy.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.localization.validate() {
             problems.push(err.to_string());
         }
         if self.readiness_probe_secs == 0 {

@@ -1,0 +1,15 @@
+{
+  "errors.title.bad-request": "Bad Request",
+  "errors.title.unauthorized": "Unauthorized",
+  "errors.title.forbidden": "Forbidden",
+  "errors.title.not-found": "Not Found",
+  "errors.title.conflict": "Conflict",
+  "errors.title.gone": "Gone",
+  "errors.title.bad-gateway": "Bad Gateway",
+  "errors.title.tenant-suspended": "Tenant Suspended",
+  "errors.title.too-many-requests": "Too Many Requests",
+  "errors.title.request-timeout": "Gateway Timeout",
+  "errors.title.service-unavailable": "Service Unavailable",
+  "errors.title.internal-error": "Internal Server Error",
+  "errors.title.error": "Error"
+}

@@ -1,0 +1,15 @@
+{
+  "errors.title.bad-request": "不正なリクエスト",
+  "errors.title.unauthorized": "認証が必要です",
+  "errors.title.forbidden": "アクセスが拒否されました",
+  "errors.title.not-found": "見つかりません",
+  "errors.title.conflict": "競合が発生しました",
+  "errors.title.gone": "リソースは削除されました",
+  "errors.title.bad-gateway": "ゲートウェイエラー",
+  "errors.title.tenant-suspended": "テナントは停止中です",
+  "errors.title.too-many-requests": "リクエストが多すぎます",
+  "errors.title.request-timeout": "リクエストがタイムアウトしました",
+  "errors.title.service-unavailable": "サービスは一時的に利用できません",
+  "errors.title.internal-error": "サーバー内部エラー",
+  "errors.title.error": "エラー"
+}

@@ -57,6 +57,13 @@ use sanvi_billing::{
         WebhookEventRepository,
     },
 };
+use sanvi_localization::{
+    LocalizationConfig,
+    adapters::{
+        LocalizationCache, LocalizationMetrics, LocalizationService, SqlxTranslationRepository,
+        events::localization_event_handler,
+    },
+};
 use sanvi_messaging::{
     ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
     StreamConsumer, StreamName, StreamsClient, connect_redis,
@@ -215,6 +222,7 @@ pub struct WorkerConfig {
     pub audit: AuditConfig,
     pub billing: BillingConfig,
     pub privacy: PrivacyConfig,
+    pub localization: LocalizationConfig,
 }
 
 impl WorkerConfig {
@@ -227,6 +235,7 @@ impl WorkerConfig {
         self.audit.validate()?;
         self.billing.validate()?;
         self.privacy.validate()?;
+        self.localization.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -331,6 +340,25 @@ async fn main() -> ExitCode {
     }
     let tenancy_consumer = tenancy_consumer.with_metrics(tenancy_consumer_metrics);
     let tenancy_consumer_name = format!("tenancy-{}", uuid::Uuid::now_v7());
+
+    // --- localization consumer: keeps merged-catalog caches coherent -------
+    // Worker-rendered output (notifications, exports) must never serve stale
+    // copy after another process edits overrides or tenant locale settings.
+    let localization_service = Arc::new(LocalizationService::new(
+        pool.clone(),
+        Arc::new(SqlxTranslationRepository::new()),
+        Arc::new(LocalizationCache::new()),
+        Arc::new(LocalizationMetrics::new(registry)),
+        config.localization.clone(),
+    ));
+    let localization_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let localization_consumer_metrics = Arc::new(ConsumerMetrics::new("localization"));
+    if let Err(err) = localization_consumer_metrics.register(registry) {
+        eprintln!("failed to register localization consumer metrics: {err}");
+        return ExitCode::from(1);
+    }
+    let localization_consumer = localization_consumer.with_metrics(localization_consumer_metrics);
+    let localization_consumer_name = format!("localization-{}", uuid::Uuid::now_v7());
 
     // --- access consumer: keeps Keto in sync with identity events -----------
     let access_store: Arc<dyn PermissionStore> = match HttpKetoClient::new(
@@ -1135,6 +1163,20 @@ async fn main() -> ExitCode {
             .await;
     });
 
+    let localization_shutdown = shutdown_rx.clone();
+    let localization_stream = format!("{}.localization", config.outbox.stream);
+    let localization_task = tokio::spawn(async move {
+        localization_consumer
+            .run_until_shutdown(
+                &localization_stream,
+                "localization",
+                &localization_consumer_name,
+                localization_event_handler(localization_service),
+                localization_shutdown,
+            )
+            .await;
+    });
+
     let access_shutdown = shutdown_rx.clone();
     let identity_stream = format!("{}.identity", config.outbox.stream);
     let access_task = tokio::spawn(async move {
@@ -1194,6 +1236,7 @@ async fn main() -> ExitCode {
     let _ = tokio::join!(
         dispatcher_task,
         tenancy_task,
+        localization_task,
         access_task,
         entitlement_task,
         billing_task,

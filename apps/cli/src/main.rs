@@ -13,6 +13,7 @@ mod billing;
 mod config;
 mod control;
 mod healthcheck;
+mod i18n;
 mod migrate;
 mod openapi;
 mod tenant;
@@ -103,6 +104,11 @@ enum Command {
         /// (Re)generate the committed `api/{context}.yaml` specs.
         #[arg(long)]
         write: bool,
+    },
+    /// Phase-06 translation workflow: extract, check or report.
+    I18n {
+        #[command(subcommand)]
+        action: I18nAction,
     },
     /// Probe an HTTP endpoint without a shell or `curl` (container HEALTHCHECK).
     Healthcheck {
@@ -310,6 +316,16 @@ struct TenantCreateArgs {
     /// Default locale (BCP 47-ish tag, e.g. `en`, `ja-JP`).
     #[arg(long, default_value = "en")]
     default_locale: String,
+}
+
+#[derive(Subcommand)]
+enum I18nAction {
+    /// Scan the source tree for `t!(...)` keys and print the key → file map.
+    Extract,
+    /// The CI gate: catalog validity, en/ja parity, placeholder parity.
+    Check,
+    /// Per-domain coverage table.
+    Report,
 }
 
 #[derive(Subcommand)]
@@ -592,6 +608,20 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::I18n { action } => {
+            let action = match action {
+                I18nAction::Extract => i18n::I18nAction::Extract,
+                I18nAction::Check => i18n::I18nAction::Check,
+                I18nAction::Report => i18n::I18nAction::Report,
+            };
+            match i18n::run(action) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("i18n check failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Healthcheck {
             host,
             port,

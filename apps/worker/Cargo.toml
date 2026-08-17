@@ -17,6 +17,7 @@ sanvi-audit.workspace = true
 sanvi-billing.workspace = true
 sanvi-identity.workspace = true
 sanvi-http.workspace = true
+sanvi-localization.workspace = true
 sanvi-messaging.workspace = true
 sanvi-persistence.workspace = true
 sanvi-platform-admin.workspace = true

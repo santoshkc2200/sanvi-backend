@@ -1,0 +1,18 @@
+{
+  "billing.invoice.label": "請求書",
+  "billing.invoice.paid": "支払い済み",
+  "billing.invoice.unpaid": "未払い",
+  "billing.invoice.open": "未決済",
+  "billing.invoice.void": "無効",
+  "billing.invoice.amount_due": "請求額",
+  "billing.invoice.subtotal": "小計",
+  "billing.invoice.tax": "税金",
+  "billing.invoice.total": "合計",
+  "billing.invoice.due_date": "支払期限 {date}",
+  "billing.invoice.items": "{count, plural, other {#項目}}",
+  "billing.receipt.label": "領収書",
+  "billing.receipt.paid_at": "{date} にお支払い済み",
+  "billing.plans.per_month": "月額",
+  "billing.checkout.button": "購読する",
+  "billing.portal.manage": "サブスクリプションを管理"
+}

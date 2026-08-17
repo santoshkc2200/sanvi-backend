@@ -16,6 +16,7 @@ pub mod config;
 pub mod error;
 pub mod features;
 pub mod impersonation;
+pub mod locale;
 pub mod metrics;
 pub mod middleware;
 pub mod openapi;
@@ -32,11 +33,15 @@ pub use authz::{
     Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,
 };
 pub use config::{CorsConfig, RateLimitConfig, ServerConfig, TenantPolicyConfig};
-pub use error::{ApiError, ProblemDetail};
+pub use error::{ApiError, ProblemDetail, ProblemTranslator};
 pub use features::{FeatureGate, RequiredFeature};
 pub use impersonation::{
     IMPERSONATION_BANNER_HEADER, IMPERSONATION_HEADER, ImpersonatedSubject, ImpersonationContext,
     ImpersonationMiddleware, ImpersonationMode, ImpersonationVerifier, impersonation_actor,
+};
+pub use locale::{
+    CurrentLocale, LocaleContext, LocaleMiddleware, LocaleResolutionInput, LocaleResolver,
+    LocaleSource,
 };
 pub use metrics::{HttpInstruments, TenantResolutionInstruments};
 pub use middleware::RequestId;

@@ -136,10 +136,11 @@ crates/
     platform_admin/        # operator control plane, impersonation, four-eyes (phase 03)
     billing/               # plans, subscriptions, invoices, Stripe, dunning (phase 04)
     privacy/               # jurisdiction profiles, consent/opt-out directives, DSRs, retention, breach (phase 05)
+    localization/          # locale negotiation, message catalogs, formatting policy (phase 06)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing) + scheduler (phase 01–05 jobs: DSR saga, retention, opt-out propagation)
-  cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval/billing, config, openapi
+  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing/localization) + scheduler (phase 01–05 jobs: DSR saga, retention, opt-out propagation)
+  cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval/billing, config, openapi, i18n
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)
 configs/                   # base.toml + per-env overlays + Ory configs (no secrets)

@@ -15,6 +15,7 @@ members = [
     "crates/contexts/platform_admin",
     "crates/contexts/billing",
     "crates/contexts/privacy",
+    "crates/contexts/localization",
     "apps/api",
     "apps/worker",
     "apps/cli",
@@ -22,7 +23,7 @@ members = [
 default-members = ["apps/api", "apps/worker", "apps/cli"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -49,6 +50,7 @@ sanvi-audit = { path = "crates/contexts/audit" }
 sanvi-platform-admin = { path = "crates/contexts/platform_admin" }
 sanvi-billing = { path = "crates/contexts/billing" }
 sanvi-privacy = { path = "crates/contexts/privacy" }
+sanvi-localization = { path = "crates/contexts/localization" }
 sanvi-api = { path = "apps/api" }
 
 actix-web = "4"
@@ -60,6 +62,7 @@ anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.9"
 clap = { version = "4", features = ["derive", "env"] }
 csv = "1"
 figment = { version = "0.10", features = ["toml", "env"] }
@@ -100,6 +103,7 @@ tracing = "0.1"
 tracing-actix-web = "0.7"
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+unicode-normalization = "0.1"
 utoipa = { version = "5", features = ["uuid", "chrono"] }
 utoipa-scalar = { version = "0.3", features = ["actix-web"] }
 uuid = { version = "1", features = ["v7", "serde"] }

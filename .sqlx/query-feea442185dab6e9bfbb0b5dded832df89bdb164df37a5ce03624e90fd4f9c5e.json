@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT default_locale, enabled_locales, timezone, updated_at\n             FROM localization.tenant_locales\n             WHERE tenant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "default_locale",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "localization.tenant_locales",
+            "name": "default_locale"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "enabled_locales",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "localization.tenant_locales",
+            "name": "enabled_locales"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "timezone",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "localization.tenant_locales",
+            "name": "timezone"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "localization.tenant_locales",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "feea442185dab6e9bfbb0b5dded832df89bdb164df37a5ce03624e90fd4f9c5e"
+}

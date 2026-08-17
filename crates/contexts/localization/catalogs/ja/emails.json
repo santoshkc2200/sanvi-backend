@@ -1,0 +1,16 @@
+{
+  "emails.invitation.subject": "{tenant} への招待",
+  "emails.invitation.body": "{name} 様\n\n{tenant} への招待が届いています。次のリンクから招待をお受け取りください:\n{url}\n\nこの招待は {days, plural, one {1日} other {#日}} で失効します。",
+  "emails.verification.subject": "認証コードのお知らせ",
+  "emails.verification.body": "認証コードは {code} です。まもなく失効します。",
+  "emails.security_notice.subject": "{tenant} アカウントのセキュリティ通知",
+  "emails.security_notice.body": "お客様のアカウントで次の操作が検出されました: {detail}",
+  "emails.export_passphrase.subject": "データ書き出しのパスフレーズ",
+  "emails.export_passphrase.body": "リクエスト {request_id}: 書き出しのパスフレーズは {passphrase} です。1回のみ使用できます。",
+  "emails.payment_failed.subject": "{tenant} のサブスクリプションのお支払いに失敗しました",
+  "emails.payment_failed.body": "{tenant} の最新のお支払いが失敗しました。サービス停止を避けるため、お支払い情報を更新してください。",
+  "emails.subscription_canceled.subject": "{tenant} のサブスクリプションが解約されました",
+  "emails.subscription_canceled.body": "{tenant} のサブスクリプションは解約されました。",
+  "emails.trial_ending.subject": "{tenant} のトライアルはまもなく終了します",
+  "emails.trial_ending.body": "{tenant} のトライアルは {date} に終了します。"
+}

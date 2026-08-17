@@ -1,0 +1,193 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.7.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/localization/translations:
+    get:
+      operationId: get_platform_translations
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Platform catalog overrides
+      summary: '`GET /api/v1/platform/localization/translations`.'
+      tags:
+      - localization
+    put:
+      operationId: put_platform_translations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              items:
+                $ref: '#/components/schemas/TranslationPatch'
+              type: array
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Updated platform overrides
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid override
+      summary: '`PUT /api/v1/platform/localization/translations`.'
+      tags:
+      - localization
+  /api/v1/public/locales:
+    get:
+      operationId: get_public_locales
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportedLocalesView'
+          description: Supported locales
+      summary: '`GET /api/v1/public/locales` — the platform''s enabled locale set.'
+      tags:
+      - localization
+  /api/v1/public/messages/{domain}:
+    get:
+      operationId: get_public_messages
+      parameters:
+      - description: Catalog domain (billing, emails, errors, privacy)
+        in: path
+        name: domain
+        required: true
+        schema:
+          type: string
+      - description: Requested locale (defaults to en)
+        in: query
+        name: locale
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogView'
+          description: Message catalog
+        '304':
+          description: Not modified (ETag match)
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown domain
+      summary: |-
+        `GET /api/v1/public/messages/{domain}?locale=` — catalog delivery for
+        the frontend, ETag-cached.
+      tags:
+      - localization
+  /api/v1/tenant/localization/overrides:
+    get:
+      operationId: get_localization_overrides
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Tenant copy overrides
+      summary: '`GET /api/v1/tenant/localization/overrides`.'
+      tags:
+      - localization
+    put:
+      operationId: put_localization_overrides
+      requestBody:
+        content:
+          application/json:
+            schema:
+              items:
+                $ref: '#/components/schemas/TranslationPatch'
+              type: array
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Updated overrides
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid override
+      summary: '`PUT /api/v1/tenant/localization/overrides`.'
+      tags:
+      - localization
+  /api/v1/tenant/localization/settings:
+    get:
+      operationId: get_localization_settings
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalizationSettingsView'
+          description: Tenant localization settings
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+      summary: '`GET /api/v1/tenant/localization/settings`.'
+      tags:
+      - localization
+    put:
+      operationId: put_localization_settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLocalizationSettingsCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalizationSettingsView'
+          description: Updated settings
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid settings
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Settings conflict
+      summary: '`PUT /api/v1/tenant/localization/settings`.'
+      tags:
+      - localization
