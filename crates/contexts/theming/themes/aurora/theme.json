@@ -1,0 +1,19 @@
+{
+  "id": "aurora",
+  "version": "1.0.0",
+  "themeApi": "^1.0.0",
+  "name": { "en": "Aurora", "ja": "オーロラ" },
+  "capabilities": ["dark-mode", "rtl-ready", "cjk-typography"],
+  "tokens": { "light": "tokens/light.json", "dark": "tokens/dark.json" },
+  "overridable": ["color.brand.*", "color.background.*", "color.text.*", "color.border.*", "font.family.*", "font.size.*", "radius.*", "spacing.scale"],
+  "layouts": {
+    "storefront.home": { "slots": ["hero", "featured", "testimonials", "cta"] },
+    "storefront.product": { "slots": ["gallery", "details", "related"] },
+    "storefront.checkout": { "slots": ["summary", "payment"], "locked": true }
+  },
+  "assets": { "preview": "preview.png", "screenshots": ["shots/home.png"] },
+  "fonts": [
+    { "family": "Noto Sans JP", "subsets": ["latin", "japanese"], "source": "self-hosted" },
+    { "family": "Zen Kaku Gothic New", "subsets": ["latin", "japanese"], "source": "self-hosted" }
+  ]
+}

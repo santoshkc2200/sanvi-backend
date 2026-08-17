@@ -34,6 +34,8 @@ pub struct CliConfig {
     pub ory: CliOryConfig,
     #[serde(default)]
     pub billing: sanvi_billing::BillingConfig,
+    #[serde(default)]
+    pub theming: sanvi_theming::ThemingConfig,
 }
 
 /// Load `configs/base.toml` + `configs/{env}.toml` + `SANVI__` env overrides.
@@ -46,6 +48,7 @@ pub fn load(environment: &str) -> anyhow::Result<CliConfig> {
         .context("failed to load configuration")?;
     config.database.validate()?;
     config.billing.validate()?;
+    config.theming.validate()?;
     Ok(config)
 }
 

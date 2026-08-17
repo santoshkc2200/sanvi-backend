@@ -12,6 +12,7 @@ use sanvi_platform_admin::PlatformAdminConfig;
 use sanvi_privacy::PrivacyConfig;
 use sanvi_telemetry::TelemetryConfig;
 use sanvi_tenancy::TenancyConfig;
+use sanvi_theming::ThemingConfig;
 
 /// Ory endpoints. Kratos public (flows/sessions), Kratos admin (identity
 /// metadata), Keto read (checks) and write (tuple admin).
@@ -64,6 +65,9 @@ pub struct FeaturesConfig {
     /// and the localization context's routes.
     #[serde(default = "default_true")]
     pub localization: bool,
+    /// Phase-07 gate: mounts the theming context's routes and state.
+    #[serde(default = "default_true")]
+    pub theming: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -91,6 +95,7 @@ pub struct AppConfig {
     pub billing: BillingConfig,
     pub privacy: PrivacyConfig,
     pub localization: LocalizationConfig,
+    pub theming: ThemingConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -112,6 +117,7 @@ impl Default for AppConfig {
             billing: BillingConfig::default(),
             privacy: PrivacyConfig::default(),
             localization: LocalizationConfig::default(),
+            theming: ThemingConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -155,6 +161,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.localization.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.theming.validate() {
             problems.push(err.to_string());
         }
         if self.readiness_probe_secs == 0 {

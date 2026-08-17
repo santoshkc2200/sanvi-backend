@@ -1,0 +1,136 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.id, v.theme_id, v.semver, v.theme_api_range, v.manifest, v.tokens,\n                    v.artifact_uri, v.artifact_digest, v.published_at, v.yanked_at\n             FROM theming.theme_versions v\n             JOIN theming.themes t ON t.id = v.theme_id\n             WHERE t.key = $1 AND v.yanked_at IS NULL\n             ORDER BY v.published_at DESC\n             LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "theme_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "theme_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "semver",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "semver"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "theme_api_range",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "theme_api_range"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "manifest",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "manifest"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "tokens",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "tokens"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "artifact_uri",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "artifact_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "artifact_digest",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "artifact_digest"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "published_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "published_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "yanked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "theming.theme_versions",
+            "name": "yanked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "e3fee4c42ed1c6eb4be22e51880ce52854e86107b3e32623825de98b62279614"
+}

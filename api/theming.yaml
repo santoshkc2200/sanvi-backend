@@ -1,0 +1,344 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.7.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/themes:
+    get:
+      operationId: list_platform_themes
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ThemeAdminView'
+                type: array
+          description: The full theme registry
+      summary: '`GET /api/v1/platform/themes`.'
+      tags:
+      - theming
+    post:
+      operationId: install_theme_version
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallThemeVersionCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThemeVersionAdminView'
+          description: Installed version
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Manifest, tokens or contrast validation failed
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Version already exists
+      summary: '`POST /api/v1/platform/themes` — install a theme version.'
+      tags:
+      - theming
+  /api/v1/platform/themes/{key}/versions:
+    get:
+      operationId: list_platform_theme_versions
+      parameters:
+      - description: Theme key
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ThemeVersionAdminView'
+                type: array
+          description: The theme's version history
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown theme
+      summary: '`GET /api/v1/platform/themes/{key}/versions`.'
+      tags:
+      - theming
+  /api/v1/platform/themes/{key}/versions/{version}/yank:
+    post:
+      operationId: yank_theme_version
+      parameters:
+      - description: Theme key
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+      - description: Semver to withdraw
+        in: path
+        name: version
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Version withdrawn
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown theme or version
+      summary: '`POST /api/v1/platform/themes/{key}/versions/{version}/yank` — withdraw.'
+      tags:
+      - theming
+  /api/v1/public/theme:
+    get:
+      operationId: get_public_theme
+      parameters:
+      - description: Host to resolve (defaults to the request Host header)
+        in: query
+        name: host
+        required: false
+        schema:
+          type: string
+      - description: Requested locale (defaults to en)
+        in: query
+        name: locale
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolvedTheme'
+          description: Resolved theme with css_vars
+        '304':
+          description: Not modified (ETag match)
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid locale
+      summary: |-
+        `GET /api/v1/public/theme` — the resolved live theme for the request
+        host (or the platform default), ETag-cached. No authentication; tenant
+        resolution happens here because public paths skip the tenant middleware.
+      tags:
+      - theming
+  /api/v1/tenant/theme/assets:
+    post:
+      operationId: upload_brand_asset
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadBrandAssetCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantThemeView'
+          description: Updated draft
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid asset
+      summary: '`POST /api/v1/tenant/theme/assets`.'
+      tags:
+      - theming
+  /api/v1/tenant/theme/assets/{kind}:
+    delete:
+      operationId: remove_brand_asset
+      parameters:
+      - description: logo | favicon | og_image
+        in: path
+        name: kind
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantThemeView'
+          description: Updated draft
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown asset kind
+      summary: '`DELETE /api/v1/tenant/theme/assets/{kind}`.'
+      tags:
+      - theming
+  /api/v1/tenant/theme/draft:
+    get:
+      operationId: get_tenant_theme_draft
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantThemeDraftView'
+          description: The tenant's theme draft
+      summary: '`GET /api/v1/tenant/theme/draft`.'
+      tags:
+      - theming
+    put:
+      operationId: put_tenant_theme_draft
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantThemeDraftCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantThemeView'
+          description: Updated draft
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid draft
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown theme or version
+      summary: '`PUT /api/v1/tenant/theme/draft`.'
+      tags:
+      - theming
+  /api/v1/tenant/theme/preview:
+    get:
+      operationId: preview_tenant_theme
+      parameters:
+      - description: Signed preview token
+        in: query
+        name: token
+        required: true
+        schema:
+          type: string
+      - description: Requested locale (defaults to en)
+        in: query
+        name: locale
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolvedTheme'
+          description: Preview of the draft theme
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid locale
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid or expired preview token
+      summary: |-
+        `GET /api/v1/tenant/theme/preview` — the draft, rendered through a
+        signed short-lived token. Never cached, never indexed.
+      tags:
+      - theming
+  /api/v1/tenant/theme/publish:
+    post:
+      operationId: publish_tenant_theme
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantThemeView'
+          description: The new live theme
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Draft failed validation (including contrast)
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No draft to publish
+      summary: '`POST /api/v1/tenant/theme/publish`.'
+      tags:
+      - theming
+  /api/v1/tenant/theme/rollback:
+    post:
+      operationId: rollback_tenant_theme
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantThemeView'
+          description: The restored live theme
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No previous revision
+      summary: '`POST /api/v1/tenant/theme/rollback`.'
+      tags:
+      - theming
+  /api/v1/tenant/themes/available:
+    get:
+      operationId: list_available_themes
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailableThemesView'
+          description: Themes this tenant may choose from
+      summary: '`GET /api/v1/tenant/themes/available`.'
+      tags:
+      - theming

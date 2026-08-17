@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE theming.tenant_themes SET updated_by = NULL WHERE updated_by = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "598eca156e62f0b5a1fe7184ace3f6762bf3923dc50fd76ed6e4977b83373a82"
+}

@@ -203,6 +203,25 @@ use sanvi_tenancy::{
     },
     routes as tenancy_routes,
 };
+use sanvi_theming::{
+    ThemingConfig,
+    adapters::{
+        HostTenantResolverAdapter, LocalFileStore, OutboxEventPublisher as ThemingEvents,
+        ResolvedThemeCache, SqlxTenantThemeRepository, SqlxThemeRepository,
+        SystemClock as ThemingClock, ThemingMetrics,
+    },
+    application::{
+        InstallThemeVersion, ListAvailableThemes, ListThemeVersionsAdmin, ListThemesAdmin,
+        PreviewTenantTheme, PublishTenantTheme, RemoveBrandAsset, ResolvePublicTheme,
+        ResolveThemeService, RollbackTenantTheme, UpdateTenantThemeDraft, UploadBrandAsset,
+        draft::GetTenantThemeDraft,
+    },
+    domain::{
+        BrandAssetStore, Clock as ThemingClockTrait, EventPublisher as ThemingEventPublisher,
+        TenantContextResolver, TenantThemeRepository, ThemeFeatureGate, ThemeRepository,
+    },
+    routes as theming_routes,
+};
 use uuid::Uuid;
 
 pub use config::AppConfig;
@@ -1810,6 +1829,164 @@ pub fn build_localization_state(
     }
 }
 
+/// The theming context's wiring: the shared resolution service, the HTTP
+/// state and the resolved-theme cache the worker's event handler also
+/// consumes.
+#[derive(Clone)]
+pub struct ThemingWiring {
+    pub state: sanvi_theming::adapters::http::ThemingState,
+    pub service: Arc<ResolveThemeService>,
+    pub cache: Arc<ResolvedThemeCache>,
+}
+
+/// The theming context's feature-gate adapter over the access context's
+/// domain-level `FeatureGate` (premium themes, custom CSS, custom
+/// templates). The theming context never depends on the access crate.
+pub struct ThemingAccessGate {
+    gate: Arc<dyn FeatureGate>,
+}
+
+impl ThemingAccessGate {
+    pub fn new(gate: Arc<dyn FeatureGate>) -> Self {
+        Self { gate }
+    }
+}
+
+#[async_trait::async_trait]
+impl ThemeFeatureGate for ThemingAccessGate {
+    async fn is_enabled(
+        &self,
+        tenant_id: Uuid,
+        feature: &str,
+    ) -> Result<bool, sanvi_theming::domain::ThemingError> {
+        let key = sanvi_access::domain::FeatureKey::parse(feature).map_err(|err| {
+            sanvi_theming::domain::ThemingError::Storage(format!(
+                "feature key {feature:?} is invalid: {err}"
+            ))
+        })?;
+        self.gate
+            .is_enabled(tenant_id, &key)
+            .await
+            .map_err(|err| sanvi_theming::domain::ThemingError::Storage(err.to_string()))
+    }
+}
+
+/// Build the theming context's application state: repositories, the
+/// entitlement gate, asset/artifact storage, the resolved-theme cache
+/// (Redis + local fallback) and the resolution service.
+pub fn build_theming_state(
+    pool: sanvi_persistence::PgPool,
+    config: &ThemingConfig,
+    registry: &prometheus::Registry,
+    redis: Option<redis::aio::ConnectionManager>,
+    feature_gate: Arc<dyn FeatureGate>,
+    tenant_resolver: Arc<dyn sanvi_http::TenantResolver>,
+) -> ThemingWiring {
+    let themes: Arc<dyn ThemeRepository> = Arc::new(SqlxThemeRepository::new());
+    let tenants: Arc<dyn TenantThemeRepository> = Arc::new(SqlxTenantThemeRepository::new());
+    let gate: Arc<dyn ThemeFeatureGate> = Arc::new(ThemingAccessGate::new(feature_gate));
+    let events: Arc<dyn ThemingEventPublisher> = Arc::new(ThemingEvents::new());
+    let clock: Arc<dyn ThemingClockTrait> = Arc::new(ThemingClock);
+    let store: Arc<dyn BrandAssetStore> =
+        Arc::new(LocalFileStore::new(config.artifact_dir.clone()));
+    let cache = Arc::new(ResolvedThemeCache::new(redis));
+    let metrics = Arc::new(ThemingMetrics::new(registry));
+    let host_resolver: Arc<dyn TenantContextResolver> =
+        Arc::new(HostTenantResolverAdapter::new(tenant_resolver));
+
+    let service = Arc::new(ResolveThemeService::new(
+        themes.clone(),
+        tenants.clone(),
+        host_resolver,
+        cache.clone(),
+        metrics.clone(),
+        clock.clone(),
+        pool.clone(),
+        config.asset_base_url.clone(),
+        config.resolved_cache_ttl_secs,
+    ));
+
+    let state = sanvi_theming::adapters::http::ThemingState {
+        pool: pool.clone(),
+        config: config.clone(),
+        service: service.clone(),
+        get_public_theme: Arc::new(ResolvePublicTheme::new(service.clone())),
+        preview_theme: Arc::new(PreviewTenantTheme::new(service.clone())),
+        get_draft: Arc::new(GetTenantThemeDraft::new(
+            themes.clone(),
+            tenants.clone(),
+            pool.clone(),
+            clock.clone(),
+        )),
+        update_draft: Arc::new(UpdateTenantThemeDraft::new(
+            themes.clone(),
+            tenants.clone(),
+            gate.clone(),
+            events.clone(),
+            clock.clone(),
+            pool.clone(),
+            config.custom_css_max_bytes,
+        )),
+        publish: Arc::new(PublishTenantTheme::new(
+            themes.clone(),
+            tenants.clone(),
+            gate.clone(),
+            events.clone(),
+            clock.clone(),
+            pool.clone(),
+            config.custom_css_max_bytes,
+            cache.clone(),
+        )),
+        rollback: Arc::new(RollbackTenantTheme::new(
+            tenants.clone(),
+            events.clone(),
+            clock.clone(),
+            cache.clone(),
+        )),
+        available: Arc::new(ListAvailableThemes::new(
+            themes.clone(),
+            gate.clone(),
+            pool.clone(),
+            config.asset_base_url.clone(),
+        )),
+        upload_asset: Arc::new(UploadBrandAsset::new(
+            tenants.clone(),
+            themes.clone(),
+            store.clone(),
+            events.clone(),
+            clock.clone(),
+            pool.clone(),
+            config.asset_max_bytes,
+        )),
+        remove_asset: Arc::new(RemoveBrandAsset::new(
+            tenants.clone(),
+            store.clone(),
+            events.clone(),
+            clock.clone(),
+        )),
+        install_version: Arc::new(InstallThemeVersion::new(
+            themes.clone(),
+            events.clone(),
+            clock.clone(),
+            pool.clone(),
+        )),
+        yank_version: Arc::new(sanvi_theming::application::install::YankThemeVersion::new(
+            themes.clone(),
+            events,
+            clock,
+            pool.clone(),
+        )),
+        list_themes: Arc::new(ListThemesAdmin::new(themes.clone(), pool.clone())),
+        list_versions: Arc::new(ListThemeVersionsAdmin::new(themes, pool)),
+    };
+
+    ThemingWiring {
+        state,
+        service,
+        cache,
+    }
+}
+
 /// Assemble the actix `App`: middleware stack, routes, OpenAPI, metrics.
 ///
 /// This is the factory `HttpServer` clones per worker; everything captured
@@ -1827,6 +2004,7 @@ pub fn build_app(
     billing: Option<sanvi_billing::adapters::http::BillingState>,
     privacy: Option<PrivacyWiring>,
     localization: Option<LocalizationWiring>,
+    theming: Option<ThemingWiring>,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -1860,6 +2038,10 @@ pub fn build_app(
     };
     let tenant_scope = match &localization {
         Some(_) => tenant_scope.configure(localization_routes::localization_tenant_scope_routes),
+        None => tenant_scope,
+    };
+    let tenant_scope = match &theming {
+        Some(_) => tenant_scope.configure(theming_routes::theming_tenant_scope_routes),
         None => tenant_scope,
     };
 
@@ -1929,6 +2111,16 @@ pub fn build_app(
             )))
             .configure(localization_routes::localization_public_routes)
             .configure(localization_routes::localization_platform_routes),
+        None => app,
+    };
+
+    // Phase-07 gate: the theming context's public and platform routes (the
+    // tenant routes mount inside the shared tenant scope above).
+    let app = match theming.clone() {
+        Some(wiring) => app
+            .app_data(web::Data::new(wiring.state))
+            .configure(theming_routes::theming_public_routes)
+            .configure(theming_routes::theming_platform_routes),
         None => app,
     };
 

@@ -25,6 +25,7 @@ sanvi-privacy.workspace = true
 sanvi-system.workspace = true
 sanvi-telemetry.workspace = true
 sanvi-tenancy.workspace = true
+sanvi-theming.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true

@@ -16,6 +16,7 @@ members = [
     "crates/contexts/billing",
     "crates/contexts/privacy",
     "crates/contexts/localization",
+    "crates/contexts/theming",
     "apps/api",
     "apps/worker",
     "apps/cli",
@@ -51,6 +52,7 @@ sanvi-platform-admin = { path = "crates/contexts/platform_admin" }
 sanvi-billing = { path = "crates/contexts/billing" }
 sanvi-privacy = { path = "crates/contexts/privacy" }
 sanvi-localization = { path = "crates/contexts/localization" }
+sanvi-theming = { path = "crates/contexts/theming" }
 sanvi-api = { path = "apps/api" }
 
 actix-web = "4"
@@ -67,6 +69,7 @@ clap = { version = "4", features = ["derive", "env"] }
 csv = "1"
 figment = { version = "0.10", features = ["toml", "env"] }
 futures-util = "0.3"
+hex = "0.4"
 hmac = "0.12"
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "metrics"] }
@@ -80,6 +83,7 @@ redis = { version = "1.5", default-features = false, features = ["tokio-comp", "
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+semver = { version = "1", features = ["serde"] }
 serde_yaml = "0.9"
 sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = [

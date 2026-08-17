@@ -18,6 +18,7 @@ use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
     build_billing_state, build_identity_state, build_localization_state,
     build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
+    build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::RoleCatalog;
@@ -276,6 +277,11 @@ async fn main() -> ExitCode {
             Arc::new(
                 sanvi_localization::adapters::LocalizationPrivacyProvider::new(privacy_tx.clone()),
             ),
+            Arc::new(
+                sanvi_theming::adapters::privacy_provider::ThemingPrivacyProvider::new(
+                    privacy_tx.clone(),
+                ),
+            ),
         ];
         Some(build_privacy_state(
             pool.clone(),
@@ -299,6 +305,23 @@ async fn main() -> ExitCode {
         None
     };
 
+    // Phase 07: theme registry, tenant drafts/publish/rollback and the
+    // resolved-theme delivery path. The entitlement gate rides on the
+    // access context's domain gate; tenant resolution for the public
+    // endpoint rides on the tenancy context's host resolver.
+    let theming = if config.features.theming {
+        Some(build_theming_state(
+            pool.clone(),
+            &config.theming,
+            metrics.prometheus_registry(),
+            redis.clone(),
+            access.domain_feature_gate.clone(),
+            tenancy.host_resolver.clone(),
+        ))
+    } else {
+        None
+    };
+
     let bind_config = config.clone();
     let factory_config = config.clone();
     let server = match bind(&bind_config.server, move || {
@@ -314,6 +337,7 @@ async fn main() -> ExitCode {
             billing.clone(),
             privacy.clone(),
             localization.clone(),
+            theming.clone(),
             redis.clone(),
         )
     }) {

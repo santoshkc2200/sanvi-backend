@@ -1,0 +1,54 @@
+{
+  "color": {
+    "background": {
+      "primary": { "$value": "#ffffff", "$type": "color" },
+      "secondary": { "$value": "#f6f7f9", "$type": "color" },
+      "inverse": { "$value": "#1a1d23", "$type": "color" }
+    },
+    "text": {
+      "primary": { "$value": "#1a1d23", "$type": "color" },
+      "secondary": { "$value": "#4a505c", "$type": "color" },
+      "inverse": { "$value": "#ffffff", "$type": "color" }
+    },
+    "border": { "primary": { "$value": "#d7dbe2", "$type": "color" } },
+    "brand": {
+      "primary": { "$value": "#2563eb", "$type": "color" },
+      "hover": { "$value": "#1d4ed8", "$type": "color" },
+      "contrast": { "$value": "#ffffff", "$type": "color" }
+    },
+    "focus": { "ring": { "$value": "#1d4ed8", "$type": "color" } },
+    "status": {
+      "success": { "$value": "#15803d", "$type": "color" },
+      "warning": { "$value": "#b45309", "$type": "color" },
+      "danger": { "$value": "#b91c1c", "$type": "color" },
+      "info": { "$value": "#1d4ed8", "$type": "color" }
+    }
+  },
+  "font": {
+    "family": {
+      "base": { "$value": "Inter, system-ui, sans-serif", "$type": "fontFamily" },
+      "heading": { "$value": "Inter, system-ui, sans-serif", "$type": "fontFamily" },
+      "mono": { "$value": "ui-monospace, SFMono-Regular, Menlo, monospace", "$type": "fontFamily" }
+    },
+    "size": {
+      "sm": { "$value": "0.875rem", "$type": "dimension" },
+      "base": { "$value": "1rem", "$type": "dimension" },
+      "lg": { "$value": "1.125rem", "$type": "dimension" },
+      "xl": { "$value": "1.375rem", "$type": "dimension" }
+    },
+    "weight": {
+      "normal": { "$value": 400, "$type": "fontWeight" },
+      "bold": { "$value": 700, "$type": "fontWeight" }
+    }
+  },
+  "radius": {
+    "sm": { "$value": "0.25rem", "$type": "dimension" },
+    "md": { "$value": "0.5rem", "$type": "dimension" },
+    "lg": { "$value": "0.75rem", "$type": "dimension" },
+    "full": { "$value": "9999px", "$type": "dimension" }
+  },
+  "spacing": {
+    "scale": { "$value": 1, "$type": "number" },
+    "unit": { "$value": "0.25rem", "$type": "dimension" }
+  }
+}

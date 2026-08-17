@@ -13,3 +13,5 @@ coverage/
 lcov.info
 .cargo/advisory-db
 docker-compose.override.yml
+# Local artifact/brand-asset storage (phase 07).
+/artifacts/

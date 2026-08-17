@@ -192,6 +192,26 @@ merge_cache_ttl_secs = 30
 tenant_settings_cache_ttl_secs = 30
 user_locale_cache_ttl_secs = 60
 
+[theming]
+# Phase 07: theming & pluggable templates. The `base` theme is seeded by
+# the migration; new themes are installed with `sanvi theme publish <dir>`
+# (artifact pipeline, no application deploy).
+# TTL for the resolved-theme cache (seconds; publish events invalidate).
+resolved_cache_ttl_secs = 86400
+# Cap on a tenant's sanitised custom CSS (bytes).
+custom_css_max_bytes = 8192
+# Cap on one brand asset upload (bytes).
+asset_max_bytes = 2097152
+# Base URL prefix for resolved asset links (absolute path or https URL).
+asset_base_url = "/assets/theming"
+# Local artifact/brand-asset directory (dev/self-hosted storage).
+artifact_dir = "artifacts/theming"
+# Signed draft-preview token TTL (seconds).
+preview_token_ttl_secs = 300
+# HMAC secret for preview tokens (base64, >= 32 bytes). Dev only; without
+# it preview signing fails closed (the endpoint returns 503).
+preview_token_secret = ""
+
 [features]
 # Phase gates live here from phase 01 onward.
 tenancy = true
@@ -200,6 +220,7 @@ platform_admin = true
 billing = true
 privacy = true
 localization = true
+theming = true
 
 [outbox]
 poll_interval_ms = 1000

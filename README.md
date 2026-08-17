@@ -137,10 +137,11 @@ crates/
     billing/               # plans, subscriptions, invoices, Stripe, dunning (phase 04)
     privacy/               # jurisdiction profiles, consent/opt-out directives, DSRs, retention, breach (phase 05)
     localization/          # locale negotiation, message catalogs, formatting policy (phase 06)
+    theming/               # theme registry, tenant drafts/publish/rollback, resolved-theme delivery (phase 07)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing/localization) + scheduler (phase 01–05 jobs: DSR saga, retention, opt-out propagation)
-  cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval/billing, config, openapi, i18n
+  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing/localization/theming) + scheduler (phase 01–05 jobs: DSR saga, retention, opt-out propagation)
+  cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval/billing, config, openapi, i18n, theme
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)
 configs/                   # base.toml + per-env overlays + Ory configs (no secrets)

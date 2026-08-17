@@ -180,13 +180,18 @@ in fail-closed digest mismatches.
 
 ## Acceptance criteria
 
-- [ ] A tenant switches theme, overrides brand color/font/logo, previews it, publishes it, and the
+- [x] A tenant switches theme, overrides brand color/font/logo, previews it, publishes it, and the
       live storefront reflects it within one request.
-- [ ] Rollback restores the previous look exactly, including assets.
-- [ ] Publishing a theme whose semantic pairs fail WCAG AA is refused by default.
-- [ ] A new theme is installed by publishing an artifact — no application deploy (demonstrated).
-- [ ] A premium theme is invisible to tenants without the entitlement.
-- [ ] No path allows theme-supplied script execution (verified by the security test suite).
+- [x] Rollback restores the previous look exactly, including assets.
+- [x] Publishing a theme whose semantic pairs fail WCAG AA is refused by default.
+- [x] A new theme is installed by publishing an artifact — no application deploy (demonstrated).
+- [x] A premium theme is invisible to tenants without the entitlement.
+- [x] No path allows theme-supplied script execution (verified by the security test suite).
+
+Implemented (see `implementation-notes.md` for the documented deviations:
+base64-JSON asset upload instead of presigned URLs, local artifact storage,
+tokens stored in the DB, append-only rollback, SVG rejection instead of
+sanitisation).
 
 ## Risks
 

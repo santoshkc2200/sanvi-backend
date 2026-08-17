@@ -1,0 +1,54 @@
+{
+  "color": {
+    "background": {
+      "primary": { "$value": "#131020", "$type": "color" },
+      "secondary": { "$value": "#1a1630", "$type": "color" },
+      "inverse": { "$value": "#ffffff", "$type": "color" }
+    },
+    "text": {
+      "primary": { "$value": "#ece9f6", "$type": "color" },
+      "secondary": { "$value": "#a89fc9", "$type": "color" },
+      "inverse": { "$value": "#131020", "$type": "color" }
+    },
+    "border": { "primary": { "$value": "#2e2848", "$type": "color" } },
+    "brand": {
+      "primary": { "$value": "#6d28d9", "$type": "color" },
+      "hover": { "$value": "#7c3aed", "$type": "color" },
+      "contrast": { "$value": "#ffffff", "$type": "color" }
+    },
+    "focus": { "ring": { "$value": "#8b5cf6", "$type": "color" } },
+    "status": {
+      "success": { "$value": "#4ade80", "$type": "color" },
+      "warning": { "$value": "#fbbf24", "$type": "color" },
+      "danger": { "$value": "#f87171", "$type": "color" },
+      "info": { "$value": "#818cf8", "$type": "color" }
+    }
+  },
+  "font": {
+    "family": {
+      "base": { "$value": "Noto Sans JP, system-ui, sans-serif", "$type": "fontFamily" },
+      "heading": { "$value": "Zen Kaku Gothic New, Noto Sans JP, sans-serif", "$type": "fontFamily" },
+      "mono": { "$value": "ui-monospace, SFMono-Regular, Menlo, monospace", "$type": "fontFamily" }
+    },
+    "size": {
+      "sm": { "$value": "0.875rem", "$type": "dimension" },
+      "base": { "$value": "1rem", "$type": "dimension" },
+      "lg": { "$value": "1.125rem", "$type": "dimension" },
+      "xl": { "$value": "1.5rem", "$type": "dimension" }
+    },
+    "weight": {
+      "normal": { "$value": 400, "$type": "fontWeight" },
+      "bold": { "$value": 700, "$type": "fontWeight" }
+    }
+  },
+  "radius": {
+    "sm": { "$value": "0.375rem", "$type": "dimension" },
+    "md": { "$value": "0.75rem", "$type": "dimension" },
+    "lg": { "$value": "1rem", "$type": "dimension" },
+    "full": { "$value": "9999px", "$type": "dimension" }
+  },
+  "spacing": {
+    "scale": { "$value": 1, "$type": "number" },
+    "unit": { "$value": "0.25rem", "$type": "dimension" }
+  }
+}

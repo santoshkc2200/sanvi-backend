@@ -17,6 +17,7 @@ mod i18n;
 mod migrate;
 mod openapi;
 mod tenant;
+mod theme;
 
 use std::process::ExitCode;
 
@@ -109,6 +110,11 @@ enum Command {
     I18n {
         #[command(subcommand)]
         action: I18nAction,
+    },
+    /// Phase-07 theme registry: publish artifacts, list, withdraw.
+    Theme {
+        #[command(subcommand)]
+        action: ThemeAction,
     },
     /// Probe an HTTP endpoint without a shell or `curl` (container HEALTHCHECK).
     Healthcheck {
@@ -326,6 +332,34 @@ enum I18nAction {
     Check,
     /// Per-domain coverage table.
     Report,
+}
+
+#[derive(Subcommand)]
+enum ThemeAction {
+    /// Validate a theme directory, build its artifact and install the
+    /// version (no application deploy).
+    Publish {
+        /// Directory containing theme.json + tokens.
+        dir: String,
+        /// Publisher identity (first-party: `sanvi`).
+        #[arg(long, default_value = "sanvi")]
+        publisher: String,
+        /// public | premium.
+        #[arg(long, default_value = "public")]
+        visibility: String,
+        /// For premium themes: the entitlement feature key.
+        #[arg(long)]
+        required_feature: Option<String>,
+        /// Bypass the WCAG AA contrast gate (recorded in the pipeline log).
+        #[arg(long)]
+        allow_contrast_warnings: bool,
+    },
+    /// List the theme registry with version history.
+    List,
+    /// List one theme's version history.
+    Versions { key: String },
+    /// Withdraw a version (kill switch; pinned tenants keep rendering).
+    Yank { key: String, version: String },
 }
 
 #[derive(Subcommand)]
@@ -618,6 +652,37 @@ async fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("i18n check failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Theme { action } => {
+            let result = match action {
+                ThemeAction::Publish {
+                    dir,
+                    publisher,
+                    visibility,
+                    required_feature,
+                    allow_contrast_warnings,
+                } => {
+                    theme::publish(
+                        &cli.env,
+                        &dir,
+                        &publisher,
+                        &visibility,
+                        required_feature.as_deref(),
+                        allow_contrast_warnings,
+                    )
+                    .await
+                }
+                ThemeAction::List => theme::list(&cli.env).await,
+                ThemeAction::Versions { key } => theme::versions(&cli.env, &key).await,
+                ThemeAction::Yank { key, version } => theme::yank(&cli.env, &key, &version).await,
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("theme command failed: {err:#}");
                     ExitCode::FAILURE
                 }
             }

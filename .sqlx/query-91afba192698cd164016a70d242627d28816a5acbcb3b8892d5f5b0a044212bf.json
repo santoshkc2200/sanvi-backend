@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE theming.theme_versions SET yanked_at = $3\n             WHERE theme_id = $1 AND semver = $2 AND yanked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "91afba192698cd164016a70d242627d28816a5acbcb3b8892d5f5b0a044212bf"
+}

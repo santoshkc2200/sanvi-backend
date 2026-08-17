@@ -298,6 +298,14 @@ pub const FEATURE_SEEDS: &[FeatureSeed] = &[
         default_limit: None,
         visibility: Visibility::Public,
     },
+    FeatureSeed {
+        key: "theming.premium_themes",
+        name: "Premium Themes",
+        kind: FeatureKind::Boolean,
+        default_enabled: false,
+        default_limit: None,
+        visibility: Visibility::Public,
+    },
     // --- domains (08) ---------------------------------------------------------
     FeatureSeed {
         key: "domains.custom",

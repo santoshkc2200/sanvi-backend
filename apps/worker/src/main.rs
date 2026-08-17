@@ -105,6 +105,10 @@ use sanvi_tenancy::{
     },
     application::{PurgeSweep, ResolveTenant},
 };
+use sanvi_theming::{
+    ThemingConfig,
+    adapters::{ResolvedThemeCache, events::theming_event_handler},
+};
 use serde::{Deserialize, Serialize};
 
 /// Outbox dispatcher tuning.
@@ -223,6 +227,8 @@ pub struct WorkerConfig {
     pub billing: BillingConfig,
     pub privacy: PrivacyConfig,
     pub localization: LocalizationConfig,
+    #[serde(default)]
+    pub theming: ThemingConfig,
 }
 
 impl WorkerConfig {
@@ -236,6 +242,7 @@ impl WorkerConfig {
         self.billing.validate()?;
         self.privacy.validate()?;
         self.localization.validate()?;
+        self.theming.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -359,6 +366,19 @@ async fn main() -> ExitCode {
     }
     let localization_consumer = localization_consumer.with_metrics(localization_consumer_metrics);
     let localization_consumer_name = format!("localization-{}", uuid::Uuid::now_v7());
+
+    // --- theming consumer: cross-instance resolved-theme invalidation ------
+    // Publish/rollback/asset events clear every instance's cached resolved
+    // theme so a tenant's new look is visible within one request.
+    let theming_cache = Arc::new(ResolvedThemeCache::new(Some(redis.clone())));
+    let theming_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let theming_consumer_metrics = Arc::new(ConsumerMetrics::new("theming"));
+    if let Err(err) = theming_consumer_metrics.register(registry) {
+        eprintln!("failed to register theming consumer metrics: {err}");
+        return ExitCode::from(1);
+    }
+    let theming_consumer = theming_consumer.with_metrics(theming_consumer_metrics);
+    let theming_consumer_name = format!("theming-{}", uuid::Uuid::now_v7());
 
     // --- access consumer: keeps Keto in sync with identity events -----------
     let access_store: Arc<dyn PermissionStore> = match HttpKetoClient::new(
@@ -1177,6 +1197,20 @@ async fn main() -> ExitCode {
             .await;
     });
 
+    let theming_shutdown = shutdown_rx.clone();
+    let theming_stream = format!("{}.theming", config.outbox.stream);
+    let theming_task = tokio::spawn(async move {
+        theming_consumer
+            .run_until_shutdown(
+                &theming_stream,
+                "theming",
+                &theming_consumer_name,
+                theming_event_handler(theming_cache),
+                theming_shutdown,
+            )
+            .await;
+    });
+
     let access_shutdown = shutdown_rx.clone();
     let identity_stream = format!("{}.identity", config.outbox.stream);
     let access_task = tokio::spawn(async move {
@@ -1237,6 +1271,7 @@ async fn main() -> ExitCode {
         dispatcher_task,
         tenancy_task,
         localization_task,
+        theming_task,
         access_task,
         entitlement_task,
         billing_task,

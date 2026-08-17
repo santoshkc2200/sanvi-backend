@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO theming.tenant_themes\n               (tenant_id, state, theme_id, semver, token_overrides, layout_overrides, assets,\n                custom_css, revision, updated_by, updated_at)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n             ON CONFLICT (tenant_id, state) DO UPDATE SET\n               theme_id = EXCLUDED.theme_id,\n               semver = EXCLUDED.semver,\n               token_overrides = EXCLUDED.token_overrides,\n               layout_overrides = EXCLUDED.layout_overrides,\n               assets = EXCLUDED.assets,\n               custom_css = EXCLUDED.custom_css,\n               revision = EXCLUDED.revision,\n               updated_by = EXCLUDED.updated_by,\n               updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Int4",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d4693aa49e7ba392347a0f8194080495a3191467f7ac310c5715620f2ec6a561"
+}

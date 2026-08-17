@@ -395,6 +395,32 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Platform,
         description: "Edit the platform catalog overrides",
     },
+    // --- theming (phase 07) ---------------------------------------------------
+    PermissionDef {
+        key: "tenant.theming.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the tenant's theme draft, available themes and previews",
+    },
+    PermissionDef {
+        key: "tenant.theming.write",
+        scope: PermissionScope::Tenant,
+        description: "Edit the tenant's theme draft (overrides, assets, custom CSS)",
+    },
+    PermissionDef {
+        key: "tenant.theming.publish",
+        scope: PermissionScope::Tenant,
+        description: "Publish the tenant's theme and roll back to previous revisions",
+    },
+    PermissionDef {
+        key: "platform.theme.read",
+        scope: PermissionScope::Platform,
+        description: "Read the theme registry and version history",
+    },
+    PermissionDef {
+        key: "platform.theme.write",
+        scope: PermissionScope::Platform,
+        description: "Install and withdraw theme versions",
+    },
 ];
 
 /// Registry lookup.

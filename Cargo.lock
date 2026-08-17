@@ -3275,6 +3275,7 @@ dependencies = [
  "sanvi-system",
  "sanvi-telemetry",
  "sanvi-tenancy",
+ "sanvi-theming",
  "serde",
  "serde_json",
  "sqlx",
@@ -3369,6 +3370,7 @@ dependencies = [
  "chrono",
  "clap",
  "figment",
+ "hex",
  "sanvi-access",
  "sanvi-api",
  "sanvi-audit",
@@ -3381,13 +3383,16 @@ dependencies = [
  "sanvi-system",
  "sanvi-telemetry",
  "sanvi-tenancy",
+ "sanvi-theming",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "utoipa",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -3675,6 +3680,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "sanvi-theming"
+version = "0.7.0"
+dependencies = [
+ "actix-http",
+ "actix-web",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "hex",
+ "hmac 0.12.1",
+ "prometheus",
+ "proptest",
+ "redis",
+ "sanvi-cache",
+ "sanvi-http",
+ "sanvi-kernel",
+ "sanvi-messaging",
+ "sanvi-persistence",
+ "sanvi-privacy",
+ "sanvi-telemetry",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "uuid",
+ "zip",
+]
+
+[[package]]
 name = "sanvi-worker"
 version = "0.7.0"
 dependencies = [
@@ -3695,6 +3738,7 @@ dependencies = [
  "sanvi-system",
  "sanvi-telemetry",
  "sanvi-tenancy",
+ "sanvi-theming",
  "serde",
  "tokio",
  "tracing",
@@ -3768,6 +3812,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "serde"

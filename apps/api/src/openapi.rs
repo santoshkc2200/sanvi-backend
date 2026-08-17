@@ -118,6 +118,19 @@ use utoipa::OpenApi;
         sanvi_localization::adapters::http::handlers::put_localization_overrides,
         sanvi_localization::adapters::http::handlers::get_platform_translations,
         sanvi_localization::adapters::http::handlers::put_platform_translations,
+        sanvi_theming::adapters::http::handlers::get_public_theme,
+        sanvi_theming::adapters::http::handlers::preview_tenant_theme,
+        sanvi_theming::adapters::http::handlers::list_available_themes,
+        sanvi_theming::adapters::http::handlers::get_tenant_theme_draft,
+        sanvi_theming::adapters::http::handlers::put_tenant_theme_draft,
+        sanvi_theming::adapters::http::handlers::publish_tenant_theme,
+        sanvi_theming::adapters::http::handlers::rollback_tenant_theme,
+        sanvi_theming::adapters::http::handlers::upload_brand_asset,
+        sanvi_theming::adapters::http::handlers::remove_brand_asset,
+        sanvi_theming::adapters::http::handlers::list_platform_themes,
+        sanvi_theming::adapters::http::handlers::install_theme_version,
+        sanvi_theming::adapters::http::handlers::list_platform_theme_versions,
+        sanvi_theming::adapters::http::handlers::yank_theme_version,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
@@ -129,7 +142,8 @@ use utoipa::OpenApi;
         (name = "platform_admin", description = "Operator control plane: tenants, impersonation, approvals"),
         (name = "billing", description = "Platform billing: plans, subscriptions, invoices, checkout and portal"),
         (name = "privacy", description = "Privacy & compliance: jurisdiction profiles, consent/opt-out directives, data subject requests (export/erasure/appeals), retention, processing records, sub-processors and breach obligations"),
-        (name = "localization", description = "Locales, message catalogs, tenant locale settings and copy overrides")
+        (name = "localization", description = "Locales, message catalogs, tenant locale settings and copy overrides"),
+        (name = "theming", description = "Theme registry, tenant theme drafts/publish/rollback, brand assets and resolved-theme delivery")
     ),
     info(
         title = "Sanvi API",
@@ -242,5 +256,24 @@ mod tests {
         assert!(json.contains("LocalizationSettingsView"));
         assert!(json.contains("CatalogView"));
         assert!(json.contains("TranslationView"));
+    }
+
+    #[test]
+    fn doc_contains_the_theming_contract() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/public/theme"));
+        assert!(json.contains("/api/v1/tenant/theme/draft"));
+        assert!(json.contains("/api/v1/tenant/theme/preview"));
+        assert!(json.contains("/api/v1/tenant/theme/publish"));
+        assert!(json.contains("/api/v1/tenant/theme/rollback"));
+        assert!(json.contains("/api/v1/tenant/themes/available"));
+        assert!(json.contains("/api/v1/tenant/theme/assets"));
+        assert!(json.contains("/api/v1/platform/themes"));
+        assert!(json.contains("/api/v1/platform/themes/{key}/versions"));
+        assert!(json.contains("/api/v1/platform/themes/{key}/versions/{version}/yank"));
+        assert!(json.contains("ResolvedTheme"));
+        assert!(json.contains("TenantThemeView"));
+        assert!(json.contains("UpdateTenantThemeDraftCommand"));
+        assert!(json.contains("ThemeAdminView"));
     }
 }

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT snapshot FROM theming.tenant_theme_revisions\n             WHERE tenant_id = $1 AND revision = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "snapshot",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "theming.tenant_theme_revisions",
+            "name": "snapshot"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bacacbc031d04cf689b4c320741359bd522c9310e4d7bb9a854899454f711afb"
+}
