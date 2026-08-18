@@ -244,6 +244,52 @@ impl MembershipRepository for SqlxMembershipRepository {
             .collect()
     }
 
+    async fn list_for_user_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<Vec<Membership>, IdentityError> {
+        let rows = sqlx::query!(
+            "SELECT tenant_id, user_id, status, invited_by, created_at
+             FROM identity.memberships WHERE user_id = $1 ORDER BY created_at",
+            user_id.as_uuid(),
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| IdentityError::Storage(err.to_string()))?;
+
+        let role_rows = sqlx::query!(
+            "SELECT tenant_id, role_id FROM identity.membership_roles WHERE user_id = $1",
+            user_id.as_uuid(),
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| IdentityError::Storage(err.to_string()))?;
+
+        let mut roles_by_tenant: std::collections::HashMap<Uuid, Vec<Uuid>> =
+            std::collections::HashMap::new();
+        for row in role_rows {
+            roles_by_tenant
+                .entry(row.tenant_id)
+                .or_default()
+                .push(row.role_id);
+        }
+
+        rows.into_iter()
+            .map(|row| {
+                let roles = roles_by_tenant.remove(&row.tenant_id).unwrap_or_default();
+                Ok(Membership::from_parts(
+                    row.tenant_id,
+                    UserId::from_uuid(row.user_id),
+                    roles,
+                    MembershipStatus::parse(&row.status)?,
+                    row.invited_by.map(UserId::from_uuid),
+                    row.created_at,
+                ))
+            })
+            .collect()
+    }
+
     async fn count_members_platform(
         &self,
         scope: &mut PlatformScope<'_>,

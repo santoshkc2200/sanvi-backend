@@ -22,7 +22,7 @@ pub use membership::{Membership, MembershipId, MembershipStatus};
 pub use ports::{
     Clock, EventPublisher, IdGenerator, InvitationRepository, KratosClient, LinkIntentRepository,
     LinkedAccountRepository, MembershipRepository, MembershipSource, Notifications, RoleCatalog,
-    SessionCache, SessionInfo, UserRepository,
+    SessionCache, SessionInfo, TenantCatalog, TenantSummary, UserRepository,
 };
 pub use user::{LinkedAccount, User, UserId, UserStatus};
 pub use values::{Email, Locale, ProviderId, ProviderSubject};

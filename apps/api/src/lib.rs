@@ -88,9 +88,9 @@ use sanvi_identity::{
         UpdateMemberRoles,
     },
     domain::{
-        EventPublisher, InvitationRepository, KratosClient, LinkIntentRepository,
+        EventPublisher, IdentityError, InvitationRepository, KratosClient, LinkIntentRepository,
         LinkedAccountRepository, MembershipRepository, Notifications, RoleCatalog, SessionCache,
-        UserRepository,
+        TenantCatalog, TenantSummary as IdentityTenantSummary, UserRepository,
     },
     routes as identity_routes,
 };
@@ -199,7 +199,8 @@ use sanvi_tenancy::{
     },
     domain::{
         EventPublisher as TenancyEventPublisherTrait, IdGenerator as TenancyIdGeneratorTrait,
-        SlugReservationPort, TenantRepository, TenantResolutionCache, TenantSettingsRepository,
+        SlugReservationPort, TenantId, TenantRepository, TenantResolutionCache,
+        TenantSettingsRepository,
     },
     routes as tenancy_routes,
 };
@@ -357,6 +358,7 @@ pub fn build_identity_state(
     kratos_public_url: &str,
     kratos_admin_url: &str,
     role_catalog: Arc<dyn RoleCatalog>,
+    tenant_catalog: Arc<dyn TenantCatalog>,
 ) -> IdentityWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
     let users: Arc<dyn UserRepository> = Arc::new(SqlxUserRepository::new());
@@ -408,7 +410,13 @@ pub fn build_identity_state(
     ));
 
     let state = IdentityState {
-        get_me: Arc::new(GetMe::new(tx_manager.clone(), users.clone())),
+        get_me: Arc::new(GetMe::new(
+            tx_manager.clone(),
+            users.clone(),
+            memberships.clone(),
+            role_catalog.clone(),
+            tenant_catalog,
+        )),
         list_sessions: Arc::new(ListSessions::new(kratos.clone())),
         revoke_session: Arc::new(RevokeSession::new(
             tx_manager.clone(),
@@ -1984,6 +1992,47 @@ pub fn build_theming_state(
         state,
         service,
         cache,
+    }
+}
+
+/// The identity context's `TenantCatalog` port over the tenancy context's
+/// `TenantRepository` — lets `GET /api/v1/me` resolve each membership's
+/// tenant slug/display name without `sanvi-identity` depending on
+/// `sanvi-tenancy` directly (mirrors `sanvi_access::adapters::SqlxRoleCatalog`,
+/// the same shape one layer over).
+pub struct TenantCatalogAdapter {
+    tx_manager: sanvi_persistence::TxManager,
+    tenants: Arc<dyn TenantRepository>,
+}
+
+impl TenantCatalogAdapter {
+    pub fn new(tx_manager: sanvi_persistence::TxManager, tenants: Arc<dyn TenantRepository>) -> Self {
+        Self { tx_manager, tenants }
+    }
+}
+
+#[async_trait::async_trait]
+impl TenantCatalog for TenantCatalogAdapter {
+    async fn summary(&self, tenant_id: Uuid) -> Result<Option<IdentityTenantSummary>, IdentityError> {
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("tenant_catalog", "identity")
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        let tenant = self
+            .tenants
+            .find_by_id(&mut scope, TenantId::from_uuid(tenant_id))
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        Ok(tenant.map(|tenant| IdentityTenantSummary {
+            tenant_id: tenant.id().as_uuid(),
+            slug: tenant.slug().as_str().to_string(),
+            name: tenant.display_name().as_str().to_string(),
+        }))
     }
 }
 

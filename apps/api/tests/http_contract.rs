@@ -6,8 +6,8 @@
 
 use actix_web::{http::StatusCode, test};
 use sanvi_api::{
-    AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
-    build_identity_state, build_platform_admin_state, build_system_state,
+    AccessEntitlementAdmin, AppConfig, TenantCatalogAdapter, build_access_state, build_app,
+    build_audit_state, build_identity_state, build_platform_admin_state, build_system_state,
 };
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
@@ -57,6 +57,11 @@ fn test_app() -> actix_web::App<
             sanvi_persistence::TxManager::new(pool.clone()),
             std::sync::Arc::new(sanvi_access::adapters::SqlxRoleRepository::new()),
         ));
+    let tenant_catalog: std::sync::Arc<dyn sanvi_identity::domain::TenantCatalog> =
+        std::sync::Arc::new(TenantCatalogAdapter::new(
+            sanvi_persistence::TxManager::new(pool.clone()),
+            std::sync::Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+        ));
     let identity = build_identity_state(
         pool.clone(),
         None,
@@ -64,6 +69,7 @@ fn test_app() -> actix_web::App<
         &config.ory.kratos_public_url,
         &config.ory.kratos_admin_url,
         role_catalog,
+        tenant_catalog,
     );
     let audit = build_audit_state(pool.clone(), &config.audit);
     let access = build_access_state(
@@ -104,6 +110,7 @@ fn test_app() -> actix_web::App<
         access,
         audit,
         platform_admin,
+        None,
         None,
         None,
         None,

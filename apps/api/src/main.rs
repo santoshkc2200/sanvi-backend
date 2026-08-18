@@ -15,13 +15,13 @@ use figment::{
 };
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
-    AccessEntitlementAdmin, AppConfig, build_access_state, build_app, build_audit_state,
-    build_billing_state, build_identity_state, build_localization_state,
+    AccessEntitlementAdmin, AppConfig, TenantCatalogAdapter, build_access_state, build_app,
+    build_audit_state, build_billing_state, build_identity_state, build_localization_state,
     build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
     build_theming_state,
 };
 use sanvi_http::{bind, run};
-use sanvi_identity::domain::RoleCatalog;
+use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
 use sanvi_messaging::connect_redis;
 use sanvi_persistence::build_pool;
 use sanvi_privacy::adapters::PrivacyContextProvider;
@@ -115,6 +115,17 @@ async fn main() -> ExitCode {
     let role_catalog: Arc<dyn RoleCatalog> =
         Arc::new(SqlxRoleCatalog::new(catalog_tx, role_repository));
 
+    // Same bridging shape as `role_catalog` above, one context over: `GET
+    // /api/v1/me` needs each membership's tenant slug/display name, and
+    // identity has no `sanvi-tenancy` dependency of its own.
+    let tenant_catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tenant_repository_for_catalog: Arc<dyn sanvi_tenancy::domain::TenantRepository> =
+        Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new());
+    let tenant_catalog: Arc<dyn TenantCatalog> = Arc::new(TenantCatalogAdapter::new(
+        tenant_catalog_tx,
+        tenant_repository_for_catalog,
+    ));
+
     let identity = build_identity_state(
         pool.clone(),
         redis.clone(),
@@ -122,6 +133,7 @@ async fn main() -> ExitCode {
         &config.ory.kratos_public_url,
         &config.ory.kratos_admin_url,
         role_catalog,
+        tenant_catalog,
     );
 
     // The audit writer/reader are shared by the access and platform_admin

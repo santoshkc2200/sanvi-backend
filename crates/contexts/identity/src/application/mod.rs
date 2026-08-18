@@ -13,7 +13,7 @@ pub mod members;
 pub mod sessions;
 pub mod sync_identity;
 
-pub use get_me::{GetMe, MeView};
+pub use get_me::{GetMe, MeView, MembershipSummary};
 pub use handle_logout::HandleLogoutWebhook;
 pub use invitations::{
     AcceptInvitation, AcceptInvitationCommand, InvitationStatus, InvitationView, InviteMember,

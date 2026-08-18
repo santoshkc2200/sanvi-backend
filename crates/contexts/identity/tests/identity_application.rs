@@ -368,6 +368,22 @@ impl MembershipRepository for World {
             .filter(|m| m.tenant_id() == tenant_id && m.role_ids().contains(&role_id))
             .count() as u32)
     }
+
+    async fn list_for_user_platform(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<Vec<Membership>, IdentityError> {
+        Ok(self
+            .memory
+            .lock()
+            .unwrap()
+            .memberships
+            .iter()
+            .filter(|m| m.user_id() == user_id)
+            .cloned()
+            .collect())
+    }
 }
 
 #[async_trait::async_trait]
@@ -673,6 +689,21 @@ impl RoleCatalog for FakeRoleCatalog {
             id if id == self.tenant_member => Some("tenant_member".to_string()),
             _ => None,
         })
+    }
+
+    async fn permissions_for_roles(
+        &self,
+        _tenant_id: uuid::Uuid,
+        role_ids: &[uuid::Uuid],
+    ) -> Result<Vec<String>, IdentityError> {
+        Ok(role_ids
+            .iter()
+            .filter_map(|id| match *id {
+                id if id == self.tenant_owner => Some("identity.member.read".to_string()),
+                id if id == self.tenant_member => Some("tenancy.settings.read".to_string()),
+                _ => None,
+            })
+            .collect())
     }
 }
 

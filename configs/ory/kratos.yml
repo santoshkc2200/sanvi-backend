@@ -5,13 +5,47 @@ dsn: postgres://postgres:postgres-local-dev@postgres:5432/postgres
 serve:
   public:
     base_url: http://127.0.0.1:4433/
+    # `@sanvi/auth` (frontend phase 02) calls this API directly from the
+    # browser — there is no backend proxy for Kratos's self-service flows —
+    # so every app's dev origin needs an explicit CORS allowance. `false` by
+    # default in Kratos; `allow_credentials` is required for the session
+    # cookie to round-trip on a cross-origin fetch.
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://127.0.0.1:5173 # marketing
+        - http://127.0.0.1:5174 # storefront
+        - http://127.0.0.1:5175 # admin
+        - http://127.0.0.1:5176 # platform-admin
+        - http://localhost:5173
+        - http://localhost:5174
+        - http://localhost:5175
+        - http://localhost:5176
+      allowed_methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+      allow_credentials: true
   admin:
     base_url: http://127.0.0.1:4434/
 
 selfservice:
-  default_browser_return_url: http://127.0.0.1:4455/
+  # Kratos needs one default; each app's `@sanvi/auth` renders its own UI and
+  # owns its own redirects regardless (see the per-flow `ui_url`s below) — this
+  # only matters as the fallback Kratos itself redirects to (an expired-flow
+  # error page, an OIDC callback with no in-flight browser flow, etc.).
+  default_browser_return_url: http://127.0.0.1:5174/
   allowed_return_urls:
-    - http://127.0.0.1:4455
+    - http://127.0.0.1:5173
+    - http://127.0.0.1:5174
+    - http://127.0.0.1:5175
+    - http://127.0.0.1:5176
+    - http://localhost:5173
+    - http://localhost:5174
+    - http://localhost:5175
+    - http://localhost:5176
 
   methods:
     password:
@@ -52,16 +86,22 @@ selfservice:
               - email
               - profile
             mapper_url: file:///etc/config/kratos/oidc.microsoft.jsonnet
+    # `platform-admin`'s aal2 entry requirement (phase 02 frontend) needs a
+    # working second factor to step up *with* — TOTP is the simplest one
+    # that needs no extra infra (WebAuthn needs a relying-party origin per
+    # deploy target, staying off until that's worth the config surface).
     totp:
-      enabled: false
+      enabled: true
+      config:
+        issuer: Sanvi
     webauthn:
       enabled: false
 
   flows:
     error:
-      ui_url: http://127.0.0.1:4455/error
+      ui_url: http://127.0.0.1:5174/error
     settings:
-      ui_url: http://127.0.0.1:4455/settings
+      ui_url: http://127.0.0.1:5174/settings
       privileged_session_max_age: 15m
       required_aal: aal1
       after:
@@ -84,15 +124,15 @@ selfservice:
                 X-Sanvi-Webhook: webhook-local-dev-secret
     recovery:
       enabled: true
-      ui_url: http://127.0.0.1:4455/recovery
+      ui_url: http://127.0.0.1:5174/recovery
     verification:
       enabled: true
-      ui_url: http://127.0.0.1:4455/verification
+      ui_url: http://127.0.0.1:5174/verification
       after:
-        default_browser_return_url: http://127.0.0.1:4455/
+        default_browser_return_url: http://127.0.0.1:5174/
     logout:
       after:
-        default_browser_return_url: http://127.0.0.1:4455/login
+        default_browser_return_url: http://127.0.0.1:5174/login
         # NOTE: v26's logout flow has no webhook support (the config schema
         # forbids `after.hooks`). Session-cache invalidation on logout
         # happens through the API's own `DELETE /api/v1/me/sessions/{id}`
@@ -100,7 +140,7 @@ selfservice:
         # ≤ 60 s cache TTL as the backstop. `/internal/kratos/logout` stays
         # mounted for forward compatibility.
     login:
-      ui_url: http://127.0.0.1:4455/login
+      ui_url: http://127.0.0.1:5174/login
       lifespan: 10m
       after:
         hooks:
@@ -120,7 +160,7 @@ selfservice:
                 X-Sanvi-Webhook: webhook-local-dev-secret
     registration:
       lifespan: 10m
-      ui_url: http://127.0.0.1:4455/registration
+      ui_url: http://127.0.0.1:5174/registration
       after:
         password:
           hooks:

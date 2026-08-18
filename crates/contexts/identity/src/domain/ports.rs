@@ -114,6 +114,17 @@ pub trait MembershipRepository: Send + Sync {
         tenant_id: Uuid,
         role_id: Uuid,
     ) -> Result<u32, IdentityError>;
+
+    /// Every active membership `user_id` holds, across every tenant (the
+    /// `GET /api/v1/me` read model — a staff member's own tenant list is not
+    /// something a `ScopedTx` can answer, since it doesn't yet know which
+    /// tenant to scope to). Read under the audited platform scope, same as
+    /// [`Self::list_all_platform`].
+    async fn list_for_user_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        user_id: UserId,
+    ) -> Result<Vec<Membership>, IdentityError>;
 }
 
 /// Global `(provider, subject)` → user binding.
@@ -324,6 +335,35 @@ pub trait RoleCatalog: Send + Sync {
         tenant_id: Uuid,
         role_id: Uuid,
     ) -> Result<Option<String>, IdentityError>;
+
+    /// The union of every permission the given roles grant — the `GET
+    /// /api/v1/me` read model's source for "what can this member do in this
+    /// tenant" (permission *keys* only; the backend still enforces every
+    /// mutation with its own `require_permission!` guard regardless of what
+    /// the frontend renders from this list).
+    async fn permissions_for_roles(
+        &self,
+        tenant_id: Uuid,
+        role_ids: &[Uuid],
+    ) -> Result<Vec<String>, IdentityError>;
+}
+
+/// In-process view of the tenancy context's tenant catalog: resolves the
+/// display metadata (`GET /api/v1/me`'s membership list needs a name/slug
+/// per tenant, not just the id) without identity depending on the tenancy
+/// crate directly — implemented by an adapter built at the composition root,
+/// same shape as [`RoleCatalog`].
+#[async_trait]
+pub trait TenantCatalog: Send + Sync {
+    async fn summary(&self, tenant_id: Uuid) -> Result<Option<TenantSummary>, IdentityError>;
+}
+
+/// The subset of a tenant's identity a membership listing needs to render.
+#[derive(Debug, Clone)]
+pub struct TenantSummary {
+    pub tenant_id: Uuid,
+    pub slug: String,
+    pub name: String,
 }
 
 /// Domain events → transactional outbox.
