@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE domains.custom_domains SET\n                 kind = $2, role = $3, status = $4,\n                 challenge_token = $5, challenge_type = $6,\n                 challenge_created_at = $7, challenge_expires_at = $8,\n                 detected_registrar = $9, verified_at = $10, last_checked_at = $11,\n                 next_check_at = $12, verification_attempts = $13,\n                 failure_code = $14, failure_detail = $15, updated_at = $16\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6093ef2cef14ea6d18fe73bbce93bfe0470d5fab12516fee109abc7a9cf47757"
+}

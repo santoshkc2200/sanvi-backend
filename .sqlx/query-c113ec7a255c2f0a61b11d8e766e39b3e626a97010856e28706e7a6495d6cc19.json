@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO domains.custom_domains\n               (id, tenant_id, hostname, normalized_hostname, kind, role, status,\n                challenge_token, challenge_type, challenge_created_at, challenge_expires_at,\n                detected_registrar, verified_at, last_checked_at, next_check_at,\n                verification_attempts, failure_code, failure_detail, created_at, updated_at)\n               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Text",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c113ec7a255c2f0a61b11d8e766e39b3e626a97010856e28706e7a6495d6cc19"
+}

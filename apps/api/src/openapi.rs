@@ -131,6 +131,19 @@ use utoipa::OpenApi;
         sanvi_theming::adapters::http::handlers::install_theme_version,
         sanvi_theming::adapters::http::handlers::list_platform_theme_versions,
         sanvi_theming::adapters::http::handlers::yank_theme_version,
+        sanvi_domains::adapters::http::handlers::claim_custom_domain,
+        sanvi_domains::adapters::http::handlers::list_custom_domains,
+        sanvi_domains::adapters::http::handlers::get_domain_instructions,
+        sanvi_domains::adapters::http::handlers::request_domain_verification,
+        sanvi_domains::adapters::http::handlers::promote_primary_domain,
+        sanvi_domains::adapters::http::handlers::remove_custom_domain,
+        sanvi_domains::adapters::http::handlers::search_domains,
+        sanvi_domains::adapters::http::handlers::place_domain_order,
+        sanvi_domains::adapters::http::handlers::list_domain_orders,
+        sanvi_domains::adapters::http::handlers::set_order_auto_renew,
+        sanvi_domains::adapters::http::handlers::tls_authorize,
+        sanvi_domains::adapters::http::handlers::list_platform_domains,
+        sanvi_domains::adapters::http::handlers::release_platform_domain,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
@@ -143,7 +156,8 @@ use utoipa::OpenApi;
         (name = "billing", description = "Platform billing: plans, subscriptions, invoices, checkout and portal"),
         (name = "privacy", description = "Privacy & compliance: jurisdiction profiles, consent/opt-out directives, data subject requests (export/erasure/appeals), retention, processing records, sub-processors and breach obligations"),
         (name = "localization", description = "Locales, message catalogs, tenant locale settings and copy overrides"),
-        (name = "theming", description = "Theme registry, tenant theme drafts/publish/rollback, brand assets and resolved-theme delivery")
+        (name = "theming", description = "Theme registry, tenant theme drafts/publish/rollback, brand assets and resolved-theme delivery"),
+        (name = "domains", description = "Custom domains: claims, verification, registrar search/purchase, TLS authorization and health")
     ),
     info(
         title = "Sanvi API",
@@ -275,5 +289,25 @@ mod tests {
         assert!(json.contains("TenantThemeView"));
         assert!(json.contains("UpdateTenantThemeDraftCommand"));
         assert!(json.contains("ThemeAdminView"));
+    }
+
+    #[test]
+    fn doc_contains_the_domains_contract() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/tenant/domains"));
+        assert!(json.contains("/api/v1/tenant/domains/search"));
+        assert!(json.contains("/api/v1/tenant/domains/orders"));
+        assert!(json.contains("/api/v1/tenant/domains/{id}/instructions"));
+        assert!(json.contains("/api/v1/tenant/domains/{id}/verify"));
+        assert!(json.contains("/api/v1/tenant/domains/{id}/promote"));
+        assert!(json.contains("/api/v1/tenant/domains/orders/{id}/auto-renew"));
+        assert!(json.contains("/internal/tls/authorize"));
+        assert!(json.contains("/api/v1/platform/domains"));
+        assert!(json.contains("/api/v1/platform/domains/{id}/release"));
+        assert!(json.contains("CustomDomainView"));
+        assert!(json.contains("InstructionsView"));
+        assert!(json.contains("OrderView"));
+        assert!(json.contains("PlaceDomainOrderCommand"));
+        assert!(json.contains("ClaimCustomDomainCommand"));
     }
 }

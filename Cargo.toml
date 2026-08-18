@@ -17,6 +17,7 @@ members = [
     "crates/contexts/privacy",
     "crates/contexts/localization",
     "crates/contexts/theming",
+    "crates/contexts/domains",
     "apps/api",
     "apps/worker",
     "apps/cli",
@@ -24,7 +25,7 @@ members = [
 default-members = ["apps/api", "apps/worker", "apps/cli"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -53,6 +54,7 @@ sanvi-billing = { path = "crates/contexts/billing" }
 sanvi-privacy = { path = "crates/contexts/privacy" }
 sanvi-localization = { path = "crates/contexts/localization" }
 sanvi-theming = { path = "crates/contexts/theming" }
+sanvi-domains = { path = "crates/contexts/domains" }
 sanvi-api = { path = "apps/api" }
 
 actix-web = "4"
@@ -71,6 +73,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"
+idna = "1"
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "metrics"] }
 opentelemetry-prometheus = "0.32"
@@ -78,6 +81,7 @@ opentelemetry-semantic-conventions = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 pbkdf2 = "0.12"
 prometheus = { version = "0.14", features = ["process"] }
+psl = "2"
 rand = "0.8"
 redis = { version = "1.5", default-features = false, features = ["tokio-comp", "aio", "connection-manager", "script", "streams"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE domains.orders\n               SET registrant_contact = jsonb_set(\n                     jsonb_set(\n                       jsonb_set(registrant_contact, '{email}', '\"erased@invalid\"'),\n                       '{name}', '\"erased\"'),\n                     '{phone}', '\"erased\"')\n               WHERE registrant_contact->>'email' = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e4dea08f13d7eec1548ddef5646346318cefc858e3efc47505cd41a05f0a775e"
+}

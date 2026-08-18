@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE domains.orders SET\n                 term_years = $2, price_minor = $3, currency = $4, status = $5,\n                 auto_renew = $6, whois_privacy = $7, registrant_contact = $8,\n                 ordered_by = $9, idempotency_key = $10, external_order_ref = $11,\n                 charge_id = $12, registered_at = $13, expires_at = $14,\n                 renewal_attempts = $15, next_renewal_at = $16, failure_detail = $17,\n                 updated_at = $18\n               WHERE id = $1 AND tenant_id = $19",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int8",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Timestamptz",
+        "Jsonb",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb3a734aa9117a1a73d0b69f46788c3dee65cef6f111451f836e251eed0aa112"
+}

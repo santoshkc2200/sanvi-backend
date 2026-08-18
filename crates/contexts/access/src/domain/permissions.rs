@@ -421,6 +421,32 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Platform,
         description: "Install and withdraw theme versions",
     },
+    // --- domains (phase 08) --------------------------------------------------
+    PermissionDef {
+        key: "tenant.domains.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the tenant's custom domains, instructions and statuses",
+    },
+    PermissionDef {
+        key: "tenant.domains.manage",
+        scope: PermissionScope::Tenant,
+        description: "Claim, verify, promote and remove the tenant's custom domains",
+    },
+    PermissionDef {
+        key: "tenant.domains.purchase",
+        scope: PermissionScope::Tenant,
+        description: "Search, purchase and manage domain orders (registrar journeys)",
+    },
+    PermissionDef {
+        key: "platform.domain.read",
+        scope: PermissionScope::Platform,
+        description: "Investigate custom domains across tenants",
+    },
+    PermissionDef {
+        key: "platform.domain.write",
+        scope: PermissionScope::Platform,
+        description: "Force-release custom domains (abuse, disputes, take-downs)",
+    },
 ];
 
 /// Registry lookup.

@@ -1,0 +1,256 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, challenge_token, challenge_type, challenge_created_at, challenge_expires_at, detected_registrar, verified_at, last_checked_at, next_check_at, verification_attempts, failure_code, failure_detail, created_at, updated_at FROM domains.custom_domains WHERE status = 'verified' ORDER BY verified_at ASC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "normalized_hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "normalized_hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "challenge_token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "challenge_token"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "challenge_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "challenge_type"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "challenge_created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "challenge_created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "challenge_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "challenge_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "detected_registrar",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "detected_registrar"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "verified_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "verified_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "last_checked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "last_checked_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "next_check_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "next_check_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "verification_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "verification_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "failure_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "failure_code"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "failure_detail",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "failure_detail"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.custom_domains",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "178e68058fd81d37c3ae27b5a6262276c83b36ddc1d627f7a6cb761f460af765"
+}

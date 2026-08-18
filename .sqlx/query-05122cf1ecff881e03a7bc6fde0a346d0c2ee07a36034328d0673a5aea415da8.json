@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT normalized_hostname, tenant_id, status FROM domains.live_hostnames WHERE normalized_hostname = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "normalized_hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.live_hostnames",
+            "name": "normalized_hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.live_hostnames",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.live_hostnames",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "05122cf1ecff881e03a7bc6fde0a346d0c2ee07a36034328d0673a5aea415da8"
+}

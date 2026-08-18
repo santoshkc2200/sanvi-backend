@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sanvi_access::AccessConfig;
 use sanvi_audit::AuditConfig;
 use sanvi_billing::BillingConfig;
+use sanvi_domains::DomainsConfig;
 use sanvi_http::ServerConfig;
 use sanvi_identity::IdentityConfig;
 use sanvi_localization::LocalizationConfig;
@@ -68,6 +69,10 @@ pub struct FeaturesConfig {
     /// Phase-07 gate: mounts the theming context's routes and state.
     #[serde(default = "default_true")]
     pub theming: bool,
+    /// Phase-08 gate: mounts the domains context's routes and state, and
+    /// installs the custom-domain hook into the tenancy resolver.
+    #[serde(default = "default_true")]
+    pub domains: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -96,6 +101,7 @@ pub struct AppConfig {
     pub privacy: PrivacyConfig,
     pub localization: LocalizationConfig,
     pub theming: ThemingConfig,
+    pub domains: DomainsConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -118,6 +124,7 @@ impl Default for AppConfig {
             privacy: PrivacyConfig::default(),
             localization: LocalizationConfig::default(),
             theming: ThemingConfig::default(),
+            domains: DomainsConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -164,6 +171,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.theming.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.domains.validate() {
             problems.push(err.to_string());
         }
         if self.readiness_probe_secs == 0 {

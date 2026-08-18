@@ -1,0 +1,280 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, hostname, normalized_hostname, term_years, price_minor, currency, status, auto_renew, whois_privacy, registrant_contact, ordered_by, idempotency_key, external_order_ref, charge_id, registered_at, expires_at, renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at FROM domains.orders WHERE tenant_id = $1 ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "normalized_hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "normalized_hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "term_years",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "term_years"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "price_minor",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "price_minor"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "auto_renew",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "auto_renew"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "whois_privacy",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "whois_privacy"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "registrant_contact",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "registrant_contact"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "ordered_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "ordered_by"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "idempotency_key",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "idempotency_key"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "external_order_ref",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "external_order_ref"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "charge_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "charge_id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "registered_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "registered_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "renewal_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "renewal_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "next_renewal_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "next_renewal_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "failure_detail",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "failure_detail"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "90d3356b3bac6eb3426a46e106999dd1cc4a6fa89240d3c81ba912a38bc6fb5e"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE domains.certificates SET\n                 issuer = $2, serial = $3, not_before = $4, not_after = $5,\n                 renewed_at = $6, expiry_warned_days = $7, status = $8, last_error = $9\n               WHERE id = $1 AND tenant_id = $10",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f8be5f7e56fc0e55ae3d585a44aff28886ccd53ecef6d5bd227befe93ad84f74"
+}

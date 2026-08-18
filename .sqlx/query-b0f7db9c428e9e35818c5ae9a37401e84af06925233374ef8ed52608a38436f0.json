@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE domains.orders SET ordered_by = NULL WHERE ordered_by = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b0f7db9c428e9e35818c5ae9a37401e84af06925233374ef8ed52608a38436f0"
+}

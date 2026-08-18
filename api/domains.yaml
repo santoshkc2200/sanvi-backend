@@ -1,0 +1,383 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.9.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/domains:
+    get:
+      operationId: list_platform_domains
+      parameters:
+      - description: Hostname substring
+        in: query
+        name: q
+        required: true
+        schema:
+          type: string
+      - description: Result cap (default 50)
+        in: query
+        name: limit
+        required: true
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/CustomDomainView'
+                type: array
+          description: Domains across tenants
+      summary: '`GET /api/v1/platform/domains`.'
+      tags:
+      - domains
+  /api/v1/platform/domains/{id}/release:
+    post:
+      operationId: release_platform_domain
+      parameters:
+      - description: The domain id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseDomainCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDomainView'
+          description: The released domain
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown domain
+      summary: '`POST /api/v1/platform/domains/{id}/release`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains:
+    get:
+      operationId: list_custom_domains
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/CustomDomainView'
+                type: array
+          description: The tenant's domains
+      summary: '`GET /api/v1/tenant/domains`.'
+      tags:
+      - domains
+    post:
+      operationId: claim_custom_domain
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimCustomDomainCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDomainView'
+          description: The claim and its verification challenge
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid hostname
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Entitlement missing
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Hostname already claimed
+      summary: '`POST /api/v1/tenant/domains`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains/orders:
+    get:
+      operationId: list_domain_orders
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/OrderView'
+                type: array
+          description: The tenant's domain orders
+      summary: '`GET /api/v1/tenant/domains/orders`.'
+      tags:
+      - domains
+    post:
+      operationId: place_domain_order
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceDomainOrderCommand'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderView'
+          description: The order (the saga may still be in flight; see status)
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid hostname or unsupported TLD
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Entitlement missing
+      summary: '`POST /api/v1/tenant/domains/orders`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains/orders/{id}/auto-renew:
+    post:
+      operationId: set_order_auto_renew
+      parameters:
+      - description: The order id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutoRenewCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderView'
+          description: The updated order
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown order
+      summary: '`POST /api/v1/tenant/domains/orders/{id}/auto-renew`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains/search:
+    get:
+      operationId: search_domains
+      parameters:
+      - description: Bare term (`acme`) or hostname (`acme.com`)
+        in: query
+        name: q
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainSearchView'
+          description: Availability and normalized pricing
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Entitlement missing
+      summary: '`GET /api/v1/tenant/domains/search`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains/{id}:
+    delete:
+      operationId: remove_custom_domain
+      parameters:
+      - description: The domain claim id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDomainView'
+          description: The removed domain
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown domain
+      summary: '`DELETE /api/v1/tenant/domains/{id}`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains/{id}/instructions:
+    get:
+      operationId: get_domain_instructions
+      parameters:
+      - description: The domain claim id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Requested locale (defaults to the negotiated one)
+        in: query
+        name: locale
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstructionsView'
+          description: The exact records and the registrar walkthrough
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown domain
+      summary: '`GET /api/v1/tenant/domains/{id}/instructions`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains/{id}/promote:
+    post:
+      operationId: promote_primary_domain
+      parameters:
+      - description: The domain claim id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDomainView'
+          description: The domain is now primary
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown domain
+      summary: '`POST /api/v1/tenant/domains/{id}/promote`.'
+      tags:
+      - domains
+  /api/v1/tenant/domains/{id}/verify:
+    post:
+      operationId: request_domain_verification
+      parameters:
+      - description: The domain claim id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDomainView'
+          description: The domain, now queued for verification
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown domain
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Throttled by the backoff schedule
+      summary: '`POST /api/v1/tenant/domains/{id}/verify`.'
+      tags:
+      - domains
+  /internal/tls/authorize:
+    get:
+      operationId: tls_authorize
+      parameters:
+      - description: The hostname the edge wants a certificate for
+        in: query
+        name: host
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TlsAuthorizeResponse'
+          description: Issuance authorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TlsAuthorizeResponse'
+          description: Issuance denied
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: The gate is not configured
+      summary: |-
+        `GET /internal/tls/authorize` — the edge asks before issuing a
+        certificate. Self-authenticated: `x-sanvi-internal` shared secret plus
+        an optional client-IP allow-list; `/internal` sits outside the authn
+        middleware.
+      tags:
+      - domains

@@ -57,6 +57,7 @@ use sanvi_billing::{
         WebhookEventRepository,
     },
 };
+use sanvi_domains::{DomainsConfig, adapters::events::domains_event_handler};
 use sanvi_localization::{
     LocalizationConfig,
     adapters::{
@@ -169,6 +170,16 @@ pub struct SchedulerConfig {
     pub export_cleanup_interval_secs: u64,
     /// Annual request-metrics generation (phase 05).
     pub privacy_metrics_interval_secs: u64,
+    /// DNS verification polling (phase 08).
+    pub domains_verification_interval_secs: u64,
+    /// Certificate issuance sweep (phase 08).
+    pub domains_cert_issue_interval_secs: u64,
+    /// Certificate/order renewal sweep (phase 08).
+    pub domains_renewal_interval_secs: u64,
+    /// Live-domain health checks (phase 08).
+    pub domains_health_interval_secs: u64,
+    /// Purchase saga advancement + refund retries (phase 08).
+    pub domains_orders_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -190,6 +201,11 @@ impl Default for SchedulerConfig {
             retention_sweep_interval_secs: 86400,
             export_cleanup_interval_secs: 3600,
             privacy_metrics_interval_secs: 86400,
+            domains_verification_interval_secs: 60,
+            domains_cert_issue_interval_secs: 30,
+            domains_renewal_interval_secs: 3600,
+            domains_health_interval_secs: 3600,
+            domains_orders_interval_secs: 60,
         }
     }
 }
@@ -229,6 +245,8 @@ pub struct WorkerConfig {
     pub localization: LocalizationConfig,
     #[serde(default)]
     pub theming: ThemingConfig,
+    #[serde(default)]
+    pub domains: DomainsConfig,
 }
 
 impl WorkerConfig {
@@ -243,6 +261,7 @@ impl WorkerConfig {
         self.privacy.validate()?;
         self.localization.validate()?;
         self.theming.validate()?;
+        self.domains.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -379,6 +398,18 @@ async fn main() -> ExitCode {
     }
     let theming_consumer = theming_consumer.with_metrics(theming_consumer_metrics);
     let theming_consumer_name = format!("theming-{}", uuid::Uuid::now_v7());
+
+    // --- domains consumer: host→tenant resolution-cache invalidation ------
+    // Verification/live/removal events clear the shared + local host cache
+    // so the tenancy resolver never serves a stale custom-domain mapping.
+    let domains_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let domains_consumer_metrics = Arc::new(ConsumerMetrics::new("domains"));
+    if let Err(err) = domains_consumer_metrics.register(registry) {
+        eprintln!("failed to register domains consumer metrics: {err}");
+        return ExitCode::from(1);
+    }
+    let domains_consumer = domains_consumer.with_metrics(domains_consumer_metrics);
+    let domains_consumer_name = format!("domains-{}", uuid::Uuid::now_v7());
 
     // --- access consumer: keeps Keto in sync with identity events -----------
     let access_store: Arc<dyn PermissionStore> = match HttpKetoClient::new(
@@ -555,6 +586,137 @@ async fn main() -> ExitCode {
     let billing_event_handler =
         sanvi_billing::adapters::billing_event_handler(entitlement_cache.clone());
 
+    // --- domains context (phase 08): verification, issuance, renewal,
+    // health and order-advancement sweeps + the resolution-cache consumer.
+    let domains_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let domains_repo: std::sync::Arc<dyn sanvi_domains::domain::CustomDomainRepository> =
+        std::sync::Arc::new(sanvi_domains::adapters::SqlxCustomDomainRepository::new());
+    let domains_orders: std::sync::Arc<dyn sanvi_domains::domain::DomainOrderRepository> =
+        std::sync::Arc::new(sanvi_domains::adapters::SqlxDomainOrderRepository::new());
+    let domains_certs: std::sync::Arc<dyn sanvi_domains::domain::CertificateRepository> =
+        std::sync::Arc::new(sanvi_domains::adapters::SqlxCertificateRepository::new());
+    let domains_records: std::sync::Arc<dyn sanvi_domains::domain::DnsRecordRepository> =
+        std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsRecordRepository::new());
+    let domains_provider: std::sync::Arc<dyn sanvi_domains::domain::DnsProviderPort> =
+        std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsProvider::new(
+            domains_records.clone(),
+        ));
+    let domains_registrar: std::sync::Arc<dyn sanvi_domains::domain::DomainRegistrarPort> =
+        std::sync::Arc::new(sanvi_domains::adapters::SandboxRegistrar::new(
+            config.domains.registrar.registrar_id.clone(),
+            &config.domains.registrar.tlds,
+        ));
+    let domains_ca: std::sync::Arc<dyn sanvi_domains::domain::CertificateAuthorityPort> =
+        std::sync::Arc::new(sanvi_domains::adapters::SandboxCertificateAuthority::new(
+            config.domains.cert_lifetime_days,
+        ));
+    let domains_verifier: std::sync::Arc<dyn sanvi_domains::domain::DnsVerifierPort> =
+        std::sync::Arc::new(sanvi_domains::adapters::DohDnsVerifier::new(
+            config.domains.doh_resolvers.clone(),
+            config.domains.doh_min_agreement,
+            config.domains.doh_timeout_secs,
+        ));
+    let domains_prober: std::sync::Arc<dyn sanvi_domains::domain::StorefrontProbePort> =
+        std::sync::Arc::new(sanvi_domains::adapters::HttpProbeAdapter::new(
+            config.domains.prober_timeout_secs,
+            config.domains.prober_user_agent.clone(),
+        ));
+    let domains_events: std::sync::Arc<dyn sanvi_domains::domain::EventPublisher> =
+        std::sync::Arc::new(sanvi_domains::adapters::OutboxEventPublisher::new());
+    let domains_clock: std::sync::Arc<dyn sanvi_domains::domain::Clock> =
+        std::sync::Arc::new(sanvi_domains::adapters::SystemClock);
+    let domains_notifications: std::sync::Arc<dyn sanvi_domains::domain::Notifications> =
+        std::sync::Arc::new(sanvi_domains::adapters::LogNotifications::new());
+    let domains_metrics = std::sync::Arc::new(sanvi_domains::adapters::DomainsMetrics::new(
+        metrics.prometheus_registry(),
+    ));
+
+    // The worker's charger is the same sandbox adapter the API uses (the
+    // purchase saga's charge step is a port; both processes implement it).
+    let domains_charger: std::sync::Arc<dyn sanvi_domains::domain::PurchaseCharger> =
+        std::sync::Arc::new(sanvi_domains::adapters::SandboxPurchaseCharger);
+
+    let domains_place_order =
+        std::sync::Arc::new(sanvi_domains::application::PlaceDomainOrder::new(
+            domains_orders.clone(),
+            domains_repo.clone(),
+            domains_registrar.clone(),
+            domains_provider.clone(),
+            domains_charger.clone(),
+            std::sync::Arc::new(sanvi_domains::adapters::AlwaysDisabledGate),
+            domains_events.clone(),
+            domains_clock.clone(),
+            domains_tx.clone(),
+            config.domains.platform_domain.clone(),
+            config.domains.edge_hostname.clone(),
+            config.domains.anycast_ips.clone(),
+            config.domains.purchase_entitlement_key.clone(),
+            config.domains.verification_timeout_hours,
+            config.domains.verification_backoff_base_secs,
+        ));
+    let domains_verification_sweep =
+        std::sync::Arc::new(sanvi_domains::application::RunVerificationSweep::new(
+            domains_repo.clone(),
+            domains_verifier.clone(),
+            domains_provider.clone(),
+            domains_events.clone(),
+            domains_tx.clone(),
+            config.domains.edge_hostname.clone(),
+            config.domains.anycast_ips.clone(),
+            config.domains.verification_backoff_base_secs,
+            config.domains.verification_backoff_max_secs,
+        ));
+    let domains_cert_sweep =
+        std::sync::Arc::new(sanvi_domains::application::RunCertIssuanceSweep::new(
+            domains_repo.clone(),
+            domains_certs.clone(),
+            domains_ca.clone(),
+            domains_events.clone(),
+            domains_clock.clone(),
+            domains_tx.clone(),
+        ));
+    let domains_renewal_sweep =
+        std::sync::Arc::new(sanvi_domains::application::RunRenewalSweep::new(
+            domains_repo.clone(),
+            domains_certs.clone(),
+            domains_orders.clone(),
+            domains_ca.clone(),
+            domains_registrar.clone(),
+            domains_charger.clone(),
+            domains_events.clone(),
+            domains_notifications.clone(),
+            domains_tx.clone(),
+            config.domains.cert_renewal_before_days,
+            config.domains.cert_expiry_warning_days.clone(),
+            config.domains.order_renewal_lead_days,
+            config.domains.order_renewal_retry_secs,
+            config.domains.order_renewal_max_attempts,
+        ));
+    let domains_health_sweep =
+        std::sync::Arc::new(sanvi_domains::application::RunHealthSweep::new(
+            domains_repo.clone(),
+            domains_certs.clone(),
+            domains_verifier.clone(),
+            domains_prober.clone(),
+            domains_events.clone(),
+            domains_notifications.clone(),
+            domains_clock.clone(),
+            domains_tx.clone(),
+            config.domains.edge_hostname.clone(),
+            config.domains.anycast_ips.clone(),
+        ));
+    let domains_order_sweep = std::sync::Arc::new(sanvi_domains::application::RunOrderSweep::new(
+        domains_orders.clone(),
+        domains_registrar.clone(),
+        domains_charger.clone(),
+        domains_place_order.clone(),
+        domains_tx.clone(),
+    ));
+    let domains_cache = std::sync::Arc::new(sanvi_domains::adapters::LiveDomainCache::new(
+        Some(redis.clone()),
+        config.domains.host_cache_ttl_secs,
+    ));
+
     // --- privacy context (phase 05): DSR saga + compliance jobs --------------
     let privacy_tx = sanvi_persistence::TxManager::new(pool.clone());
     let privacy_subjects: std::sync::Arc<dyn SubjectRepository> =
@@ -698,6 +860,11 @@ async fn main() -> ExitCode {
                 std::sync::Arc::new(sanvi_billing::adapters::SqlxInvoiceRepository::new()),
                 std::sync::Arc::new(sanvi_billing::adapters::SqlxWebhookEventRepository::new()),
                 billing_stripe.clone(),
+            ),
+        ),
+        std::sync::Arc::new(
+            sanvi_domains::adapters::privacy_provider::DomainsPrivacyProvider::new(
+                privacy_tx.clone(),
             ),
         ),
         std::sync::Arc::new(PrivacyContextProvider::new(
@@ -1034,6 +1201,151 @@ async fn main() -> ExitCode {
                 }
             },
         )),
+        // --- phase 08: domains -------------------------------------------------
+        Arc::new(FnJob::new(
+            "domains.verification_poll",
+            Duration::from_secs(config.scheduler.domains_verification_interval_secs),
+            {
+                let sweep = domains_verification_sweep.clone();
+                let clock = domains_clock.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    let clock = clock.clone();
+                    Box::pin(async move {
+                        let now = clock.now();
+                        let report = sweep
+                            .execute(now, 200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                verified = report.verified,
+                                failed = report.failed,
+                                expired = report.expired,
+                                superseded = report.superseded,
+                                "domains verification pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "domains.cert_issue",
+            Duration::from_secs(config.scheduler.domains_cert_issue_interval_secs),
+            {
+                let sweep = domains_cert_sweep.clone();
+                let metrics = domains_metrics.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    let metrics = metrics.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(100)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        for _ in 0..report.issued {
+                            metrics.acme_issue_total.with_label_values(&["ok"]).inc();
+                        }
+                        for _ in 0..report.failures {
+                            metrics.acme_issue_total.with_label_values(&["error"]).inc();
+                        }
+                        if report.issued > 0 || report.failures > 0 {
+                            tracing::info!(
+                                issued = report.issued,
+                                failures = report.failures,
+                                "domains certificate issuance pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "domains.renewal_sweep",
+            Duration::from_secs(config.scheduler.domains_renewal_interval_secs),
+            {
+                let sweep = domains_renewal_sweep.clone();
+                let clock = domains_clock.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    let clock = clock.clone();
+                    Box::pin(async move {
+                        let now = clock.now();
+                        let report = sweep
+                            .execute(now, 500)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.cert_renewal_failures > 0 || report.order_renewals_escalated > 0 {
+                            tracing::error!(
+                                cert_renewal_failures = report.cert_renewal_failures,
+                                order_renewals_escalated = report.order_renewals_escalated,
+                                "domains renewal escalation",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "domains.health_check",
+            Duration::from_secs(config.scheduler.domains_health_interval_secs),
+            {
+                let sweep = domains_health_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(500)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                degraded = report.degraded,
+                                recovered = report.recovered,
+                                "domains health pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "domains.order_sweep",
+            Duration::from_secs(config.scheduler.domains_orders_interval_secs),
+            {
+                let sweep = domains_order_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(100)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.resumed > 0
+                            || report.configured > 0
+                            || report.refunded > 0
+                            || report.failed > 0
+                        {
+                            tracing::info!(
+                                resumed = report.resumed,
+                                configured = report.configured,
+                                refunded = report.refunded,
+                                failed = report.failed,
+                                "domains order sweep",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
         // --- phase 05: privacy --------------------------------------------------
         Arc::new(FnJob::new(
             "privacy.dsr_advance",
@@ -1211,6 +1523,21 @@ async fn main() -> ExitCode {
             .await;
     });
 
+    let domains_shutdown = shutdown_rx.clone();
+    let domains_stream = format!("{}.domains", config.outbox.stream);
+    let domains_cache = domains_cache.clone();
+    let domains_task = tokio::spawn(async move {
+        domains_consumer
+            .run_until_shutdown(
+                &domains_stream,
+                "domains",
+                &domains_consumer_name,
+                domains_event_handler(domains_cache),
+                domains_shutdown,
+            )
+            .await;
+    });
+
     let access_shutdown = shutdown_rx.clone();
     let identity_stream = format!("{}.identity", config.outbox.stream);
     let access_task = tokio::spawn(async move {
@@ -1272,6 +1599,7 @@ async fn main() -> ExitCode {
         tenancy_task,
         localization_task,
         theming_task,
+        domains_task,
         access_task,
         entitlement_task,
         billing_task,

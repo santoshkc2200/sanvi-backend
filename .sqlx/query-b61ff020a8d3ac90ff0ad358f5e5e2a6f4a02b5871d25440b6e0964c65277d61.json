@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM domains.dns_records WHERE domain_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b61ff020a8d3ac90ff0ad358f5e5e2a6f4a02b5871d25440b6e0964c65277d61"
+}

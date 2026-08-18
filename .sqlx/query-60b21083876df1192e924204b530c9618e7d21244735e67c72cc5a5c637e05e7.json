@@ -1,0 +1,160 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after, renewed_at, expiry_warned_days, status, last_error FROM domains.certificates WHERE status = 'active' ORDER BY not_after ASC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "domain_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "domain_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "issuer",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "issuer"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "serial",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "serial"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "not_before",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "not_before"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "not_after",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "not_after"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "renewed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "renewed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "expiry_warned_days",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "expiry_warned_days"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.certificates",
+            "name": "last_error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "60b21083876df1192e924204b530c9618e7d21244735e67c72cc5a5c637e05e7"
+}

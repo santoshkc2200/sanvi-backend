@@ -65,6 +65,26 @@ use sanvi_billing::{
     },
     routes as billing_routes,
 };
+use sanvi_domains::{
+    DomainsConfig,
+    adapters::{
+        DomainsMetrics, LiveDomainCache, OutboxEventPublisher as DomainsEvents,
+        SandboxCertificateAuthority, SandboxRegistrar, SqlxCertificateRepository,
+        SqlxCustomDomainRepository, SqlxDnsProvider, SqlxDnsRecordRepository,
+        SqlxDomainOrderRepository, SystemClock as DomainsClock,
+    },
+    application::{
+        AuthorizeTls, ClaimCustomDomain, GetDomainInstructions, ListCustomDomains,
+        ListDomainOrders, LiveDomainLookupService, PlaceDomainOrder, PlatformListDomains,
+        PlatformReleaseDomain, PromotePrimaryDomain, RemoveCustomDomain, RequestVerification,
+        SearchDomains, SetOrderAutoRenew,
+    },
+    domain::{
+        CustomDomainRepository, DomainFeatureGate, DomainOrderRepository, DomainsError,
+        EventPublisher as DomainsEventPublisher, GuideTranslator, PurchaseCharger, TenantState,
+    },
+    routes as domains_routes,
+};
 use sanvi_http::{
     AuthnMiddleware, FeatureGate as HttpFeatureGatePort, PermissionGate, ProblemDetail,
     ResourceRef, Subject, middleware,
@@ -260,11 +280,14 @@ pub fn build_system_state(
 }
 
 /// Build the tenancy context's application state: real adapters wired into
-/// every use case, plus the resolver the middleware stack consumes.
+/// every use case, plus the resolver the middleware stack consumes. The
+/// phase-08 custom-domain lookup hook is optional (off when the domains
+/// feature flag is off).
 pub fn build_tenancy_state(
     pool: sanvi_persistence::PgPool,
     redis: Option<redis::aio::ConnectionManager>,
     config: &TenancyConfig,
+    custom_domains: Option<Arc<dyn sanvi_tenancy::adapters::resolution::CustomDomainLookup>>,
 ) -> TenancyState {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
@@ -286,11 +309,15 @@ pub fn build_tenancy_state(
         tenants.clone(),
         cache,
     ));
-    let host_resolver = Arc::new(HostTenantResolver::new(
+    let mut host_resolver = HostTenantResolver::new(
         resolve.clone(),
         config.base_domain.clone(),
         config.usable_keys(),
-    ));
+    );
+    if let Some(lookup) = custom_domains {
+        host_resolver = host_resolver.with_custom_domains(lookup);
+    }
+    let host_resolver = Arc::new(host_resolver);
 
     TenancyState {
         provision: Arc::new(ProvisionTenant::new(
@@ -1995,6 +2022,76 @@ pub fn build_theming_state(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 08: the domains context's composition root.
+// ---------------------------------------------------------------------------
+
+/// What the domains context needs from the composition root.
+#[derive(Clone)]
+pub struct DomainsWiring {
+    pub state: sanvi_domains::adapters::http::DomainsState,
+    pub lookup: Arc<LiveDomainLookupService>,
+}
+
+/// The domains context's feature-gate adapter over the access context's
+/// domain-level `FeatureGate` (`domains.custom`, `domains.purchase`). The
+/// domains context never depends on the access crate.
+pub struct DomainsAccessGate {
+    gate: Arc<dyn FeatureGate>,
+}
+
+impl DomainsAccessGate {
+    pub fn new(gate: Arc<dyn FeatureGate>) -> Self {
+        Self { gate }
+    }
+}
+
+#[async_trait::async_trait]
+impl DomainFeatureGate for DomainsAccessGate {
+    async fn is_enabled(&self, tenant_id: Uuid, feature: &str) -> Result<bool, DomainsError> {
+        let key = sanvi_access::domain::FeatureKey::parse(feature).map_err(|err| {
+            DomainsError::Storage(format!("invalid feature key {feature:?}: {err}"))
+        })?;
+        self.gate
+            .is_enabled(tenant_id, &key)
+            .await
+            .map_err(|err| DomainsError::Storage(err.to_string()))
+    }
+}
+
+/// The domains context's guide translator over the localization context's
+/// `Translator` (scope "platform"). With localization off, a fallback
+/// returns the key itself.
+pub struct DomainsGuideTranslatorAdapter {
+    translator: Arc<dyn sanvi_localization::domain::Translator>,
+}
+
+impl DomainsGuideTranslatorAdapter {
+    pub fn new(translator: Arc<dyn sanvi_localization::domain::Translator>) -> Self {
+        Self { translator }
+    }
+}
+
+impl GuideTranslator for DomainsGuideTranslatorAdapter {
+    fn translate(&self, locale: &str, key: &str, args: &[(&str, String)]) -> String {
+        let args: Vec<(&str, sanvi_localization::domain::Arg)> = args
+            .iter()
+            .map(|(name, value)| (*name, sanvi_localization::domain::Arg::Text(value.clone())))
+            .collect();
+        self.translator.translate("platform", locale, key, &args)
+    }
+}
+
+/// The no-localization fallback: raw keys (the frontend renders its own
+/// copy from the same contract).
+pub struct FallbackGuideTranslator;
+
+impl GuideTranslator for FallbackGuideTranslator {
+    fn translate(&self, _locale: &str, key: &str, _args: &[(&str, String)]) -> String {
+        key.to_string()
+    }
+}
+
 /// The identity context's `TenantCatalog` port over the tenancy context's
 /// `TenantRepository` — lets `GET /api/v1/me` resolve each membership's
 /// tenant slug/display name without `sanvi-identity` depending on
@@ -2036,6 +2133,237 @@ impl TenantCatalog for TenantCatalogAdapter {
     }
 }
 
+/// The domains context's tenant-state port over the tenancy context's
+/// `ResolveTenant`.
+pub struct DomainsTenantStateAdapter {
+    resolve: Arc<sanvi_tenancy::application::ResolveTenant>,
+}
+
+impl DomainsTenantStateAdapter {
+    pub fn new(resolve: Arc<sanvi_tenancy::application::ResolveTenant>) -> Self {
+        Self { resolve }
+    }
+}
+
+#[async_trait::async_trait]
+impl TenantState for DomainsTenantStateAdapter {
+    async fn is_active(&self, tenant_id: Uuid) -> Result<bool, DomainsError> {
+        let tenant = self
+            .resolve
+            .by_id(sanvi_tenancy::domain::TenantId::from_uuid(tenant_id))
+            .await
+            .map_err(|err| DomainsError::Storage(err.to_string()))?;
+        Ok(matches!(
+            tenant.map(|tenant| tenant.status()),
+            Some(sanvi_tenancy::domain::TenantStatus::Active)
+        ))
+    }
+}
+
+/// The phase-08 hook for the tenancy resolver: wraps the domains lookup
+/// service in the trait `HostTenantResolver` consumes.
+pub struct DomainsTenantLookupAdapter {
+    lookup: Arc<LiveDomainLookupService>,
+}
+
+impl DomainsTenantLookupAdapter {
+    pub fn new(lookup: Arc<LiveDomainLookupService>) -> Self {
+        Self { lookup }
+    }
+}
+
+#[async_trait::async_trait]
+impl sanvi_tenancy::adapters::resolution::CustomDomainLookup for DomainsTenantLookupAdapter {
+    async fn lookup(
+        &self,
+        host: &str,
+    ) -> Result<Option<Uuid>, sanvi_tenancy::domain::TenancyError> {
+        Ok(self.lookup.resolve(host).await)
+    }
+}
+
+/// The reference purchase charger: deterministic sandbox charges recorded
+/// in the audit log. The production adapter implements the same port over
+/// the billing context's one-off charge capability (phase-04 extension) —
+/// the saga's compensation logic (refund paths, idempotency on the order
+/// id) is already exercised against this adapter.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SandboxPurchaseCharger;
+
+#[async_trait::async_trait]
+impl PurchaseCharger for SandboxPurchaseCharger {
+    async fn charge(
+        &self,
+        _tenant_id: Uuid,
+        order_id: Uuid,
+        amount_minor: i64,
+        currency: &str,
+        description: &str,
+    ) -> Result<String, DomainsError> {
+        tracing::info!(
+            order_id = %order_id,
+            amount_minor,
+            currency,
+            description,
+            "sandbox charge recorded"
+        );
+        Ok(format!("sandbox-ch-{order_id}"))
+    }
+
+    async fn refund(
+        &self,
+        _tenant_id: Uuid,
+        order_id: Uuid,
+        charge_id: &str,
+    ) -> Result<(), DomainsError> {
+        tracing::info!(order_id = %order_id, charge_id, "sandbox refund recorded");
+        Ok(())
+    }
+}
+
+/// Build the host → tenant lookup service (needed before the tenancy
+/// resolver, so it exists as its own step in `main`).
+pub fn build_domains_lookup(
+    pool: sanvi_persistence::PgPool,
+    redis: Option<redis::aio::ConnectionManager>,
+    config: &DomainsConfig,
+) -> Arc<LiveDomainLookupService> {
+    let cache = Arc::new(LiveDomainCache::new(redis, config.host_cache_ttl_secs));
+    let domains: Arc<dyn CustomDomainRepository> = Arc::new(SqlxCustomDomainRepository::new());
+    Arc::new(LiveDomainLookupService::new(cache, domains, pool))
+}
+
+/// Build the domains context's application state: repositories, the
+/// entitlement gate, the sandbox registrar/DNS/CA gateways and every use
+/// case. (The DoH verifier, prober and notification stub belong to the
+/// worker's jobs and are built there.)
+#[allow(clippy::too_many_arguments)]
+pub fn build_domains_state(
+    pool: sanvi_persistence::PgPool,
+    config: &DomainsConfig,
+    registry: &prometheus::Registry,
+    redis: Option<redis::aio::ConnectionManager>,
+    feature_gate: Arc<dyn FeatureGate>,
+    translator: Arc<dyn GuideTranslator>,
+    lookup: Arc<LiveDomainLookupService>,
+    tenancy_resolve: Arc<sanvi_tenancy::application::ResolveTenant>,
+) -> DomainsWiring {
+    let tx = sanvi_persistence::TxManager::new(pool.clone());
+
+    let domains: Arc<dyn CustomDomainRepository> = Arc::new(SqlxCustomDomainRepository::new());
+    let orders: Arc<dyn DomainOrderRepository> = Arc::new(SqlxDomainOrderRepository::new());
+    let certs: Arc<dyn sanvi_domains::domain::CertificateRepository> =
+        Arc::new(SqlxCertificateRepository::new());
+    let records: Arc<dyn sanvi_domains::domain::DnsRecordRepository> =
+        Arc::new(SqlxDnsRecordRepository::new());
+    let gate: Arc<dyn DomainFeatureGate> = Arc::new(DomainsAccessGate::new(feature_gate));
+    let events: Arc<dyn DomainsEventPublisher> = Arc::new(DomainsEvents::new());
+    let clock: Arc<dyn sanvi_domains::domain::Clock> = Arc::new(DomainsClock);
+    let metrics = Arc::new(DomainsMetrics::new(registry));
+
+    let registrar: Arc<dyn sanvi_domains::domain::DomainRegistrarPort> =
+        Arc::new(SandboxRegistrar::new(
+            config.registrar.registrar_id.clone(),
+            &config.registrar.tlds,
+        ));
+    let provider: Arc<dyn sanvi_domains::domain::DnsProviderPort> =
+        Arc::new(SqlxDnsProvider::new(records.clone()));
+    let ca: Arc<dyn sanvi_domains::domain::CertificateAuthorityPort> =
+        Arc::new(SandboxCertificateAuthority::new(config.cert_lifetime_days));
+    let charger: Arc<dyn PurchaseCharger> = Arc::new(SandboxPurchaseCharger);
+    let tenant_state: Arc<dyn TenantState> =
+        Arc::new(DomainsTenantStateAdapter::new(tenancy_resolve));
+
+    let search_cache = Arc::new(sanvi_domains::application::search::SearchCache::new());
+
+    let place_order = Arc::new(PlaceDomainOrder::new(
+        orders.clone(),
+        domains.clone(),
+        registrar.clone(),
+        provider.clone(),
+        charger.clone(),
+        gate.clone(),
+        events.clone(),
+        clock.clone(),
+        tx.clone(),
+        config.platform_domain.clone(),
+        config.edge_hostname.clone(),
+        config.anycast_ips.clone(),
+        config.purchase_entitlement_key.clone(),
+        config.verification_timeout_hours,
+        config.verification_backoff_base_secs,
+    ));
+
+    let state = sanvi_domains::adapters::http::DomainsState {
+        pool: pool.clone(),
+        config: config.clone(),
+        metrics: metrics.clone(),
+        lookup: lookup.clone(),
+        cache: lookup.cache(),
+        claim: Arc::new(ClaimCustomDomain::new(
+            domains.clone(),
+            gate.clone(),
+            events.clone(),
+            clock.clone(),
+            tx.clone(),
+            config.platform_domain.clone(),
+            config.connect_entitlement_key.clone(),
+            config.verification_timeout_hours,
+            config.verification_backoff_base_secs,
+        )),
+        list_domains: Arc::new(ListCustomDomains::new(domains.clone())),
+        list_orders: Arc::new(ListDomainOrders::new(orders.clone())),
+        instructions: Arc::new(GetDomainInstructions::new(
+            domains.clone(),
+            translator,
+            config.edge_hostname.clone(),
+            config.anycast_ips.clone(),
+        )),
+        verify: Arc::new(RequestVerification::new(domains.clone(), clock.clone())),
+        remove: Arc::new(RemoveCustomDomain::new(
+            domains.clone(),
+            certs.clone(),
+            provider.clone(),
+            ca.clone(),
+            events.clone(),
+            clock.clone(),
+        )),
+        promote: Arc::new(PromotePrimaryDomain::new(
+            domains.clone(),
+            events.clone(),
+            clock.clone(),
+        )),
+        search: Arc::new(SearchDomains::new(
+            registrar.clone(),
+            gate.clone(),
+            search_cache,
+            config.purchase_entitlement_key.clone(),
+            config.registrar.search_cache_ttl_secs,
+        )),
+        place_order: place_order.clone(),
+        set_auto_renew_on: Arc::new(SetOrderAutoRenew::new(orders.clone(), clock.clone(), true)),
+        set_auto_renew_off: Arc::new(SetOrderAutoRenew::new(orders.clone(), clock.clone(), false)),
+        authorize_tls: Arc::new(AuthorizeTls::new(
+            domains.clone(),
+            tenant_state,
+            pool.clone(),
+        )),
+        platform_list: Arc::new(PlatformListDomains::new(domains.clone(), tx.clone())),
+        platform_release: Arc::new(PlatformReleaseDomain::new(
+            domains.clone(),
+            certs,
+            provider,
+            ca,
+            events.clone(),
+            tx.clone(),
+        )),
+    };
+
+    let _ = redis;
+
+    DomainsWiring { state, lookup }
+}
+
 /// Assemble the actix `App`: middleware stack, routes, OpenAPI, metrics.
 ///
 /// This is the factory `HttpServer` clones per worker; everything captured
@@ -2054,6 +2382,7 @@ pub fn build_app(
     privacy: Option<PrivacyWiring>,
     localization: Option<LocalizationWiring>,
     theming: Option<ThemingWiring>,
+    domains: Option<DomainsWiring>,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -2091,6 +2420,10 @@ pub fn build_app(
     };
     let tenant_scope = match &theming {
         Some(_) => tenant_scope.configure(theming_routes::theming_tenant_scope_routes),
+        None => tenant_scope,
+    };
+    let tenant_scope = match &domains {
+        Some(_) => tenant_scope.configure(domains_routes::domains_tenant_scope_routes),
         None => tenant_scope,
     };
 
@@ -2170,6 +2503,18 @@ pub fn build_app(
             .app_data(web::Data::new(wiring.state))
             .configure(theming_routes::theming_public_routes)
             .configure(theming_routes::theming_platform_routes),
+        None => app,
+    };
+
+    // Phase-08 gate: the domains context's platform and internal routes
+    // (the tenant routes mount inside the shared tenant scope above). The
+    // `/internal/tls/authorize` gate is self-authenticated — `/internal`
+    // sits outside the authn middleware by design.
+    let app = match domains.clone() {
+        Some(wiring) => app
+            .app_data(web::Data::new(wiring.state))
+            .configure(domains_routes::domains_platform_routes)
+            .configure(domains_routes::domains_internal_routes),
         None => app,
     };
 

@@ -15,10 +15,11 @@ use figment::{
 };
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
-    AccessEntitlementAdmin, AppConfig, TenantCatalogAdapter, build_access_state, build_app,
-    build_audit_state, build_billing_state, build_identity_state, build_localization_state,
-    build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
-    build_theming_state,
+    AccessEntitlementAdmin, AppConfig, DomainsGuideTranslatorAdapter, DomainsTenantLookupAdapter,
+    FallbackGuideTranslator, TenantCatalogAdapter, build_access_state, build_app,
+    build_audit_state, build_billing_state, build_domains_lookup, build_domains_state,
+    build_identity_state, build_localization_state, build_platform_admin_state,
+    build_privacy_state, build_system_state, build_tenancy_state, build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
@@ -105,7 +106,22 @@ async fn main() -> ExitCode {
         config.readiness_probe_secs,
     );
 
-    let tenancy = build_tenancy_state(pool.clone(), redis.clone(), &config.tenancy);
+    // Phase 08: the custom-domain lookup hook is installed before tenancy
+    // builds its resolver (resolution order: signed header → custom domain
+    // → subdomain).
+    let domains_lookup = build_domains_lookup(pool.clone(), redis.clone(), &config.domains);
+    let custom_domain_lookup: Option<
+        std::sync::Arc<dyn sanvi_tenancy::adapters::resolution::CustomDomainLookup>,
+    > = config.features.domains.then(|| {
+        std::sync::Arc::new(DomainsTenantLookupAdapter::new(domains_lookup.clone()))
+            as std::sync::Arc<dyn sanvi_tenancy::adapters::resolution::CustomDomainLookup>
+    });
+    let tenancy = build_tenancy_state(
+        pool.clone(),
+        redis.clone(),
+        &config.tenancy,
+        custom_domain_lookup,
+    );
 
     // The role catalog bridges identity → access in-process; it needs only
     // a TxManager and the role repository, so there is no wiring cycle.
@@ -294,6 +310,11 @@ async fn main() -> ExitCode {
                     privacy_tx.clone(),
                 ),
             ),
+            Arc::new(
+                sanvi_domains::adapters::privacy_provider::DomainsPrivacyProvider::new(
+                    privacy_tx.clone(),
+                ),
+            ),
         ];
         Some(build_privacy_state(
             pool.clone(),
@@ -334,6 +355,31 @@ async fn main() -> ExitCode {
         None
     };
 
+    // Phase 08: custom domains. The guide translator rides on the
+    // localization context (off → raw keys); the entitlement gate rides on
+    // the access context; tenant activity rides on tenancy's resolver.
+    let domains = if config.features.domains {
+        let translator: std::sync::Arc<dyn sanvi_domains::domain::GuideTranslator> =
+            match &localization {
+                Some(wiring) => std::sync::Arc::new(DomainsGuideTranslatorAdapter::new(
+                    wiring.translator.clone(),
+                )),
+                None => std::sync::Arc::new(FallbackGuideTranslator),
+            };
+        Some(build_domains_state(
+            pool.clone(),
+            &config.domains,
+            metrics.prometheus_registry(),
+            redis.clone(),
+            access.domain_feature_gate.clone(),
+            translator,
+            domains_lookup.clone(),
+            tenancy.resolve.clone(),
+        ))
+    } else {
+        None
+    };
+
     let bind_config = config.clone();
     let factory_config = config.clone();
     let server = match bind(&bind_config.server, move || {
@@ -350,6 +396,7 @@ async fn main() -> ExitCode {
             privacy.clone(),
             localization.clone(),
             theming.clone(),
+            domains.clone(),
             redis.clone(),
         )
     }) {

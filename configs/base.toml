@@ -212,6 +212,80 @@ preview_token_ttl_secs = 300
 # it preview signing fails closed (the endpoint returns 503).
 preview_token_secret = ""
 
+[domains]
+# Phase 08: custom domains, DNS & TLS. The reference deployment runs the
+# sandbox registrar / DNS provider / certificate authority (deterministic,
+# no external accounts); production adapters implement the same ports.
+# Tenant hostnames must not be this domain or any subdomain of it.
+platform_domain = "platform.sanvi.app"
+# CNAME target for non-apex hostnames (the edge proxy).
+edge_hostname = "edge.sanvi.app"
+# A records for apex hostnames (CNAME at apex is illegal in DNS).
+anycast_ips = ["203.0.113.10", "203.0.113.11"]
+# DoH JSON endpoints used for verification (multi-resolver agreement).
+doh_resolvers = ["https://cloudflare-dns.com/dns-query", "https://dns.google/resolve"]
+# Verification requires agreement from at least this many resolvers.
+doh_min_agreement = 2
+# Per-resolver timeout (seconds).
+doh_timeout_secs = 5
+# Unverified claims expire after this long (no permanent squatting).
+verification_timeout_hours = 72
+# Verification polling backoff: start and cap (seconds).
+verification_backoff_base_secs = 10
+verification_backoff_max_secs = 300
+# Sandbox CA certificate validity (days).
+cert_lifetime_days = 90
+# Renewal starts this many days before not_after.
+cert_renewal_before_days = 30
+# Expiry warnings fire at these days-left thresholds.
+cert_expiry_warning_days = [30, 14, 7, 1]
+# Host -> tenant resolution cache TTL (seconds).
+host_cache_ttl_secs = 300
+# Shared secret the edge presents on /internal/tls/authorize. Empty means
+# the gate fails closed (every issuance attempt is denied).
+internal_secret = ""
+# Optional CIDR allow-list for the /internal domains route.
+internal_allowed_ips = []
+# Storefront probe timeout (seconds).
+prober_timeout_secs = 10
+prober_user_agent = "sanvi-domain-health/1.0"
+# Auto-renewal: lead time before registry expiry (days), retry window
+# between attempts (seconds), max attempts before escalation.
+order_renewal_lead_days = 30
+order_renewal_retry_secs = 86400
+order_renewal_max_attempts = 3
+connect_entitlement_key = "domains.custom"
+purchase_entitlement_key = "domains.purchase"
+
+[domains.registrar]
+mode = "sandbox"
+registrar_id = "sandbox"
+search_cache_ttl_secs = 300
+
+[[domains.registrar.tlds]]
+tld = "com"
+register_price_minor = 1299
+renew_price_minor = 1599
+currency = "usd"
+
+[[domains.registrar.tlds]]
+tld = "net"
+register_price_minor = 1399
+renew_price_minor = 1699
+currency = "usd"
+
+[[domains.registrar.tlds]]
+tld = "dev"
+register_price_minor = 1499
+renew_price_minor = 1499
+currency = "usd"
+
+[[domains.registrar.tlds]]
+tld = "jp"
+register_price_minor = 2400
+renew_price_minor = 2400
+currency = "usd"
+
 [features]
 # Phase gates live here from phase 01 onward.
 tenancy = true
@@ -221,6 +295,7 @@ billing = true
 privacy = true
 localization = true
 theming = true
+domains = true
 
 [outbox]
 poll_interval_ms = 1000
@@ -248,3 +323,9 @@ optout_propagation_interval_secs = 60
 retention_sweep_interval_secs = 86400
 export_cleanup_interval_secs = 3600
 privacy_metrics_interval_secs = 86400
+# Phase 08 jobs
+domains_verification_interval_secs = 60
+domains_cert_issue_interval_secs = 30
+domains_renewal_interval_secs = 3600
+domains_health_interval_secs = 3600
+domains_orders_interval_secs = 60

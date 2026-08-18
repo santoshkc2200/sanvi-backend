@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, hostname, registrant_contact, ordered_by, created_at\n               FROM domains.orders\n               WHERE ordered_by = $1 OR registrant_contact->>'email' = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "hostname",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "hostname"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "registrant_contact",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "registrant_contact"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "ordered_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "ordered_by"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "domains.orders",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "647a91ec126885dba335514d456cbd07b8dc5ba7d952d247bab27c585178882a"
+}

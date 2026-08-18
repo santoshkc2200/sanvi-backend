@@ -138,9 +138,10 @@ crates/
     privacy/               # jurisdiction profiles, consent/opt-out directives, DSRs, retention, breach (phase 05)
     localization/          # locale negotiation, message catalogs, formatting policy (phase 06)
     theming/               # theme registry, tenant drafts/publish/rollback, resolved-theme delivery (phase 07)
+    domains/               # custom domains, DNS verification, TLS authorize gate, registrar purchase (phase 08)
 apps/
   api/                     # composition root (binary + lib for tests/CLI)
-  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing/localization/theming) + scheduler (phase 01–05 jobs: DSR saga, retention, opt-out propagation)
+  worker/                  # outbox dispatcher + consumers (tenancy/identity/access/billing/localization/theming/domains) + scheduler (phase 01–08 jobs: DSR saga, retention, opt-out propagation, domain verification/renewal/health)
   cli/                     # migrate, tenant, seed roles/access/features, feature/entitlement/impersonation/audit/approval/billing, config, openapi, i18n, theme
 api/                       # committed per-context OpenAPI specs (contract)
 migrations/                # timestamped SQL migrations (reversible)

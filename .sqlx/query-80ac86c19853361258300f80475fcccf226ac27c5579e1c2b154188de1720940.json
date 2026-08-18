@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO domains.live_hostnames (normalized_hostname, tenant_id, status, updated_at)\n             VALUES ($1, $2, $3, now())\n             ON CONFLICT (normalized_hostname)\n             DO UPDATE SET tenant_id = EXCLUDED.tenant_id, status = EXCLUDED.status, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "80ac86c19853361258300f80475fcccf226ac27c5579e1c2b154188de1720940"
+}

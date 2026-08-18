@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO domains.orders\n               (id, tenant_id, hostname, normalized_hostname, term_years, price_minor,\n                currency, status, auto_renew, whois_privacy, registrant_contact, ordered_by,\n                idempotency_key, external_order_ref, charge_id, registered_at, expires_at,\n                renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at)\n               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Int8",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Timestamptz",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e38d0930c492d68bc38fe0ddbb29ad56a194ad7054247b1f271e6b7d00689bd"
+}

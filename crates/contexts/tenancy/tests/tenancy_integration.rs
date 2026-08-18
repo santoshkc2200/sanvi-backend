@@ -310,11 +310,20 @@ async fn tenant_scoped_settings_are_isolated_by_rls() {
 async fn every_tenant_scoped_table_enforces_rls_isolation() {
     let (pool, _owner, _admin, _node) = prepare().await;
 
+    // One documented exemption: `domains.live_hostnames` (phase 08) is the
+    // host→tenant projection the tenancy resolver and the TLS authorize
+    // gate read on the hot path. Unscoped pool connections cannot see RLS
+    // rows, so the projection deliberately has no policy; it contains only
+    // live-claim hostnames (public DNS information) and is written only
+    // inside transactions that also update `domains.custom_domains` — the
+    // RLS-enforced source of truth (see docs/runbooks/domains.md §1 for the
+    // rebuild statement).
     let tables: Vec<(String, String)> = sqlx::query_as(
         "SELECT table_schema, table_name
          FROM information_schema.columns
          WHERE column_name = 'tenant_id'
            AND table_schema NOT IN ('pg_catalog', 'information_schema')
+           AND NOT (table_schema = 'domains' AND table_name = 'live_hostnames')
          ORDER BY table_schema, table_name",
     )
     .fetch_all(&pool)

@@ -36,6 +36,8 @@ pub struct CliConfig {
     pub billing: sanvi_billing::BillingConfig,
     #[serde(default)]
     pub theming: sanvi_theming::ThemingConfig,
+    #[serde(default)]
+    pub domains: sanvi_domains::DomainsConfig,
 }
 
 /// Load `configs/base.toml` + `configs/{env}.toml` + `SANVI__` env overrides.
@@ -49,6 +51,7 @@ pub fn load(environment: &str) -> anyhow::Result<CliConfig> {
     config.database.validate()?;
     config.billing.validate()?;
     config.theming.validate()?;
+    config.domains.validate()?;
     Ok(config)
 }
 
