@@ -58,30 +58,37 @@ impl RoleCatalog for SqlxRoleCatalog {
 
     async fn permissions_for_roles(
         &self,
-        _tenant_id: uuid::Uuid,
+        tenant_id: uuid::Uuid,
         role_ids: &[uuid::Uuid],
     ) -> Result<Vec<String>, IdentityError> {
-        use crate::domain::roles::RoleId;
+        // Resolve through `assignable_to`, the same tenant-scoped role set
+        // `GrantMembership`/`UpdateMemberRoles` validate `role_ids` against
+        // at grant time — not `find_by_id`, which has no notion of tenant
+        // ownership and would silently resolve a role belonging to a
+        // different tenant. This also opens the audited unscoped-transaction
+        // escape hatch once per call instead of once per role id.
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("role_catalog", "identity")
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        let assignable = self
+            .roles
+            .assignable_to(&mut scope, tenant_id)
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| IdentityError::Storage(err.to_string()))?;
 
+        let wanted: std::collections::HashSet<_> = role_ids.iter().copied().collect();
         let mut permissions = std::collections::BTreeSet::new();
-        for role_id in role_ids {
-            let mut scope = self
-                .tx_manager
-                .begin_unscoped("role_catalog", "identity")
-                .await
-                .map_err(|err| IdentityError::Storage(err.to_string()))?;
-            let role = self
-                .roles
-                .find_by_id(&mut scope, RoleId::from_uuid(*role_id))
-                .await
-                .map_err(|err| IdentityError::Storage(err.to_string()))?;
-            scope
-                .commit()
-                .await
-                .map_err(|err| IdentityError::Storage(err.to_string()))?;
-            // A membership referencing a since-deleted role contributes no
-            // permissions rather than failing the whole `/me` response.
-            if let Some(role) = role {
+        // A membership referencing a since-deleted role, or (should it ever
+        // happen) a role belonging to a different tenant, contributes no
+        // permissions rather than failing the whole `/me` response.
+        for role in assignable {
+            if wanted.contains(&role.id().as_uuid()) {
                 permissions.extend(role.permissions().iter().cloned());
             }
         }

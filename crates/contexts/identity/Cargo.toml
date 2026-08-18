@@ -12,6 +12,7 @@ actix-web.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+rand.workspace = true
 redis.workspace = true
 reqwest.workspace = true
 sanvi-http.workspace = true

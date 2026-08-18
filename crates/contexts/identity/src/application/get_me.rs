@@ -89,13 +89,22 @@ impl GetMe {
             .await?;
         scope.commit().await.map_err(storage)?;
 
+        let tenant_ids: Vec<_> = memberships.iter().map(|m| m.tenant_id()).collect();
+        let tenants: std::collections::HashMap<_, _> = self
+            .tenant_catalog
+            .summaries(&tenant_ids)
+            .await?
+            .into_iter()
+            .map(|tenant| (tenant.tenant_id, tenant))
+            .collect();
+
         let mut membership_summaries = Vec::with_capacity(memberships.len());
         for membership in memberships {
             // A membership referencing a since-deleted tenant is skipped
             // rather than surfaced with blank metadata — it's cleaned up by
             // the same erasure/reconciliation path that handles the rest of
             // a deleted tenant's rows.
-            let Some(tenant) = self.tenant_catalog.summary(membership.tenant_id()).await? else {
+            let Some(tenant) = tenants.get(&membership.tenant_id()) else {
                 continue;
             };
             let permissions = self
@@ -104,8 +113,8 @@ impl GetMe {
                 .await?;
             membership_summaries.push(MembershipSummary {
                 tenant_id: tenant.tenant_id.to_string(),
-                tenant_slug: tenant.slug,
-                tenant_name: tenant.name,
+                tenant_slug: tenant.slug.clone(),
+                tenant_name: tenant.name.clone(),
                 role_ids: membership
                     .role_ids()
                     .iter()

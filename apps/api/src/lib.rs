@@ -2110,26 +2110,40 @@ impl TenantCatalogAdapter {
 
 #[async_trait::async_trait]
 impl TenantCatalog for TenantCatalogAdapter {
-    async fn summary(&self, tenant_id: Uuid) -> Result<Option<IdentityTenantSummary>, IdentityError> {
+    async fn summaries(
+        &self,
+        tenant_ids: &[Uuid],
+    ) -> Result<Vec<IdentityTenantSummary>, IdentityError> {
+        if tenant_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut scope = self
             .tx_manager
             .begin_unscoped("tenant_catalog", "identity")
             .await
             .map_err(|err| IdentityError::Storage(err.to_string()))?;
-        let tenant = self
-            .tenants
-            .find_by_id(&mut scope, TenantId::from_uuid(tenant_id))
-            .await
-            .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        let mut summaries = Vec::with_capacity(tenant_ids.len());
+        for &tenant_id in tenant_ids {
+            let tenant = self
+                .tenants
+                .find_by_id(&mut scope, TenantId::from_uuid(tenant_id))
+                .await
+                .map_err(|err| IdentityError::Storage(err.to_string()))?;
+            // A membership referencing a since-deleted tenant is skipped
+            // rather than surfaced with blank metadata (see get_me.rs).
+            if let Some(tenant) = tenant {
+                summaries.push(IdentityTenantSummary {
+                    tenant_id: tenant.id().as_uuid(),
+                    slug: tenant.slug().as_str().to_string(),
+                    name: tenant.display_name().as_str().to_string(),
+                });
+            }
+        }
         scope
             .commit()
             .await
             .map_err(|err| IdentityError::Storage(err.to_string()))?;
-        Ok(tenant.map(|tenant| IdentityTenantSummary {
-            tenant_id: tenant.id().as_uuid(),
-            slug: tenant.slug().as_str().to_string(),
-            name: tenant.display_name().as_str().to_string(),
-        }))
+        Ok(summaries)
     }
 }
 

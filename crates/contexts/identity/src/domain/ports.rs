@@ -355,7 +355,12 @@ pub trait RoleCatalog: Send + Sync {
 /// same shape as [`RoleCatalog`].
 #[async_trait]
 pub trait TenantCatalog: Send + Sync {
-    async fn summary(&self, tenant_id: Uuid) -> Result<Option<TenantSummary>, IdentityError>;
+    /// Resolve every tenant summary for the given ids in one call. Callers
+    /// with multiple ids (e.g. `GET /api/v1/me`'s per-membership loop) must
+    /// batch through this rather than looping single lookups, since each
+    /// call opens the audited unscoped-transaction escape hatch exactly
+    /// once regardless of `tenant_ids.len()`.
+    async fn summaries(&self, tenant_ids: &[Uuid]) -> Result<Vec<TenantSummary>, IdentityError>;
 }
 
 /// The subset of a tenant's identity a membership listing needs to render.

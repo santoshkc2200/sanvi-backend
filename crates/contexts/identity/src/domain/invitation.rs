@@ -2,6 +2,8 @@
 //! memberships on acceptance.
 
 use chrono::{DateTime, Utc};
+use rand::RngCore;
+use rand::rngs::OsRng;
 use sanvi_kernel::Id;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -23,7 +25,7 @@ impl InvitationToken {
     /// Generate a fresh token: 32 random bytes, hex-encoded.
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
-        getrandom_fill(&mut bytes);
+        OsRng.fill_bytes(&mut bytes);
         Self(bytes.iter().map(|b| format!("{b:02x}")).collect())
     }
 
@@ -47,16 +49,6 @@ impl InvitationToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-}
-
-fn getrandom_fill(bytes: &mut [u8]) {
-    // `getrandom` is not a workspace dep; UUIDv7 entropy is a perfectly good
-    // local source (the uuid crate already links a CSPRNG).
-    let mut rng = uuid::Uuid::now_v7().as_bytes().to_vec();
-    while rng.len() < bytes.len() {
-        rng.extend_from_slice(uuid::Uuid::now_v7().as_bytes());
-    }
-    bytes.copy_from_slice(&rng[..bytes.len()]);
 }
 
 /// A pending invitation. The token hash is the lookup key; acceptance marks

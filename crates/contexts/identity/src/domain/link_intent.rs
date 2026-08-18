@@ -7,6 +7,8 @@
 //! may complete the link.
 
 use chrono::{DateTime, Utc};
+use rand::RngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -19,12 +21,7 @@ pub struct LinkNonce(String);
 impl LinkNonce {
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
-        let mut rng = uuid::Uuid::now_v7().as_bytes().to_vec();
-        while rng.len() < bytes.len() {
-            rng.extend_from_slice(uuid::Uuid::now_v7().as_bytes());
-        }
-        let len = bytes.len();
-        bytes.copy_from_slice(&rng[..len]);
+        OsRng.fill_bytes(&mut bytes);
         Self(bytes.iter().map(|b| format!("{b:02x}")).collect())
     }
 
