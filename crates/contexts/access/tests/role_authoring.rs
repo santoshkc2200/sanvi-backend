@@ -418,6 +418,7 @@ async fn system_roles_are_immutable_on_update_and_delete() {
             None,
             UpdateCustomRoleCommand {
                 role_id: system_role.id(),
+                tenant_id: Uuid::now_v7(),
                 name: Some("Renamed".to_string()),
                 permissions: Some(vec!["identity.member.read".to_string()]),
             },
@@ -428,7 +429,7 @@ async fn system_roles_are_immutable_on_update_and_delete() {
 
     let delete = DeleteCustomRole::new(tx_manager, roles, events, clock, audit);
     let err = delete
-        .execute(Uuid::now_v7(), None, system_role.id())
+        .execute(Uuid::now_v7(), None, Uuid::now_v7(), system_role.id())
         .await
         .expect_err("system roles cannot be deleted");
     assert!(matches!(err, AccessError::SystemRoleImmutable { .. }));
@@ -482,6 +483,7 @@ async fn updating_a_role_rechecks_the_whole_new_set() {
             None,
             UpdateCustomRoleCommand {
                 role_id: role.id(),
+                tenant_id: tenant,
                 name: None,
                 permissions: Some(vec![
                     "identity.member.read".to_string(),

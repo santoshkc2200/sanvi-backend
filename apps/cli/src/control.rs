@@ -24,8 +24,11 @@ use sanvi_audit::{
 };
 use sanvi_persistence::TxManager;
 use sanvi_platform_admin::{
-    adapters::{SqlxImpersonationGrantRepository, SqlxPendingApprovalRepository, SystemClock},
-    application::approvals::DecideApproval,
+    adapters::{
+        ApprovalGateAdapter, SqlxImpersonationGrantRepository, SqlxPendingApprovalRepository,
+        SystemClock, SystemIdGenerator,
+    },
+    application::approvals::{DecideApproval, RecordApprovalRequest},
     application::{
         ApproveRequest, DecideApprovalCommand, ListImpersonations, ListPendingApprovals,
         RejectRequest, RevokeImpersonation,
@@ -148,8 +151,14 @@ pub async fn entitlement_grant(
     args: EntitlementGrantArgs,
 ) -> anyhow::Result<()> {
     let tenant_id = tenant_id_by_slug(environment, &args.tenant_slug).await?;
+    let config = load_config(environment)?;
     let pool = connect(environment).await?;
     let tx_manager = TxManager::new(pool);
+    let record_approval = Arc::new(RecordApprovalRequest::new(
+        Arc::new(SqlxPendingApprovalRepository::new()),
+        Arc::new(SystemIdGenerator),
+        Arc::new(SystemClock),
+    ));
     let use_case = GrantEntitlement::new(
         tx_manager,
         Arc::new(SqlxFeatureRepository::new()),
@@ -157,8 +166,10 @@ pub async fn entitlement_grant(
         Arc::new(sanvi_access::adapters::OutboxEventPublisher::new()),
         Arc::new(sanvi_access::adapters::SystemClock),
         Arc::new(SqlxAuditWriter::new()),
-        noop_approval_gate(),
-        sanvi_access::application::entitlements::EntitlementPolicy::default(),
+        Arc::new(ApprovalGateAdapter::new(record_approval)),
+        sanvi_access::application::entitlements::EntitlementPolicy {
+            approval_threshold: config.access.entitlement_approval_threshold,
+        },
     );
     match use_case
         .execute(
@@ -435,6 +446,7 @@ pub async fn approval_decide(
         ApproveRequest::new(decide)
             .execute(
                 CLI_ACTOR,
+                None,
                 DecideApprovalCommand {
                     approval_id: sanvi_platform_admin::domain::ApprovalId::from_uuid(approval_id),
                     approve: true,
@@ -445,6 +457,7 @@ pub async fn approval_decide(
         RejectRequest::new(decide)
             .execute(
                 CLI_ACTOR,
+                None,
                 DecideApprovalCommand {
                     approval_id: sanvi_platform_admin::domain::ApprovalId::from_uuid(approval_id),
                     approve: false,

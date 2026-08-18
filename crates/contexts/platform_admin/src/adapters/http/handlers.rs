@@ -350,7 +350,7 @@ pub enum GrantEntitlementResultView {
     responses(
         (status = 201, description = "Granted (or approval required)", body = GrantEntitlementResultView),
         (status = 400, description = "Invalid request", body = sanvi_http::ProblemDetail),
-        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+        (status = 403, description = "Permission denied or fresh MFA missing", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn grant_entitlement_override(
@@ -359,6 +359,7 @@ pub async fn grant_entitlement_override(
     path: web::Path<Uuid>,
     body: web::Json<GrantEntitlementRequest>,
     _guard: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
 ) -> Result<impl Responder, ApiError> {
     let outcome = state
         .entitlements
@@ -512,11 +513,13 @@ pub async fn approve_request(
     path: web::Path<Uuid>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
+    req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
     let approval = state
         .approve
         .execute(
             subject.0.user_id,
+            sanvi_http::impersonation_actor(&req),
             DecideApprovalCommand {
                 approval_id: ApprovalId::from_uuid(path.into_inner()),
                 approve: true,
@@ -547,11 +550,13 @@ pub async fn reject_request(
     path: web::Path<Uuid>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
+    req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
     let approval = state
         .reject
         .execute(
             subject.0.user_id,
+            sanvi_http::impersonation_actor(&req),
             DecideApprovalCommand {
                 approval_id: ApprovalId::from_uuid(path.into_inner()),
                 approve: false,

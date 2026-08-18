@@ -91,6 +91,23 @@ impl PersonalDataProvider for PlatformAdminPrivacyProvider {
                 }),
             });
         }
+        for grant in self
+            .grants
+            .list_by_target(&mut scope, user_id)
+            .await
+            .map_err(storage)?
+        {
+            entries.push(DataEntry {
+                data_class: DataClass::AuditLog,
+                category: "Security".to_string(),
+                label: "impersonation_grant_received".to_string(),
+                value: serde_json::json!({
+                    "tenant_id": grant.tenant_id(),
+                    "actor_id": grant.actor_id(),
+                    "created_at": grant.created_at(),
+                }),
+            });
+        }
         for approval in self
             .approvals
             .list_by_requester(&mut scope, user_id)
@@ -133,6 +150,11 @@ impl PersonalDataProvider for PlatformAdminPrivacyProvider {
             erased += self
                 .grants
                 .revoke_all_for_actor(&mut scope, user_id)
+                .await
+                .map_err(storage)?;
+            anonymised += self
+                .grants
+                .anonymise_target(&mut scope, user_id)
                 .await
                 .map_err(storage)?;
             anonymised += self

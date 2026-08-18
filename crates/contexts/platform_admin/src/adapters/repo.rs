@@ -192,6 +192,24 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
         Ok(result.rows_affected() as usize)
     }
 
+    async fn anonymise_target(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        target_user_id: Uuid,
+    ) -> Result<usize, PlatformAdminError> {
+        let result = sqlx::query(
+            "UPDATE platform_admin.impersonation_grants
+             SET target_user_id = $1
+             WHERE target_user_id = $2",
+        )
+        .bind(Uuid::nil())
+        .bind(target_user_id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn count_active(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -322,7 +340,8 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
     ) -> Result<usize, PlatformAdminError> {
         let result = sqlx::query(
             "UPDATE platform_admin.pending_approvals
-             SET requested_by = $2, decided_by = COALESCE(decided_by, $2)
+             SET requested_by = CASE WHEN requested_by = $1 THEN $2 ELSE requested_by END,
+                 decided_by = CASE WHEN decided_by = $1 THEN $2 ELSE decided_by END
              WHERE requested_by = $1 OR decided_by = $1",
         )
         .bind(user_id)

@@ -57,6 +57,15 @@ pub trait ImpersonationGrantRepository: Send + Sync {
         actor_id: Uuid,
     ) -> Result<usize, PlatformAdminError>;
 
+    /// Phase-05 erasure: redact `target_user_id` on every grant a user was
+    /// impersonated under (the table has no DELETE grant, so this is a
+    /// reference anonymisation, not a revoke).
+    async fn anonymise_target(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        target_user_id: Uuid,
+    ) -> Result<usize, PlatformAdminError>;
+
     /// How many active grants exist into a tenant (admin view summary).
     async fn count_active(
         &self,

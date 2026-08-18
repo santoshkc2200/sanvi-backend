@@ -125,9 +125,12 @@ impl ApproveRequest {
     pub async fn execute(
         &self,
         actor: Uuid,
+        on_behalf_of: Option<Uuid>,
         cmd: DecideApprovalCommand,
     ) -> Result<ApprovalView, PlatformAdminError> {
-        self.inner.execute_decision(actor, cmd, true).await
+        self.inner
+            .execute_decision(actor, on_behalf_of, cmd, true)
+            .await
     }
 }
 
@@ -135,9 +138,12 @@ impl RejectRequest {
     pub async fn execute(
         &self,
         actor: Uuid,
+        on_behalf_of: Option<Uuid>,
         cmd: DecideApprovalCommand,
     ) -> Result<ApprovalView, PlatformAdminError> {
-        self.inner.execute_decision(actor, cmd, false).await
+        self.inner
+            .execute_decision(actor, on_behalf_of, cmd, false)
+            .await
     }
 }
 
@@ -145,6 +151,7 @@ impl DecideApproval {
     async fn execute_decision(
         &self,
         actor: Uuid,
+        on_behalf_of: Option<Uuid>,
         cmd: DecideApprovalCommand,
         approve: bool,
     ) -> Result<ApprovalView, PlatformAdminError> {
@@ -163,71 +170,11 @@ impl DecideApproval {
             })?;
         approval.decide(actor, approve, now)?;
 
-        // Approving executes the recorded action *before* the transaction
-        // commits, through the context that owns it.
-        let executed = if approve {
-            match approval.action_type() {
-                "entitlement.grant" => {
-                    let payload = approval.payload();
-                    let tenant_id = payload
-                        .get("tenant_id")
-                        .and_then(|value| value.as_str())
-                        .and_then(|value| value.parse::<Uuid>().ok())
-                        .ok_or_else(|| {
-                            PlatformAdminError::InvalidSearch(
-                                "approval payload has no tenant_id".to_string(),
-                            )
-                        })?;
-                    let feature_key = payload
-                        .get("feature_key")
-                        .and_then(|value| value.as_str())
-                        .ok_or_else(|| {
-                            PlatformAdminError::InvalidSearch(
-                                "approval payload has no feature_key".to_string(),
-                            )
-                        })?;
-                    let enabled = payload
-                        .get("enabled")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false);
-                    let limit = payload.get("limit").and_then(|value| value.as_i64());
-                    let expires_at = payload
-                        .get("expires_at")
-                        .and_then(|value| value.as_str())
-                        .and_then(|value| {
-                            chrono::DateTime::parse_from_rfc3339(value)
-                                .ok()
-                                .map(|dt| dt.with_timezone(&Utc))
-                        });
-                    let reason = payload
-                        .get("reason")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string);
-                    self.entitlements
-                        .grant_override_approved(
-                            approval.requested_by(),
-                            tenant_id,
-                            feature_key.to_string(),
-                            enabled,
-                            limit,
-                            expires_at,
-                            reason,
-                        )
-                        .await?;
-                    true
-                }
-                other => {
-                    return Err(PlatformAdminError::InvalidActionType(format!(
-                        "no executor registered for approval action {other}"
-                    )));
-                }
-            }
-        } else {
-            false
-        };
-        if executed {
-            approval.mark_executed(now)?;
-        }
+        // The decision itself (approved/rejected) is committed durably
+        // *before* the cross-context executor runs: the two contexts do
+        // not share a transaction (no cross-context database access), so
+        // this ordering guarantees the approval is never left `Pending`
+        // — and therefore never re-decidable — once execution has begun.
         self.approvals.save(&mut scope, &approval).await?;
         self.audit
             .append(
@@ -236,7 +183,7 @@ impl DecideApproval {
                     occurred_at: now,
                     actor_type: ActorType::PlatformAdmin,
                     actor_id: Some(actor),
-                    on_behalf_of: None,
+                    on_behalf_of,
                     tenant_id: None,
                     action: if approve {
                         "platform_admin.approval_approved".to_string()
@@ -259,6 +206,80 @@ impl DecideApproval {
             )
             .await
             .map_err(storage)?;
+        scope.commit().await.map_err(storage)?;
+
+        if !approve {
+            return Ok(ApprovalView::from(&approval));
+        }
+
+        // Execute the approved action through the context that owns it.
+        // If this fails, the approval durably stays `Approved` (not
+        // `Executed`) rather than reverting to `Pending` or silently
+        // reporting success — a recoverable, visible state instead of a
+        // state that contradicts what actually happened.
+        match approval.action_type() {
+            "entitlement.grant" => {
+                let payload = approval.payload();
+                let tenant_id = payload
+                    .get("tenant_id")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| value.parse::<Uuid>().ok())
+                    .ok_or_else(|| {
+                        PlatformAdminError::InvalidSearch(
+                            "approval payload has no tenant_id".to_string(),
+                        )
+                    })?;
+                let feature_key = payload
+                    .get("feature_key")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| {
+                        PlatformAdminError::InvalidSearch(
+                            "approval payload has no feature_key".to_string(),
+                        )
+                    })?;
+                let enabled = payload
+                    .get("enabled")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                let limit = payload.get("limit").and_then(|value| value.as_i64());
+                let expires_at = payload
+                    .get("expires_at")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| {
+                        chrono::DateTime::parse_from_rfc3339(value)
+                            .ok()
+                            .map(|dt| dt.with_timezone(&Utc))
+                    });
+                let reason = payload
+                    .get("reason")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+                self.entitlements
+                    .grant_override_approved(
+                        approval.requested_by(),
+                        tenant_id,
+                        feature_key.to_string(),
+                        enabled,
+                        limit,
+                        expires_at,
+                        reason,
+                    )
+                    .await?;
+            }
+            other => {
+                return Err(PlatformAdminError::InvalidActionType(format!(
+                    "no executor registered for approval action {other}"
+                )));
+            }
+        }
+
+        approval.mark_executed(now)?;
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("decide_approval_executed", "platform-admin")
+            .await
+            .map_err(storage)?;
+        self.approvals.save(&mut scope, &approval).await?;
         scope.commit().await.map_err(storage)?;
         Ok(ApprovalView::from(&approval))
     }

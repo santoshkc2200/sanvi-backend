@@ -247,6 +247,7 @@ pub struct UpdateRoleRequest {
     path = "/api/v1/tenant/roles/{id}",
     tag = "access",
     operation_id = "update_role",
+    params(("id" = Uuid, Path, description = "Role id")),
     request_body = UpdateRoleRequest,
     responses(
         (status = 200, description = "Role updated", body = RoleView),
@@ -257,7 +258,7 @@ pub struct UpdateRoleRequest {
 )]
 pub async fn update_role(
     state: web::Data<AccessState>,
-    _tenant: CurrentTenant,
+    tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<Uuid>,
     body: web::Json<UpdateRoleRequest>,
@@ -273,6 +274,7 @@ pub async fn update_role(
             on_behalf_of,
             UpdateCustomRoleCommand {
                 role_id: RoleId::from_uuid(path.into_inner()),
+                tenant_id: tenant.0.tenant_id,
                 name: body.name.clone(),
                 permissions: body.permissions.clone(),
             },
@@ -288,6 +290,7 @@ pub async fn update_role(
     path = "/api/v1/tenant/roles/{id}",
     tag = "access",
     operation_id = "delete_role",
+    params(("id" = Uuid, Path, description = "Role id")),
     responses(
         (status = 204, description = "Role deleted"),
         (status = 403, description = "System role or permission denied", body = sanvi_http::ProblemDetail),
@@ -296,7 +299,7 @@ pub async fn update_role(
 )]
 pub async fn delete_role(
     state: web::Data<AccessState>,
-    _tenant: CurrentTenant,
+    tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<Uuid>,
     _guard: RequiredPermission,
@@ -306,7 +309,12 @@ pub async fn delete_role(
     let on_behalf_of = on_behalf_of(&req);
     state
         .delete_role
-        .execute(actor, on_behalf_of, RoleId::from_uuid(path.into_inner()))
+        .execute(
+            actor,
+            on_behalf_of,
+            tenant.0.tenant_id,
+            RoleId::from_uuid(path.into_inner()),
+        )
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::NoContent())
@@ -432,6 +440,7 @@ pub struct UpdateFeatureRequest {
     path = "/api/v1/platform/features/{key}",
     tag = "access",
     operation_id = "update_feature",
+    params(("key" = String, Path, description = "Feature key")),
     request_body = UpdateFeatureRequest,
     responses(
         (status = 200, description = "Feature updated", body = FeatureView),
@@ -446,6 +455,7 @@ pub async fn update_feature(
     path: web::Path<String>,
     body: web::Json<UpdateFeatureRequest>,
     _guard: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
 ) -> Result<impl Responder, ApiError> {
     let feature = state
         .update_feature
@@ -472,6 +482,7 @@ pub async fn update_feature(
     path = "/api/v1/platform/features/{key}",
     tag = "access",
     operation_id = "deprecate_feature",
+    params(("key" = String, Path, description = "Feature key")),
     responses(
         (status = 200, description = "Feature deprecated", body = FeatureView),
         (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),

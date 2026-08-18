@@ -183,6 +183,7 @@ impl CreateCustomRole {
 
 pub struct UpdateCustomRoleCommand {
     pub role_id: RoleId,
+    pub tenant_id: Uuid,
     pub name: Option<String>,
     pub permissions: Option<Vec<String>>,
 }
@@ -243,6 +244,11 @@ impl UpdateCustomRole {
                 key: existing.key().to_string(),
             });
         };
+        if tenant_id != cmd.tenant_id {
+            return Err(AccessError::RoleNotFound {
+                key: cmd.role_id.to_string(),
+            });
+        }
 
         let permissions = match cmd.permissions {
             Some(raw) => {
@@ -347,6 +353,7 @@ impl DeleteCustomRole {
         &self,
         actor: Uuid,
         on_behalf_of: Option<Uuid>,
+        tenant_id: Uuid,
         role_id: RoleId,
     ) -> Result<(), AccessError> {
         let mut scope = self
@@ -364,6 +371,11 @@ impl DeleteCustomRole {
         if existing.is_system() || existing.scope() != RoleScope::Tenant {
             return Err(AccessError::SystemRoleImmutable {
                 key: existing.key().to_string(),
+            });
+        }
+        if existing.tenant_id() != Some(tenant_id) {
+            return Err(AccessError::RoleNotFound {
+                key: role_id.to_string(),
             });
         }
         self.roles.delete(&mut scope, role_id).await?;

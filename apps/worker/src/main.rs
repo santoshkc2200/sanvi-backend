@@ -463,9 +463,11 @@ async fn main() -> ExitCode {
     }
     let access_consumer = access_consumer.with_metrics(access_consumer_metrics);
     let access_consumer_name = format!("access-{}", uuid::Uuid::now_v7());
+    let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> =
+        Arc::new(InMemoryDecisionCache::new(10_000));
     let access_handler = sanvi_access::adapters::sync::access_sync_handler(
         access_store.clone(),
-        None,
+        Some(decision_cache.clone()),
         role_key_resolver,
     );
 
@@ -478,8 +480,6 @@ async fn main() -> ExitCode {
         config.access.entitlement_cache_ttl_secs,
     ));
 
-    let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> =
-        Arc::new(InMemoryDecisionCache::new(10_000));
     let entitlement_consumer = StreamConsumer::new(pool.clone(), streams.clone());
     let entitlement_consumer_metrics = Arc::new(ConsumerMetrics::new("access-entitlements"));
     if let Err(err) = entitlement_consumer_metrics.register(registry) {

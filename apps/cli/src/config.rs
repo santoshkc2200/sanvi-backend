@@ -33,6 +33,8 @@ pub struct CliConfig {
     #[serde(default)]
     pub ory: CliOryConfig,
     #[serde(default)]
+    pub access: sanvi_access::AccessConfig,
+    #[serde(default)]
     pub billing: sanvi_billing::BillingConfig,
     #[serde(default)]
     pub theming: sanvi_theming::ThemingConfig,
@@ -49,6 +51,7 @@ pub fn load(environment: &str) -> anyhow::Result<CliConfig> {
         .extract()
         .context("failed to load configuration")?;
     config.database.validate()?;
+    config.access.validate()?;
     config.billing.validate()?;
     config.theming.validate()?;
     config.domains.validate()?;

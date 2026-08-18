@@ -17,6 +17,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::application::storage;
+use crate::application::tenant_views::MAX_PAGE_LIMIT;
 use crate::domain::PlatformAdminError;
 use crate::domain::events::PlatformAdminEvent;
 use crate::domain::impersonation::{ImpersonationGrant, ImpersonationGrantId, ImpersonationMode};
@@ -243,7 +244,12 @@ impl ListImpersonations {
             .map_err(storage)?;
         let grants = self
             .grants
-            .list_active(&mut scope, tenant_id, self.clock.now(), limit)
+            .list_active(
+                &mut scope,
+                tenant_id,
+                self.clock.now(),
+                limit.clamp(1, MAX_PAGE_LIMIT),
+            )
             .await?;
         scope.commit().await.map_err(storage)?;
         Ok(grants.iter().map(ImpersonationGrantView::from).collect())
