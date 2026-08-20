@@ -8,10 +8,30 @@ architecture, PostgreSQL via compile-time-checked SQLx, Redis, docker-compose fo
 - [`architecture-overview.md`](architecture-overview.md) — the invariants every phase must respect.
 - `phase-NN-<slug>/implementation-plan.md` — one plan per delivery phase. Each plan is
   self-contained: scope, decisions, deliverables, task breakdown, data model, tests, DoD.
+- [`requirements.md`](requirements.md) — numbered `FR-*` / `NFR-*` requirements, from phase 09 onward.
+  Tasks trace to these IDs.
+- [`tasks/backlog.md`](tasks/backlog.md) — **start here to pick up work.** The status of every task,
+  with the task specs in `tasks/phase-NN/`.
 - [`runbooks/`](runbooks/) — operator procedures (impersonation, entitlement grants,
   audit chain incidents, billing/webhook repair, …).
 - [`adr/`](adr/) — architecture decision records.
 - The cross-project phase map lives in [`../../docs/roadmap.md`](../../docs/roadmap.md).
+
+## Working the backlog
+
+From phase 09 the delivery layers are: the roadmap (why the phase exists) → the phase
+implementation plan (what and how) → the cross-track slice docs in `../../docs/phase-NN-*/` (order and
+exit criteria per slice) → [`requirements.md`](requirements.md) (numbered requirements) →
+[`tasks/`](tasks/backlog.md) (one agent-executable spec per slice). Every layer traces to the one
+above it; `sdlc.py check` enforces it mechanically.
+
+```bash
+SDLC="python3 ~/.claude/skills/sdlc-planner/scripts/sdlc.py"
+$SDLC check                          # traceability + status drift, run from this repo root
+$SDLC status TASK-002 in-progress    # never hand-edit the status line and the backlog separately
+```
+
+Phases 00–08 predate this practice and stay documented by their implementation plans alone.
 
 ## Phases
 
