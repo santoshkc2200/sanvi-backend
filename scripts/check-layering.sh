@@ -5,13 +5,16 @@
 #   ./scripts/check-layering.sh --self-test # prove the lint catches violations
 #
 # Non-negotiable #1 from docs/architecture-overview.md: no sqlx, actix,
-# reqwest (or any HTTP/DB runtime) inside a src/domain/ module.
+# reqwest (or any HTTP/DB runtime) inside a src/domain/ module. `stripe`
+# enforces NFR-906 (phase 09): no provider SDK type may appear in a port
+# signature or anywhere in the domain — Stripe specifics live only in
+# adapters.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-FORBIDDEN=(sqlx actix_web actix-web reqwest hyper tokio_postgres diesel redis aws_sdk)
+FORBIDDEN=(sqlx actix_web actix-web reqwest hyper tokio_postgres diesel redis aws_sdk stripe)
 
 check() {
     local violations=0

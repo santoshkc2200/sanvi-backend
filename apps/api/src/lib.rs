@@ -136,8 +136,14 @@ use sanvi_localization::{
 };
 use sanvi_payments::{
     PaymentsConfig,
-    adapters::{EmptyProviderCatalog, PaymentsMetrics, SqlxProviderConnectionRepository},
-    application::ListProviders,
+    adapters::{
+        FakeProvider, OutboxEventPublisher as PaymentsEvents, PaymentsMetrics,
+        SqlxProviderConnectionRepository,
+    },
+    application::{
+        ListProviders, ProviderRegistry as PaymentsProviderRegistry, RegistryProviderCatalog,
+        RuntimeEnvironment, StartProviderConnection,
+    },
     routes as payments_routes,
 };
 use sanvi_platform_admin::{
@@ -2440,29 +2446,59 @@ pub fn build_domains_lookup(
 }
 
 // ---------------------------------------------------------------------------
-// Phase 09: the payments context's composition root. Deliberately thin in
-// 09.0 — one use case (the empty provider catalog) over a stub adapter;
-// Stripe adapters, onboarding and webhooks arrive with 09.1+.
+// Phase 09: the payments context's composition root. 09.1 assembles the
+// provider registry — the single source of catalog entries — and wires
+// the first vertical use case (registry → port → repo → outbox). The
+// Stripe Connect adapter joins the registry with 09.2.
 // ---------------------------------------------------------------------------
 
 /// Build the payments context's application state.
+///
+/// The registry decides what exists: the fake provider is registered
+/// only in non-production environments (gate 1), and the registry-backed
+/// catalog independently refuses to list non-production descriptors in
+/// production (gate 2) — a mistake in one place is not enough to leak a
+/// test provider into a production catalog.
+#[allow(clippy::too_many_arguments)]
 pub fn build_payments_state(
-    _pool: sanvi_persistence::PgPool,
+    pool: sanvi_persistence::PgPool,
     config: &PaymentsConfig,
     registry: &prometheus::Registry,
+    environment: &str,
 ) -> sanvi_payments::adapters::http::PaymentsState {
-    // Registered so the repo is part of the composition root from day one
-    // (RLS tests exercise it); the connection use cases that consume it
-    // arrive with 09.2.
-    let _connections: Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
-        Arc::new(SqlxProviderConnectionRepository::new());
-    let catalog: Arc<dyn sanvi_payments::application::ProviderCatalog> =
-        Arc::new(EmptyProviderCatalog);
+    let environment = RuntimeEnvironment::from_config(environment);
+
+    let mut providers = PaymentsProviderRegistry::new();
+    if environment == RuntimeEnvironment::NonProduction {
+        providers
+            .register(std::sync::Arc::new(FakeProvider::new()))
+            .expect("the fake provider is the first registration");
+    }
+    // 09.2: register the Stripe Connect adapter when `connect_api_key` is
+    // configured. Until then the production registry is empty and the
+    // catalog answers an empty list — the honest state, not a hardcoded
+    // one.
+    let providers = std::sync::Arc::new(providers);
+
+    let catalog = std::sync::Arc::new(RegistryProviderCatalog::new(providers.clone(), environment));
+    let connections: std::sync::Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
+        std::sync::Arc::new(SqlxProviderConnectionRepository::new());
+    let events: std::sync::Arc<dyn sanvi_payments::domain::EventPublisher> =
+        std::sync::Arc::new(PaymentsEvents::new());
+    let tx = sanvi_persistence::TxManager::new(pool.clone());
+    let start_connection = std::sync::Arc::new(StartProviderConnection::new(
+        tx,
+        providers.clone(),
+        connections,
+        events,
+    ));
 
     sanvi_payments::adapters::http::PaymentsState {
         config: config.clone(),
-        metrics: Arc::new(PaymentsMetrics::new(registry)),
-        list_providers: Arc::new(ListProviders::new(catalog)),
+        metrics: std::sync::Arc::new(PaymentsMetrics::new(registry)),
+        list_providers: std::sync::Arc::new(ListProviders::new(catalog)),
+        registry: providers,
+        start_connection,
     }
 }
 

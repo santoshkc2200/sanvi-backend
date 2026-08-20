@@ -320,6 +320,11 @@ mod tests {
         assert!(json.contains("/api/v1/tenant/payments/providers"));
         assert!(json.contains("ProvidersView"));
         assert!(json.contains("ProviderView"));
+        // The catalog's 09.1 shape: kind-keyed entries with per-tenant
+        // availability and country support — the frontend's card list.
+        assert!(json.contains("supported_countries"));
+        assert!(json.contains("requires_onboarding"));
+        assert!(json.contains("available"));
         // The conventions this slice fixes for every later payments
         // endpoint: the error namespace, minor-unit money, idempotency.
         assert!(json.contains("payments/provider-unavailable"));

@@ -1,7 +1,7 @@
 # TASK-002: 09.1 Provider-agnostic domain, ports & catalog
 
 **Phase:** 09
-**Status:** todo
+**Status:** done
 **Requirement(s):** FR-902, NFR-906, NFR-907
 **Depends on:** TASK-001
 **Created:** 2026-08-20

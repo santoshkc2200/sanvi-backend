@@ -27,7 +27,7 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | ID | Phase | Title | Status | Depends on | Notes |
 |---|---|---|---|---|---|
 | TASK-001 | 09 | 09.0 Contract, schema & foundations | done | phase 03, 04, 08 | shipped: payments crate, migration 20260823000000, catalog route, connect-invariants gate |
-| TASK-002 | 09 | 09.1 Provider-agnostic domain, ports & catalog | todo | TASK-001 | |
+| TASK-002 | 09 | 09.1 Provider-agnostic domain, ports & catalog | done | TASK-001 | shipped: domain+ports+fake provider, registry-derived catalog, ProviderConnectionStarted outbox e2e (09.1) |
 | TASK-003 | 09 | 09.2 Stripe Connect onboarding (Accounts v2) | todo | TASK-002 | |
 | TASK-004 | 09 | 09.3 Connection lifecycle & Connect webhooks | todo | TASK-003 | |
 | TASK-005 | 09 | 09.4 Checkout on the connected account | todo | TASK-004 | |

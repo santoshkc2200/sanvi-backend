@@ -59,13 +59,19 @@ pub fn api_error(err: crate::domain::PaymentsError) -> ApiError {
 /// `payments.stripe_connect` entitlement (`RequiredFeature` — 403, never
 /// 404, so the frontend can render an upgrade prompt instead of a dead
 /// end).
+///
+/// The response is derived from the provider registry — the handler adds
+/// nothing provider-specific. The tenant's country (from the tenant
+/// context's region, when it parses as ISO-3166-1 alpha-2) decides
+/// per-tenant availability; an unparseable region leaves the provider
+/// available rather than locking the tenant out.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/payments/providers",
     tag = "payments",
     operation_id = "list_payment_providers",
     responses(
-        (status = 200, description = "Connectable payment providers (empty until the catalog lands in 09.1)", body = crate::application::ProvidersView),
+        (status = 200, description = "Connectable providers, derived from the provider registry", body = crate::application::ProvidersView),
         (status = 403, description = "Missing payments.read permission or the payments.stripe_connect entitlement", body = ProblemDetail)
     ),
     params(
@@ -79,9 +85,10 @@ pub async fn list_payment_providers(
     _entitlement: RequiredFeature,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
+    let tenant_country = crate::domain::provider::CountryCode::parse(&tenant.0.region).ok();
     let view: ProvidersView = state
         .list_providers
-        .execute(tenant_id)
+        .execute(tenant_id, tenant_country)
         .await
         .map_err(api_error)?;
     state

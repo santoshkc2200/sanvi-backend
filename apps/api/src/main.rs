@@ -394,12 +394,15 @@ async fn main() -> ExitCode {
 
     // Phase 09: tenant payment providers. Flag ships off — with it off no
     // payments route is mounted; with it on, the catalog route is
-    // permission- and entitlement-gated (sub-phase 09.0).
+    // permission- and entitlement-gated (sub-phase 09.0). The environment
+    // string decides whether the fake provider joins the registry
+    // (sub-phase 09.1).
     let payments = if config.features.payments {
         Some(build_payments_state(
             pool.clone(),
             &config.payments,
             metrics.prometheus_registry(),
+            &config.telemetry.environment,
         ))
     } else {
         None

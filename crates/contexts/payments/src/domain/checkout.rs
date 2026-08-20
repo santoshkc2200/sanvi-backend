@@ -1,0 +1,228 @@
+//! The checkout aggregate: one provider checkout session per merchant
+//! order attempt. Direct charges on the connected account — the amount
+//! belongs to the tenant, and Sanvi's fee (if ever configured) rides the
+//! payment intent, never the session total.
+//!
+//! Persistence lands in 09.4; the aggregate and its invariants exist now
+//! because the ports (this slice) already speak them.
+
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
+use super::error::PaymentsError;
+use super::money::Money;
+
+/// The tenant's own order reference, carried through to the provider and
+/// echoed on every read model — the join key between the tenant's order
+/// book and our payments. Opaque to us beyond validation: non-empty,
+/// bounded (providers reject long client reference ids at the HTTP layer,
+/// and unbounded strings are a log-injection vector).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MerchantOrderRef(String);
+
+impl MerchantOrderRef {
+    const MAX_LEN: usize = 200;
+
+    pub fn parse(raw: &str) -> Result<Self, PaymentsError> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(PaymentsError::InvalidConnection(
+                "merchant order reference must not be empty".to_string(),
+            ));
+        }
+        if trimmed.len() > Self::MAX_LEN {
+            return Err(PaymentsError::InvalidConnection(format!(
+                "merchant order reference exceeds {} characters",
+                Self::MAX_LEN
+            )));
+        }
+        Ok(Self(trimmed.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The checkout lifecycle. Values are fixed by the 09.0 schema CHECK on
+/// `payments.checkouts` — this enum and that constraint must never
+/// disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutStatus {
+    /// Created, session not yet confirmed by the provider.
+    Pending,
+    /// Provider session live; the customer may pay.
+    Open,
+    /// Payment succeeded (the webhook said so — never the redirect).
+    Complete,
+    /// No payment happened before the deadline.
+    Expired,
+    /// The customer abandoned at the provider.
+    Canceled,
+}
+
+impl CheckoutStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Open => "open",
+            Self::Complete => "complete",
+            Self::Expired => "expired",
+            Self::Canceled => "canceled",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Some(match raw {
+            "pending" => Self::Pending,
+            "open" => Self::Open,
+            "complete" => Self::Complete,
+            "expired" => Self::Expired,
+            "canceled" => Self::Canceled,
+            _ => return None,
+        })
+    }
+}
+
+/// A checkout for one merchant order on the tenant's connected account.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Checkout {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub connection_id: Uuid,
+    /// The tenant's own order reference (opaque to Sanvi).
+    pub reference: MerchantOrderRef,
+    /// What the order is for, as the tenant's bookkeeping states it
+    /// (free-form JSON, provider-passthrough; no card data ever).
+    pub customer_ref: Option<serde_json::Value>,
+    pub amount: Money,
+    pub status: CheckoutStatus,
+    /// The provider's session id (`cs_…` for Stripe), once created.
+    pub external_session_id: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl Checkout {
+    /// A checkout awaiting its provider session. The amount must be
+    /// positive: a zero-money checkout is a programming error, and the
+    /// provider would reject it after the round-trip we can catch here.
+    pub fn new(
+        id: Uuid,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+        reference: MerchantOrderRef,
+        amount: Money,
+        now: DateTime<Utc>,
+    ) -> Result<Self, PaymentsError> {
+        if amount.is_zero() {
+            return Err(PaymentsError::InvalidMoney(format!(
+                "checkout amount must be positive, got 0 {}",
+                amount.currency.as_str()
+            )));
+        }
+        Ok(Self {
+            id,
+            tenant_id,
+            connection_id,
+            reference,
+            customer_ref: None,
+            amount,
+            status: CheckoutStatus::Pending,
+            external_session_id: None,
+            expires_at: None,
+            created_at: now,
+        })
+    }
+
+    /// Record the provider session: the checkout goes `Open` and learns
+    /// its provider id and expiry. Idempotent in shape only — callers
+    /// route replays through the idempotency key, not through re-calling
+    /// this with a different session.
+    pub fn session_created(
+        &mut self,
+        external_session_id: String,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<(), PaymentsError> {
+        if self.status != CheckoutStatus::Pending {
+            return Err(PaymentsError::InvalidConnection(format!(
+                "checkout {} cannot open from status {}",
+                self.id,
+                self.status.as_str()
+            )));
+        }
+        self.external_session_id = Some(external_session_id);
+        self.expires_at = expires_at;
+        self.status = CheckoutStatus::Open;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn order_references_are_validated_and_bounded() {
+        assert_eq!(
+            MerchantOrderRef::parse(" order-123 ").unwrap().as_str(),
+            "order-123"
+        );
+        assert!(MerchantOrderRef::parse("   ").is_err());
+        assert!(MerchantOrderRef::parse(&"x".repeat(201)).is_err());
+        assert!(MerchantOrderRef::parse(&"x".repeat(200)).is_ok());
+    }
+
+    #[test]
+    fn checkout_statuses_round_trip_the_schema_check() {
+        for status in [
+            CheckoutStatus::Pending,
+            CheckoutStatus::Open,
+            CheckoutStatus::Complete,
+            CheckoutStatus::Expired,
+            CheckoutStatus::Canceled,
+        ] {
+            assert_eq!(CheckoutStatus::parse(status.as_str()), Some(status));
+        }
+        assert_eq!(CheckoutStatus::parse("failed"), None);
+    }
+
+    #[test]
+    fn zero_amount_checkouts_are_refused_and_sessions_open_once() {
+        let mut checkout = Checkout::new(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            MerchantOrderRef::parse("order-1").unwrap(),
+            Money::new(2000, "JPY").unwrap(),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(checkout.status, CheckoutStatus::Pending);
+
+        assert!(
+            Checkout::new(
+                Uuid::now_v7(),
+                Uuid::now_v7(),
+                Uuid::now_v7(),
+                MerchantOrderRef::parse("order-2").unwrap(),
+                Money::new(0, "JPY").unwrap(),
+                Utc::now(),
+            )
+            .is_err()
+        );
+
+        checkout
+            .session_created("cs_fake_1".to_string(), None)
+            .unwrap();
+        assert_eq!(checkout.status, CheckoutStatus::Open);
+        assert_eq!(checkout.external_session_id.as_deref(), Some("cs_fake_1"));
+        // Opening twice is an error — the webhook drives what happens next.
+        assert!(
+            checkout
+                .session_created("cs_fake_2".to_string(), None)
+                .is_err()
+        );
+        assert_eq!(checkout.external_session_id.as_deref(), Some("cs_fake_1"));
+    }
+}

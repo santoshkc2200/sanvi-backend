@@ -8,11 +8,13 @@
 //! CI on the deprecated v1 account-creation and capability-field patterns
 //! so a regression fails the build rather than an audit.
 //!
-//! Sub-phase 09.0 ships only the skeleton: the context compiles, owns a
-//! schema with RLS, and is reachable through an entitlement-gated route
-//! that returns an empty provider catalog. The domain model, ports and the
-//! real catalog arrive with 09.1; Stripe calls with 09.2+. No Stripe SDK
-//! call exists yet — that is this slice's exit criteria, not an omission.
+//! Sub-phase 09.1 ships the provider-agnostic whole: domain aggregates
+//! and value objects (money, capabilities, requirements, countries), the
+//! connection lifecycle state machine, the `PaymentProviderPort` family,
+//! the **fake provider adapter** (the proof a second provider is one
+//! adapter, and the frontend's counterpart until sandbox credentials are
+//! everywhere), the provider registry the catalog is derived from, and
+//! the full outbox event vocabulary. Stripe calls arrive with 09.2+.
 
 pub mod adapters;
 pub mod application;
@@ -22,7 +24,9 @@ pub mod domain;
 pub use config::PaymentsConfig;
 
 pub use domain::{
-    ConnectionStatus, Currency, Money, PaymentsError, ProviderKind, WebhookVerificationError,
+    CapabilitySet, CapabilityStatus, Checkout, CheckoutStatus, ConnectionStatus, CountryCode,
+    Currency, MerchantOrderRef, Money, PaymentRecord, PaymentStatus, PaymentsError, PaymentsEvent,
+    ProviderConnection, ProviderKind, RefundRecord, RefundStatus, WebhookVerificationError,
 };
 
 /// Wire payments routes into an actix `ServiceConfig`.

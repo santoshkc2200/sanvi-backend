@@ -15,6 +15,12 @@ paths:
         `payments.stripe_connect` entitlement (`RequiredFeature` — 403, never
         404, so the frontend can render an upgrade prompt instead of a dead
         end).
+
+        The response is derived from the provider registry — the handler adds
+        nothing provider-specific. The tenant's country (from the tenant
+        context's region, when it parses as ISO-3166-1 alpha-2) decides
+        per-tenant availability; an unparseable region leaves the provider
+        available rather than locking the tenant out.
       operationId: list_payment_providers
       parameters:
       - description: Required on every *mutating* payments endpoint (none exist yet); documented here because the convention is fixed now, before the first one ships
@@ -32,7 +38,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProvidersView'
-          description: Connectable payment providers (empty until the catalog lands in 09.1)
+          description: Connectable providers, derived from the provider registry
         '403':
           content:
             application/json:

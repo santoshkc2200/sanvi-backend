@@ -1,35 +1,47 @@
 //! Application layer: use cases and their view models.
 //!
-//! 09.0 ships one use case — the provider catalog — and its port
-//! (`ProviderCatalog`) returns an empty list until 09.1 fills it. The
-//! point of the slice is that the route, the entitlement gate, the
-//! contract and the generated frontend client all exist and are tested
-//! before any provider logic lands on top of them.
+//! 09.1 fills the catalog in: the provider registry is the single source
+//! of catalog entries, `StartProviderConnection` proves the
+//! registry → port → repo → outbox vertical, and the Stripe adapter
+//! (09.2) slots in behind the same ports.
 
 pub mod catalog;
+pub mod connections;
+pub mod registry;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-pub use catalog::{EmptyProviderCatalog, ListProviders, ProviderCatalog};
+pub use catalog::{EmptyProviderCatalog, ListProviders, ProviderCatalog, RegistryProviderCatalog};
+pub use connections::{ResumeProviderOnboarding, StartConnectionCommand, StartProviderConnection};
+pub use registry::{ProviderRegistry, RuntimeEnvironment};
 
-/// One connectable provider as the settings page renders it. Kept minimal
-/// in 09.0 (the envelope is the contract); 09.1 fills in the real entries.
+/// One connectable provider as the settings page renders it. Derived
+/// from the adapter's [`crate::domain::ports::ProviderDescriptor`] —
+/// never hardcoded per provider anywhere in this layer or the handlers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ProviderView {
-    /// Stable provider identifier (`stripe_connect`).
+    /// Stable provider identifier (`stripe_connect`, `fake`).
     #[schema(example = "stripe_connect")]
-    pub provider: String,
+    pub kind: String,
+    /// Whether *this tenant* may connect (country support).
+    #[schema(example = true)]
+    pub available: bool,
     /// Human-readable name for cards and menus.
     #[schema(example = "Stripe")]
     pub display_name: String,
+    /// ISO-3166-1 alpha-2 countries whose tenants may connect.
+    #[schema(example = json!(["US", "JP", "GB", "DE"]))]
+    pub supported_countries: Vec<String>,
+    /// Whether connecting requires an onboarding flow.
+    #[schema(example = true)]
+    pub requires_onboarding: bool,
 }
 
-/// `GET /api/v1/tenant/payments/providers` — the catalog envelope. The
-/// empty array in 09.0 is the contract's shape, not a placeholder for a
-/// different one.
+/// `GET /api/v1/tenant/payments/providers` — the catalog envelope,
+/// derived from the provider registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ProvidersView {
-    /// Connectable providers; empty until the catalog lands (09.1).
+    /// Connectable providers, in stable kind order.
     pub providers: Vec<ProviderView>,
 }

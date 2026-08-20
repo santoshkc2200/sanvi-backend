@@ -95,6 +95,76 @@ impl Money {
             currency: self.currency.clone(),
         })
     }
+
+    /// Currency-checked addition. Cross-currency arithmetic is rejected —
+    /// `Money` has no implicit conversion, because exchange is a business
+    /// decision, not a convenience. Overflow is *defined*: a checked
+    /// error, never a wrap and never a panic.
+    pub fn checked_add(&self, other: &Money) -> Result<Money, PaymentsError> {
+        if self.currency != other.currency {
+            return Err(PaymentsError::InvalidMoney(format!(
+                "cannot add {} to {} — cross-currency arithmetic is not defined",
+                other.currency.as_str(),
+                self.currency.as_str()
+            )));
+        }
+        let amount_minor = self
+            .amount_minor
+            .checked_add(other.amount_minor)
+            .ok_or_else(|| {
+                PaymentsError::InvalidMoney(format!(
+                    "addition of {} + {} {} overflows the minor-unit integer",
+                    self.amount_minor,
+                    other.amount_minor,
+                    self.currency.as_str()
+                ))
+            })?;
+        Ok(Money {
+            amount_minor,
+            currency: self.currency.clone(),
+        })
+    }
+
+    /// Currency-checked subtraction. A negative result is rejected —
+    /// amounts are non-negative by representation, so "owed" is the
+    /// caller's separate concept.
+    pub fn checked_sub(&self, other: &Money) -> Result<Money, PaymentsError> {
+        if self.currency != other.currency {
+            return Err(PaymentsError::InvalidMoney(format!(
+                "cannot subtract {} from {} — cross-currency arithmetic is not defined",
+                other.currency.as_str(),
+                self.currency.as_str()
+            )));
+        }
+        let amount_minor = self
+            .amount_minor
+            .checked_sub(other.amount_minor)
+            .ok_or_else(|| {
+                PaymentsError::InvalidMoney(format!(
+                    "subtraction of {} - {} {} overflows the minor-unit integer",
+                    self.amount_minor,
+                    other.amount_minor,
+                    self.currency.as_str()
+                ))
+            })?;
+        if amount_minor < 0 {
+            return Err(PaymentsError::InvalidMoney(format!(
+                "{} {} - {} {} would be negative",
+                self.amount_minor,
+                self.currency.as_str(),
+                other.amount_minor,
+                other.currency.as_str()
+            )));
+        }
+        Ok(Money {
+            amount_minor,
+            currency: self.currency.clone(),
+        })
+    }
+
+    pub const fn is_zero(&self) -> bool {
+        self.amount_minor == 0
+    }
 }
 
 #[cfg(test)]
@@ -140,5 +210,50 @@ mod tests {
         let yen = Money::new(2000, "JPY").unwrap();
         assert_eq!(yen.portion_of(2000).unwrap().amount_minor, 2000);
         assert!(yen.portion_of(2001).is_err());
+    }
+
+    #[test]
+    fn arithmetic_is_currency_checked() {
+        let usd = Money::new(1000, "USD").unwrap();
+        let jpy = Money::new(1000, "JPY").unwrap();
+        assert!(usd.checked_add(&jpy).is_err());
+        assert!(usd.checked_sub(&jpy).is_err());
+        assert!(jpy.checked_sub(&usd).is_err());
+
+        assert_eq!(
+            usd.checked_add(&Money::new(499, "USD").unwrap()).unwrap(),
+            Money::new(1499, "USD").unwrap()
+        );
+        // JPY stays zero-decimal under arithmetic: ¥1,000 + ¥500 = ¥1,500.
+        assert_eq!(
+            jpy.checked_add(&Money::new(500, "JPY").unwrap()).unwrap(),
+            Money::new(1500, "JPY").unwrap()
+        );
+        assert_eq!(
+            jpy.checked_sub(&Money::new(500, "JPY").unwrap()).unwrap(),
+            Money::new(500, "JPY").unwrap()
+        );
+    }
+
+    #[test]
+    fn arithmetic_has_defined_overflow_and_underflow_behaviour() {
+        // Overflow: an error naming the operands — never a wrap, never a
+        // panic. i64::MAX minor units is ~92 quadrillion majors; nothing
+        // legitimate gets there, so refusing is correct.
+        let max = Money::new(i64::MAX, "USD").unwrap();
+        let one = Money::new(1, "USD").unwrap();
+        let err = max.checked_add(&one).unwrap_err();
+        assert!(matches!(err, PaymentsError::InvalidMoney(_)));
+        assert!(err.to_string().contains("overflows"));
+
+        // Underflow: negative results are rejected, not clamped.
+        let small = Money::new(100, "USD").unwrap();
+        let big = Money::new(200, "USD").unwrap();
+        let err = small.checked_sub(&big).unwrap_err();
+        assert!(matches!(err, PaymentsError::InvalidMoney(_)));
+        assert!(err.to_string().contains("negative"));
+
+        // The boundary itself is fine.
+        assert!(small.checked_sub(&small).unwrap().is_zero());
     }
 }
