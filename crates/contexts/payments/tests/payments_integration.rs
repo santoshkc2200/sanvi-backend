@@ -9,7 +9,11 @@
 
 use std::sync::Arc;
 
-use actix_web::{App, http::StatusCode, test, web};
+// `test` is aliased: `actix_web` re-exports both a `test` module (these
+// helpers) and a `#[test]`-shadowing attribute macro at the same path, so a
+// bare `use actix_web::test;` would silently turn the plain `#[test]` below
+// into `#[actix_web::test]` and demand an async fn.
+use actix_web::{App, HttpMessage, http::StatusCode, test as actix_test, web};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -132,8 +136,12 @@ async fn migration_round_trips_on_a_seeded_database() {
     // Down: the schema (and the seeded row) disappear; everything before
     // this migration is untouched.
     let migrator = Migrator::new(migrations_dir());
+    // `undo(pool, target)` reverts every migration with version > target,
+    // i.e. target is the version to end up AT, not the one to revert — so
+    // this slice's own migration needs `PAYMENTS_MIGRATION - 1` here, or it
+    // is left applied instead of undone.
     migrator
-        .undo(&migrator_pool, PAYMENTS_MIGRATION)
+        .undo(&migrator_pool, PAYMENTS_MIGRATION - 1)
         .await
         .unwrap();
     let exists: bool = sqlx::query_scalar(
@@ -269,15 +277,22 @@ async fn one_active_connection_per_provider_but_history_is_kept() {
     }
 
     // …but a disconnected row no longer counts against the index, and the
-    // history stays for the statutory period.
-    sqlx::query(
-        "UPDATE payments.provider_connections
-         SET disconnected_at = now(), status = 'disconnected' WHERE id = $1",
-    )
-    .bind(first.id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    // history stays for the statutory period. RLS requires the tenant
+    // context (`sanvi.tenant_id`), so this has to run inside a scoped
+    // transaction like every other write — a raw pool query silently
+    // matches zero rows instead of erroring.
+    {
+        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        sqlx::query(
+            "UPDATE payments.provider_connections
+             SET disconnected_at = now(), status = 'disconnected' WHERE id = $1",
+        )
+        .bind(first.id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+        scope.commit().await.unwrap();
+    }
     {
         let mut scope = tx.begin_for(tenant_id).await.unwrap();
         repo.insert(&mut scope, &second).await.unwrap();
@@ -433,14 +448,14 @@ async fn spawn_app(
         enabled: entitlement_enabled,
     });
 
-    test::init_service(
+    actix_test::init_service(
         App::new()
             .app_data(web::Data::new(payments_state()))
             .app_data(web::Data::new(permission_gate))
             .app_data(web::Data::new(feature_gate))
             .wrap(actix_web::middleware::from_fn(
                 move |req: actix_web::dev::ServiceRequest,
-                      srv: actix_web::middleware::Next| {
+                      srv: actix_web::middleware::Next<actix_web::body::BoxBody>| {
                     let subject = subject.clone();
                     let tenant = tenant.clone();
                     async move {
@@ -458,12 +473,12 @@ async fn spawn_app(
 #[tokio::test]
 async fn the_catalog_route_requires_the_entitlement() {
     let app = spawn_app(true, false).await; // permission OK, entitlement off
-    let req = test::TestRequest::get()
+    let req = actix_test::TestRequest::get()
         .uri("/api/v1/tenant/payments/providers")
         .to_request();
-    let res = test::call_service(&app, req).await;
+    let res = actix_test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    let body: serde_json::Value = test::read_body_json(res).await;
+    let body: serde_json::Value = actix_test::read_body_json(res).await;
     // 403 with the feature named — never a bare 404 — so the frontend can
     // render its upgrade prompt.
     assert!(
@@ -477,24 +492,24 @@ async fn the_catalog_route_requires_the_entitlement() {
 #[tokio::test]
 async fn the_catalog_route_requires_payments_read() {
     let app = spawn_app(false, true).await; // entitlement OK, permission denied
-    let req = test::TestRequest::get()
+    let req = actix_test::TestRequest::get()
         .uri("/api/v1/tenant/payments/providers")
         .to_request();
-    let res = test::call_service(&app, req).await;
+    let res = actix_test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    let body: serde_json::Value = test::read_body_json(res).await;
+    let body: serde_json::Value = actix_test::read_body_json(res).await;
     assert!(body["detail"].as_str().unwrap().contains("payments.read"));
 }
 
 #[tokio::test]
 async fn with_permission_and_entitlement_the_catalog_answers_empty() {
     let app = spawn_app(true, true).await;
-    let req = test::TestRequest::get()
+    let req = actix_test::TestRequest::get()
         .uri("/api/v1/tenant/payments/providers")
         .to_request();
-    let res = test::call_service(&app, req).await;
+    let res = actix_test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::OK);
-    let body: serde_json::Value = test::read_body_json(res).await;
+    let body: serde_json::Value = actix_test::read_body_json(res).await;
     assert_eq!(body["providers"].as_array().unwrap().len(), 0);
 }
 

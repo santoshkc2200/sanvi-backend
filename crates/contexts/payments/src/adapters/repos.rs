@@ -133,7 +133,7 @@ impl ProviderConnectionRepository for SqlxProviderConnectionRepository {
                       connected_at, last_synced_at, disconnected_at
                FROM payments.provider_connections
                WHERE tenant_id = $1
-               ORDER BY connected_at DESC NULLS LAST, id"#,
+               ORDER BY connected_at DESC NULLS LAST, id DESC"#,
             tenant_id,
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())

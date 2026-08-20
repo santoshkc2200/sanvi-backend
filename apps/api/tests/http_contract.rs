@@ -110,12 +110,13 @@ fn test_app() -> actix_web::App<
         access,
         audit,
         platform_admin,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        None, // billing
+        None, // privacy
+        None, // localization
+        None, // theming
+        None, // domains
+        None, // payments
+        None, // redis
     )
 }
 

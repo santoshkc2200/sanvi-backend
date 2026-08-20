@@ -11,19 +11,13 @@ use serde::{Deserialize, Serialize};
 /// monetises via subscription); when a commercial model calls for it, the
 /// fee rides `payment_intent_data.application_fee_amount` on a direct
 /// charge — the only correct mechanism for this charge pattern.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ApplicationFeeConfig {
     /// Master switch. While false, no fee is ever sent on any
     /// tenant-transaction request.
     #[serde(default)]
     pub enabled: bool,
-}
-
-impl Default for ApplicationFeeConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -106,16 +100,22 @@ mod tests {
 
     #[test]
     fn validation_rejects_wrong_key_shapes() {
-        let mut config = PaymentsConfig::default();
-        config.connect_api_key = "sk_live_oops".to_string();
+        let config = PaymentsConfig {
+            connect_api_key: "sk_live_oops".to_string(),
+            ..PaymentsConfig::default()
+        };
         assert!(config.validate().is_err());
 
-        let mut config = PaymentsConfig::default();
-        config.connect_webhook_secret = "not-a-secret".to_string();
+        let config = PaymentsConfig {
+            connect_webhook_secret: "not-a-secret".to_string(),
+            ..PaymentsConfig::default()
+        };
         assert!(config.validate().is_err());
 
-        let mut config = PaymentsConfig::default();
-        config.webhook_tolerance_secs = 0;
+        let config = PaymentsConfig {
+            webhook_tolerance_secs: 0,
+            ..PaymentsConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, provider, external_account_id, status,\n                      capabilities, requirements, country, default_currency,\n                      connected_at, last_synced_at, disconnected_at\n               FROM payments.provider_connections\n               WHERE tenant_id = $1\n               ORDER BY connected_at DESC NULLS LAST, id",
+  "query": "SELECT id, tenant_id, provider, external_account_id, status,\n                      capabilities, requirements, country, default_currency,\n                      connected_at, last_synced_at, disconnected_at\n               FROM payments.provider_connections\n               WHERE tenant_id = $1\n               ORDER BY connected_at DESC NULLS LAST, id DESC",
   "describe": {
     "columns": [
       {
@@ -156,5 +156,5 @@
       true
     ]
   },
-  "hash": "bafdf8399567f67f14fdd1964fe2cb3d81d03e788a814e3e164473dd8ea0e4d3"
+  "hash": "fe1539e4038d1bfc517f270eb08113d015bddd7cd4028923d20ba11bb5eb9a1d"
 }
