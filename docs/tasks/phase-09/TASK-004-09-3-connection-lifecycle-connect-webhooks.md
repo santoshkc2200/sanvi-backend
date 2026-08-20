@@ -6,7 +6,7 @@
 **Depends on:** TASK-003
 **Created:** 2026-08-20
 
-**Sub-phase:** [09.3 — Connection lifecycle & Connect webhooks](../../../../docs/phase-09-tenant-payments/09.3-lifecycle-and-webhooks.md)
+**Slice:** 09.3 — Connection lifecycle & Connect webhooks
 **Prerelease:** `v0.10.0-alpha.4` · **Flag:** `payments.stripe_connect`
 
 ## Context

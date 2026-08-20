@@ -6,7 +6,8 @@
 **Depends on:** TASK-006, TASK-007
 **Created:** 2026-08-20
 
-**Sub-phase:** [09.7 — Disconnect, hardening & release](../../../../docs/phase-09-tenant-payments/09.7-disconnect-hardening-ga.md)
+**Blocked by (cross-repo):** sanvi-frontend TASK-008 — `v0.10.0` is not tagged until both tracks' 09.7 are done
+**Slice:** 09.7 — Disconnect, hardening & release
 **Release:** `v0.10.0` · **Flags:** default on at the end of this task
 
 ## Context
@@ -52,7 +53,7 @@ events from TASK-005.
       prove a pinned-version bump is verifiable rather than hopeful. Document the drill; it is the
       procedure for every future Stripe version bump.
 - [ ] **Release** — flags default on, changelog generated from Conventional Commits, tag `v0.10.0`,
-      update [the shared roadmap](../../../../docs/roadmap.md).
+      update [the shared roadmap](../../shared/roadmap.md).
 
 ## Acceptance criteria
 
@@ -98,7 +99,7 @@ conversion pipeline here.
 - `crates/contexts/payments/src/adapters/metrics.rs`
 - `crates/contexts/privacy/**` (retention override registration)
 - `docs/runbooks/*.md`, `docs/security/threat-model.md`
-- `api/payments.yaml`, `CHANGELOG.md`, [the shared roadmap](../../../../docs/roadmap.md)
+- `api/payments.yaml`, `CHANGELOG.md`, [the shared roadmap](../../shared/roadmap.md)
 
 ## Notes / gotchas
 

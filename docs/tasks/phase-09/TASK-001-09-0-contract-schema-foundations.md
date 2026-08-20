@@ -6,7 +6,7 @@
 **Depends on:** phase 03, 04, 08
 **Created:** 2026-08-20
 
-**Sub-phase:** [09.0 — Contract, schema & foundations](../../../../docs/phase-09-tenant-payments/09.0-contract-and-foundations.md)
+**Slice:** 09.0 — Contract, schema & foundations
 **Prerelease:** `v0.10.0-alpha.1` · **Flag:** `payments.enabled` (off)
 
 ## Context

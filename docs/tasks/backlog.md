@@ -15,7 +15,8 @@ $SDLC new-task 09 "<title>" --requirement FR-903 --depends TASK-002
 
 Each task traces to a numbered requirement in [`../requirements.md`](../requirements.md); the *why*
 behind each one lives in [`../phase-09-tenant-payments/implementation-plan.md`](../phase-09-tenant-payments/implementation-plan.md)
-and the cross-track slice docs in [`../../../docs/phase-09-tenant-payments/`](../../../docs/phase-09-tenant-payments/README.md).
+and the slice order in [`phase-09/README.md`](phase-09/README.md). Every task must clear
+[`definition-of-done.md`](definition-of-done.md).
 
 Statuses: `todo` · `in-progress` · `blocked` · `done`
 

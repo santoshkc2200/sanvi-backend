@@ -17,7 +17,7 @@ covered by at least one task in `tasks/`, and that every task names a requiremen
 ## Phase 09 — Tenant Payment Providers (0.10.0)
 
 Derived from [`phase-09-tenant-payments/implementation-plan.md`](phase-09-tenant-payments/implementation-plan.md)
-and the cross-track sub-phase breakdown in [`../../docs/phase-09-tenant-payments/`](../../docs/phase-09-tenant-payments/README.md).
+and sliced into tasks per [`tasks/phase-09/README.md`](tasks/phase-09/README.md).
 
 ### Functional
 

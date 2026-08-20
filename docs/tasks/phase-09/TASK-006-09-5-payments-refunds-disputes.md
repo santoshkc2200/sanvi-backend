@@ -6,7 +6,7 @@
 **Depends on:** TASK-005
 **Created:** 2026-08-20
 
-**Sub-phase:** [09.5 — Payments, refunds & disputes](../../../../docs/phase-09-tenant-payments/09.5-payments-refunds-disputes.md)
+**Slice:** 09.5 — Payments, refunds & disputes
 **Prerelease:** `v0.10.0-alpha.6` · **Flag:** `payments.checkout` · **Parallel with:** TASK-007
 
 ## Context

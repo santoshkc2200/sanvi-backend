@@ -11,19 +11,25 @@ architecture, PostgreSQL via compile-time-checked SQLx, Redis, docker-compose fo
 - [`requirements.md`](requirements.md) — numbered `FR-*` / `NFR-*` requirements, from phase 09 onward.
   Tasks trace to these IDs.
 - [`tasks/backlog.md`](tasks/backlog.md) — **start here to pick up work.** The status of every task,
-  with the task specs in `tasks/phase-NN/`.
+  with the task specs in `tasks/phase-NN/` and that phase's ordering in `tasks/phase-NN/README.md`.
+- [`tasks/definition-of-done.md`](tasks/definition-of-done.md) — the exit bar every task must clear.
 - [`runbooks/`](runbooks/) — operator procedures (impersonation, entitlement grants,
   audit chain incidents, billing/webhook repair, …).
 - [`adr/`](adr/) — architecture decision records.
-- The cross-project phase map lives in [`../../docs/roadmap.md`](../../docs/roadmap.md).
+- [`shared/roadmap.md`](shared/roadmap.md) — the cross-project phase map. Jointly owned with
+  `sanvi-frontend`; it lives here because it needs one canonical copy and this repo owns the API
+  contract. Changes to it are reviewed by both tracks.
 
 ## Working the backlog
 
-From phase 09 the delivery layers are: the roadmap (why the phase exists) → the phase
-implementation plan (what and how) → the cross-track slice docs in `../../docs/phase-NN-*/` (order and
-exit criteria per slice) → [`requirements.md`](requirements.md) (numbered requirements) →
-[`tasks/`](tasks/backlog.md) (one agent-executable spec per slice). Every layer traces to the one
-above it; `sdlc.py check` enforces it mechanically.
+From phase 09 the delivery layers are: [the roadmap](shared/roadmap.md) (why the phase exists) → the
+phase implementation plan (what and how) → [`requirements.md`](requirements.md) (numbered
+requirements) → [`tasks/`](tasks/backlog.md) (one agent-executable spec per slice, ordered by that
+phase's `tasks/phase-NN/README.md`). Every layer traces to the one above it; `sdlc.py check`
+enforces it mechanically.
+
+Cross-track coordination lives in the tasks themselves: a task blocked on `sanvi-frontend` work says
+so in a `**Blocked by (cross-repo):**` line. There is no shared schedule document.
 
 ```bash
 SDLC="python3 ~/.claude/skills/sdlc-planner/scripts/sdlc.py"
@@ -94,6 +100,6 @@ sanvi-backend/
 
 ## Versioning & release
 
-Semantic versioning per [`../../docs/roadmap.md`](../../docs/roadmap.md). Conventional Commits drive
+Semantic versioning per [`shared/roadmap.md`](shared/roadmap.md). Conventional Commits drive
 `CHANGELOG.md`. The HTTP API is versioned separately under `/api/v1`; breaking API changes require a
 new path version and a deprecation window announced in the OpenAPI `deprecated` markers.

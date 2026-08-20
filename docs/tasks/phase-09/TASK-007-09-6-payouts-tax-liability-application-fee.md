@@ -6,7 +6,7 @@
 **Depends on:** TASK-004, TASK-005
 **Created:** 2026-08-20
 
-**Sub-phase:** [09.6 — Payouts, tax liability & application fee](../../../../docs/phase-09-tenant-payments/09.6-payouts-tax-and-fees.md)
+**Slice:** 09.6 — Payouts, tax liability & application fee
 **Prerelease:** `v0.10.0-alpha.7` · **Flag:** `payments.stripe_connect` · **Parallel with:** TASK-006
 
 ## Context

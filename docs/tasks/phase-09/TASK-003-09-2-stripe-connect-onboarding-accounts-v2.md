@@ -6,7 +6,7 @@
 **Depends on:** TASK-002
 **Created:** 2026-08-20
 
-**Sub-phase:** [09.2 — Stripe Connect onboarding](../../../../docs/phase-09-tenant-payments/09.2-connect-onboarding.md)
+**Slice:** 09.2 — Stripe Connect onboarding
 **Prerelease:** `v0.10.0-alpha.3` · **Flag:** `payments.stripe_connect`
 
 ## Context

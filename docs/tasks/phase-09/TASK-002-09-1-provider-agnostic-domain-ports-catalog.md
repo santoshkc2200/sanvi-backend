@@ -6,7 +6,7 @@
 **Depends on:** TASK-001
 **Created:** 2026-08-20
 
-**Sub-phase:** [09.1 — Provider-agnostic domain & catalog](../../../../docs/phase-09-tenant-payments/09.1-provider-domain-and-catalog.md)
+**Slice:** 09.1 — Provider-agnostic domain & catalog
 **Prerelease:** `v0.10.0-alpha.2` · **Flag:** `payments.enabled`
 
 ## Context
