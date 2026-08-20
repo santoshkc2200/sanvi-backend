@@ -4,6 +4,11 @@
 **Depends on:** phases 00–10
 **Unlocks:** general availability and a public API contract we are willing to be held to
 
+**Sliced into twelve tasks in [`../tasks/phase-11/README.md`](../tasks/phase-11/README.md)**, which is
+authoritative for order, slicing, and each slice's exit criteria. This plan stays authoritative for
+*what* and *why*. Requirements are numbered `FR-11xx` / `NFR-11xx` in
+[`../requirements.md`](../requirements.md).
+
 ## Goal
 
 Turn a feature-complete system into an operable product: measurable reliability targets, proven

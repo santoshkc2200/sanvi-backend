@@ -35,8 +35,7 @@ ordering moves into the tasks' `Depends on` / `Blocked by` lines and the shared 
 
 - **Phase 09** — decomposed. See each repo's `docs/tasks/phase-09/`.
 - **Phase 10** — decomposed. See each repo's `docs/tasks/phase-10/`.
-- **Phase 11** (twelve slices) — still held in the workspace-root `docs/phase-11-hardening-ga/`
-  folder until it is decomposed the same way.
+- **Phase 11** (twelve slices) — decomposed. See each repo's `docs/tasks/phase-11/`.
 
 ## Phase map
 

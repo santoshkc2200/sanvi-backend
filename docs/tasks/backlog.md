@@ -16,8 +16,10 @@ $SDLC new-task 10 "<title>" --requirement FR-1003 --depends TASK-010
 Each task traces to a numbered requirement in [`../requirements.md`](../requirements.md); the *why*
 behind each one lives in that phase's implementation plan
 ([09](../phase-09-tenant-payments/implementation-plan.md) ·
-[10](../phase-10-advertising/implementation-plan.md)) and the slice order in its
-`phase-NN/README.md` ([09](phase-09/README.md) · [10](phase-10/README.md)). Every task must clear
+[10](../phase-10-advertising/implementation-plan.md) ·
+[11](../phase-11-hardening-ga/implementation-plan.md)) and the slice order in its
+`phase-NN/README.md` ([09](phase-09/README.md) · [10](phase-10/README.md) ·
+[11](phase-11/README.md)). Every task must clear
 [`definition-of-done.md`](definition-of-done.md).
 
 Statuses: `todo` · `in-progress` · `blocked` · `done`
@@ -42,3 +44,15 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | TASK-016 | 10 | 10.7 Metrics ingestion, rollups & ROAS query layer | todo | TASK-012, TASK-015 | |
 | TASK-017 | 10 | 10.8 Budget guardrails & spend alerts | todo | TASK-016 | |
 | TASK-018 | 10 | 10.9 Privacy integration, hardening & release | todo | TASK-013, TASK-015, TASK-017 | |
+| TASK-019 | 11 | 11.0 Freeze, production-shaped baseline & measurement harness | todo | phases 00-10 | |
+| TASK-020 | 11 | 11.1 Observability completion, SLOs & alerting | todo | TASK-019 | |
+| TASK-021 | 11 | 11.2 Backend performance, load testing & capacity model | todo | TASK-020 | |
+| TASK-022 | 11 | 11.3 SSR response cache, cache headers & compression | todo | TASK-020 | |
+| TASK-023 | 11 | 11.4 Resilience, degradation & zero-downtime deploys | todo | TASK-021 | |
+| TASK-024 | 11 | 11.5 Threat model, blocking scanners, isolation sweep & pen-test remediation | todo | TASK-019 | |
+| TASK-025 | 11 | 11.6 Disaster recovery, secret rotation & on-call readiness | todo | TASK-023, TASK-024 | |
+| TASK-026 | 11 | 11.7 API v1 freeze, deprecation policy, rate limits & quotas | todo | TASK-021, TASK-023 | |
+| TASK-027 | 11 | 11.8 Error addressability, collection ordering & template accessibility | todo | TASK-022 | |
+| TASK-028 | 11 | 11.9 Data lifecycle at scale, archival & tenant offboarding | todo | TASK-021 | |
+| TASK-029 | 11 | 11.10 Compliance evidence packs & jurisdiction drills | todo | TASK-028 | |
+| TASK-030 | 11 | 11.11 GA release gate, flag cleanup, staged rollout & v1.0.0 | todo | TASK-024, TASK-025, TASK-026, TASK-027, TASK-029 | |

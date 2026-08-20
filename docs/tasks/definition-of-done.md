@@ -14,6 +14,20 @@ rather than deferring it to the end of the phase.
 - [ ] Feature flag defined and defaulted **off**; rollback plan written.
 - [ ] Deployed to staging behind the flag. **Merged ≠ done.**
 
+### Phase 11 additions — hardening tasks
+
+A hardening task ships a number, a report, or a rehearsed drill rather than a feature, so from phase 11
+onward these three lines are added to the list above:
+
+- [ ] **Evidence artifact committed** — a report, a benchmark JSON, a drill log, or an audit result with
+      a date and a named runner. **A task with no artifact did not happen.**
+- [ ] Numbers compared against the stored baseline; a regression is explained or reverted.
+- [ ] Runbook written or updated for every alert the task adds — including alerts on the hardening
+      machinery itself.
+
+The flag line is read as "*if* the task ships behaviour": several phase 11 tasks ship tooling, evidence,
+or documentation and have no flag. Those say so in their header rather than inventing one.
+
 Status is recorded only through the sdlc-planner script, never by hand-editing the task file and
 [`backlog.md`](backlog.md) separately:
 
