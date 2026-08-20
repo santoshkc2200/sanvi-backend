@@ -182,6 +182,34 @@ impl ProcessDsrBatch {
         let mut bundles: Vec<DataBundle> = Vec::new();
         let mut erase_reports: Vec<EraseReport> = Vec::new();
 
+        // Participant reports are the durable saga accumulator. Rehydrate
+        // successful results before retrying failed providers so a later
+        // packaging pass cannot omit data collected in an earlier attempt.
+        for participant in participants.values().filter(|row| {
+            matches!(
+                row.status,
+                ParticipantStatus::Completed | ParticipantStatus::Retained
+            )
+        }) {
+            if let Some(report) = participant.report.clone() {
+                if request.kind.collects() {
+                    bundles.push(serde_json::from_value(report).map_err(|err| {
+                        PrivacyError::Storage(format!(
+                            "invalid persisted collection report for {}: {err}",
+                            participant.context
+                        ))
+                    })?);
+                } else if request.kind.erases() {
+                    erase_reports.push(serde_json::from_value(report).map_err(|err| {
+                        PrivacyError::Storage(format!(
+                            "invalid persisted erasure report for {}: {err}",
+                            participant.context
+                        ))
+                    })?);
+                }
+            }
+        }
+
         for provider in &self.registry {
             let name = provider.context_name();
             if !context_names.contains(&name) {
@@ -345,6 +373,7 @@ impl ProcessDsrBatch {
         let now = self.clock.now();
 
         if request.kind.collects() {
+            self.crypto.create_subject_key(request.subject_id).await?;
             let passphrase = self.generate_passphrase();
             let token = self.generate_passphrase();
             let archive = self.packager.package(&request.subject_ref, bundles)?;
@@ -370,16 +399,14 @@ impl ProcessDsrBatch {
             self.requests
                 .set_status(scope, request.id, DsrStatus::Completed, Some(now), None)
                 .await?;
-            if let Some(email) = request
-                .subject_ref
-                .identifiers
-                .iter()
-                .find_map(|id| (id.id_type == "email").then(|| id.value.clone()))
-            {
-                self.notifications
-                    .send_export_passphrase(&email, &passphrase, &request.id.as_uuid().to_string())
-                    .await?;
-            }
+            self.notifications
+                .send_export_credentials(
+                    &request.subject_ref,
+                    &token,
+                    &passphrase,
+                    &request.id.as_uuid().to_string(),
+                )
+                .await?;
             self.events
                 .publish(
                     scope,
@@ -396,6 +423,9 @@ impl ProcessDsrBatch {
         }
 
         if request.kind.erases() {
+            // Provision legacy subjects that pre-date envelope-key creation,
+            // then destroy the durable row. A tombstone prevents recreation.
+            self.crypto.create_subject_key(request.subject_id).await?;
             // Crypto-shred: destroy the per-subject DEK. After this, any
             // ciphertext under that key is unrecoverable (backups included).
             self.crypto.destroy_subject_key(request.subject_id).await?;

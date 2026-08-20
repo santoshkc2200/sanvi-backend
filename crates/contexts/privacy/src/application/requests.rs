@@ -76,6 +76,9 @@ pub struct SubmitDsrOutput {
     /// Present when verification is required before disclosure/deletion.
     pub verification_required: bool,
     pub challenge_id: Option<Uuid>,
+    /// Opaque half of the verification credential. The OTP is delivered
+    /// out-of-band, so neither response nor notification is sufficient alone.
+    pub verification_token: Option<String>,
     /// Opt-out kinds take effect immediately and never require
     /// verification.
     pub effective_immediately: bool,
@@ -290,6 +293,10 @@ impl SubmitDsr {
         // session is the verification).
         let verified_at = if opt_out
             || (requester_user.is_some() && subject_ref.kind == SubjectKind::TenantUser)
+            || (requester_user.is_some()
+                && tenant_id.is_some()
+                && command.requester == Requester::TenantOperator
+                && subject_ref.kind == SubjectKind::EndUser)
         {
             Some(now)
         } else {
@@ -330,6 +337,7 @@ impl SubmitDsr {
             requester_ip: ip,
             requester_note: command.note.clone(),
             rejection_reason: None,
+            rejected_by: None,
             appeal_id: None,
             export_artifact_id: None,
         };
@@ -350,6 +358,7 @@ impl SubmitDsr {
         }
 
         let mut challenge_id = None;
+        let mut verification_token = None;
         if verified_at.is_none() {
             let code = generate_otp(self.otp_digits);
             let token = Uuid::now_v7().to_string();
@@ -366,6 +375,7 @@ impl SubmitDsr {
             };
             self.challenges.save(&mut scope, &challenge).await?;
             challenge_id = Some(challenge.id);
+            verification_token = Some(token);
             if let Some(email) = &command.subject.email {
                 self.notifications
                     .send_verification_code(email, &code)
@@ -443,6 +453,7 @@ impl SubmitDsr {
             jurisdiction: subject.jurisdiction.as_str().to_string(),
             verification_required: challenge_id.is_some(),
             challenge_id,
+            verification_token,
             effective_immediately: opt_out,
         })
     }
@@ -758,22 +769,45 @@ impl ListRequestsOperator {
             .commit()
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        Ok(requests
-            .into_iter()
-            .map(|request| RequestOperatorView {
-                request_id: request.id.as_uuid(),
-                tenant_id: request.tenant_id,
-                subject_key: request.subject_ref.canonical_key().to_string(),
-                kind: request.kind,
-                status: request.status,
-                received_at: request.received_at,
-                due_at: request.effective_due(),
-                completed_at: request.completed_at,
-                jurisdiction: request.jurisdiction.as_str().to_string(),
-                submitted_by: request.submitted_by,
-                rejection_reason: request.rejection_reason,
-            })
-            .collect())
+        Ok(requests.into_iter().map(request_operator_view).collect())
+    }
+
+    pub async fn execute_for_tenant(
+        &self,
+        tenant_id: Uuid,
+        status: Option<DsrStatus>,
+        limit: u32,
+    ) -> Result<Vec<RequestOperatorView>, PrivacyError> {
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("privacy_tenant_dsr_list", "privacy")
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        let requests = self
+            .requests
+            .list_tenant(&mut scope, tenant_id, status, limit.min(200))
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        Ok(requests.into_iter().map(request_operator_view).collect())
+    }
+}
+
+fn request_operator_view(request: crate::domain::DataSubjectRequest) -> RequestOperatorView {
+    RequestOperatorView {
+        request_id: request.id.as_uuid(),
+        tenant_id: request.tenant_id,
+        subject_key: request.subject_ref.canonical_key().to_string(),
+        kind: request.kind,
+        status: request.status,
+        received_at: request.received_at,
+        due_at: request.effective_due(),
+        completed_at: request.completed_at,
+        jurisdiction: request.jurisdiction.as_str().to_string(),
+        submitted_by: request.submitted_by,
+        rejection_reason: request.rejection_reason,
     }
 }
 
@@ -908,6 +942,7 @@ impl RejectRequest {
                 Some(reason),
             )
             .await?;
+        self.requests.set_rejected_by(&mut scope, id, actor).await?;
         self.events
             .publish(
                 &mut scope,
@@ -978,6 +1013,9 @@ impl PatchRequest {
             .find_by_id(&mut scope, id)
             .await?
             .ok_or(PrivacyError::RequestNotFound(request_id.to_string()))?;
+        if request.subject_ref != SubjectRef::user(actor) {
+            return Err(PrivacyError::RequestNotOwned);
+        }
         if request.kind != DsrKind::Rectification {
             return Err(PrivacyError::Conflict(
                 "request is not a rectification request".to_string(),

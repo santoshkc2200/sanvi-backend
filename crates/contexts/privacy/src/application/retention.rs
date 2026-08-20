@@ -126,18 +126,13 @@ impl RetentionSweep {
                     }
                 }
                 RetentionAction::Anonymise => {
-                    let mut seen = std::collections::BTreeSet::new();
                     for record in expired_consents {
-                        seen.insert(record.subject_ref.canonical_key().to_string());
-                    }
-                    for key in seen {
-                        let anonymised = crate::adapters::anonymised_subject_ref(
-                            &crate::domain::SubjectRef::contact(&key),
-                        );
-                        deleted.anonymised += self
-                            .consents
-                            .anonymise_subject(&mut scope, &key, &anonymised)
+                        let anonymised =
+                            crate::adapters::anonymised_subject_ref(&record.subject_ref);
+                        self.consents
+                            .anonymise_record(&mut scope, record.id, &anonymised)
                             .await?;
+                        deleted.anonymised += 1;
                     }
                 }
                 RetentionAction::Archive => {

@@ -317,6 +317,7 @@ async fn main() -> ExitCode {
                     privacy_tx.clone(),
                 ),
             ),
+            Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new()),
         ];
         Some(build_privacy_state(
             pool.clone(),

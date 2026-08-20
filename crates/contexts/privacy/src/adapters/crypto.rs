@@ -91,6 +91,9 @@ impl SqlxEnvelopeCrypto {
             .commit()
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        if row.destroyed_at.is_some() {
+            return Err(PrivacyError::KeyShredded);
+        }
         let dek: [u8; 32] = self
             .unwrap(&row.wrapped_dek, &row.kek_id)?
             .try_into()
@@ -121,21 +124,74 @@ impl SqlxEnvelopeCrypto {
 
 #[async_trait]
 impl EnvelopeCrypto for SqlxEnvelopeCrypto {
-    async fn create_subject_key(
-        &self,
-        subject_id: SubjectId,
-        kek_id: &str,
-    ) -> Result<Vec<u8>, PrivacyError> {
-        if let Ok(existing) = self.fetch_dek(subject_id).await {
-            return self.wrap(&existing, kek_id);
+    async fn create_subject_key(&self, subject_id: SubjectId) -> Result<Vec<u8>, PrivacyError> {
+        if let Ok(shredded) = self.shredded.lock()
+            && shredded.contains_key(&subject_id.as_uuid())
+        {
+            return Err(PrivacyError::KeyShredded);
         }
+
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("privacy_subject_key_create", "privacy")
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        if let Some(row) = self.keys.find(&mut scope, subject_id).await? {
+            scope
+                .commit()
+                .await
+                .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            if row.destroyed_at.is_some() {
+                return Err(PrivacyError::KeyShredded);
+            }
+            let dek: [u8; 32] = self
+                .unwrap(&row.wrapped_dek, &row.kek_id)?
+                .try_into()
+                .map_err(|_| PrivacyError::EncryptionFailure("DEK must be 32 bytes".to_string()))?;
+            if let Ok(mut cache) = self.dek_cache.lock() {
+                cache.insert(subject_id.as_uuid(), Arc::new(dek));
+            }
+            return Ok(row.wrapped_dek);
+        }
+
         let mut dek = [0u8; 32];
         OsRng.fill_bytes(&mut dek);
-        let wrapped = self.wrap(&dek, kek_id)?;
-        if let Ok(mut cache) = self.dek_cache.lock() {
-            cache.insert(subject_id.as_uuid(), Arc::new(dek));
+        let wrapped = self.wrap(&dek, &self.kek_id)?;
+        self.keys
+            .save(&mut scope, subject_id, wrapped, &self.kek_id)
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+
+        // Re-read after the INSERT .. ON CONFLICT so concurrent creators all
+        // cache and use the one canonical DEK stored in the database.
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("privacy_subject_key_reload", "privacy")
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        let row = self
+            .keys
+            .find(&mut scope, subject_id)
+            .await?
+            .ok_or(PrivacyError::KeyShredded)?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        if row.destroyed_at.is_some() {
+            return Err(PrivacyError::KeyShredded);
         }
-        Ok(wrapped)
+        let canonical: [u8; 32] = self
+            .unwrap(&row.wrapped_dek, &row.kek_id)?
+            .try_into()
+            .map_err(|_| PrivacyError::EncryptionFailure("DEK must be 32 bytes".to_string()))?;
+        if let Ok(mut cache) = self.dek_cache.lock() {
+            cache.insert(subject_id.as_uuid(), Arc::new(canonical));
+        }
+        Ok(row.wrapped_dek)
     }
 
     fn wrap(&self, dek: &[u8], _kek_id: &str) -> Result<Vec<u8>, PrivacyError> {
@@ -269,11 +325,7 @@ pub struct DisabledEnvelopeCrypto;
 
 #[async_trait]
 impl EnvelopeCrypto for DisabledEnvelopeCrypto {
-    async fn create_subject_key(
-        &self,
-        _subject_id: SubjectId,
-        _kek_id: &str,
-    ) -> Result<Vec<u8>, PrivacyError> {
+    async fn create_subject_key(&self, _subject_id: SubjectId) -> Result<Vec<u8>, PrivacyError> {
         Err(PrivacyError::EncryptionUnconfigured)
     }
 

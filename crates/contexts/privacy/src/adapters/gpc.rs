@@ -21,7 +21,7 @@ use sanvi_http::Subject;
 use sanvi_persistence::TxManager;
 
 use crate::domain::{
-    Clock, PreferenceSignal, ProcessingPurpose, SignalRepository, SubjectId, SubjectRef,
+    Clock, PreferenceSignal, ProcessingPurpose, SignalRepository, SubjectRef, SubjectRepository,
 };
 
 const GPC_HEADER: &str = "Sec-GPC";
@@ -32,6 +32,7 @@ const SIGNAL_WINDOW: chrono::Duration = chrono::Duration::hours(1);
 pub struct GpcSignalMiddleware {
     tx_manager: TxManager,
     signals: Arc<dyn SignalRepository>,
+    subjects: Arc<dyn SubjectRepository>,
     clock: Arc<dyn Clock>,
     cookie_name: String,
     cookie_ttl_days: i64,
@@ -41,6 +42,7 @@ impl GpcSignalMiddleware {
     pub fn new(
         tx_manager: TxManager,
         signals: Arc<dyn SignalRepository>,
+        subjects: Arc<dyn SubjectRepository>,
         clock: Arc<dyn Clock>,
         cookie_name: String,
         cookie_ttl_days: i64,
@@ -48,6 +50,7 @@ impl GpcSignalMiddleware {
         Self {
             tx_manager,
             signals,
+            subjects,
             clock,
             cookie_name,
             cookie_ttl_days,
@@ -89,6 +92,29 @@ impl GpcSignalMiddleware {
         {
             Ok(mut scope) => {
                 let now = self.clock.now();
+                let privacy_subject = if let Some(subject) = subject {
+                    self.subjects
+                        .find_by_key(
+                            &mut scope,
+                            SubjectRef::user(subject.user_id).canonical_key(),
+                        )
+                        .await
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+                if let Some(subject) = &privacy_subject {
+                    let _ = self
+                        .signals
+                        .bind_by_device(
+                            &mut scope,
+                            device_ref,
+                            subject.id,
+                            subject.jurisdiction.as_str(),
+                        )
+                        .await;
+                }
                 let recent = self
                     .signals
                     .latest_for_device(&mut scope, device_ref)
@@ -105,14 +131,14 @@ impl GpcSignalMiddleware {
                     tenant_id: subject.and_then(|s| s.tenant_id),
                     signal: "gpc".to_string(),
                     device_ref: device_ref.to_string(),
-                    subject_id: subject.map(|s| SubjectId::from_uuid(s.user_id)),
-                    jurisdiction: None,
+                    subject_id: privacy_subject.as_ref().map(|s| s.id),
+                    jurisdiction: privacy_subject.as_ref().map(|s| s.jurisdiction.clone()),
                     purposes: vec![
                         ProcessingPurpose::SaleOrShare,
                         ProcessingPurpose::TargetedAdvertising,
                     ],
                     observed_at: now,
-                    bound_at: subject.map(|_| now),
+                    bound_at: privacy_subject.as_ref().map(|_| now),
                     evidence: serde_json::json!({
                         "identifier": subject.map(|s| s.user_id.to_string()),
                     }),
@@ -128,7 +154,7 @@ impl GpcSignalMiddleware {
         }
     }
 
-    async fn bind_unbound(&self, subject: &Subject) {
+    async fn bind_device(&self, device_ref: &str, subject: &Subject) {
         let subject_ref = SubjectRef::user(subject.user_id);
         match self
             .tx_manager
@@ -136,22 +162,20 @@ impl GpcSignalMiddleware {
             .await
         {
             Ok(mut scope) => {
-                if let Ok(signals) = self
-                    .signals
-                    .unbound_for_subject(&mut scope, &subject_ref)
+                if let Ok(Some(privacy_subject)) = self
+                    .subjects
+                    .find_by_key(&mut scope, subject_ref.canonical_key())
                     .await
                 {
-                    for signal in signals {
-                        let _ = self
-                            .signals
-                            .bind(
-                                &mut scope,
-                                signal.id,
-                                SubjectId::from_uuid(subject.user_id),
-                                "us-ca",
-                            )
-                            .await;
-                    }
+                    let _ = self
+                        .signals
+                        .bind_by_device(
+                            &mut scope,
+                            device_ref,
+                            privacy_subject.id,
+                            privacy_subject.jurisdiction.as_str(),
+                        )
+                        .await;
                 }
                 let _ = scope.commit().await;
             }
@@ -222,10 +246,10 @@ where
                 if let Some(device) = device_ref.clone() {
                     recorded = inner.record_signal(&device, subject.as_ref()).await;
                 }
-            } else if let Some(subject) = &subject {
-                // Authenticated request without a GPC header: bind any
-                // previously unbound signals for this subject's identifiers.
-                inner.bind_unbound(subject).await;
+            } else if let (Some(subject), Some(device)) = (&subject, &device_ref) {
+                // Bind the exact pre-authentication device signal once the
+                // same browser authenticates.
+                inner.bind_device(device, subject).await;
             }
 
             let mut res = service.call(req).await?;

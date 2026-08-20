@@ -81,17 +81,19 @@ impl Notifications for LoggingNotifications {
         Ok(())
     }
 
-    async fn send_export_passphrase(
+    async fn send_export_credentials(
         &self,
-        to: &str,
+        subject: &crate::domain::SubjectRef,
+        token: &str,
         passphrase: &str,
         request_id: &str,
     ) -> Result<(), PrivacyError> {
         tracing::info!(
-            to,
+            subject = subject.canonical_key(),
+            token,
             passphrase,
             request_id,
-            "export passphrase generated (logging adapter)"
+            "export credentials generated (logging adapter)"
         );
         Ok(())
     }
@@ -112,10 +114,9 @@ impl Notifications for LoggingNotifications {
     }
 }
 
-/// The sub-processor notifier: propagates honoured opt-outs to processors
-/// that support deletion/opt-out APIs. The logging implementation records
-/// the intent; the tenant-facing contract of propagation is the
-/// `propagated_at` evidence on the consent ledger row.
+/// Development notifier. It succeeds only when there is no downstream work;
+/// configured processors/admins require a real delivery adapter so the
+/// ledger can never claim that a log line was propagation evidence.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoggingSubProcessorNotifier;
 
@@ -126,16 +127,15 @@ impl SubProcessorNotifier for LoggingSubProcessorNotifier {
         record: &ConsentRecord,
         processors: &[SubProcessor],
     ) -> Result<(), PrivacyError> {
-        for processor in processors {
-            tracing::info!(
-                subprocessor = %processor.name,
-                role = processor.role.as_str(),
-                purpose = record.purpose.as_str(),
-                subject = record.subject_ref.canonical_key(),
-                "opt-out propagated to sub-processor (logging adapter)",
-            );
+        if processors.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        Err(PrivacyError::Upstream(format!(
+            "sub-processor delivery adapter is not configured for {} processor(s), purpose {}, subject {}",
+            processors.len(),
+            record.purpose.as_str(),
+            record.subject_ref.canonical_key(),
+        )))
     }
 
     async fn notify_removal(
@@ -143,12 +143,13 @@ impl SubProcessorNotifier for LoggingSubProcessorNotifier {
         processor: &SubProcessor,
         tenant_admins: Vec<String>,
     ) -> Result<(), PrivacyError> {
-        tracing::info!(
-            subprocessor = %processor.name,
-            admins = tenant_admins.len(),
-            "sub-processor removal notice queued for tenant admins (logging adapter)",
-        );
-        Ok(())
+        if tenant_admins.is_empty() {
+            return Ok(());
+        }
+        Err(PrivacyError::Upstream(format!(
+            "tenant-admin delivery adapter is not configured for sub-processor {}",
+            processor.name
+        )))
     }
 }
 
@@ -170,9 +171,10 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
         &self,
         incident: &BreachIncident,
         profiles: &[JurisdictionProfile],
-        now: DateTime<Utc>,
+        _now: DateTime<Utc>,
     ) -> Vec<NotificationObligation> {
         let mut obligations = Vec::new();
+        let deadline_base = incident.discovered_at;
         for jurisdiction in &incident.affected.jurisdictions {
             let Some(profile) = profiles.iter().find(|p| &p.code == jurisdiction) else {
                 continue;
@@ -186,11 +188,11 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
             // assessment is recorded (suppressed flag stays true).
             let authority_due = rules
                 .authority_due_hours
-                .map(|h| now + chrono::Duration::hours(i64::from(h)))
+                .map(|h| deadline_base + chrono::Duration::hours(i64::from(h)))
                 .or_else(|| {
                     rules
                         .authority_due_days
-                        .map(|d| now + chrono::Duration::days(i64::from(d)))
+                        .map(|d| deadline_base + chrono::Duration::days(i64::from(d)))
                 });
             if let Some(due_at) = authority_due {
                 let below_threshold = rules
@@ -219,7 +221,7 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
                     obligations.push(NotificationObligation {
                         jurisdiction: jurisdiction.clone(),
                         audience: ObligationAudience::Consumer,
-                        due_at: now + chrono::Duration::days(i64::from(days)),
+                        due_at: deadline_base + chrono::Duration::days(i64::from(days)),
                         notified_at: None,
                         suppressed_by_encryption: encryption_suppresses,
                         artifact: None,
@@ -233,7 +235,7 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
                 obligations.push(NotificationObligation {
                     jurisdiction: jurisdiction.clone(),
                     audience: ObligationAudience::Tenant,
-                    due_at: add_business_days(now, 2),
+                    due_at: add_business_days(deadline_base, 2),
                     notified_at: None,
                     suppressed_by_encryption: false,
                     artifact: None,
@@ -306,7 +308,8 @@ mod tests {
             notes: None,
             created_by: None,
         };
-        let obligations = calculator.compute(&incident, &[eu, ca], now);
+        let recorded_late = now + chrono::Duration::hours(10);
+        let obligations = calculator.compute(&incident, &[eu, ca], recorded_late);
         // eu: authority 72h + tenant; us-ca: authority (threshold 500 met,
         // no fixed deadline → none since both fields are NULL) + consumer
         // (no fixed consumer deadline) + tenant.
@@ -318,7 +321,10 @@ mod tests {
             .expect("eu authority obligation");
         let expected = now + chrono::Duration::hours(72);
         let delta = (eu_authority.due_at - expected).num_seconds().abs();
-        assert!(delta <= 1, "GDPR authority deadline is 72 hours");
+        assert!(
+            delta <= 1,
+            "GDPR authority deadline is 72 hours from discovery, not recording"
+        );
         assert_eq!(
             obligations
                 .iter()

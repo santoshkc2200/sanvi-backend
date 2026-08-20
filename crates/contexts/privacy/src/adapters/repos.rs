@@ -91,6 +91,7 @@ struct DsrRow {
     requester_ip: Option<IpAddr>,
     requester_note: Option<String>,
     rejection_reason: Option<String>,
+    rejected_by: Option<Uuid>,
     appeal_id: Option<Uuid>,
     export_artifact_id: Option<Uuid>,
 }
@@ -117,6 +118,7 @@ fn to_dsr(row: DsrRow) -> Result<DataSubjectRequest, PrivacyError> {
         requester_ip: row.requester_ip,
         requester_note: row.requester_note,
         rejection_reason: row.rejection_reason,
+        rejected_by: row.rejected_by,
         appeal_id: row.appeal_id,
         export_artifact_id: row.export_artifact_id,
     })
@@ -444,8 +446,8 @@ impl DsrRepository for SqlxDsrRepository {
                (id, tenant_id, subject_id, subject_ref, kind, status, received_at,
                 acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction,
                 submitted_by, agent_id, requester_ip, requester_note, rejection_reason,
-                appeal_id, export_artifact_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::inet, $17, $18, $19, $20)
+                rejected_by, appeal_id, export_artifact_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::inet, $17, $18, $19, $20, $21)
              ON CONFLICT (id) DO UPDATE SET
                status = EXCLUDED.status,
                acknowledged_at = EXCLUDED.acknowledged_at,
@@ -453,6 +455,7 @@ impl DsrRepository for SqlxDsrRepository {
                extended_to = EXCLUDED.extended_to,
                completed_at = EXCLUDED.completed_at,
                rejection_reason = EXCLUDED.rejection_reason,
+               rejected_by = EXCLUDED.rejected_by,
                appeal_id = EXCLUDED.appeal_id,
                export_artifact_id = EXCLUDED.export_artifact_id,
                updated_at = now()",
@@ -475,6 +478,7 @@ impl DsrRepository for SqlxDsrRepository {
         .bind(request.requester_ip.map(|ip| ip.to_string()))
         .bind(&request.requester_note)
         .bind(&request.rejection_reason)
+        .bind(request.rejected_by)
         .bind(request.appeal_id)
         .bind(request.export_artifact_id)
         .execute(&mut **scope.tx_mut().as_inner())
@@ -489,7 +493,7 @@ impl DsrRepository for SqlxDsrRepository {
         id: DsrId,
     ) -> Result<Option<DataSubjectRequest>, PrivacyError> {
         let row: Option<DsrRow> = sqlx::query_as(
-            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, appeal_id, export_artifact_id FROM privacy.data_subject_requests WHERE id = $1",
+            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests WHERE id = $1",
         )
         .bind(id.as_uuid())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -504,7 +508,7 @@ impl DsrRepository for SqlxDsrRepository {
         id: DsrId,
     ) -> Result<Option<DataSubjectRequest>, PrivacyError> {
         let row: Option<DsrRow> = sqlx::query_as(
-            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, appeal_id, export_artifact_id FROM privacy.data_subject_requests WHERE id = $1",
+            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests WHERE id = $1",
         )
         .bind(id.as_uuid())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -519,7 +523,7 @@ impl DsrRepository for SqlxDsrRepository {
         subject_id: SubjectId,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError> {
         let rows: Vec<DsrRow> = sqlx::query_as(
-            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, appeal_id, export_artifact_id FROM privacy.data_subject_requests
+            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests
              WHERE subject_id = $1 AND status = 'awaiting_verification'
              ORDER BY received_at DESC LIMIT 20",
         )
@@ -539,7 +543,7 @@ impl DsrRepository for SqlxDsrRepository {
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError> {
         let statuses: Vec<String> = statuses.iter().map(|s| s.as_str().to_string()).collect();
         let rows: Vec<DsrRow> = sqlx::query_as(
-            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, appeal_id, export_artifact_id FROM privacy.data_subject_requests
+            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests
              WHERE status = ANY($1) AND ($2::text IS NULL OR kind = $2)
              ORDER BY received_at ASC LIMIT $3",
         )
@@ -559,10 +563,31 @@ impl DsrRepository for SqlxDsrRepository {
         limit: u32,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError> {
         let rows: Vec<DsrRow> = sqlx::query_as(
-            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, appeal_id, export_artifact_id FROM privacy.data_subject_requests
+            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests
              WHERE ($1::text IS NULL OR status = $1)
              ORDER BY received_at DESC LIMIT $2",
         )
+        .bind(status.map(|s| s.as_str().to_string()))
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
+        rows.into_iter().map(to_dsr).collect()
+    }
+
+    async fn list_tenant(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        status: Option<DsrStatus>,
+        limit: u32,
+    ) -> Result<Vec<DataSubjectRequest>, PrivacyError> {
+        let rows: Vec<DsrRow> = sqlx::query_as(
+            "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests
+             WHERE tenant_id = $1 AND ($2::text IS NULL OR status = $2)
+             ORDER BY received_at DESC LIMIT $3",
+        )
+        .bind(tenant_id)
         .bind(status.map(|s| s.as_str().to_string()))
         .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
@@ -589,6 +614,25 @@ impl DsrRepository for SqlxDsrRepository {
         .bind(status.as_str())
         .bind(completed_at)
         .bind(rejection_reason)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
+        Ok(())
+    }
+
+    async fn set_rejected_by(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+        actor: Uuid,
+    ) -> Result<(), PrivacyError> {
+        sqlx::query(
+            "UPDATE privacy.data_subject_requests
+             SET rejected_by = $2, updated_at = now()
+             WHERE id = $1",
+        )
+        .bind(id.as_uuid())
+        .bind(actor)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -1172,6 +1216,25 @@ impl ConsentRepository for SqlxConsentRepository {
         .map_err(map_db)?;
         Ok(result.rows_affected() as usize)
     }
+
+    async fn anonymise_record(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        record_id: Uuid,
+        anonymised: &SubjectRef,
+    ) -> Result<(), PrivacyError> {
+        sqlx::query(
+            "UPDATE privacy.consents
+             SET subject_id = NULL, tenant_id = NULL, subject_ref = $2
+             WHERE id = $1",
+        )
+        .bind(record_id)
+        .bind(serde_json::to_value(anonymised).map_err(|e| PrivacyError::Storage(e.to_string()))?)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,7 +1371,7 @@ impl SignalRepository for SqlxSignalRepository {
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.preference_signals
-             SET bound_at = now(), subject_id = $3, jurisdiction = COALESCE(jurisdiction, $4)
+             SET bound_at = now(), subject_id = $2, jurisdiction = COALESCE(jurisdiction, $3)
              WHERE id = $1 AND bound_at IS NULL",
         )
         .bind(signal_id)
@@ -2179,11 +2242,15 @@ impl SubjectKeyRepository for SqlxSubjectKeyRepository {
         scope: &mut PlatformScope<'_>,
         subject_id: SubjectId,
     ) -> Result<(), PrivacyError> {
-        sqlx::query("DELETE FROM privacy.subject_keys WHERE subject_id = $1")
-            .bind(subject_id.as_uuid())
-            .execute(&mut **scope.tx_mut().as_inner())
-            .await
-            .map_err(map_db)?;
+        sqlx::query(
+            "UPDATE privacy.subject_keys
+             SET wrapped_dek = ''::bytea, destroyed_at = now()
+             WHERE subject_id = $1 AND destroyed_at IS NULL",
+        )
+        .bind(subject_id.as_uuid())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
         Ok(())
     }
 
@@ -2192,12 +2259,14 @@ impl SubjectKeyRepository for SqlxSubjectKeyRepository {
         scope: &mut PlatformScope<'_>,
         subject_id: SubjectId,
     ) -> Result<bool, PrivacyError> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM privacy.subject_keys WHERE subject_id = $1")
-                .bind(subject_id.as_uuid())
-                .fetch_one(&mut **scope.tx_mut().as_inner())
-                .await
-                .map_err(map_db)?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM privacy.subject_keys
+                 WHERE subject_id = $1 AND destroyed_at IS NULL",
+        )
+        .bind(subject_id.as_uuid())
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
         Ok(count > 0)
     }
 }

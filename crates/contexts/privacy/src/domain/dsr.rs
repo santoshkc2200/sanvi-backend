@@ -61,6 +61,7 @@ pub struct DataSubjectRequest {
     pub requester_ip: Option<IpAddr>,
     pub requester_note: Option<String>,
     pub rejection_reason: Option<String>,
+    pub rejected_by: Option<Uuid>,
     pub appeal_id: Option<Uuid>,
     pub export_artifact_id: Option<Uuid>,
 }

@@ -533,6 +533,13 @@ impl RecordBreachIncident {
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let profiles = self.jurisdictions.list(&mut scope).await?;
+        for jurisdiction in &jurisdictions {
+            if !profiles.iter().any(|profile| profile.code == *jurisdiction) {
+                return Err(PrivacyError::JurisdictionNotFound(
+                    jurisdiction.as_str().to_string(),
+                ));
+            }
+        }
         let obligations = self
             .calculator
             .compute(&incident, &profiles, self.clock.now());

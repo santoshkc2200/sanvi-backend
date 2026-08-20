@@ -4,10 +4,12 @@
 pub mod events;
 pub mod http;
 pub mod metrics;
+pub mod privacy_provider;
 pub mod repos;
 pub mod stubs;
 
 pub use events::OutboxEventPublisher;
 pub use metrics::PaymentsMetrics;
+pub use privacy_provider::PaymentsPrivacyProvider;
 pub use repos::SqlxProviderConnectionRepository;
 pub use stubs::EmptyProviderCatalog;

@@ -176,6 +176,13 @@ pub trait DsrRepository: Send + Sync {
         status: Option<super::types::DsrStatus>,
         limit: u32,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError>;
+    async fn list_tenant(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        status: Option<super::types::DsrStatus>,
+        limit: u32,
+    ) -> Result<Vec<DataSubjectRequest>, PrivacyError>;
     async fn set_status(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -183,6 +190,12 @@ pub trait DsrRepository: Send + Sync {
         status: super::types::DsrStatus,
         completed_at: Option<DateTime<Utc>>,
         rejection_reason: Option<String>,
+    ) -> Result<(), PrivacyError>;
+    async fn set_rejected_by(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+        actor: Uuid,
     ) -> Result<(), PrivacyError>;
     async fn extend(
         &self,
@@ -384,6 +397,14 @@ pub trait ConsentRepository: Send + Sync {
         subject_key: &str,
         anonymised: &SubjectRef,
     ) -> Result<usize, PrivacyError>;
+    /// Pseudonymise exactly one expired ledger row, leaving newer rows for
+    /// the same subject untouched.
+    async fn anonymise_record(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        record_id: Uuid,
+        anonymised: &SubjectRef,
+    ) -> Result<(), PrivacyError>;
 }
 
 #[async_trait]
@@ -760,11 +781,7 @@ pub trait Hasher: Send + Sync {
 #[async_trait]
 pub trait EnvelopeCrypto: Send + Sync {
     /// Create (or return the existing) wrapped DEK for the subject.
-    async fn create_subject_key(
-        &self,
-        subject_id: SubjectId,
-        kek_id: &str,
-    ) -> Result<Vec<u8>, PrivacyError>;
+    async fn create_subject_key(&self, subject_id: SubjectId) -> Result<Vec<u8>, PrivacyError>;
     /// Wrap a DEK with the KEK.
     fn wrap(&self, dek: &[u8], kek_id: &str) -> Result<Vec<u8>, PrivacyError>;
     /// Unwrap a DEK with the KEK.
@@ -807,13 +824,14 @@ pub trait ExportPackager: Send + Sync {
     ) -> Result<Vec<u8>, PrivacyError>;
 }
 
-/// Sends verification codes and export passphrases out of band.
+/// Sends verification codes and complete export credentials out of band.
 #[async_trait]
 pub trait Notifications: Send + Sync {
     async fn send_verification_code(&self, to: &str, code: &str) -> Result<(), PrivacyError>;
-    async fn send_export_passphrase(
+    async fn send_export_credentials(
         &self,
-        to: &str,
+        subject: &SubjectRef,
+        token: &str,
         passphrase: &str,
         request_id: &str,
     ) -> Result<(), PrivacyError>;
@@ -886,7 +904,7 @@ pub trait IdGenerator: Send + Sync {
 /// The registry of every context that must register a provider. The CI test
 /// derives the workspace's context crates and asserts this list matches
 /// exactly; the DSR saga asserts every registered provider participated.
-pub const CONTEXT_NAMES: [&str; 11] = [
+pub const CONTEXT_NAMES: [&str; 12] = [
     "system",
     "tenancy",
     "identity",
@@ -898,6 +916,7 @@ pub const CONTEXT_NAMES: [&str; 11] = [
     "localization",
     "theming",
     "domains",
+    "payments",
 ];
 
 #[cfg(test)]

@@ -871,6 +871,14 @@ async fn main() -> ExitCode {
             ),
         ),
         std::sync::Arc::new(
+            sanvi_localization::adapters::LocalizationPrivacyProvider::new(privacy_tx.clone()),
+        ),
+        std::sync::Arc::new(
+            sanvi_theming::adapters::privacy_provider::ThemingPrivacyProvider::new(
+                privacy_tx.clone(),
+            ),
+        ),
+        std::sync::Arc::new(
             sanvi_domains::adapters::privacy_provider::DomainsPrivacyProvider::new(
                 privacy_tx.clone(),
             ),
@@ -882,6 +890,7 @@ async fn main() -> ExitCode {
             privacy_signals.clone(),
             privacy_directives.clone(),
         )),
+        std::sync::Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new()),
     ];
 
     let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(

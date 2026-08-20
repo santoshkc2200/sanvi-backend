@@ -728,11 +728,12 @@ pub async fn list_tenant_dsrs(
     _subject: OptionalSubject,
     _guard: RequiredPermission,
     query: web::Query<TenantRequestQuery>,
-    _req: HttpRequest,
+    req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
+    let tenant_id = current_tenant(&req)?;
     let requests = state
         .list_requests
-        .execute(query.status, 100)
+        .execute_for_tenant(tenant_id, query.status, 100)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(requests))

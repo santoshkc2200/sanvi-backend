@@ -244,20 +244,6 @@ impl DecideAppeal {
         };
         let mut appeal = open.remove(index);
 
-        // Second-operator review: both the rejecter and this decision are
-        // recorded in the audit chain; the composition root enforces the
-        // "different operator" rule at review time via the audit reader.
-        appeal.decide(
-            command.outcome,
-            actor,
-            command.reason.clone(),
-            self.clock.now(),
-            None,
-        )?;
-        self.appeals.decide(&mut scope, &appeal).await?;
-
-        // An upheld appeal re-opens the request; a denied appeal closes it
-        // with the authority route in the outcome.
         let request_id = appeal.request_id;
         let request = self
             .requests
@@ -266,6 +252,21 @@ impl DecideAppeal {
             .ok_or(PrivacyError::RequestNotFound(
                 request_id.as_uuid().to_string(),
             ))?;
+
+        // Second-operator review: both the rejecter and this decision are
+        // persisted on the request so the domain can enforce that the
+        // appeal is decided by a different operator.
+        appeal.decide(
+            command.outcome,
+            actor,
+            command.reason.clone(),
+            self.clock.now(),
+            request.rejected_by,
+        )?;
+        self.appeals.decide(&mut scope, &appeal).await?;
+
+        // An upheld appeal re-opens the request; a denied appeal closes it
+        // with the authority route in the outcome.
         match command.outcome {
             AppealOutcome::Upheld => {
                 self.requests

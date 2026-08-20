@@ -1243,6 +1243,23 @@ pub fn build_privacy_state(
     providers: ProviderRegistry,
     audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter>,
 ) -> PrivacyWiring {
+    let registered: std::collections::BTreeSet<_> = providers
+        .iter()
+        .map(|provider| provider.context_name())
+        .collect();
+    let expected: std::collections::BTreeSet<_> = sanvi_privacy::domain::CONTEXT_NAMES
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(
+        registered, expected,
+        "privacy provider registry must contain every context exactly once"
+    );
+    assert_eq!(
+        providers.len(),
+        sanvi_privacy::domain::CONTEXT_NAMES.len(),
+        "privacy provider registry contains duplicate contexts"
+    );
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
     let audit: Arc<dyn PrivacyAuditWriter> = Arc::new(
         sanvi_audit::adapters::PrivacyAuditWriterAdapter::new(audit_writer.clone()),
@@ -1567,6 +1584,7 @@ pub fn build_privacy_state(
     let gpc = GpcSignalMiddleware::new(
         tx_manager.clone(),
         signals.clone(),
+        subjects.clone(),
         clock.clone(),
         config.device_cookie_name.clone(),
         config.device_cookie_ttl_days,
@@ -2530,7 +2548,6 @@ pub fn build_app(
 
     // Phase-05 gate: privacy routes (subject-scoped scope wrapped with the
     // GPC middleware, public disclosures, platform control plane).
-    let privacy_wiring = privacy.clone();
     let app = match privacy {
         Some(wiring) => app
             .app_data(web::Data::new(wiring.state))
@@ -2607,7 +2624,7 @@ pub fn build_app(
             verifier: identity.verifier.clone(),
             session_cookie_name: config.identity.session_cookie_name.clone(),
             exempt_prefixes: {
-                let mut prefixes = vec![
+                vec![
                     "/healthz".to_string(),
                     "/readyz".to_string(),
                     "/metrics".to_string(),
@@ -2615,13 +2632,7 @@ pub fn build_app(
                     "/scalar".to_string(),
                     "/api/v1/public".to_string(),
                     "/internal".to_string(),
-                ];
-                // Self-service privacy endpoints are their own credential:
-                // opt-outs may never be gated on authentication.
-                if privacy_wiring.is_some() {
-                    prefixes.push("/api/v1/privacy".to_string());
-                }
-                prefixes
+                ]
             },
         }))
     } else {

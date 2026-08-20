@@ -847,6 +847,19 @@ async fn a_us_refusal_can_be_appealed_and_decided_by_a_second_operator() {
         .unwrap();
     assert!(appeal.authority.complaint_url.starts_with("https://"));
 
+    let self_review = wired
+        .decide_appeal
+        .execute(
+            operator,
+            DecideAppealCommand {
+                appeal_id: appeal.appeal_id,
+                outcome: AppealOutcome::Denied,
+                reason: "same operator attempted review".to_string(),
+            },
+        )
+        .await;
+    assert!(matches!(self_review, Err(PrivacyError::AppealSelfReview)));
+
     let second_operator = Uuid::now_v7();
     let decision = wired
         .decide_appeal

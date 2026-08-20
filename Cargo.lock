@@ -3592,6 +3592,7 @@ dependencies = [
  "sanvi-kernel",
  "sanvi-messaging",
  "sanvi-persistence",
+ "sanvi-privacy",
  "serde",
  "serde_json",
  "sha2 0.10.9",
