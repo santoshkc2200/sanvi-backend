@@ -126,13 +126,16 @@ async fn memberships_are_isolated_between_tenants() {
     let tenant_a = uuid::Uuid::now_v7();
     let tenant_b = uuid::Uuid::now_v7();
     for (id, slug) in [(tenant_a, "tenant-a"), (tenant_b, "tenant-b")] {
-        sqlx::query!(
+        // Runtime-checked queries, like every other test file: query
+        // macros in test targets fall outside `cargo sqlx prepare`'s
+        // lib-only cache and break the SQLX_OFFLINE build.
+        sqlx::query(
             "INSERT INTO tenancy.tenants (id, slug, display_name, status, region)
              VALUES ($1, $2, $3, 'active', 'us')",
-            id,
-            slug,
-            slug,
         )
+        .bind(id)
+        .bind(slug)
+        .bind(slug)
         .execute(&pool)
         .await
         .unwrap();
@@ -143,11 +146,11 @@ async fn memberships_are_isolated_between_tenants() {
     {
         // access.roles is RLS FORCE: inserts need the audited platform scope.
         let mut scope = tx.begin_unscoped("seed_role", "test").await.unwrap();
-        sqlx::query!(
+        sqlx::query(
             "INSERT INTO access.roles (id, scope, tenant_id, key, name, is_system)
              VALUES ($1, 'tenant', NULL, 'rls_test_role', 'RLS Test Role', true)",
-            role,
         )
+        .bind(role)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .unwrap();

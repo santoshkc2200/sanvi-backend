@@ -634,7 +634,7 @@ impl EventPublisher for World {
 impl Notifications for World {
     async fn send_invitation(
         &self,
-        _tenant_id: Uuid,
+        _tenant_id: uuid::Uuid,
         email: &Email,
         _tenant_name: &str,
         invite_url: &str,
