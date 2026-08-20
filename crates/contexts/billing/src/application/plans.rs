@@ -338,6 +338,7 @@ impl CreatePlan {
 pub struct UpdatePlanCommand {
     pub plan_id: PlanId,
     pub name: String,
+    pub stripe_product_id: Option<String>,
     pub visibility: PlanVisibility,
     pub sort_order: i32,
 }
@@ -380,7 +381,13 @@ impl UpdatePlan {
             .find_by_id(&mut scope, cmd.plan_id)
             .await?
             .ok_or_else(|| BillingError::PlanNotFound(cmd.plan_id.to_string()))?;
-        plan.update(cmd.name, cmd.visibility, cmd.sort_order, self.clock.now())?;
+        plan.update(
+            cmd.name,
+            cmd.stripe_product_id,
+            cmd.visibility,
+            cmd.sort_order,
+            self.clock.now(),
+        )?;
         self.plans.save(&mut scope, &plan).await?;
         audit_plan(
             self.audit.as_ref(),

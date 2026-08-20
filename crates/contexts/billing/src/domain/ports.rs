@@ -111,6 +111,14 @@ pub trait SubscriptionRepository: Send + Sync {
         tenant_id: Uuid,
     ) -> Result<usize, BillingError>;
 
+    /// Remove a tenant's projection (used when an operator override is
+    /// revoked; Stripe-backed history is retained by status instead).
+    async fn delete_by_tenant(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<bool, BillingError>;
+
     /// The tenant's own row (RLS sees only them).
     async fn find_by_tenant(
         &self,
@@ -167,20 +175,84 @@ pub trait SubscriptionRepository: Send + Sync {
     /// Subscriptions inside the dunning grace window (the dunning gauge).
     async fn dunning_count(&self, scope: &mut PlatformScope<'_>) -> Result<i64, BillingError>;
 
-    /// Monthly recurring revenue in minor units: the active prices of
-    /// access-granting subscriptions (the MRR gauge).
-    async fn mrr_minor(&self, scope: &mut PlatformScope<'_>) -> Result<i64, BillingError>;
+    /// Monthly recurring revenue grouped by currency. Annual prices are
+    /// normalized to one month before aggregation.
+    async fn mrr_by_currency(
+        &self,
+        scope: &mut PlatformScope<'_>,
+    ) -> Result<Vec<(String, f64)>, BillingError>;
+}
+
+/// Durable state for an in-flight Checkout Session. Keeping the Stripe
+/// idempotency key and request inputs locally makes concurrent requests and
+/// process retries converge on one Customer and one Session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutState {
+    pub tenant_id: Uuid,
+    pub price_id: PriceId,
+    pub command_id: Uuid,
+    pub stripe_customer_id: Option<String>,
+    pub stripe_session_id: Option<String>,
+    pub session_url: Option<String>,
+    pub success_url: String,
+    pub cancel_url: String,
+    pub integration_identifier_suffix: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[async_trait]
+pub trait CheckoutStateRepository: Send + Sync {
+    /// Insert a new state, or replace an expired state while retaining its
+    /// Stripe Customer. An unexpired state is returned unchanged.
+    async fn claim(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        proposed: &CheckoutState,
+        now: DateTime<Utc>,
+        force_new: bool,
+    ) -> Result<CheckoutState, BillingError>;
+
+    async fn set_customer(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        command_id: Uuid,
+        stripe_customer_id: &str,
+    ) -> Result<(), BillingError>;
+
+    async fn complete(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        command_id: Uuid,
+        stripe_session_id: &str,
+        session_url: &str,
+    ) -> Result<(), BillingError>;
+
+    async fn customer_for_tenant(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Option<String>, BillingError>;
+
+    async fn anonymise(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<usize, BillingError>;
 }
 
 /// Invoices.
 #[async_trait]
 pub trait InvoiceRepository: Send + Sync {
-    /// Upsert on stripe_invoice_id.
+    /// Upsert on stripe_invoice_id only when this event is not older than the
+    /// projection's last Stripe event. Returns whether the row was applied.
     async fn upsert(
         &self,
         scope: &mut PlatformScope<'_>,
         invoice: &InvoiceRef,
-    ) -> Result<(), BillingError>;
+        event_created: DateTime<Utc>,
+    ) -> Result<bool, BillingError>;
 
     /// The tenant's invoices, newest first (RLS sees only them).
     async fn list_for_tenant(

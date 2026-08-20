@@ -17,12 +17,14 @@ use sanvi_privacy::domain::{
 };
 
 use crate::domain::{
-    InvoiceRepository, StripeClient, SubscriptionRepository, WebhookEventRepository,
+    CheckoutStateRepository, InvoiceRepository, StripeClient, SubscriptionRepository,
+    WebhookEventRepository,
 };
 
 pub struct BillingPrivacyProvider {
     tx_manager: TxManager,
     subscriptions: std::sync::Arc<dyn SubscriptionRepository>,
+    checkout_states: std::sync::Arc<dyn CheckoutStateRepository>,
     invoices: std::sync::Arc<dyn InvoiceRepository>,
     webhooks: std::sync::Arc<dyn WebhookEventRepository>,
     stripe: std::sync::Arc<dyn StripeClient>,
@@ -32,6 +34,7 @@ impl BillingPrivacyProvider {
     pub fn new(
         tx_manager: TxManager,
         subscriptions: std::sync::Arc<dyn SubscriptionRepository>,
+        checkout_states: std::sync::Arc<dyn CheckoutStateRepository>,
         invoices: std::sync::Arc<dyn InvoiceRepository>,
         webhooks: std::sync::Arc<dyn WebhookEventRepository>,
         stripe: std::sync::Arc<dyn StripeClient>,
@@ -39,6 +42,7 @@ impl BillingPrivacyProvider {
         Self {
             tx_manager,
             subscriptions,
+            checkout_states,
             invoices,
             webhooks,
             stripe,
@@ -95,6 +99,19 @@ impl PersonalDataProvider for BillingPrivacyProvider {
                 }),
             });
         }
+        if let Some(customer_id) = self
+            .checkout_states
+            .customer_for_tenant(&mut scope, tenant_id)
+            .await
+            .map_err(storage)?
+        {
+            entries.push(DataEntry {
+                data_class: DataClass::Billing,
+                category: "Financial".to_string(),
+                label: "checkout_customer".to_string(),
+                value: serde_json::json!({ "stripe_customer_id": customer_id }),
+            });
+        }
         for invoice in self
             .invoices
             .list_for_tenant_platform(&mut scope, tenant_id, 100)
@@ -146,16 +163,23 @@ impl PersonalDataProvider for BillingPrivacyProvider {
         let mut retained = Vec::new();
 
         // Stripe-side tombstone first (the processor holds the real data).
-        if let Some(subscription) = self
+        // An abandoned Checkout may have a Customer before a subscription
+        // projection exists, so consult both durable pointers.
+        let subscription_customer = self
             .subscriptions
             .find_by_tenant_platform(&mut scope, tenant_id)
             .await
             .map_err(storage)?
-            && let Some(customer_id) = subscription.stripe_customer_id()
-        {
+            .and_then(|subscription| subscription.stripe_customer_id().map(str::to_string));
+        let checkout_customer = self
+            .checkout_states
+            .customer_for_tenant(&mut scope, tenant_id)
+            .await
+            .map_err(storage)?;
+        if let Some(customer_id) = subscription_customer.or(checkout_customer) {
             if !customer_id.is_empty() {
                 self.stripe
-                    .delete_customer(customer_id)
+                    .delete_customer(&customer_id)
                     .await
                     .map_err(|err| PrivacyError::Upstream(err.to_string()))?;
             }
@@ -163,7 +187,7 @@ impl PersonalDataProvider for BillingPrivacyProvider {
             // customer (email/name/address leak).
             anonymised += self
                 .webhooks
-                .scrub_payloads_for_customer(&mut scope, customer_id)
+                .scrub_payloads_for_customer(&mut scope, &customer_id)
                 .await
                 .map_err(storage)?;
         }
@@ -173,6 +197,11 @@ impl PersonalDataProvider for BillingPrivacyProvider {
         anonymised += self
             .subscriptions
             .anonymise_stripe_ids(&mut scope, tenant_id)
+            .await
+            .map_err(storage)?;
+        anonymised += self
+            .checkout_states
+            .anonymise(&mut scope, tenant_id)
             .await
             .map_err(storage)?;
 

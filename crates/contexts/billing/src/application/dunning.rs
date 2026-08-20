@@ -16,14 +16,14 @@ use utoipa::ToSchema;
 
 use crate::application::storage;
 use crate::domain::{
-    BillingError, Clock, EntitlementSyncer, EventPublisher, Notifications, SubscriptionRepository,
-    SubscriptionStatus, TenantLifecycle,
+    BillingError, Clock, CollectionState, EntitlementSyncer, EventPublisher, Notifications,
+    SubscriptionRepository, SubscriptionStatus, TenantLifecycle,
 };
 
 #[derive(Debug, Clone, Copy, Default, Serialize, ToSchema)]
 pub struct DunningSweepReport {
-    /// Subscriptions whose grace expired this pass (entitlements downgraded,
-    /// tenants suspended).
+    /// Tenants suspended after grace expiry this pass, including retries
+    /// after a prior cross-context suspension failure.
     pub grace_expired: u32,
     /// Trial-ending notices sent this pass.
     pub trials_notified: u32,
@@ -92,36 +92,51 @@ impl DunningSweep {
         };
 
         let mut expired = 0;
-        for subscription in due {
-            let tenant_id = subscription.tenant_id();
-            let mut subscription = subscription;
+        for candidate in due {
+            let tenant_id = candidate.tenant_id();
             {
                 let mut scope = self
                     .tx_manager
                     .begin_unscoped("dunning_sweep_expire", "worker")
                     .await
                     .map_err(storage)?;
-                if !subscription.expire_grace(now) {
-                    // Another sweep won the race; nothing to do.
+                // Re-read inside the write transaction so a payment recovery
+                // that landed after the fetch cannot be overwritten by the
+                // stale candidate snapshot.
+                let Some(mut subscription) = self
+                    .subscriptions
+                    .find_by_tenant_platform(&mut scope, tenant_id)
+                    .await?
+                else {
+                    scope.commit().await.map_err(storage)?;
+                    continue;
+                };
+                let newly_expired = subscription.expire_grace(now);
+                if !newly_expired
+                    && subscription.collection_state() != CollectionState::GraceExpired
+                {
+                    // Another sweep repaired or otherwise changed this row.
                     scope.commit().await.map_err(storage)?;
                     continue;
                 }
-                self.subscriptions.save(&mut scope, &subscription).await?;
-                self.syncer
-                    .clear_subscription(&mut scope, tenant_id)
-                    .await?;
-                self.events
-                    .publish(
-                        &mut scope,
-                        &[crate::domain::BillingEvent::SubscriptionSuspended {
-                            tenant_id,
-                            stripe_subscription_id: subscription
-                                .stripe_subscription_id()
-                                .unwrap_or_default()
-                                .to_string(),
-                        }],
-                    )
-                    .await?;
+                if newly_expired {
+                    self.subscriptions.save(&mut scope, &subscription).await?;
+                    self.syncer
+                        .clear_subscription(&mut scope, tenant_id)
+                        .await?;
+                    self.events
+                        .publish(
+                            &mut scope,
+                            &[crate::domain::BillingEvent::SubscriptionSuspended {
+                                tenant_id,
+                                stripe_subscription_id: subscription
+                                    .stripe_subscription_id()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            }],
+                        )
+                        .await?;
+                }
                 scope.commit().await.map_err(storage)?;
             }
             // Cross-context: suspend the tenant (own transaction). A failure

@@ -17,9 +17,12 @@ use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::{
-    BillingError, CheckoutSessionRequest, Clock, PlanPriceRepository, PlanRepository, PriceId,
-    StripeClient, SubscriptionRepository, SubscriptionStatus, TaxGate,
+    BillingError, CheckoutSessionRequest, CheckoutState, CheckoutStateRepository, Clock,
+    PlanPriceRepository, PlanRepository, PriceId, StripeClient, SubscriptionRepository,
+    SubscriptionStatus, TaxGate,
 };
+
+const CHECKOUT_STATE_TTL_HOURS: i64 = 24;
 
 /// Random lowercase-letter suffix for the Checkout `integration_identifier`
 /// (Dashboard comparison across flows; 8 letters per the Stripe guideline).
@@ -57,7 +60,9 @@ fn blocks_new_checkout(status: SubscriptionStatus) -> bool {
         SubscriptionStatus::Trialing
             | SubscriptionStatus::Active
             | SubscriptionStatus::PastDue
+            | SubscriptionStatus::Unpaid
             | SubscriptionStatus::Incomplete
+            | SubscriptionStatus::Paused
     )
 }
 
@@ -66,6 +71,7 @@ pub struct CreateCheckoutSession {
     plans: Arc<dyn PlanRepository>,
     prices: Arc<dyn PlanPriceRepository>,
     subscriptions: Arc<dyn SubscriptionRepository>,
+    checkout_states: Arc<dyn CheckoutStateRepository>,
     stripe: Arc<dyn StripeClient>,
     tax_gate: Arc<dyn TaxGate>,
     audit: Arc<dyn AuditWriter>,
@@ -83,6 +89,7 @@ impl CreateCheckoutSession {
         plans: Arc<dyn PlanRepository>,
         prices: Arc<dyn PlanPriceRepository>,
         subscriptions: Arc<dyn SubscriptionRepository>,
+        checkout_states: Arc<dyn CheckoutStateRepository>,
         stripe: Arc<dyn StripeClient>,
         tax_gate: Arc<dyn TaxGate>,
         audit: Arc<dyn AuditWriter>,
@@ -97,6 +104,7 @@ impl CreateCheckoutSession {
             plans,
             prices,
             subscriptions,
+            checkout_states,
             stripe,
             tax_gate,
             audit,
@@ -119,11 +127,47 @@ impl CreateCheckoutSession {
             .await
             .map_err(storage)?;
 
+        // Existing live subscription → the Customer Portal is the change
+        // path, not a second Checkout.
+        let existing = self
+            .subscriptions
+            .find_by_tenant_platform(&mut scope, cmd.tenant_id)
+            .await?;
+        if existing
+            .as_ref()
+            .is_some_and(|subscription| blocks_new_checkout(subscription.status()))
+        {
+            return Err(BillingError::SubscriptionExists);
+        }
+        // A terminal subscription means the prior Checkout is no longer a
+        // valid route back to paid access, even when it was created recently.
+        let force_new_checkout = existing.is_some();
+
+        let now = self.clock.now();
+        let proposed = CheckoutState {
+            tenant_id: cmd.tenant_id,
+            price_id: cmd.price_id,
+            command_id: Uuid::now_v7(),
+            stripe_customer_id: existing
+                .as_ref()
+                .and_then(|subscription| subscription.stripe_customer_id())
+                .map(str::to_string),
+            stripe_session_id: None,
+            session_url: None,
+            success_url: cmd.success_url.unwrap_or_else(|| self.success_url.clone()),
+            cancel_url: cmd.cancel_url.unwrap_or_else(|| self.cancel_url.clone()),
+            integration_identifier_suffix: random_suffix(self.integration_identifier_suffix_len),
+            expires_at: now + chrono::Duration::hours(CHECKOUT_STATE_TTL_HOURS),
+        };
+        let checkout = self
+            .checkout_states
+            .claim(&mut scope, &proposed, now, force_new_checkout)
+            .await?;
         let price = self
             .prices
-            .find_by_id(&mut scope, cmd.price_id)
+            .find_by_id(&mut scope, checkout.price_id)
             .await?
-            .ok_or_else(|| BillingError::PriceNotFound(cmd.price_id.to_string()))?;
+            .ok_or_else(|| BillingError::PriceNotFound(checkout.price_id.to_string()))?;
         if !price.active() {
             return Err(BillingError::PriceNotActive(
                 price.stripe_price_id().to_string(),
@@ -135,18 +179,14 @@ impl CreateCheckoutSession {
             .await?
             .ok_or_else(|| BillingError::PlanNotFound(price.plan_id().to_string()))?;
 
-        // Existing live subscription → the Customer Portal is the change
-        // path, not a second Checkout.
-        if let Some(existing) = self
-            .subscriptions
-            .find_by_tenant_platform(&mut scope, cmd.tenant_id)
-            .await?
-            && blocks_new_checkout(existing.status())
-        {
-            return Err(BillingError::SubscriptionExists);
-        }
-
         scope.commit().await.map_err(storage)?;
+
+        if let (Some(session_id), Some(url)) = (
+            checkout.stripe_session_id.clone(),
+            checkout.session_url.clone(),
+        ) {
+            return Ok(CheckoutSessionView { session_id, url });
+        }
 
         // The tax gate runs before the session exists: enabling
         // automatic_tax without an active registration silently collects
@@ -160,26 +200,38 @@ impl CreateCheckoutSession {
             false
         };
 
-        let command_id = Uuid::now_v7();
-        let customer = self
-            .stripe
-            .ensure_customer(cmd.tenant_id, command_id)
-            .await?;
+        let customer_id = match checkout.stripe_customer_id.clone() {
+            Some(customer_id) => customer_id,
+            None => {
+                let customer = self
+                    .stripe
+                    .ensure_customer(cmd.tenant_id, checkout.command_id)
+                    .await?;
+                let mut scope = self
+                    .tx_manager
+                    .begin_unscoped("store_checkout_customer", "tenant")
+                    .await
+                    .map_err(storage)?;
+                self.checkout_states
+                    .set_customer(&mut scope, cmd.tenant_id, checkout.command_id, &customer.id)
+                    .await?;
+                scope.commit().await.map_err(storage)?;
+                customer.id
+            }
+        };
         let session = self
             .stripe
             .create_checkout_session(&CheckoutSessionRequest {
-                command_id,
-                customer_id: customer.id,
+                command_id: checkout.command_id,
+                customer_id,
                 stripe_price_id: price.stripe_price_id().to_string(),
                 trial_period_days: price.trial_days(),
                 tenant_id: cmd.tenant_id,
-                success_url: cmd.success_url.unwrap_or_else(|| self.success_url.clone()),
-                cancel_url: cmd.cancel_url.unwrap_or_else(|| self.cancel_url.clone()),
+                success_url: checkout.success_url.clone(),
+                cancel_url: checkout.cancel_url.clone(),
                 automatic_tax,
                 tax_id_collection: true,
-                integration_identifier_suffix: random_suffix(
-                    self.integration_identifier_suffix_len,
-                ),
+                integration_identifier_suffix: checkout.integration_identifier_suffix.clone(),
             })
             .await?;
 
@@ -189,6 +241,15 @@ impl CreateCheckoutSession {
             .begin_unscoped("audit_checkout_session", "tenant")
             .await
             .map_err(storage)?;
+        self.checkout_states
+            .complete(
+                &mut scope,
+                cmd.tenant_id,
+                checkout.command_id,
+                &session.session_id,
+                &session.url,
+            )
+            .await?;
         self.audit
             .append(
                 &mut scope,

@@ -182,11 +182,12 @@ impl Plan {
         self.updated_at
     }
 
-    /// Update the mutable fields (key/tier/product are stable once created;
-    /// renaming those is a product decision that creates a new plan).
+    /// Update mutable catalog fields. Seeded plans use placeholder Product
+    /// ids, so operators may replace the Product id before go-live.
     pub fn update(
         &mut self,
         name: String,
+        stripe_product_id: Option<String>,
         visibility: PlanVisibility,
         sort_order: i32,
         now: DateTime<Utc>,
@@ -196,6 +197,15 @@ impl Plan {
             return Err(BillingError::InvalidPlanName(name.to_string()));
         }
         self.name = name.to_string();
+        if let Some(stripe_product_id) = stripe_product_id {
+            let stripe_product_id = stripe_product_id.trim();
+            if stripe_product_id.is_empty() {
+                return Err(BillingError::InvalidPrice(
+                    "stripe_product_id must not be empty".to_string(),
+                ));
+            }
+            self.stripe_product_id = stripe_product_id.to_string();
+        }
         self.visibility = visibility;
         self.sort_order = sort_order;
         self.updated_at = now;
@@ -418,6 +428,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn seeded_product_id_can_be_replaced() {
+        let mut plan = Plan::new(
+            PlanId::new(),
+            "starter".to_string(),
+            "Starter".to_string(),
+            PlanTier::Starter,
+            "prod_seed_starter".to_string(),
+            PlanVisibility::Public,
+            1,
+            now(),
+        )
+        .unwrap();
+
+        plan.update(
+            "Starter".to_string(),
+            Some("prod_live_starter".to_string()),
+            PlanVisibility::Public,
+            1,
+            now(),
+        )
+        .unwrap();
+        assert_eq!(plan.stripe_product_id(), "prod_live_starter");
     }
 
     #[test]

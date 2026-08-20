@@ -348,12 +348,6 @@ paths:
   /api/v1/tenant/billing/portal-session:
     post:
       operationId: create_portal_session
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PortalSessionRequest'
-        required: true
       responses:
         '201':
           content:

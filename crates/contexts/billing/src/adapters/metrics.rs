@@ -12,7 +12,7 @@ pub struct BillingMetrics {
     status_gauge: prometheus::IntGaugeVec,
     dunning_active: prometheus::IntGauge,
     drift_total: prometheus::IntCounter,
-    mrr: prometheus::Gauge,
+    mrr: prometheus::GaugeVec,
     dead_letter_total: prometheus::IntGauge,
 }
 
@@ -46,9 +46,12 @@ impl BillingMetrics {
             "Subscription drifts repaired by reconciliation",
         )
         .expect("drift counter construction is infallible");
-        let mrr = prometheus::Gauge::new(
-            "mrr_gauge",
-            "Monthly recurring revenue in minor units (local projection)",
+        let mrr = prometheus::GaugeVec::new(
+            prometheus::Opts::new(
+                "mrr_gauge",
+                "Monthly recurring revenue in minor units, normalized by interval",
+            ),
+            &["currency"],
         )
         .expect("mrr gauge construction is infallible");
         let dead_letter_total = prometheus::IntGauge::new(
@@ -94,7 +97,7 @@ impl BillingMetrics {
         &self.drift_total
     }
 
-    pub fn mrr(&self) -> &prometheus::Gauge {
+    pub fn mrr(&self) -> &prometheus::GaugeVec {
         &self.mrr
     }
 

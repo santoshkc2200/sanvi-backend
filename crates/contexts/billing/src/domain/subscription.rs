@@ -152,6 +152,8 @@ pub struct Subscription {
     trial_notified_at: Option<DateTime<Utc>>,
     collection_state: CollectionState,
     collection_started_at: Option<DateTime<Utc>>,
+    stripe_subscription_event_at: Option<DateTime<Utc>>,
+    stripe_invoice_event_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -194,6 +196,8 @@ impl Subscription {
             trial_notified_at: None,
             collection_state: CollectionState::Ok,
             collection_started_at: None,
+            stripe_subscription_event_at: None,
+            stripe_invoice_event_at: None,
             created_at: now,
             updated_at: now,
         })
@@ -216,6 +220,8 @@ impl Subscription {
         trial_notified_at: Option<DateTime<Utc>>,
         collection_state: CollectionState,
         collection_started_at: Option<DateTime<Utc>>,
+        stripe_subscription_event_at: Option<DateTime<Utc>>,
+        stripe_invoice_event_at: Option<DateTime<Utc>>,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Self {
@@ -234,6 +240,8 @@ impl Subscription {
             trial_notified_at,
             collection_state,
             collection_started_at,
+            stripe_subscription_event_at,
+            stripe_invoice_event_at,
             created_at,
             updated_at,
         }
@@ -281,6 +289,12 @@ impl Subscription {
     pub fn collection_started_at(&self) -> Option<DateTime<Utc>> {
         self.collection_started_at
     }
+    pub fn stripe_subscription_event_at(&self) -> Option<DateTime<Utc>> {
+        self.stripe_subscription_event_at
+    }
+    pub fn stripe_invoice_event_at(&self) -> Option<DateTime<Utc>> {
+        self.stripe_invoice_event_at
+    }
     pub fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
@@ -305,6 +319,7 @@ impl Subscription {
         current_period: Option<Period>,
         cancel_at_period_end: bool,
         trial_end: Option<DateTime<Utc>>,
+        event_created: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> bool {
         let mut entitlements_changed = false;
@@ -333,8 +348,63 @@ impl Subscription {
             self.collection_state = CollectionState::Dunning;
             self.collection_started_at = Some(now);
         }
+        self.stripe_subscription_event_at = Some(event_created);
         self.updated_at = now;
         entitlements_changed
+    }
+
+    /// Replace a terminal Stripe subscription with its successor while
+    /// retaining the tenant-scoped local projection id.
+    pub fn replace_stripe_identity(
+        &mut self,
+        customer_id: String,
+        subscription_id: String,
+    ) -> Result<(), BillingError> {
+        if customer_id.trim().is_empty() || subscription_id.trim().is_empty() {
+            return Err(BillingError::InvalidWebhookPayload(
+                "replacement Stripe identity must not be empty".to_string(),
+            ));
+        }
+        self.source = SubscriptionSource::Stripe;
+        self.stripe_customer_id = Some(customer_id);
+        self.stripe_subscription_id = Some(subscription_id);
+        self.trial_notified_at = None;
+        self.collection_state = CollectionState::Ok;
+        self.collection_started_at = None;
+        self.stripe_subscription_event_at = None;
+        self.stripe_invoice_event_at = None;
+        Ok(())
+    }
+
+    pub fn is_subscription_event_stale(&self, event_created: DateTime<Utc>) -> bool {
+        self.stripe_subscription_event_at
+            .is_some_and(|last| event_created < last)
+    }
+
+    pub fn is_invoice_event_stale(&self, event_created: DateTime<Utc>) -> bool {
+        self.stripe_invoice_event_at
+            .is_some_and(|last| event_created < last)
+    }
+
+    pub fn record_invoice_event(&mut self, event_created: DateTime<Utc>, now: DateTime<Utc>) {
+        self.stripe_invoice_event_at = Some(event_created);
+        self.updated_at = now;
+    }
+
+    pub fn start_dunning_from_invoice(
+        &mut self,
+        event_created: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let changed = self.status != SubscriptionStatus::PastDue
+            || self.collection_state != CollectionState::Dunning;
+        self.status = SubscriptionStatus::PastDue;
+        if self.collection_state == CollectionState::Ok {
+            self.collection_state = CollectionState::Dunning;
+            self.collection_started_at = Some(now);
+        }
+        self.record_invoice_event(event_created, now);
+        changed
     }
 
     /// The dunning grace window expired: entitlements drop to the limited
@@ -360,12 +430,6 @@ impl Subscription {
     pub fn mark_trial_notified(&mut self, now: DateTime<Utc>) {
         self.trial_notified_at = Some(now);
         self.updated_at = now;
-    }
-
-    /// The daily reconciliation uses the same guard as webhooks: a Stripe
-    /// object older than our local row must not overwrite newer state.
-    pub fn is_stale(&self, stripe_updated: Option<DateTime<Utc>>) -> bool {
-        stripe_updated.is_some_and(|remote| remote < self.updated_at)
     }
 }
 
@@ -477,6 +541,7 @@ mod tests {
             false,
             None,
             now(),
+            now(),
         );
         assert!(changed);
         assert_eq!(s.collection_state(), CollectionState::Dunning);
@@ -505,6 +570,7 @@ mod tests {
             false,
             None,
             now(),
+            now(),
         );
         assert!(changed);
         assert_eq!(s.collection_state(), CollectionState::Ok);
@@ -523,6 +589,7 @@ mod tests {
             false,
             None,
             now(),
+            now(),
         );
         assert!(changed);
         assert_eq!(s.plan_id(), new_plan);
@@ -530,9 +597,48 @@ mod tests {
 
     #[test]
     fn stale_stripe_updates_are_rejected() {
-        let s = sub(SubscriptionStatus::Active, CollectionState::Ok);
-        assert!(s.is_stale(Some(s.updated_at() - chrono::Duration::minutes(1))));
-        assert!(!s.is_stale(Some(s.updated_at() + chrono::Duration::minutes(1))));
-        assert!(!s.is_stale(None));
+        let mut s = sub(SubscriptionStatus::Active, CollectionState::Ok);
+        let provider_time = now() - chrono::Duration::minutes(10);
+        s.apply_stripe_update(
+            s.status(),
+            s.plan_id(),
+            s.price_id(),
+            s.current_period(),
+            false,
+            None,
+            provider_time,
+            now(),
+        );
+        assert!(s.is_subscription_event_stale(provider_time - chrono::Duration::minutes(1)));
+        assert!(!s.is_subscription_event_stale(provider_time + chrono::Duration::minutes(1)));
+    }
+
+    #[test]
+    fn provider_ordering_is_independent_of_local_processing_time() {
+        let mut s = sub(SubscriptionStatus::Active, CollectionState::Ok);
+        let first_provider_time = now() - chrono::Duration::hours(2);
+        s.apply_stripe_update(
+            s.status(),
+            s.plan_id(),
+            s.price_id(),
+            s.current_period(),
+            false,
+            None,
+            first_provider_time,
+            now(),
+        );
+
+        assert!(!s.is_subscription_event_stale(first_provider_time + chrono::Duration::minutes(1)));
+    }
+
+    #[test]
+    fn invoice_events_have_an_independent_ordering_cursor() {
+        let mut s = sub(SubscriptionStatus::Active, CollectionState::Ok);
+        let paid_at = now();
+        s.record_invoice_event(paid_at, paid_at);
+
+        assert!(s.is_invoice_event_stale(paid_at - chrono::Duration::seconds(1)));
+        assert!(!s.is_invoice_event_stale(paid_at + chrono::Duration::seconds(1)));
+        assert_eq!(s.stripe_subscription_event_at(), None);
     }
 }

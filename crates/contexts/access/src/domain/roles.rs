@@ -195,6 +195,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "platform.audit.read",
             "platform.approval.read",
             "platform.approval.write",
+            "platform.plan.write",
+            "platform.subscription.override",
         ],
     },
     RoleSeed {
@@ -206,6 +208,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "platform.tenant.read",
             "platform.entitlement.write",
             "platform.audit.read",
+            "platform.plan.write",
+            "platform.subscription.override",
         ],
     },
     RoleSeed {
@@ -233,6 +237,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "tenant.entitlement.read",
             "billing.subscription.read",
             "billing.subscription.update",
+            "billing.subscription.create",
+            "billing.invoice.read",
             // Phase 09: owners run the money — including refunds.
             "payments.read",
             "payments.manage",
@@ -278,6 +284,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "identity.member.read",
             "billing.subscription.read",
             "billing.subscription.update",
+            "billing.subscription.create",
+            "billing.invoice.read",
         ],
     },
     RoleSeed {
@@ -348,6 +356,20 @@ mod tests {
                 .permissions
                 .contains(&"payments.refund")
         );
+    }
+
+    #[test]
+    fn billing_permissions_are_reachable_from_default_roles() {
+        for role in ["platform_owner", "platform_operator"] {
+            let permissions = seed_by_key(role).unwrap().permissions;
+            assert!(permissions.contains(&"platform.plan.write"));
+            assert!(permissions.contains(&"platform.subscription.override"));
+        }
+        for role in ["tenant_owner", "tenant_billing"] {
+            let permissions = seed_by_key(role).unwrap().permissions;
+            assert!(permissions.contains(&"billing.subscription.create"));
+            assert!(permissions.contains(&"billing.invoice.read"));
+        }
     }
 
     #[test]

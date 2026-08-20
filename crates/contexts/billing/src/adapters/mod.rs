@@ -14,8 +14,9 @@ pub use events::{OutboxEventPublisher, SystemClock, SystemIdGenerator};
 pub use lifecycle::TenancyTenantLifecycle;
 pub use notifications::LoggingNotifications;
 pub use repos::{
-    SqlxInvoiceRepository, SqlxPlanEntitlementRepository, SqlxPlanPriceRepository,
-    SqlxPlanRepository, SqlxSubscriptionRepository, SqlxWebhookEventRepository,
+    SqlxCheckoutStateRepository, SqlxInvoiceRepository, SqlxPlanEntitlementRepository,
+    SqlxPlanPriceRepository, SqlxPlanRepository, SqlxSubscriptionRepository,
+    SqlxWebhookEventRepository,
 };
 pub use stripe::{CachedTaxGate, HttpStripeClient, StripeMetrics, verify_webhook_signature};
 pub use sync::{AccessEntitlementSyncer, billing_event_handler};

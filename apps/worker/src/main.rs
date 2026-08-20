@@ -864,6 +864,7 @@ async fn main() -> ExitCode {
             sanvi_billing::adapters::privacy_provider::BillingPrivacyProvider::new(
                 privacy_tx.clone(),
                 std::sync::Arc::new(sanvi_billing::adapters::SqlxSubscriptionRepository::new()),
+                std::sync::Arc::new(sanvi_billing::adapters::SqlxCheckoutStateRepository::new()),
                 std::sync::Arc::new(sanvi_billing::adapters::SqlxInvoiceRepository::new()),
                 std::sync::Arc::new(sanvi_billing::adapters::SqlxWebhookEventRepository::new()),
                 billing_stripe.clone(),
@@ -1193,9 +1194,11 @@ async fn main() -> ExitCode {
                         metrics
                             .dunning_active()
                             .set(subscriptions.dunning_count(&mut scope).await? as i64);
-                        metrics
-                            .mrr()
-                            .set(subscriptions.mrr_minor(&mut scope).await? as f64);
+                        metrics.mrr().reset();
+                        for (currency, amount) in subscriptions.mrr_by_currency(&mut scope).await? {
+                            metrics.mrr().with_label_values(&[&currency]).set(amount);
+                        }
+                        metrics.status_gauge().reset();
                         for (status, count) in subscriptions.count_by_status(&mut scope).await? {
                             metrics
                                 .status_gauge()

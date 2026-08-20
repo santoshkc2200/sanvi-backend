@@ -171,11 +171,6 @@ pub async fn create_checkout_session(
     Ok(HttpResponse::Created().json(session))
 }
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-pub struct PortalSessionRequest {
-    pub return_url: Option<String>,
-}
-
 /// `POST /api/v1/tenant/billing/portal-session` — open the Customer Portal
 /// (upgrades, downgrades, cancellation, payment methods).
 #[utoipa::path(
@@ -183,7 +178,6 @@ pub struct PortalSessionRequest {
     path = "/api/v1/tenant/billing/portal-session",
     tag = "billing",
     operation_id = "create_portal_session",
-    request_body = PortalSessionRequest,
     responses(
         (status = 201, description = "Portal URL", body = crate::application::PortalSessionView),
         (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
@@ -193,12 +187,10 @@ pub struct PortalSessionRequest {
 pub async fn create_portal_session(
     state: web::Data<BillingState>,
     subject: CurrentSubject,
-    body: web::Json<PortalSessionRequest>,
     _guard: RequiredPermission,
     req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
     let tenant_id = current_tenant(&req)?;
-    let _ = body;
     let session = state
         .create_portal
         .execute(subject.0.user_id, tenant_id)
@@ -343,6 +335,7 @@ pub async fn create_plan(
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct UpdatePlanRequest {
     pub name: String,
+    pub stripe_product_id: Option<String>,
     #[serde(default)]
     pub visibility: PlanVisibility,
     #[serde(default)]
@@ -377,6 +370,7 @@ pub async fn update_plan(
             UpdatePlanCommand {
                 plan_id: PlanId::from_uuid(path.into_inner()),
                 name: body.name.clone(),
+                stripe_product_id: body.stripe_product_id.clone(),
                 visibility: body.visibility,
                 sort_order: body.sort_order,
             },

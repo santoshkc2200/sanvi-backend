@@ -286,6 +286,7 @@ async fn main() -> ExitCode {
                 sanvi_billing::adapters::privacy_provider::BillingPrivacyProvider::new(
                     privacy_tx.clone(),
                     Arc::new(sanvi_billing::adapters::SqlxSubscriptionRepository::new()),
+                    Arc::new(sanvi_billing::adapters::SqlxCheckoutStateRepository::new()),
                     Arc::new(sanvi_billing::adapters::SqlxInvoiceRepository::new()),
                     Arc::new(sanvi_billing::adapters::SqlxWebhookEventRepository::new()),
                     Arc::new(sanvi_billing::adapters::HttpStripeClient::new(

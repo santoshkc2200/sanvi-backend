@@ -119,9 +119,9 @@ scheduled job applies the downgrade (scheduled from the event, not from a pollin
   before any parsing, plus Stripe IP allow-listing for defence in depth.
 - Store the raw event first (`billing.webhook_events`, PK on `stripe_event_id` = free deduplication),
   return `2xx` immediately, process asynchronously in `apps/worker`.
-- Out-of-order tolerance: every handler compares the event's object version/`created` against the
-  local row and ignores stale updates; final state is reconciled by a daily job that re-reads the
-  subscription from Stripe.
+- Out-of-order tolerance: subscription and invoice handlers compare event `created` against their
+  own Stripe event cursors on the local row and ignore stale updates; local `updated_at` is never an
+  ordering signal. Final state is reconciled by a daily job that re-reads the subscription.
 - Unknown event types are stored and ignored, not errors.
 - Handled: `checkout.session.completed`, `customer.subscription.{created,updated,deleted,paused,resumed}`,
   `invoice.{paid,payment_failed,finalized,upcoming}`, `customer.updated`,
@@ -175,7 +175,8 @@ scheduled job applies the downgrade (scheduled from the event, not from a pollin
 ## Observability
 
 Metrics: `stripe_request_duration{op}`, `stripe_error_total{code}`, `webhook_lag_seconds`,
-`webhook_unprocessed_gauge`, `subscription_status_gauge{status}`, `mrr_gauge`, `dunning_active_gauge`.
+`webhook_unprocessed_gauge`, `subscription_status_gauge{status}`, `mrr_gauge{currency}`,
+`dunning_active_gauge`.
 Alerts: unprocessed webhooks > 5 min, signature failures > 0, reconciliation drift > 0.
 
 ## Acceptance criteria

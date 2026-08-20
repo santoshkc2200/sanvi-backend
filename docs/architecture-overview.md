@@ -133,8 +133,9 @@ RLS is tested explicitly: a test asserts tenant A's connection cannot read tenan
   `billing.subscriptions`/`billing.invoices` rows are a projection for *access* (entitlements).
   Webhook events are stored first (`billing.webhook_events`, PK on `stripe_event_id` = free
   deduplication), acknowledged immediately, and applied asynchronously by the worker. Out-of-order
-  delivery is guarded by comparing event `created` against local `updated_at`; final state is
-  reconciled daily by a job that re-reads live subscriptions from Stripe.
+  delivery is guarded by comparing event `created` against a per-provider-stream cursor (never the
+  local processing timestamp); final state is reconciled daily by a job that re-reads live
+  subscriptions from Stripe.
 - **Plan → entitlement mapping is data, not code.** `billing.plans` + `billing.plan_entitlements`
   seed the three tiers; pricing changes never require a deploy. On every subscription state change
   the application rewrites the tenant's `access.entitlements` rows with `source = 'subscription'`

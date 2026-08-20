@@ -15,12 +15,12 @@ pub use plan::{
     EntitlementGrant, Plan, PlanId, PlanPrice, PlanTier, PlanVisibility, PriceId, PriceInterval,
 };
 pub use ports::{
-    CheckoutSessionRequest, CheckoutSessionResult, Clock, EntitlementSyncer, EventPublisher,
-    IdGenerator, InvoiceRepository, Notifications, PlanEntitlementRepository, PlanPriceRepository,
-    PlanRepository, PortalSessionRequest, PortalSessionResult, StripeClient, StripeCustomer,
-    StripeInvoiceData, StripeSubscriptionData, StripeSubscriptionView, SubscriptionRepository,
-    TaxGate, TaxRegistration, TenantLifecycle, WebhookEventRecord, WebhookEventRepository,
-    period_from_range,
+    CheckoutSessionRequest, CheckoutSessionResult, CheckoutState, CheckoutStateRepository, Clock,
+    EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRepository, Notifications,
+    PlanEntitlementRepository, PlanPriceRepository, PlanRepository, PortalSessionRequest,
+    PortalSessionResult, StripeClient, StripeCustomer, StripeInvoiceData, StripeSubscriptionData,
+    StripeSubscriptionView, SubscriptionRepository, TaxGate, TaxRegistration, TenantLifecycle,
+    WebhookEventRecord, WebhookEventRepository, period_from_range,
 };
 pub use subscription::{
     CollectionState, Period, Subscription, SubscriptionId, SubscriptionSource, SubscriptionStatus,

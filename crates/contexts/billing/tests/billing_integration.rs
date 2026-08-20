@@ -17,10 +17,10 @@ use uuid::Uuid;
 
 use sanvi_billing::{
     adapters::{
-        AccessEntitlementSyncer, LoggingNotifications, OutboxEventPublisher, SqlxInvoiceRepository,
-        SqlxPlanEntitlementRepository, SqlxPlanPriceRepository, SqlxPlanRepository,
-        SqlxSubscriptionRepository, SqlxWebhookEventRepository, SystemClock, SystemIdGenerator,
-        TenancyTenantLifecycle,
+        AccessEntitlementSyncer, LoggingNotifications, OutboxEventPublisher,
+        SqlxCheckoutStateRepository, SqlxInvoiceRepository, SqlxPlanEntitlementRepository,
+        SqlxPlanPriceRepository, SqlxPlanRepository, SqlxSubscriptionRepository,
+        SqlxWebhookEventRepository, SystemClock, SystemIdGenerator, TenancyTenantLifecycle,
     },
     application::{
         ApplySubscriptionOverride, ApplySubscriptionOverrideCommand, CreateCheckoutSession,
@@ -325,6 +325,7 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
     let grants: Arc<dyn PlanEntitlementRepository> = Arc::new(SqlxPlanEntitlementRepository::new());
     let subscriptions: Arc<dyn SubscriptionRepository> =
         Arc::new(SqlxSubscriptionRepository::new());
+    let checkout_states = Arc::new(SqlxCheckoutStateRepository::new());
     let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
     let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
@@ -376,6 +377,7 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
         plans.clone(),
         prices.clone(),
         subscriptions.clone(),
+        checkout_states,
         stripe.clone(),
         tax_gate,
         Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
@@ -567,35 +569,41 @@ async fn subscribe_dunn_recover_and_reconcile() {
     assert!(session.url.starts_with("https://checkout"));
     // A live subscription must block a second checkout.
     // (No subscription row yet — the webhook creates it.)
-    assert!(
-        stack
-            .checkout
-            .execute(
-                Uuid::nil(),
-                CreateCheckoutSessionCommand {
-                    tenant_id,
-                    price_id,
-                    success_url: None,
-                    cancel_url: None,
-                },
-            )
-            .await
-            .is_ok()
-    );
+    let retried_session = stack
+        .checkout
+        .execute(
+            Uuid::nil(),
+            CreateCheckoutSessionCommand {
+                tenant_id,
+                price_id,
+                success_url: None,
+                cancel_url: None,
+            },
+        )
+        .await
+        .expect("checkout retry");
+    assert_eq!(retried_session.session_id, session.session_id);
+    {
+        let state = fake.inner.lock().unwrap();
+        assert_eq!(state.customers, 1, "retry reuses the Stripe Customer");
+        assert_eq!(state.checkout_calls, 1, "retry reuses the Checkout Session");
+    }
 
-    // Subscription webhook: creates the local row + entitlements.
+    // If subscription.created is delayed or lost, checkout.completed resolves
+    // the tenant via client_reference_id and retrieves the subscription.
     let created = Utc::now();
     receive_and_dispatch(
         &stack,
-        &subscription_event(
-            "evt_sub_1",
-            "customer.subscription.created",
-            created,
-            "sub_1",
-            "active",
-            tenant_id,
-            "price_starter_monthly",
-        ),
+        &serde_json::json!({
+            "id": "evt_checkout_1",
+            "type": "checkout.session.completed",
+            "created": created.timestamp(),
+            "data": { "object": {
+                "id": "cs_test_1",
+                "subscription": "sub_1",
+                "client_reference_id": tenant_id.to_string()
+            } }
+        }),
     )
     .await;
 
@@ -629,6 +637,19 @@ async fn subscribe_dunn_recover_and_reconcile() {
     );
 
     // Idempotency: redelivering the same event changes nothing.
+    receive_and_dispatch(
+        &stack,
+        &subscription_event(
+            "evt_sub_1",
+            "customer.subscription.created",
+            created,
+            "sub_1",
+            "active",
+            tenant_id,
+            "price_starter_monthly",
+        ),
+    )
+    .await;
     let count_before: i64 = sqlx::query_scalar("SELECT count(*) FROM billing.webhook_events")
         .fetch_one(&admin)
         .await
@@ -766,13 +787,36 @@ async fn subscribe_dunn_recover_and_reconcile() {
             .unwrap();
     assert_eq!(reason, "billing");
 
+    // Recreate the state left by a transient lifecycle failure: the billing
+    // row is already grace_expired, but the tenant is still active. The next
+    // sweep must retry the cross-context suspension.
+    sqlx::query(
+        "UPDATE tenancy.tenants
+         SET status = 'active', suspended_reason = NULL
+         WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .execute(&admin)
+    .await
+    .unwrap();
+    let retry_report = stack.dunning.execute(10).await.expect("dunning retry");
+    assert_eq!(retry_report.grace_expired, 1);
+    let retried_status: String =
+        sqlx::query_scalar("SELECT status FROM tenancy.tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    assert_eq!(retried_status, "suspended");
+
     // Payment recovery: invoice.paid restores everything.
+    let paid_event_at = Utc::now();
     receive_and_dispatch(
         &stack,
         &invoice_event(
             "evt_inv_paid",
             "invoice.paid",
-            Utc::now(),
+            paid_event_at,
             "in_2",
             "sub_1",
             "paid",
@@ -802,6 +846,35 @@ async fn subscribe_dunn_recover_and_reconcile() {
             .await
             .unwrap();
     assert_eq!(tenant_status, "active", "billing suspension lifted");
+
+    // A delayed payment_failed event must not put a recovered subscription
+    // back into dunning.
+    receive_and_dispatch(
+        &stack,
+        &invoice_event(
+            "evt_inv_fail_stale",
+            "invoice.payment_failed",
+            paid_event_at - chrono::Duration::seconds(1),
+            "in_1",
+            "sub_1",
+            "open",
+        ),
+    )
+    .await;
+    let subscription = {
+        let mut scope = stack
+            .tx
+            .begin_unscoped("test_read_stale_invoice", "test")
+            .await
+            .unwrap();
+        stack
+            .subscriptions
+            .find_by_tenant_platform(&mut scope, tenant_id)
+            .await
+            .unwrap()
+            .expect("subscription")
+    };
+    assert_eq!(subscription.collection_state(), CollectionState::Ok);
 
     // Reconciliation: script a drift in Stripe and prove the repair.
     {
@@ -833,6 +906,70 @@ async fn subscribe_dunn_recover_and_reconcile() {
     );
     let rows = subscription_source_rows(&admin, tenant_id).await;
     assert!(rows.is_empty(), "canceled subscription clears entitlements");
+
+    // A terminal Stripe row can be replaced by a fresh subscription without
+    // violating the one-projection-per-tenant constraint.
+    let replacement_session = stack
+        .checkout
+        .execute(
+            Uuid::nil(),
+            CreateCheckoutSessionCommand {
+                tenant_id,
+                price_id,
+                success_url: None,
+                cancel_url: None,
+            },
+        )
+        .await
+        .expect("checkout after cancellation");
+    assert_eq!(replacement_session.session_id, "cs_test_1");
+    assert_eq!(fake.inner.lock().unwrap().checkout_calls, 2);
+    receive_and_dispatch(
+        &stack,
+        &subscription_event(
+            "evt_sub_replacement",
+            "customer.subscription.created",
+            Utc::now() + chrono::Duration::seconds(1),
+            "sub_2",
+            "active",
+            tenant_id,
+            "price_starter_monthly",
+        ),
+    )
+    .await;
+    let subscription = {
+        let mut scope = stack
+            .tx
+            .begin_unscoped("test_read_replacement", "test")
+            .await
+            .unwrap();
+        stack
+            .subscriptions
+            .find_by_tenant_platform(&mut scope, tenant_id)
+            .await
+            .unwrap()
+            .expect("replacement subscription")
+    };
+    assert_eq!(subscription.stripe_subscription_id(), Some("sub_2"));
+    assert_eq!(subscription.status(), SubscriptionStatus::Active);
+
+    // Trial reminders are one-shot: once trial_notified_at is recorded, the
+    // same still-upcoming trial is not selected on every sweep.
+    let trial_tenant_id = provision_tenant(&pool, "acme-trial").await;
+    let mut trial_event = subscription_event(
+        "evt_trial",
+        "customer.subscription.created",
+        Utc::now(),
+        "sub_trial",
+        "trialing",
+        trial_tenant_id,
+        "price_starter_monthly",
+    );
+    trial_event["data"]["object"]["trial_end"] =
+        serde_json::json!((Utc::now() + chrono::Duration::days(2)).timestamp());
+    receive_and_dispatch(&stack, &trial_event).await;
+    assert_eq!(stack.dunning.execute(10).await.unwrap().trials_notified, 1);
+    assert_eq!(stack.dunning.execute(10).await.unwrap().trials_notified, 0);
 
     // Unknown events are stored and acknowledged without state change.
     receive_and_dispatch(
@@ -900,6 +1037,16 @@ async fn platform_override_grants_and_revokes() {
         .expect("override revoked");
     let rows = subscription_source_rows(&admin, tenant_id).await;
     assert!(rows.is_empty(), "revoke clears the override's entitlements");
+    let subscription_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM billing.subscriptions WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    assert_eq!(
+        subscription_count, 0,
+        "revoke removes the active override row"
+    );
 }
 
 #[tokio::test]
@@ -931,6 +1078,7 @@ async fn checkout_fails_loudly_without_tax_registration() {
         Arc::new(SqlxPlanRepository::new()),
         stack.prices.clone(),
         stack.subscriptions.clone(),
+        Arc::new(SqlxCheckoutStateRepository::new()),
         stack.fake.clone(),
         tax_gate,
         Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),

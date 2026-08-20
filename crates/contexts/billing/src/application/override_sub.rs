@@ -142,6 +142,8 @@ impl ApplySubscriptionOverride {
                 None,
                 CollectionState::Ok,
                 None,
+                None,
+                None,
                 existing.created_at(),
                 now,
             ),
@@ -249,6 +251,9 @@ impl RevokeSubscriptionOverride {
         }
         self.syncer
             .clear_subscription(&mut scope, tenant_id)
+            .await?;
+        self.subscriptions
+            .delete_by_tenant(&mut scope, tenant_id)
             .await?;
         self.audit
             .append(

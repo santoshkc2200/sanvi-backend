@@ -48,9 +48,9 @@ use sanvi_audit::{
 use sanvi_billing::{
     BillingConfig,
     adapters::{
-        AccessEntitlementSyncer, CachedTaxGate, HttpStripeClient, SqlxInvoiceRepository,
-        SqlxPlanEntitlementRepository, SqlxPlanPriceRepository, SqlxPlanRepository,
-        SqlxSubscriptionRepository, SqlxWebhookEventRepository, StripeMetrics,
+        AccessEntitlementSyncer, CachedTaxGate, HttpStripeClient, SqlxCheckoutStateRepository,
+        SqlxInvoiceRepository, SqlxPlanEntitlementRepository, SqlxPlanPriceRepository,
+        SqlxPlanRepository, SqlxSubscriptionRepository, SqlxWebhookEventRepository, StripeMetrics,
         SystemClock as BillingSystemClock, SystemIdGenerator as BillingSystemIdGenerator,
     },
     application::{
@@ -59,9 +59,10 @@ use sanvi_billing::{
         RevokeSubscriptionOverride, SetPlanEntitlements, UpdatePlan, WebhookReceiver,
     },
     domain::{
-        Clock as BillingClock, EntitlementSyncer, IdGenerator as BillingIds, InvoiceRepository,
-        PlanEntitlementRepository, PlanPriceRepository, PlanRepository, StripeClient,
-        SubscriptionRepository, TaxGate, WebhookEventRepository,
+        CheckoutStateRepository, Clock as BillingClock, EntitlementSyncer,
+        IdGenerator as BillingIds, InvoiceRepository, PlanEntitlementRepository,
+        PlanPriceRepository, PlanRepository, StripeClient, SubscriptionRepository, TaxGate,
+        WebhookEventRepository,
     },
     routes as billing_routes,
 };
@@ -1646,6 +1647,8 @@ pub fn build_billing_state(
     let grants: Arc<dyn PlanEntitlementRepository> = Arc::new(SqlxPlanEntitlementRepository::new());
     let subscriptions: Arc<dyn SubscriptionRepository> =
         Arc::new(SqlxSubscriptionRepository::new());
+    let checkout_states: Arc<dyn CheckoutStateRepository> =
+        Arc::new(SqlxCheckoutStateRepository::new());
     let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
     let webhook_events: Arc<dyn WebhookEventRepository> =
         Arc::new(SqlxWebhookEventRepository::new());
@@ -1679,6 +1682,7 @@ pub fn build_billing_state(
             plans.clone(),
             prices.clone(),
             subscriptions.clone(),
+            checkout_states,
             stripe.clone(),
             tax_gate,
             audit_writer.clone(),

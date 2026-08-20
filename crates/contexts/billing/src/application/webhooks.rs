@@ -277,23 +277,17 @@ fn parse_event(record: &WebhookEventRecord) -> Result<ParsedEvent, BillingError>
         };
 
     match record.event_type.as_str() {
-        "checkout.session.completed" => {
-            let session = object
-                .get("object")
-                .cloned()
-                .unwrap_or_else(|| object.clone());
-            Ok(ParsedEvent::CheckoutSessionCompleted {
-                subscription_id: session
-                    .get("subscription")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-                client_reference_id: session
-                    .get("client_reference_id")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-                created,
-            })
-        }
+        "checkout.session.completed" => Ok(ParsedEvent::CheckoutSessionCompleted {
+            subscription_id: object
+                .get("subscription")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            client_reference_id: object
+                .get("client_reference_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            created,
+        }),
         "customer.subscription.created"
         | "customer.subscription.updated"
         | "customer.subscription.paused"
@@ -572,7 +566,7 @@ impl WebhookDispatcher {
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         subscription_id: Option<&str>,
         client_reference_id: Option<&str>,
-        _created: DateTime<Utc>,
+        created: DateTime<Utc>,
     ) -> Result<ApplyOutcome, BillingError> {
         let Some(stripe_subscription_id) = subscription_id else {
             return Ok(ApplyOutcome::Skipped);
@@ -589,7 +583,6 @@ impl WebhookDispatcher {
         // No local row: the subscription.created event may have been lost.
         // Retrieve from Stripe (reconciliation-grade) rather than granting
         // anything from the session payload.
-        let _ = client_reference_id;
         let view = match self
             .stripe
             .retrieve_subscription(stripe_subscription_id)
@@ -609,11 +602,12 @@ impl WebhookDispatcher {
             current_period: view.current_period,
             cancel_at_period_end: view.cancel_at_period_end,
             trial_end: view.trial_end,
-            metadata: serde_json::json!({}),
-            created: chrono::Utc::now(),
+            metadata: client_reference_id
+                .map(|tenant_id| serde_json::json!({ "sanvi_tenant_id": tenant_id }))
+                .unwrap_or_else(|| serde_json::json!({})),
+            created,
         };
-        self.apply_subscription_update(scope, &data, chrono::Utc::now())
-            .await
+        self.apply_subscription_update(scope, &data, created).await
     }
 
     /// Upsert a subscription from a Stripe subscription object; recompute
@@ -626,14 +620,14 @@ impl WebhookDispatcher {
         data: &StripeSubscriptionData,
         event_created: DateTime<Utc>,
     ) -> Result<ApplyOutcome, BillingError> {
-        let existing = self
+        let existing_by_stripe_id = self
             .subscriptions
             .find_by_stripe_subscription_id(scope, &data.id)
             .await?;
 
         // Tenant identity: the existing row wins; otherwise the metadata we
         // stamped on the subscription at Checkout creation.
-        let tenant_id = match existing.as_ref().map(|s| s.tenant_id()) {
+        let tenant_id = match existing_by_stripe_id.as_ref().map(|s| s.tenant_id()) {
             Some(tenant_id) => tenant_id,
             None => {
                 crate::domain::plan::tenant_id_from_metadata(&data.metadata).ok_or_else(|| {
@@ -645,10 +639,40 @@ impl WebhookDispatcher {
             }
         };
 
-        // Out-of-order guard: a Stripe object older than our local row must
-        // not overwrite newer state.
+        // A tenant owns one local projection, but Stripe creates a new
+        // subscription id when a canceled/incomplete subscription is
+        // replaced. Reuse that tenant row instead of violating its unique
+        // constraint; non-terminal subscriptions still reject replacement.
+        let existing = match existing_by_stripe_id {
+            Some(existing) => Some(existing),
+            None => {
+                self.subscriptions
+                    .find_by_tenant_platform(scope, tenant_id)
+                    .await?
+            }
+        };
+        let replacing = existing.as_ref().is_some_and(|subscription| {
+            subscription.stripe_subscription_id() != Some(data.id.as_str())
+        });
+        if replacing
+            && existing.as_ref().is_some_and(|subscription| {
+                subscription.source() != SubscriptionSource::Stripe
+                    || !matches!(
+                        subscription.status(),
+                        SubscriptionStatus::Canceled | SubscriptionStatus::IncompleteExpired
+                    )
+            })
+        {
+            return Err(BillingError::Conflict(format!(
+                "tenant {tenant_id} already has a non-terminal subscription"
+            )));
+        }
+
+        // Provider time is compared only with the preceding provider event,
+        // never with local processing time.
         if let Some(existing) = &existing
-            && existing.is_stale(Some(event_created))
+            && !replacing
+            && existing.is_subscription_event_stale(event_created)
         {
             return Ok(ApplyOutcome::Skipped);
         }
@@ -701,6 +725,7 @@ impl WebhookDispatcher {
                     data.current_period,
                     data.cancel_at_period_end,
                     data.trial_end,
+                    event_created,
                     self.clock.now(),
                 );
                 let plan = self.plans.find_by_id(scope, plan_id).await?;
@@ -718,6 +743,10 @@ impl WebhookDispatcher {
             Some(existing) => {
                 let from_plan = existing.plan_id();
                 let mut subscription = existing.clone();
+                if replacing {
+                    subscription
+                        .replace_stripe_identity(data.customer_id.clone(), data.id.clone())?;
+                }
                 let changed = subscription.apply_stripe_update(
                     data.status,
                     plan_id,
@@ -725,9 +754,22 @@ impl WebhookDispatcher {
                     data.current_period,
                     data.cancel_at_period_end,
                     data.trial_end,
+                    event_created,
                     self.clock.now(),
                 );
-                if subscription.plan_id() != from_plan {
+                if replacing {
+                    let plan_key = self
+                        .plans
+                        .find_by_id(scope, plan_id)
+                        .await?
+                        .map(|p| p.key().to_string())
+                        .unwrap_or_default();
+                    events_to_publish.push(crate::domain::BillingEvent::SubscriptionStarted {
+                        tenant_id,
+                        plan_key,
+                        stripe_subscription_id: data.id.clone(),
+                    });
+                } else if subscription.plan_id() != from_plan {
                     let from_key = self
                         .plans
                         .find_by_id(scope, from_plan)
@@ -748,8 +790,9 @@ impl WebhookDispatcher {
                 }
                 // Renewal: the period end moved forward on an already-live
                 // subscription.
-                if let (Some(new_period), Some(old_period)) =
-                    (subscription.current_period(), existing.current_period())
+                if !replacing
+                    && let (Some(new_period), Some(old_period)) =
+                        (subscription.current_period(), existing.current_period())
                     && new_period.end > old_period.end
                     && existing.status().grants_entitlements()
                     && subscription.status().grants_entitlements()
@@ -760,7 +803,7 @@ impl WebhookDispatcher {
                     });
                 }
                 self.subscriptions.save(scope, &subscription).await?;
-                if changed {
+                if changed || replacing {
                     ApplyOutcome::Applied
                 } else {
                     ApplyOutcome::Skipped
@@ -821,7 +864,7 @@ impl WebhookDispatcher {
         else {
             return Ok(ApplyOutcome::Skipped);
         };
-        if existing.is_stale(Some(event_created)) {
+        if existing.is_subscription_event_stale(event_created) {
             return Ok(ApplyOutcome::Skipped);
         }
         let tenant_id = existing.tenant_id();
@@ -833,6 +876,7 @@ impl WebhookDispatcher {
             existing.current_period(),
             existing.cancel_at_period_end(),
             existing.trial_end(),
+            event_created,
             self.clock.now(),
         );
         self.subscriptions.save(scope, &subscription).await?;
@@ -851,9 +895,9 @@ impl WebhookDispatcher {
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         data: &StripeInvoiceData,
-        _event_created: DateTime<Utc>,
+        event_created: DateTime<Utc>,
     ) -> Result<ApplyOutcome, BillingError> {
-        let outcome = self.upsert_invoice(scope, data).await?;
+        let outcome = self.upsert_invoice(scope, data, event_created).await?;
         let Some(stripe_subscription_id) = data.subscription_id.as_deref() else {
             return Ok(outcome);
         };
@@ -864,13 +908,15 @@ impl WebhookDispatcher {
         else {
             return Ok(outcome);
         };
+        if existing.is_invoice_event_stale(event_created) {
+            return Ok(outcome);
+        }
 
         // Payment recovery: undo dunning (entitlements were already cleared
         // by the subscription.update webhook that flips status to active).
+        let mut subscription = existing.clone();
         if existing.collection_state() != crate::domain::CollectionState::Ok {
-            let mut subscription = existing.clone();
             subscription.restore(self.clock.now());
-            self.subscriptions.save(scope, &subscription).await?;
             let tenant_id = existing.tenant_id();
             self.events
                 .publish(
@@ -884,6 +930,8 @@ impl WebhookDispatcher {
                 .await?;
             self.notifications.subscription_restored(tenant_id).await?;
         }
+        subscription.record_invoice_event(event_created, self.clock.now());
+        self.subscriptions.save(scope, &subscription).await?;
         // Resume the tenant when *we* suspended it for billing (the adapter
         // checks the suspension reason).
         self.lifecycle.resume_billing(existing.tenant_id()).await?;
@@ -894,9 +942,9 @@ impl WebhookDispatcher {
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         data: &StripeInvoiceData,
-        _event_created: DateTime<Utc>,
+        event_created: DateTime<Utc>,
     ) -> Result<ApplyOutcome, BillingError> {
-        let outcome = self.upsert_invoice(scope, data).await?;
+        let outcome = self.upsert_invoice(scope, data, event_created).await?;
         let Some(stripe_subscription_id) = data.subscription_id.as_deref() else {
             return Ok(outcome);
         };
@@ -907,28 +955,22 @@ impl WebhookDispatcher {
         else {
             return Ok(outcome);
         };
+        if existing.is_invoice_event_stale(event_created) {
+            return Ok(outcome);
+        }
         let mut events_to_publish = vec![crate::domain::BillingEvent::InvoicePaymentFailed {
             tenant_id: existing.tenant_id(),
             number: data.number.clone(),
             total_minor: data.total_minor,
         }];
-        if existing.collection_state() == crate::domain::CollectionState::Ok {
-            let mut subscription = existing.clone();
-            subscription.apply_stripe_update(
-                SubscriptionStatus::PastDue,
-                subscription.plan_id(),
-                subscription.price_id(),
-                subscription.current_period(),
-                subscription.cancel_at_period_end(),
-                subscription.trial_end(),
-                self.clock.now(),
-            );
-            self.subscriptions.save(scope, &subscription).await?;
+        let mut subscription = existing.clone();
+        if subscription.start_dunning_from_invoice(event_created, self.clock.now()) {
             events_to_publish.push(crate::domain::BillingEvent::SubscriptionPastDue {
                 tenant_id: existing.tenant_id(),
                 stripe_subscription_id: stripe_subscription_id.to_string(),
             });
         }
+        self.subscriptions.save(scope, &subscription).await?;
         self.events.publish(scope, &events_to_publish).await?;
         self.notifications
             .payment_failed(existing.tenant_id())
@@ -940,9 +982,9 @@ impl WebhookDispatcher {
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         data: &StripeInvoiceData,
-        _event_created: DateTime<Utc>,
+        event_created: DateTime<Utc>,
     ) -> Result<ApplyOutcome, BillingError> {
-        self.upsert_invoice(scope, data).await
+        self.upsert_invoice(scope, data, event_created).await
     }
 
     /// Mirror an invoice row (tenant resolved through the subscription).
@@ -950,6 +992,7 @@ impl WebhookDispatcher {
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         data: &StripeInvoiceData,
+        event_created: DateTime<Utc>,
     ) -> Result<ApplyOutcome, BillingError> {
         let Some(stripe_subscription_id) = data.subscription_id.as_deref() else {
             return Ok(ApplyOutcome::Skipped);
@@ -982,8 +1025,11 @@ impl WebhookDispatcher {
             data.created,
             data.paid_at,
         )?;
-        self.invoices.upsert(scope, &invoice).await?;
-        Ok(ApplyOutcome::Applied)
+        if self.invoices.upsert(scope, &invoice, event_created).await? {
+            Ok(ApplyOutcome::Applied)
+        } else {
+            Ok(ApplyOutcome::Skipped)
+        }
     }
 }
 
