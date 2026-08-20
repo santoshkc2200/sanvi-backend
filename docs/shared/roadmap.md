@@ -34,8 +34,9 @@ scaffolding, not a permanent layer: once a phase is decomposed into per-repo tas
 ordering moves into the tasks' `Depends on` / `Blocked by` lines and the shared breakdown is deleted.
 
 - **Phase 09** — decomposed. See each repo's `docs/tasks/phase-09/`.
-- **Phase 10** (ten slices) and **phase 11** (twelve slices) — still held in the workspace-root
-  `docs/phase-NN-*/` folders until they are decomposed the same way.
+- **Phase 10** — decomposed. See each repo's `docs/tasks/phase-10/`.
+- **Phase 11** (twelve slices) — still held in the workspace-root `docs/phase-11-hardening-ga/`
+  folder until it is decomposed the same way.
 
 ## Phase map
 
