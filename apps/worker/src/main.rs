@@ -247,6 +247,12 @@ pub struct WorkerConfig {
     pub theming: ThemingConfig,
     #[serde(default)]
     pub domains: DomainsConfig,
+    /// Phase 09: payments configuration (per-environment secrets and the
+    /// application-fee switch). No worker job consumes it until 09.3's
+    /// webhook dispatcher and sync job land; declaring it now keeps the
+    /// api and worker reading the same sections.
+    #[serde(default)]
+    pub payments: sanvi_payments::PaymentsConfig,
 }
 
 impl WorkerConfig {
@@ -262,6 +268,7 @@ impl WorkerConfig {
         self.localization.validate()?;
         self.theming.validate()?;
         self.domains.validate()?;
+        self.payments.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }

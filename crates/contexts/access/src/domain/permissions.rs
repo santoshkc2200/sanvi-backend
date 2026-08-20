@@ -447,6 +447,30 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Platform,
         description: "Force-release custom domains (abuse, disputes, take-downs)",
     },
+    // --- tenant payments (phase 09) -------------------------------------------
+    // `payments.refund` is deliberately NOT in the default staff/member
+    // roles: moving money back out is owner/admin territory, and every
+    // refund is audited with actor and reason.
+    PermissionDef {
+        key: "payments.read",
+        scope: PermissionScope::Tenant,
+        description: "Read the provider catalog, connections, payments, payouts and disputes",
+    },
+    PermissionDef {
+        key: "payments.manage",
+        scope: PermissionScope::Tenant,
+        description: "Connect, onboard and disconnect payment providers for the tenant",
+    },
+    PermissionDef {
+        key: "payments.checkout",
+        scope: PermissionScope::Tenant,
+        description: "Create checkout sessions on the tenant's connected account",
+    },
+    PermissionDef {
+        key: "payments.refund",
+        scope: PermissionScope::Tenant,
+        description: "Issue full and partial refunds on the tenant's payments (audited)",
+    },
 ];
 
 /// Registry lookup.

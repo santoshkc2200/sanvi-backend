@@ -296,6 +296,10 @@ privacy = true
 localization = true
 theming = true
 domains = true
+# Phase 09 ships OFF: each 09.x slice turns its own surface on behind this
+# flag; 09.7 flips the default for GA. Staging opt-in:
+# SANVI__FEATURES__PAYMENTS=true.
+payments = false
 
 [outbox]
 poll_interval_ms = 1000
@@ -329,3 +333,25 @@ domains_cert_issue_interval_secs = 30
 domains_renewal_interval_secs = 3600
 domains_health_interval_secs = 3600
 domains_orders_interval_secs = 60
+
+[payments]
+# Phase 09: tenant payment providers (Stripe Connect, direct charges —
+# Sanvi is never the merchant of record). Secrets are env-only:
+#   SANVI__PAYMENTS__CONNECT_API_KEY        (rk_ — Connect permissions ONLY,
+#                                            a different key from billing's)
+#   SANVI__PAYMENTS__CONNECT_WEBHOOK_SECRET (whsec_ — MUST differ from
+#                                            billing.stripe_webhook_secret;
+#                                            validated at boot)
+entitlement_key = "payments.stripe_connect"
+connect_api_key = ""
+stripe_api_version = "2026-06-24.dahlia"
+connect_webhook_secret = ""
+webhook_tolerance_secs = 300
+# Client IPs allowed to POST Connect webhooks (09.3): empty = fail closed.
+webhook_allowed_clients = ["127.0.0.1", "::1", "172.16.0.0/12", "192.168.0.0/16"]
+
+[payments.application_fee]
+# Off in 0.10.0 (the platform monetises via subscription). When enabled,
+# the fee rides payment_intent_data.application_fee_amount on a direct
+# charge — the only correct mechanism for this charge pattern.
+enabled = false

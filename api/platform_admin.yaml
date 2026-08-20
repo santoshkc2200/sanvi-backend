@@ -369,7 +369,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Permission denied
+          description: Permission denied or fresh MFA missing
       summary: |-
         `POST /api/v1/platform/tenants/{id}/entitlements` — grant an override.
         Overrides above the configured threshold require four-eyes approval and

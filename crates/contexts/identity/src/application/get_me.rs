@@ -9,7 +9,9 @@ use utoipa::ToSchema;
 use crate::application::storage;
 use crate::domain::membership::MembershipStatus;
 use crate::domain::user::{UserId, UserStatus};
-use crate::domain::{IdentityError, MembershipRepository, RoleCatalog, TenantCatalog, UserRepository};
+use crate::domain::{
+    IdentityError, MembershipRepository, RoleCatalog, TenantCatalog, UserRepository,
+};
 
 /// One tenant `GET /api/v1/me` reports the caller as a member of, with the
 /// roles/permissions they hold there — the single hydration call the

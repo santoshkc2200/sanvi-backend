@@ -27,6 +27,7 @@ sanvi-telemetry.workspace = true
 sanvi-tenancy.workspace = true
 sanvi-theming.workspace = true
 sanvi-domains.workspace = true
+sanvi-payments.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true

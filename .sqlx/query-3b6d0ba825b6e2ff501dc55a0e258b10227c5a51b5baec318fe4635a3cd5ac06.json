@@ -1,0 +1,161 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, provider, external_account_id, status,\n                      capabilities, requirements, country, default_currency,\n                      connected_at, last_synced_at, disconnected_at\n               FROM payments.provider_connections\n               WHERE tenant_id = $1 AND provider = $2 AND disconnected_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "provider",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "provider"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "external_account_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "external_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "capabilities",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "capabilities"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "requirements",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "requirements"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "country",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "country"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "default_currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "default_currency"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "connected_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "connected_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "last_synced_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "last_synced_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "disconnected_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "payments.provider_connections",
+            "name": "disconnected_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "3b6d0ba825b6e2ff501dc55a0e258b10227c5a51b5baec318fe4635a3cd5ac06"
+}

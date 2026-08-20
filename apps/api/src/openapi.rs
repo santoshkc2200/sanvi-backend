@@ -144,6 +144,7 @@ use utoipa::OpenApi;
         sanvi_domains::adapters::http::handlers::tls_authorize,
         sanvi_domains::adapters::http::handlers::list_platform_domains,
         sanvi_domains::adapters::http::handlers::release_platform_domain,
+        sanvi_payments::adapters::http::handlers::list_payment_providers,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
@@ -157,7 +158,8 @@ use utoipa::OpenApi;
         (name = "privacy", description = "Privacy & compliance: jurisdiction profiles, consent/opt-out directives, data subject requests (export/erasure/appeals), retention, processing records, sub-processors and breach obligations"),
         (name = "localization", description = "Locales, message catalogs, tenant locale settings and copy overrides"),
         (name = "theming", description = "Theme registry, tenant theme drafts/publish/rollback, brand assets and resolved-theme delivery"),
-        (name = "domains", description = "Custom domains: claims, verification, registrar search/purchase, TLS authorization and health")
+        (name = "domains", description = "Custom domains: claims, verification, registrar search/purchase, TLS authorization and health"),
+        (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header.")
     ),
     info(
         title = "Sanvi API",
@@ -309,5 +311,21 @@ mod tests {
         assert!(json.contains("OrderView"));
         assert!(json.contains("PlaceDomainOrderCommand"));
         assert!(json.contains("ClaimCustomDomainCommand"));
+    }
+
+    #[test]
+    fn doc_contains_the_payments_contract() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/tenant/payments/providers"));
+        assert!(json.contains("ProvidersView"));
+        assert!(json.contains("ProviderView"));
+        // The conventions this slice fixes for every later payments
+        // endpoint: the error namespace, minor-unit money, idempotency.
+        assert!(json.contains("payments/provider-unavailable"));
+        assert!(json.contains("payments/connection-not-active"));
+        assert!(json.contains("payments/capability-missing"));
+        assert!(json.contains("payments/currency-unsupported"));
+        assert!(json.contains("payments/idempotency-conflict"));
+        assert!(json.contains("Idempotency-Key"));
     }
 }

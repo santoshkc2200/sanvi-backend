@@ -8,6 +8,7 @@ use sanvi_http::ServerConfig;
 use sanvi_identity::IdentityConfig;
 use sanvi_localization::LocalizationConfig;
 use sanvi_messaging::RedisConfig;
+use sanvi_payments::PaymentsConfig;
 use sanvi_persistence::DatabaseConfig;
 use sanvi_platform_admin::PlatformAdminConfig;
 use sanvi_privacy::PrivacyConfig;
@@ -73,6 +74,11 @@ pub struct FeaturesConfig {
     /// installs the custom-domain hook into the tenancy resolver.
     #[serde(default = "default_true")]
     pub domains: bool,
+    /// Phase-09 gate: mounts the payments context's routes and state.
+    /// **Ships off** — every 09.x slice flips its own surface on behind
+    /// this flag; 09.7 turns the default on for GA.
+    #[serde(default)]
+    pub payments: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -102,6 +108,7 @@ pub struct AppConfig {
     pub localization: LocalizationConfig,
     pub theming: ThemingConfig,
     pub domains: DomainsConfig,
+    pub payments: PaymentsConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -125,6 +132,7 @@ impl Default for AppConfig {
             localization: LocalizationConfig::default(),
             theming: ThemingConfig::default(),
             domains: DomainsConfig::default(),
+            payments: PaymentsConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -176,6 +184,22 @@ impl AppConfig {
         if let Err(err) = self.domains.validate() {
             problems.push(err.to_string());
         }
+        if let Err(err) = self.payments.validate() {
+            problems.push(err.to_string());
+        }
+        // Phase-09 invariant, enforced at boot: the Connect webhook
+        // endpoint and the phase-04 platform endpoint must never share a
+        // signing secret — a leaked one must not forge events for the
+        // other (the cross-secret unit tests live in sanvi-payments).
+        if !self.billing.stripe_webhook_secret.is_empty()
+            && self.billing.stripe_webhook_secret == self.payments.connect_webhook_secret
+        {
+            problems.push(
+                "billing.stripe_webhook_secret and payments.connect_webhook_secret must differ \
+                 (the Connect and platform webhook endpoints are separate trust domains)"
+                    .to_string(),
+            );
+        }
         if self.readiness_probe_secs == 0 {
             problems.push("readiness_probe_secs must be >= 1".to_string());
         }
@@ -213,5 +237,38 @@ mod tests {
         assert!(err.contains("server.host"));
         assert!(err.contains("redis.url"));
         assert!(err.contains("readiness_probe_secs"));
+    }
+
+    #[test]
+    fn payments_ships_disabled_by_default() {
+        // 09.0's rollback story: the flag is off until 09.7 flips it.
+        assert!(!AppConfig::default().features.payments);
+    }
+
+    #[test]
+    fn shared_webhook_secrets_are_rejected_at_boot() {
+        let config = AppConfig {
+            billing: sanvi_billing::BillingConfig {
+                stripe_webhook_secret: "whsec_same".to_string(),
+                ..sanvi_billing::BillingConfig::default()
+            },
+            payments: PaymentsConfig {
+                connect_webhook_secret: "whsec_same".to_string(),
+                ..PaymentsConfig::default()
+            },
+            ..AppConfig::default()
+        };
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("must differ"));
+
+        // Distinct secrets (and the unset/unset case) pass.
+        let config = AppConfig {
+            payments: PaymentsConfig {
+                connect_webhook_secret: "whsec_connect".to_string(),
+                ..PaymentsConfig::default()
+            },
+            ..AppConfig::default()
+        };
+        config.validate().unwrap();
     }
 }

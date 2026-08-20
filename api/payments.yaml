@@ -1,0 +1,44 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.9.0
+openapi: 3.1.0
+paths:
+  /api/v1/tenant/payments/providers:
+    get:
+      description: |-
+        Gated three ways: the `payments.enabled` phase flag (route absent when
+        off), `payments.read` (permission extractor), and the
+        `payments.stripe_connect` entitlement (`RequiredFeature` — 403, never
+        404, so the frontend can render an upgrade prompt instead of a dead
+        end).
+      operationId: list_payment_providers
+      parameters:
+      - description: Required on every *mutating* payments endpoint (none exist yet); documented here because the convention is fixed now, before the first one ships
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          format: uuid
+          type:
+          - string
+          - 'null'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvidersView'
+          description: Connectable payment providers (empty until the catalog lands in 09.1)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the payments.stripe_connect entitlement
+      summary: '`GET /api/v1/tenant/payments/providers`.'
+      tags:
+      - payments

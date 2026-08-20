@@ -48,6 +48,14 @@ jobs:
       - run: ./scripts/check-layering.sh
       - run: ./scripts/check-layering.sh --self-test
 
+  connect-invariants:
+    name: Stripe Connect invariants (+ self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/check-connect-invariants.sh
+      - run: ./scripts/check-connect-invariants.sh --self-test
+
   test:
     name: cargo test (unit + application, SQLx offline)
     runs-on: ubuntu-latest
@@ -102,7 +110,7 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy -p sanvi-billing -p sanvi-privacy -p sanvi-localization -p sanvi-domains
+      - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy -p sanvi-billing -p sanvi-privacy -p sanvi-localization -p sanvi-domains -p sanvi-payments
 
   openapi:
     name: OpenAPI contract drift

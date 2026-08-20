@@ -107,6 +107,12 @@ clippy:
 layering:
     ./scripts/check-layering.sh
 
+connect-invariants:
+    ./scripts/check-connect-invariants.sh
+
+connect-invariants-self-test:
+    ./scripts/check-connect-invariants.sh --self-test
+
 test:
     cargo test --workspace
 
@@ -122,4 +128,4 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering test openapi i18n
+ci: fmt clippy layering connect-invariants test openapi i18n

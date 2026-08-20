@@ -233,6 +233,11 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "tenant.entitlement.read",
             "billing.subscription.read",
             "billing.subscription.update",
+            // Phase 09: owners run the money — including refunds.
+            "payments.read",
+            "payments.manage",
+            "payments.checkout",
+            "payments.refund",
         ],
     },
     RoleSeed {
@@ -252,6 +257,11 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "access.role.update",
             "access.role.delete",
             "tenant.entitlement.read",
+            // Phase 09: admins connect providers and read money; refunds
+            // stay owner-only by default (grantable per-tenant).
+            "payments.read",
+            "payments.manage",
+            "payments.checkout",
         ],
     },
     RoleSeed {
@@ -315,6 +325,29 @@ mod tests {
     #[test]
     fn seeds_reference_only_declared_permissions_in_matching_scopes() {
         validate_seeds().unwrap();
+    }
+
+    #[test]
+    fn refund_stays_owner_only_in_the_default_roles() {
+        // Phase 09's deliberate call: `payments.refund` moves money back
+        // out, so the default member/staff roles never carry it — only
+        // tenant_owner (admins can be granted it per-tenant).
+        for seed in SYSTEM_ROLE_SEEDS {
+            if seed.key == "tenant_owner" {
+                continue;
+            }
+            assert!(
+                !seed.permissions.contains(&"payments.refund"),
+                "{} must not refund by default",
+                seed.key
+            );
+        }
+        assert!(
+            seed_by_key("tenant_owner")
+                .unwrap()
+                .permissions
+                .contains(&"payments.refund")
+        );
     }
 
     #[test]

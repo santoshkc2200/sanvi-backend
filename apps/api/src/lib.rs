@@ -133,6 +133,12 @@ use sanvi_localization::{
     },
     routes as localization_routes,
 };
+use sanvi_payments::{
+    PaymentsConfig,
+    adapters::{EmptyProviderCatalog, PaymentsMetrics, SqlxProviderConnectionRepository},
+    application::ListProviders,
+    routes as payments_routes,
+};
 use sanvi_platform_admin::{
     PlatformAdminConfig,
     adapters::{
@@ -2103,8 +2109,14 @@ pub struct TenantCatalogAdapter {
 }
 
 impl TenantCatalogAdapter {
-    pub fn new(tx_manager: sanvi_persistence::TxManager, tenants: Arc<dyn TenantRepository>) -> Self {
-        Self { tx_manager, tenants }
+    pub fn new(
+        tx_manager: sanvi_persistence::TxManager,
+        tenants: Arc<dyn TenantRepository>,
+    ) -> Self {
+        Self {
+            tx_manager,
+            tenants,
+        }
     }
 }
 
@@ -2245,6 +2257,33 @@ pub fn build_domains_lookup(
     let cache = Arc::new(LiveDomainCache::new(redis, config.host_cache_ttl_secs));
     let domains: Arc<dyn CustomDomainRepository> = Arc::new(SqlxCustomDomainRepository::new());
     Arc::new(LiveDomainLookupService::new(cache, domains, pool))
+}
+
+// ---------------------------------------------------------------------------
+// Phase 09: the payments context's composition root. Deliberately thin in
+// 09.0 — one use case (the empty provider catalog) over a stub adapter;
+// Stripe adapters, onboarding and webhooks arrive with 09.1+.
+// ---------------------------------------------------------------------------
+
+/// Build the payments context's application state.
+pub fn build_payments_state(
+    _pool: sanvi_persistence::PgPool,
+    config: &PaymentsConfig,
+    registry: &prometheus::Registry,
+) -> sanvi_payments::adapters::http::PaymentsState {
+    // Registered so the repo is part of the composition root from day one
+    // (RLS tests exercise it); the connection use cases that consume it
+    // arrive with 09.2.
+    let _connections: Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
+        Arc::new(SqlxProviderConnectionRepository::new());
+    let catalog: Arc<dyn sanvi_payments::application::ProviderCatalog> =
+        Arc::new(EmptyProviderCatalog);
+
+    sanvi_payments::adapters::http::PaymentsState {
+        config: config.clone(),
+        metrics: Arc::new(PaymentsMetrics::new(registry)),
+        list_providers: Arc::new(ListProviders::new(catalog)),
+    }
 }
 
 /// Build the domains context's application state: repositories, the
@@ -2397,6 +2436,7 @@ pub fn build_app(
     localization: Option<LocalizationWiring>,
     theming: Option<ThemingWiring>,
     domains: Option<DomainsWiring>,
+    payments: Option<sanvi_payments::adapters::http::PaymentsState>,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -2438,6 +2478,10 @@ pub fn build_app(
     };
     let tenant_scope = match &domains {
         Some(_) => tenant_scope.configure(domains_routes::domains_tenant_scope_routes),
+        None => tenant_scope,
+    };
+    let tenant_scope = match &payments {
+        Some(_) => tenant_scope.configure(payments_routes::payments_tenant_scope_routes),
         None => tenant_scope,
     };
 
@@ -2529,6 +2573,14 @@ pub fn build_app(
             .app_data(web::Data::new(wiring.state))
             .configure(domains_routes::domains_platform_routes)
             .configure(domains_routes::domains_internal_routes),
+        None => app,
+    };
+
+    // Phase-09 gate: the payments context's tenant routes mounted above;
+    // all that remains is the state. With the flag off (the default) no
+    // payments route exists at all.
+    let app = match payments {
+        Some(state) => app.app_data(web::Data::new(state)),
         None => app,
     };
 

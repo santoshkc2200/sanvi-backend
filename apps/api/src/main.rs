@@ -18,8 +18,9 @@ use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsGuideTranslatorAdapter, DomainsTenantLookupAdapter,
     FallbackGuideTranslator, TenantCatalogAdapter, build_access_state, build_app,
     build_audit_state, build_billing_state, build_domains_lookup, build_domains_state,
-    build_identity_state, build_localization_state, build_platform_admin_state,
-    build_privacy_state, build_system_state, build_tenancy_state, build_theming_state,
+    build_identity_state, build_localization_state, build_payments_state,
+    build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
+    build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
@@ -380,6 +381,19 @@ async fn main() -> ExitCode {
         None
     };
 
+    // Phase 09: tenant payment providers. Flag ships off — with it off no
+    // payments route is mounted; with it on, the catalog route is
+    // permission- and entitlement-gated (sub-phase 09.0).
+    let payments = if config.features.payments {
+        Some(build_payments_state(
+            pool.clone(),
+            &config.payments,
+            metrics.prometheus_registry(),
+        ))
+    } else {
+        None
+    };
+
     let bind_config = config.clone();
     let factory_config = config.clone();
     let server = match bind(&bind_config.server, move || {
@@ -397,6 +411,7 @@ async fn main() -> ExitCode {
             localization.clone(),
             theming.clone(),
             domains.clone(),
+            payments.clone(),
             redis.clone(),
         )
     }) {
