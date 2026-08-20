@@ -77,7 +77,7 @@ pub fn localization_event_handler(
                     }
                     service.cache().clear();
                 }
-                "localization.translation_updated" => {
+                "localization.translation_updated" | "localization.translation_deleted" => {
                     let scope = envelope
                         .metadata
                         .get("tenant_id")

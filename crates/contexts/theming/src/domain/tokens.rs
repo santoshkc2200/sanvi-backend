@@ -141,6 +141,18 @@ pub fn validate_token_value(token: &TokenValue) -> Result<(), ThemingError> {
                     "fontFamily $value must be a non-empty string under 512 bytes".to_string(),
                 ));
             }
+            // Values are emitted verbatim into a CSS custom property. Keep
+            // this grammar deliberately smaller than CSS so a token cannot
+            // terminate the declaration or the containing style element.
+            if !raw.chars().all(|ch| {
+                ch.is_alphanumeric()
+                    || ch == ' '
+                    || matches!(ch, ',' | '-' | '_' | '.' | '\'' | '"')
+            }) {
+                return Err(ThemingError::InvalidTokens(
+                    "fontFamily $value contains characters that are unsafe in CSS".to_string(),
+                ));
+            }
             Ok(())
         }
         "fontWeight" => {
@@ -408,6 +420,22 @@ mod tests {
 
         let missing_type = json!({ "color": { "x": { "$value": "#fff" } } });
         assert!(parse_token_document(&missing_type).is_err());
+
+        let injected_font = json!({
+            "font": { "base": {
+                "$value": "Inter;}</style><script>alert(1)</script>",
+                "$type": "fontFamily"
+            } }
+        });
+        assert!(parse_token_document(&injected_font).is_err());
+
+        let safe_font = json!({
+            "font": { "base": {
+                "$value": "'Noto Sans JP', system-ui, sans-serif",
+                "$type": "fontFamily"
+            } }
+        });
+        assert!(parse_token_document(&safe_font).is_ok());
     }
 
     #[test]

@@ -10,7 +10,9 @@ use sanvi_localization::{
         LocalizationCache, LocalizationMetrics, LocalizationService, SqlxSupportedLocaleRepository,
         SqlxTenantLocaleRepository, SqlxTranslationRepository,
     },
-    application::{CatalogService, GetTenantOverrides, UpdateTenantOverrides},
+    application::{
+        CatalogService, GetTenantOverrides, UpdatePlatformTranslations, UpdateTenantOverrides,
+    },
     domain::{
         Locale, LocalizationError, SupportedLocaleRepository, TenantLocaleRepository,
         TenantLocaleSettings, Translation, TranslationRepository, Translator,
@@ -221,6 +223,113 @@ async fn platform_overrides_are_readable_but_only_writable_from_the_platform_sco
     let overrides = repo.list_platform(&pool).await.unwrap();
     assert_eq!(overrides.len(), 1);
     assert_eq!(overrides[0].value, "インボイス");
+}
+
+#[tokio::test]
+async fn audited_platform_scope_can_collect_and_anonymize_tenant_translation_attribution() {
+    let (pool, _node) = prepare().await;
+    let tx = TxManager::new(pool.clone());
+    let repo = SqlxTranslationRepository::new();
+    let tenant = seed_tenant(&pool, "loc-dsr").await;
+    let actor = uuid::Uuid::now_v7();
+
+    {
+        let mut scope = tx.begin_for(tenant).await.unwrap();
+        repo.upsert_tenant(
+            &mut scope,
+            tenant,
+            &Translation {
+                scope: tenant.to_string(),
+                key: "billing.invoice.label".to_string(),
+                locale: "en".to_string(),
+                value: "Statement".to_string(),
+                updated_by: Some(actor),
+                updated_at: chrono::Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    let mut platform = tx
+        .begin_unscoped("privacy.dsr", "localization")
+        .await
+        .unwrap();
+    let visible: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM localization.translations WHERE updated_by = $1")
+            .bind(actor)
+            .fetch_one(&mut **platform.tx_mut().as_inner())
+            .await
+            .unwrap();
+    assert_eq!(visible, 1);
+    sqlx::query("UPDATE localization.translations SET updated_by = NULL WHERE updated_by = $1")
+        .bind(actor)
+        .execute(&mut **platform.tx_mut().as_inner())
+        .await
+        .unwrap();
+    platform.commit().await.unwrap();
+
+    let mut tenant_scope = tx.begin_for(tenant).await.unwrap();
+    let translations = repo.list_tenant(&mut tenant_scope, tenant).await.unwrap();
+    tenant_scope.commit().await.unwrap();
+    assert_eq!(translations.len(), 1);
+    assert_eq!(translations[0].updated_by, None);
+}
+
+#[tokio::test]
+async fn platform_translation_put_replaces_rows_omitted_from_the_request() {
+    let (pool, _node) = prepare().await;
+    let tx = TxManager::new(pool.clone());
+    let repo = Arc::new(SqlxTranslationRepository::new());
+    let update = UpdatePlatformTranslations::new(
+        repo.clone(),
+        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_localization::adapters::SystemClock),
+    );
+
+    let mut scope = tx.begin_unscoped("test", "test").await.unwrap();
+    update
+        .execute(
+            &mut scope,
+            None,
+            "en",
+            &[
+                sanvi_localization::application::TranslationPatch {
+                    key: "billing.invoice.label".to_string(),
+                    locale: "en".to_string(),
+                    value: "Bill".to_string(),
+                },
+                sanvi_localization::application::TranslationPatch {
+                    key: "billing.invoice.total".to_string(),
+                    locale: "en".to_string(),
+                    value: "Grand total".to_string(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let mut scope = tx.begin_unscoped("test", "test").await.unwrap();
+    update
+        .execute(
+            &mut scope,
+            None,
+            "en",
+            &[sanvi_localization::application::TranslationPatch {
+                key: "billing.invoice.total".to_string(),
+                locale: "en".to_string(),
+                value: "Total".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let rows = repo.list_platform(&pool).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key, "billing.invoice.total");
 }
 
 #[tokio::test]

@@ -124,6 +124,25 @@ async fn main() -> ExitCode {
         custom_domain_lookup,
     );
 
+    // Build localization before notification-producing contexts so their
+    // outbound adapters render through the shared override-aware service.
+    let localization = if config.features.localization {
+        Some(build_localization_state(
+            pool.clone(),
+            &config.localization,
+            metrics.prometheus_registry(),
+        ))
+    } else {
+        None
+    };
+    let notification_localizer = localization.as_ref().map(|wiring| {
+        Arc::new(sanvi_localization::adapters::NotificationLocalizer::new(
+            pool.clone(),
+            wiring.service.clone(),
+            config.localization.clone(),
+        ))
+    });
+
     // The role catalog bridges identity → access in-process; it needs only
     // a TxManager and the role repository, so there is no wiring cycle.
     let catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
@@ -151,6 +170,7 @@ async fn main() -> ExitCode {
         &config.ory.kratos_admin_url,
         role_catalog,
         tenant_catalog,
+        notification_localizer.clone(),
     );
 
     // The audit writer/reader are shared by the access and platform_admin
@@ -324,18 +344,7 @@ async fn main() -> ExitCode {
             &config.privacy,
             privacy_providers,
             audit.writer.clone(),
-        ))
-    } else {
-        None
-    };
-
-    // Phase 06: locale negotiation, localized problem bodies and the
-    // localization control plane (settings, overrides, catalog delivery).
-    let localization = if config.features.localization {
-        Some(build_localization_state(
-            pool.clone(),
-            &config.localization,
-            metrics.prometheus_registry(),
+            notification_localizer.clone(),
         ))
     } else {
         None

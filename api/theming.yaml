@@ -285,6 +285,27 @@ paths:
         signed short-lived token. Never cached, never indexed.
       tags:
       - theming
+  /api/v1/tenant/theme/preview-token:
+    post:
+      operationId: mint_theme_preview_token
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewTokenView'
+          description: Signed draft preview token
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Preview signing is not configured
+      summary: |-
+        `POST /api/v1/tenant/theme/preview-token` — mint a short-lived token for
+        the current tenant's draft.
+      tags:
+      - theming
   /api/v1/tenant/theme/publish:
     post:
       operationId: publish_tenant_theme

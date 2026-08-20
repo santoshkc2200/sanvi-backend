@@ -22,12 +22,14 @@ impl LoggingNotifications {
 impl Notifications for LoggingNotifications {
     async fn send_invitation(
         &self,
+        tenant_id: uuid::Uuid,
         email: &Email,
         tenant_name: &str,
         invite_url: &str,
     ) -> Result<(), IdentityError> {
         info!(
             email = %email,
+            tenant_id = %tenant_id,
             tenant = %tenant_name,
             url = %invite_url,
             notification = "invitation",

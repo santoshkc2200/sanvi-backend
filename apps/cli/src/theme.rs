@@ -67,8 +67,8 @@ pub async fn publish(
     // 3. Content-addressed artifact (zip of the whole directory).
     let artifact_bytes = build_artifact(&theme_dir)?;
     let digest = hex::encode(Sha256::digest(&artifact_bytes));
-    let artifact_key = format!("{}-{}.zip", manifest.id, manifest.version);
-    let store = LocalFileStore::new(config.theming.artifact_dir.clone());
+    let artifact_key = format!("{}-{}-{digest}.zip", manifest.id, manifest.version);
+    let store = std::sync::Arc::new(LocalFileStore::new(config.theming.artifact_dir.clone()));
     store
         .put(&artifact_key, &artifact_bytes)
         .await
@@ -82,7 +82,7 @@ pub async fn publish(
     let events: std::sync::Arc<dyn EventPublisher> =
         std::sync::Arc::new(OutboxEventPublisher::new());
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
-    let install = InstallThemeVersion::new(themes, events, clock, pool.clone());
+    let install = InstallThemeVersion::new(themes, events, clock, pool.clone(), store);
 
     let tx_manager = sanvi_persistence::TxManager::new(pool);
     let mut scope = tx_manager

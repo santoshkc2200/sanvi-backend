@@ -1,7 +1,7 @@
 {
   "privacy.notice.updated": "プライバシー通知が更新されました",
   "privacy.export.label": "データ書き出し",
-  "privacy.export.generated_at": "{date} に作成",
+  "privacy.export.generated_at": "{date, date} に作成",
   "privacy.export.contains": "{count, plural, other {#件のサービス}} にわたる個人データが含まれています。",
   "privacy.verification.code": "認証コード",
   "privacy.request.received": "リクエストを受け付けました"

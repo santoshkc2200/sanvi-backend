@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ThemingConfig {
-    /// TTL for the resolved-theme cache (Redis with a process-local
-    /// fallback), seconds. Publish events invalidate immediately; the TTL
-    /// is the staleness bound when an invalidation event is lost.
+    /// TTL for the resolved-theme cache (Redis, or a process-local cache
+    /// when Redis is not configured), seconds. Publish events invalidate
+    /// immediately; the TTL is the staleness bound when an event is lost.
     pub resolved_cache_ttl_secs: u64,
 
     /// Cap on the sanitised custom CSS a tenant may store, bytes.

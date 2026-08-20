@@ -144,6 +144,7 @@ pub async fn get_public_messages(
 pub async fn get_localization_settings(
     state: web::Data<LocalizationState>,
     tenant: CurrentTenant,
+    _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
@@ -177,6 +178,7 @@ pub async fn put_localization_settings(
     tenant: CurrentTenant,
     locale: CurrentLocale,
     body: web::Json<UpdateLocalizationSettingsCommand>,
+    _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let mut command = body.into_inner();
@@ -218,6 +220,7 @@ pub async fn put_localization_settings(
 pub async fn get_localization_overrides(
     state: web::Data<LocalizationState>,
     tenant: CurrentTenant,
+    _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
@@ -251,6 +254,7 @@ pub async fn put_localization_overrides(
     subject: CurrentSubject,
     locale: CurrentLocale,
     body: web::Json<Vec<TranslationPatch>>,
+    _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());

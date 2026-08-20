@@ -70,6 +70,7 @@ fn test_app() -> actix_web::App<
         &config.ory.kratos_admin_url,
         role_catalog,
         tenant_catalog,
+        None,
     );
     let audit = build_audit_state(pool.clone(), &config.audit);
     let access = build_access_state(

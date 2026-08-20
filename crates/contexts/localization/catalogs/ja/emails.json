@@ -11,6 +11,12 @@
   "emails.payment_failed.body": "{tenant} の最新のお支払いが失敗しました。サービス停止を避けるため、お支払い情報を更新してください。",
   "emails.subscription_canceled.subject": "{tenant} のサブスクリプションが解約されました",
   "emails.subscription_canceled.body": "{tenant} のサブスクリプションは解約されました。",
+  "emails.subscription_restored.subject": "{tenant} のサブスクリプションが再開されました",
+  "emails.subscription_restored.body": "{tenant} のサブスクリプションは再び有効になりました。",
+  "emails.grace_expired.subject": "{tenant} のサブスクリプションは停止されました",
+  "emails.grace_expired.body": "{tenant} の支払い猶予期間が終了しました。サービスを再開するには、お支払い情報を更新してください。",
   "emails.trial_ending.subject": "{tenant} のトライアルはまもなく終了します",
-  "emails.trial_ending.body": "{tenant} のトライアルは {date} に終了します。"
+  "emails.trial_ending.body": "{tenant} のトライアルは {date, date} に終了します。",
+  "emails.privacy_status.subject": "プライバシーリクエストの更新: {subject}",
+  "emails.privacy_status.body": "プライバシーリクエストの現在の状態は {status} です。"
 }

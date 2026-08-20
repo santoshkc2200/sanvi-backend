@@ -10,9 +10,9 @@ use sanvi_http::{ResourceSpec, require_permission};
 
 use super::handlers::{
     get_public_theme, get_tenant_theme_draft, install_theme_version, list_available_themes,
-    list_platform_theme_versions, list_platform_themes, preview_tenant_theme, publish_tenant_theme,
-    put_tenant_theme_draft, remove_brand_asset, rollback_tenant_theme, upload_brand_asset,
-    yank_theme_version,
+    list_platform_theme_versions, list_platform_themes, mint_theme_preview_token,
+    preview_tenant_theme, publish_tenant_theme, put_tenant_theme_draft, remove_brand_asset,
+    rollback_tenant_theme, upload_brand_asset, yank_theme_version,
 };
 
 /// Public routes: no tenant or authentication required. The theme endpoint
@@ -25,6 +25,15 @@ pub fn theming_public_routes(cfg: &mut web::ServiceConfig) {
 /// Tenant-scoped theme control (mounted inside the shared `/api/v1/tenant`
 /// scope by the composition root).
 pub fn theming_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
+    theming_tenant_scope_routes_with_asset_limit(cfg, crate::domain::MAX_ASSET_BYTES);
+}
+
+/// Register tenant routes with a JSON limit large enough to carry a base64
+/// encoding of the configured binary asset cap.
+pub fn theming_tenant_scope_routes_with_asset_limit(
+    cfg: &mut web::ServiceConfig,
+    asset_max_bytes: usize,
+) {
     let draft_map = sanvi_http::PermissionMap::new(vec![
         (
             Method::GET,
@@ -57,6 +66,11 @@ pub fn theming_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(preview_tenant_theme)),
     )
     .service(
+        web::resource("/theme/preview-token")
+            .app_data(require_permission!("tenant.theming.read", tenant))
+            .route(web::post().to(mint_theme_preview_token)),
+    )
+    .service(
         web::resource("/themes/available")
             .app_data(require_permission!("tenant.theming.read", tenant))
             .route(web::get().to(list_available_themes)),
@@ -64,6 +78,7 @@ pub fn theming_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/theme/assets")
             .app_data(require_permission!("tenant.theming.write", tenant))
+            .app_data(web::JsonConfig::default().limit(asset_json_limit(asset_max_bytes)))
             .route(web::post().to(upload_brand_asset)),
     )
     .service(
@@ -71,6 +86,16 @@ pub fn theming_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(require_permission!("tenant.theming.write", tenant))
             .route(web::delete().to(remove_brand_asset)),
     );
+}
+
+fn asset_json_limit(asset_max_bytes: usize) -> usize {
+    // Base64 expands by ceil(n / 3) * 4; leave bounded room for JSON field
+    // names, the declared MIME type and escaping overhead.
+    asset_max_bytes
+        .saturating_add(2)
+        .saturating_div(3)
+        .saturating_mul(4)
+        .saturating_add(4 * 1024)
 }
 
 /// Platform-scoped theme registry administration.
@@ -132,6 +157,12 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         ResourceSpec::Tenant,
     ),
     (
+        "/api/v1/tenant/theme/preview-token",
+        Method::POST,
+        "tenant.theming.read",
+        ResourceSpec::Tenant,
+    ),
+    (
         "/api/v1/tenant/themes/available",
         Method::GET,
         "tenant.theming.read",
@@ -174,3 +205,15 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         ResourceSpec::Platform,
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::asset_json_limit;
+
+    #[test]
+    fn asset_json_limit_accounts_for_base64_expansion() {
+        let binary_cap = 2 * 1024 * 1024;
+        assert!(asset_json_limit(binary_cap) > binary_cap);
+        assert!(asset_json_limit(binary_cap) >= binary_cap.div_ceil(3) * 4);
+    }
+}

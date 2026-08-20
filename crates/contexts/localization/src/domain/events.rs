@@ -18,6 +18,7 @@ pub const CATALOG_AGGREGATE: &str = "localization.catalog";
 pub enum LocalizationEventName {
     TenantLocalesChanged,
     TranslationUpdated,
+    TranslationDeleted,
     CatalogPublished,
 }
 
@@ -26,6 +27,7 @@ impl LocalizationEventName {
         match self {
             Self::TenantLocalesChanged => "localization.tenant_locales_changed",
             Self::TranslationUpdated => "localization.translation_updated",
+            Self::TranslationDeleted => "localization.translation_deleted",
             Self::CatalogPublished => "localization.catalog_published",
         }
     }
@@ -54,6 +56,13 @@ pub enum LocalizationEvent {
         /// The locale the change was made under.
         acting_locale: String,
     },
+    /// A copy override was removed by replacement-style PUT semantics.
+    TranslationDeleted {
+        scope: String,
+        key: String,
+        locale: String,
+        acting_locale: String,
+    },
     /// The static catalog was released (informational).
     CatalogPublished { version: String },
 }
@@ -63,6 +72,7 @@ impl LocalizationEvent {
         match self {
             Self::TenantLocalesChanged { .. } => LocalizationEventName::TenantLocalesChanged,
             Self::TranslationUpdated { .. } => LocalizationEventName::TranslationUpdated,
+            Self::TranslationDeleted { .. } => LocalizationEventName::TranslationDeleted,
             Self::CatalogPublished { .. } => LocalizationEventName::CatalogPublished,
         }
     }
@@ -71,6 +81,7 @@ impl LocalizationEvent {
         match self {
             Self::TenantLocalesChanged { tenant_id, .. } => *tenant_id,
             Self::TranslationUpdated { scope, .. } => scope.parse().unwrap_or_else(|_| Uuid::nil()),
+            Self::TranslationDeleted { scope, .. } => scope.parse().unwrap_or_else(|_| Uuid::nil()),
             Self::CatalogPublished { .. } => Uuid::nil(),
         }
     }
@@ -79,6 +90,7 @@ impl LocalizationEvent {
         let aggregate = match self {
             Self::TenantLocalesChanged { .. } => TENANT_LOCALES_AGGREGATE,
             Self::TranslationUpdated { .. } => TRANSLATION_AGGREGATE,
+            Self::TranslationDeleted { .. } => TRANSLATION_AGGREGATE,
             Self::CatalogPublished { .. } => CATALOG_AGGREGATE,
         };
         EventEnvelope::new(
@@ -92,12 +104,17 @@ impl LocalizationEvent {
             serde_json::json!(match self {
                 Self::TenantLocalesChanged { tenant_id, .. } => tenant_id.to_string(),
                 Self::TranslationUpdated { scope, .. } => scope.clone(),
+                Self::TranslationDeleted { scope, .. } => scope.clone(),
                 Self::CatalogPublished { .. } => "platform".to_string(),
             }),
         )
         .with_locale(match self {
             Self::TenantLocalesChanged { locale, .. }
             | Self::TranslationUpdated {
+                acting_locale: locale,
+                ..
+            }
+            | Self::TranslationDeleted {
                 acting_locale: locale,
                 ..
             } => locale.clone(),

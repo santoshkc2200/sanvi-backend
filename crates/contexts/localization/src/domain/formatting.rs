@@ -163,26 +163,31 @@ impl FormattingPolicy {
     ) -> Result<String, LocalizationError> {
         let exponent = currency_exponent(currency_code)
             .ok_or_else(|| LocalizationError::UnknownCurrency(currency_code.to_string()))?;
-        let divisor = 10_i64.pow(exponent);
-        let major = minor_units / divisor;
-        let remainder = (minor_units % divisor).unsigned_abs();
+        let divisor = 10_u64.pow(exponent);
+        let absolute = minor_units.unsigned_abs();
+        let major = absolute / divisor;
+        let remainder = absolute % divisor;
+        let sign = if minor_units < 0 { "-" } else { "" };
         let symbol = currency_symbol(currency_code, self.is_japanese());
 
         if exponent == 0 {
             // Zero-decimal currencies never render fraction digits.
-            let amount = self.format_number_integer(major);
+            let amount = format!("{sign}{}", self.group_digits(major));
             return Ok(if self.is_japanese() {
                 format!("{amount}{symbol}")
             } else {
-                format!("{symbol}{amount}")
+                format!("{sign}{symbol}{}", self.group_digits(major))
             });
         }
         let fraction = format!("{:0width$}", remainder, width = exponent as usize);
-        let amount = format!("{}.{}", self.format_number_integer(major), fraction);
+        let amount = format!("{sign}{}.{fraction}", self.group_digits(major));
         if self.is_japanese() {
             Ok(format!("{amount}{symbol}"))
         } else {
-            Ok(format!("{symbol}{amount}"))
+            Ok(format!(
+                "{sign}{symbol}{}.{fraction}",
+                self.group_digits(major)
+            ))
         }
     }
 
@@ -547,6 +552,11 @@ mod tests {
         assert_eq!(ja().format_currency(123456, "USD").unwrap(), "1,234.56$");
         // BHD: three decimals.
         assert_eq!(en().format_currency(1234567, "BHD").unwrap(), "BD1,234.567");
+        // The sign belongs to the whole amount even when the absolute value
+        // is below one major unit.
+        assert_eq!(en().format_currency(-50, "USD").unwrap(), "-$0.50");
+        assert_eq!(ja().format_currency(-50, "USD").unwrap(), "-0.50$");
+        assert_eq!(en().format_currency(-1, "JPY").unwrap(), "-¥1");
     }
 
     #[test]

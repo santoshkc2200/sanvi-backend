@@ -318,6 +318,12 @@ impl<'a> Parser<'a> {
         if options.is_empty() {
             return Err(err(&self.key, format!("{{{name}}} has no options")));
         }
+        if !options.iter().any(|(selector, _)| selector == "other") {
+            return Err(err(
+                &self.key,
+                format!("{{{name}}} must define an `other` option"),
+            ));
+        }
         Ok(Segment::Branch {
             name,
             kind,
@@ -649,6 +655,8 @@ mod tests {
         assert!(parse_pattern("{name, plural}").is_err());
         assert!(parse_pattern("{name, wat}").is_err());
         assert!(parse_pattern("{n, plural, one {x}").is_err());
+        assert!(parse_pattern("{n, plural, one {one}}").is_err());
+        assert!(parse_pattern("{kind, select, known {known}}").is_err());
     }
 
     proptest::proptest! {

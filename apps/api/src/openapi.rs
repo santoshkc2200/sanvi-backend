@@ -119,6 +119,7 @@ use utoipa::OpenApi;
         sanvi_localization::adapters::http::handlers::get_platform_translations,
         sanvi_localization::adapters::http::handlers::put_platform_translations,
         sanvi_theming::adapters::http::handlers::get_public_theme,
+        sanvi_theming::adapters::http::handlers::mint_theme_preview_token,
         sanvi_theming::adapters::http::handlers::preview_tenant_theme,
         sanvi_theming::adapters::http::handlers::list_available_themes,
         sanvi_theming::adapters::http::handlers::get_tenant_theme_draft,

@@ -1,5 +1,5 @@
 //! The resolved-theme cache: Redis (24 h TTL by default) with a
-//! process-local fallback for when Redis is not configured or unreachable.
+//! process-local fallback only when Redis is not configured.
 //!
 //! Publish/rollback events invalidate immediately — the TTL is only the
 //! staleness bound when an invalidation event is lost. Key shape is
@@ -19,11 +19,8 @@ use crate::domain::resolved::ResolvedTheme;
 struct LocalEntry {
     theme: ResolvedTheme,
     stored_at: Instant,
+    ttl: std::time::Duration,
 }
-
-/// Local entries expire on read after this long (matches the default Redis
-/// TTL; invalidation events clear them far sooner in practice).
-const LOCAL_TTL: std::time::Duration = std::time::Duration::from_secs(86_400);
 
 #[derive(Default)]
 struct LocalInner {
@@ -51,17 +48,17 @@ impl ResolvedThemeCache {
 
     pub async fn get(&self, tenant_id: Uuid, locale: &str) -> Option<ResolvedTheme> {
         let key = Self::key(tenant_id, locale);
-        if let Some(theme) = self.get_local(&key) {
-            return Some(theme);
+        // A process-local entry cannot be invalidated by another process.
+        // When Redis is configured it is the single shared cache layer, so
+        // the worker's Redis invalidation is immediately visible everywhere.
+        if self.redis.is_none() {
+            return self.get_local(&key);
         }
         if let Some(manager) = &self.redis {
             let mut conn = manager.clone();
             match conn.get::<_, Option<String>>(&key).await {
                 Ok(Some(json)) => match serde_json::from_str::<ResolvedTheme>(&json) {
-                    Ok(theme) => {
-                        self.set_local(key.clone(), theme.clone());
-                        return Some(theme);
-                    }
+                    Ok(theme) => return Some(theme),
                     Err(err) => {
                         tracing::warn!(error = %err, "cached resolved theme failed to deserialize; evicting");
                         let _: Result<(), _> = conn.del(&key).await;
@@ -79,7 +76,6 @@ impl ResolvedThemeCache {
 
     pub async fn set(&self, tenant_id: Uuid, locale: &str, theme: &ResolvedTheme, ttl_secs: u64) {
         let key = Self::key(tenant_id, locale);
-        self.set_local(key.clone(), theme.clone());
         if let Some(manager) = &self.redis {
             let mut conn = manager.clone();
             let Ok(json) = serde_json::to_string(theme) else {
@@ -89,6 +85,8 @@ impl ResolvedThemeCache {
             if let Err(err) = result {
                 tracing::debug!(error = %err, "resolved-theme cache write failed");
             }
+        } else {
+            self.set_local(key, theme.clone(), ttl_secs);
         }
     }
 
@@ -141,19 +139,20 @@ impl ResolvedThemeCache {
     fn get_local(&self, key: &str) -> Option<ResolvedTheme> {
         let guard = self.local.read().expect("cache lock is not poisoned");
         let entry = guard.entries.get(key)?;
-        if entry.stored_at.elapsed() > LOCAL_TTL {
+        if entry.stored_at.elapsed() > entry.ttl {
             return None;
         }
         Some(entry.theme.clone())
     }
 
-    fn set_local(&self, key: String, theme: ResolvedTheme) {
+    fn set_local(&self, key: String, theme: ResolvedTheme, ttl_secs: u64) {
         let mut guard = self.local.write().expect("cache lock is not poisoned");
         guard.entries.insert(
             key,
             LocalEntry {
                 theme,
                 stored_at: Instant::now(),
+                ttl: std::time::Duration::from_secs(ttl_secs),
             },
         );
     }
@@ -213,5 +212,13 @@ mod tests {
         cache.invalidate_local(a);
         assert!(cache.get(a, "en").await.is_none());
         assert_eq!(cache.get(b, "en").await.unwrap().revision, 2);
+    }
+
+    #[tokio::test]
+    async fn local_cache_honors_the_requested_ttl() {
+        let cache = ResolvedThemeCache::new(None);
+        let tenant = Uuid::now_v7();
+        cache.set(tenant, "en", &theme(1), 0).await;
+        assert!(cache.get(tenant, "en").await.is_none());
     }
 }

@@ -305,6 +305,7 @@ pub trait SessionCache: Send + Sync {
 pub trait Notifications: Send + Sync {
     async fn send_invitation(
         &self,
+        tenant_id: Uuid,
         email: &Email,
         tenant_name: &str,
         invite_url: &str,

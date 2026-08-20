@@ -11,5 +11,18 @@
   "errors.title.request-timeout": "リクエストがタイムアウトしました",
   "errors.title.service-unavailable": "サービスは一時的に利用できません",
   "errors.title.internal-error": "サーバー内部エラー",
-  "errors.title.error": "エラー"
+  "errors.title.error": "エラー",
+  "errors.detail.bad-request": "リクエストを処理できませんでした。",
+  "errors.detail.unauthorized": "このリソースにアクセスするには認証が必要です。",
+  "errors.detail.forbidden": "この操作を実行する権限がありません。",
+  "errors.detail.not-found": "指定されたリソースが見つかりませんでした。",
+  "errors.detail.conflict": "リクエストが現在のリソース状態と競合しています。",
+  "errors.detail.gone": "指定されたリソースは利用できなくなりました。",
+  "errors.detail.bad-gateway": "上流サービスがリクエストを拒否しました。",
+  "errors.detail.tenant-suspended": "このテナントは現在停止中です。",
+  "errors.detail.too-many-requests": "リクエストが多すぎます。しばらくしてから再試行してください。",
+  "errors.detail.request-timeout": "リクエストが時間内に完了しませんでした。",
+  "errors.detail.service-unavailable": "サービスは一時的に利用できません。",
+  "errors.detail.internal-error": "予期しないサーバーエラーが発生しました。",
+  "errors.detail.error": "リクエストを完了できませんでした。"
 }

@@ -97,8 +97,10 @@ fn format_violations(mode: &str, violations: &[ContrastViolation]) -> Vec<String
 /// WCAG relative luminance and contrast ratio (sRGB, with alpha flattened
 /// against white — tokens are opaque in practice).
 pub fn relative_luminance(rgb: [u8; 4]) -> f64 {
+    let alpha = rgb[3] as f64 / 255.0;
     let channel = |byte: u8| {
-        let c = byte as f64 / 255.0;
+        // Flatten against white before converting sRGB to linear light.
+        let c = (byte as f64 / 255.0) * alpha + (1.0 - alpha);
         if c <= 0.04045 {
             c / 12.92
         } else {
@@ -132,6 +134,9 @@ mod tests {
         let white = parse_hex_color("#ffffff").unwrap();
         assert!((contrast_ratio(black, white) - 21.0).abs() < 0.01);
         assert!((contrast_ratio(white, white) - 1.0).abs() < 0.01);
+
+        // Fully transparent black is white after compositing, not black.
+        assert!((contrast_ratio([0, 0, 0, 0], white) - 1.0).abs() < 0.01);
     }
 
     #[test]

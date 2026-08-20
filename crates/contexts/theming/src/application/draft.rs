@@ -51,8 +51,21 @@ pub struct UpdateTenantThemeDraftCommand {
     #[serde(default)]
     pub layout_overrides: Option<BTreeMap<String, LayoutOverride>>,
     /// Replacement custom CSS (`Some(None)` clears it).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub custom_css: Option<Option<String>>,
+}
+
+fn deserialize_optional_nullable<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Validates a draft's selection and adjustments against a target version.
@@ -107,11 +120,19 @@ impl<'a> DraftValidator<'a> {
                     theme: theme_key.clone(),
                     version: semver.clone(),
                 })?,
-            None => self
+            None if command.theme_key.is_some() => self
                 .themes
                 .get_latest_version(self.pool, &theme_key)
                 .await?
                 .ok_or_else(|| ThemingError::UnknownTheme(theme_key.clone()))?,
+            None => self
+                .themes
+                .get_version(self.pool, &current.theme_key, &current.semver.to_string())
+                .await?
+                .ok_or_else(|| ThemingError::UnknownThemeVersion {
+                    theme: current.theme_key.clone(),
+                    version: current.semver.to_string(),
+                })?,
         };
 
         let switching = command.theme_key.is_some() || version.semver != current.semver;
@@ -437,5 +458,25 @@ pub fn to_view(theme: &TenantTheme) -> TenantThemeView {
         custom_css: theme.custom_css.clone(),
         revision: theme.revision,
         updated_at: theme.updated_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn custom_css_distinguishes_missing_null_and_value() {
+        let missing: UpdateTenantThemeDraftCommand = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(missing.custom_css, None);
+
+        let cleared: UpdateTenantThemeDraftCommand =
+            serde_json::from_value(json!({ "custom_css": null })).unwrap();
+        assert_eq!(cleared.custom_css, Some(None));
+
+        let replaced: UpdateTenantThemeDraftCommand =
+            serde_json::from_value(json!({ "custom_css": ".brand {}" })).unwrap();
+        assert_eq!(replaced.custom_css, Some(Some(".brand {}".to_string())));
     }
 }

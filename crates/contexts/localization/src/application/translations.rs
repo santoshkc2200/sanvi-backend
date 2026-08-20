@@ -121,6 +121,17 @@ impl UpdateTenantOverrides {
                 self.repo
                     .delete_tenant(scope, tenant_id, &previous.key, &previous.locale)
                     .await?;
+                self.events
+                    .publish_scoped(
+                        scope,
+                        &LocalizationEvent::TranslationDeleted {
+                            scope: tenant_id.to_string(),
+                            key: previous.key.clone(),
+                            locale: previous.locale.clone(),
+                            acting_locale: acting_locale.as_str().to_string(),
+                        },
+                    )
+                    .await?;
             }
         }
 
@@ -214,6 +225,29 @@ impl UpdatePlatformTranslations {
                 updated_at: self.clock.now(),
             }
             .validate()?;
+        }
+
+        let existing = self.repo.list_platform_scoped(scope).await?;
+        for previous in &existing {
+            let still_present = patches
+                .iter()
+                .any(|patch| patch.key == previous.key && patch.locale == previous.locale);
+            if !still_present {
+                self.repo
+                    .delete_platform(scope, &previous.key, &previous.locale)
+                    .await?;
+                self.events
+                    .publish(
+                        scope,
+                        &LocalizationEvent::TranslationDeleted {
+                            scope: "platform".to_string(),
+                            key: previous.key.clone(),
+                            locale: previous.locale.clone(),
+                            acting_locale: acting_locale.as_str().to_string(),
+                        },
+                    )
+                    .await?;
+            }
         }
 
         let mut updated = Vec::new();

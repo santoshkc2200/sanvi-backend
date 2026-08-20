@@ -119,7 +119,7 @@ use sanvi_localization::{
     LocalizationConfig,
     adapters::{
         LocaleResolverService, LocalizationCache, LocalizationMetrics, LocalizationService,
-        OutboxEventPublisher as LocalizationEvents, PoolUserLocaleProvider,
+        NotificationLocalizer, OutboxEventPublisher as LocalizationEvents, PoolUserLocaleProvider,
         SqlxSupportedLocaleRepository, SqlxTenantLocaleRepository, SqlxTranslationRepository,
         SystemClock as LocalizationClock,
     },
@@ -128,9 +128,9 @@ use sanvi_localization::{
         UpdateLocalizationSettings, UpdatePlatformTranslations, UpdateTenantOverrides,
     },
     domain::{
-        Clock as LocalizationClockTrait, EventPublisher as LocalizationEventPublisher,
-        SupportedLocaleRepository, TenantLocaleRepository, TranslationRepository,
-        Translator as LocalizationTranslator,
+        Arg as LocalizationArg, Clock as LocalizationClockTrait,
+        EventPublisher as LocalizationEventPublisher, SupportedLocaleRepository,
+        TenantLocaleRepository, TranslationRepository, Translator as LocalizationTranslator,
     },
     routes as localization_routes,
 };
@@ -384,6 +384,76 @@ pub struct IdentityWiring {
     pub memberships: Arc<dyn MembershipRepository>,
 }
 
+struct LocalizedIdentityNotifications {
+    localizer: Arc<NotificationLocalizer>,
+}
+
+#[async_trait::async_trait]
+impl Notifications for LocalizedIdentityNotifications {
+    async fn send_invitation(
+        &self,
+        tenant_id: uuid::Uuid,
+        email: &sanvi_identity::domain::Email,
+        tenant_name: &str,
+        invite_url: &str,
+    ) -> Result<(), IdentityError> {
+        let context = self.localizer.tenant_locale(tenant_id).await;
+        let subject = self.localizer.render(
+            &context,
+            "emails.invitation.subject",
+            &[("tenant", LocalizationArg::from(tenant_name))],
+        );
+        let body = self.localizer.render(
+            &context,
+            "emails.invitation.body",
+            &[
+                ("name", LocalizationArg::from(email.as_str())),
+                ("tenant", LocalizationArg::from(tenant_name)),
+                ("url", LocalizationArg::from(invite_url)),
+                ("days", LocalizationArg::from(7i64)),
+            ],
+        );
+        tracing::info!(
+            to = %email,
+            tenant_id = %tenant_id,
+            locale = %context.locale,
+            subject,
+            body,
+            notification = "invitation",
+            "localized notification rendered"
+        );
+        Ok(())
+    }
+
+    async fn send_security_notice(
+        &self,
+        email: &sanvi_identity::domain::Email,
+        _kind: &str,
+        detail: &str,
+    ) -> Result<(), IdentityError> {
+        let context = self.localizer.platform_locale().await;
+        let subject = self.localizer.render(
+            &context,
+            "emails.security_notice.subject",
+            &[("tenant", LocalizationArg::from("Sanvi"))],
+        );
+        let body = self.localizer.render(
+            &context,
+            "emails.security_notice.body",
+            &[("detail", LocalizationArg::from(detail))],
+        );
+        tracing::info!(
+            to = %email,
+            locale = %context.locale,
+            subject,
+            body,
+            notification = "security_notice",
+            "localized notification rendered"
+        );
+        Ok(())
+    }
+}
+
 /// Build the identity context's application state.
 pub fn build_identity_state(
     pool: sanvi_persistence::PgPool,
@@ -393,6 +463,7 @@ pub fn build_identity_state(
     kratos_admin_url: &str,
     role_catalog: Arc<dyn RoleCatalog>,
     tenant_catalog: Arc<dyn TenantCatalog>,
+    notification_localizer: Option<Arc<NotificationLocalizer>>,
 ) -> IdentityWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
     let users: Arc<dyn UserRepository> = Arc::new(SqlxUserRepository::new());
@@ -401,7 +472,10 @@ pub fn build_identity_state(
     let invitations: Arc<dyn InvitationRepository> = Arc::new(SqlxInvitationRepository::new());
     let link_intents: Arc<dyn LinkIntentRepository> = Arc::new(SqlxLinkIntentRepository::new());
     let events: Arc<dyn EventPublisher> = Arc::new(IdentityEventPublisher::new());
-    let notifications: Arc<dyn Notifications> = Arc::new(LoggingNotifications::new());
+    let notifications: Arc<dyn Notifications> = match notification_localizer {
+        Some(localizer) => Arc::new(LocalizedIdentityNotifications { localizer }),
+        None => Arc::new(LoggingNotifications::new()),
+    };
     let ids: Arc<dyn sanvi_identity::domain::IdGenerator> = Arc::new(SystemIdGenerator);
     let clock: Arc<dyn sanvi_identity::domain::Clock> = Arc::new(SystemClock);
     let kratos: Arc<dyn KratosClient> = Arc::new(
@@ -1188,6 +1262,85 @@ pub struct PrivacyWiring {
     pub lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock>,
 }
 
+struct LocalizedPrivacyNotifications {
+    localizer: Arc<NotificationLocalizer>,
+}
+
+#[async_trait::async_trait]
+impl PrivacyNotifications for LocalizedPrivacyNotifications {
+    async fn send_verification_code(
+        &self,
+        to: &str,
+        code: &str,
+    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
+        let context = self.localizer.platform_locale().await;
+        let subject = self
+            .localizer
+            .render(&context, "emails.verification.subject", &[]);
+        let body = self.localizer.render(
+            &context,
+            "emails.verification.body",
+            &[("code", LocalizationArg::from(code))],
+        );
+        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy notification rendered");
+        Ok(())
+    }
+
+    async fn send_export_credentials(
+        &self,
+        subject_ref: &sanvi_privacy::domain::SubjectRef,
+        token: &str,
+        passphrase: &str,
+        request_id: &str,
+    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
+        let context = match subject_ref.tenant_id {
+            Some(tenant_id) => self.localizer.tenant_locale(tenant_id).await,
+            None => self.localizer.platform_locale().await,
+        };
+        let subject = self
+            .localizer
+            .render(&context, "emails.export_passphrase.subject", &[]);
+        let body = self.localizer.render(
+            &context,
+            "emails.export_passphrase.body",
+            &[
+                ("request_id", LocalizationArg::from(request_id)),
+                ("passphrase", LocalizationArg::from(passphrase)),
+            ],
+        );
+        tracing::info!(
+            subject_ref = %subject_ref.canonical_key(),
+            token,
+            locale = %context.locale,
+            subject,
+            body,
+            "localized privacy export notification rendered"
+        );
+        Ok(())
+    }
+
+    async fn send_request_status(
+        &self,
+        to: &str,
+        request_subject: &str,
+        status: &str,
+    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
+        let context = self.localizer.platform_locale().await;
+        let subject = self.localizer.render(
+            &context,
+            "emails.privacy_status.subject",
+            &[("subject", LocalizationArg::from(request_subject))],
+        );
+        let body = self.localizer.render(
+            &context,
+            "emails.privacy_status.body",
+            &[("status", LocalizationArg::from(status))],
+        );
+        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy status notification rendered");
+        Ok(())
+    }
+}
+
 /// The jurisdiction-driven privacy lock (phase 05 wires the real
 /// implementation): a tenant with an open erasure request cannot be
 /// impersonated.
@@ -1242,6 +1395,7 @@ pub fn build_privacy_state(
     config: &PrivacyConfig,
     providers: ProviderRegistry,
     audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter>,
+    notification_localizer: Option<Arc<NotificationLocalizer>>,
 ) -> PrivacyWiring {
     let registered: std::collections::BTreeSet<_> = providers
         .iter()
@@ -1290,7 +1444,10 @@ pub fn build_privacy_state(
         Arc::new(SqlxRiskAssessmentRepository::new());
 
     let events: Arc<dyn PrivacyEventPublisher> = Arc::new(PrivacyEvents::new());
-    let notifications: Arc<dyn PrivacyNotifications> = Arc::new(PrivacyLoggingNotifications);
+    let notifications: Arc<dyn PrivacyNotifications> = match notification_localizer {
+        Some(localizer) => Arc::new(LocalizedPrivacyNotifications { localizer }),
+        None => Arc::new(PrivacyLoggingNotifications),
+    };
     let clock: Arc<dyn PrivacyClock> = Arc::new(PrivacySystemClock);
     let ids: Arc<dyn PrivacyIds> = Arc::new(PrivacySystemIdGenerator);
     let hasher: Arc<dyn Hasher> = Arc::new(Sha256Hasher::new(if config.kek.is_empty() {
@@ -1936,7 +2093,7 @@ impl ThemeFeatureGate for ThemingAccessGate {
 
 /// Build the theming context's application state: repositories, the
 /// entitlement gate, asset/artifact storage, the resolved-theme cache
-/// (Redis + local fallback) and the resolution service.
+/// (Redis, or a local fallback when Redis is disabled) and the resolution service.
 pub fn build_theming_state(
     pool: sanvi_persistence::PgPool,
     config: &ThemingConfig,
@@ -1950,8 +2107,9 @@ pub fn build_theming_state(
     let gate: Arc<dyn ThemeFeatureGate> = Arc::new(ThemingAccessGate::new(feature_gate));
     let events: Arc<dyn ThemingEventPublisher> = Arc::new(ThemingEvents::new());
     let clock: Arc<dyn ThemingClockTrait> = Arc::new(ThemingClock);
-    let store: Arc<dyn BrandAssetStore> =
-        Arc::new(LocalFileStore::new(config.artifact_dir.clone()));
+    let file_store = Arc::new(LocalFileStore::new(config.artifact_dir.clone()));
+    let store: Arc<dyn BrandAssetStore> = file_store.clone();
+    let artifact_store: Arc<dyn sanvi_theming::ArtifactStore> = file_store;
     let cache = Arc::new(ResolvedThemeCache::new(redis));
     let metrics = Arc::new(ThemingMetrics::new(registry));
     let host_resolver: Arc<dyn TenantContextResolver> =
@@ -2023,7 +2181,6 @@ pub fn build_theming_state(
         )),
         remove_asset: Arc::new(RemoveBrandAsset::new(
             tenants.clone(),
-            store.clone(),
             events.clone(),
             clock.clone(),
         )),
@@ -2032,6 +2189,7 @@ pub fn build_theming_state(
             events.clone(),
             clock.clone(),
             pool.clone(),
+            artifact_store,
         )),
         yank_version: Arc::new(sanvi_theming::application::install::YankThemeVersion::new(
             themes.clone(),
@@ -2495,7 +2653,12 @@ pub fn build_app(
         None => tenant_scope,
     };
     let tenant_scope = match &theming {
-        Some(_) => tenant_scope.configure(theming_routes::theming_tenant_scope_routes),
+        Some(theming) => {
+            let asset_max_bytes = theming.state.config.asset_max_bytes;
+            tenant_scope.configure(move |cfg| {
+                theming_routes::theming_tenant_scope_routes_with_asset_limit(cfg, asset_max_bytes)
+            })
+        }
         None => tenant_scope,
     };
     let tenant_scope = match &domains {

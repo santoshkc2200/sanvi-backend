@@ -156,6 +156,9 @@ pub trait BrandAssetStore: Send + Sync {
 #[async_trait]
 pub trait ArtifactStore: Send + Sync {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ThemingError>;
+
+    /// Confirm that an artifact exists and matches its pinned sha256.
+    async fn verify(&self, key: &str, digest: &str) -> Result<(), ThemingError>;
 }
 
 /// Source of time, injectable for tests.

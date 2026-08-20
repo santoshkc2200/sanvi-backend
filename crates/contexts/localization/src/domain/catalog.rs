@@ -35,6 +35,19 @@ impl Message {
     pub fn render(&self, translator: &dyn Translator, scope: &str, locale: &str) -> String {
         translator.translate(scope, locale, self.key, &self.args)
     }
+
+    /// Render with the subject's negotiated IANA timezone. Request and
+    /// worker adapters should prefer this when request or event-carried
+    /// locale context is available.
+    pub fn render_with_timezone(
+        &self,
+        translator: &dyn Translator,
+        scope: &str,
+        locale: &str,
+        timezone: &str,
+    ) -> String {
+        translator.translate_with_timezone(scope, locale, timezone, self.key, &self.args)
+    }
 }
 
 /// The localization context's translator port.
@@ -48,6 +61,20 @@ impl Message {
 ///   over platform overrides over the static catalog.
 pub trait Translator: Send + Sync {
     fn translate(&self, scope: &str, locale: &str, key: &str, args: MessageArgs<'_>) -> String;
+
+    /// Translate using the subject's timezone for `{..., date}` and
+    /// `{..., time}` arguments. The default keeps existing adapters source
+    /// compatible; timezone-aware composition roots override it.
+    fn translate_with_timezone(
+        &self,
+        scope: &str,
+        locale: &str,
+        _timezone: &str,
+        key: &str,
+        args: MessageArgs<'_>,
+    ) -> String {
+        self.translate(scope, locale, key, args)
+    }
 }
 
 /// A runtime-editable override row: tenant tone-of-voice or an urgent copy

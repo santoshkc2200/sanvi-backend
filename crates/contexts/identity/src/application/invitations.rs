@@ -135,7 +135,7 @@ impl InviteMember {
         let invite_url = format!("https://invalid.local/invitations/{}", token.as_str());
         let _ = self
             .notifications
-            .send_invitation(&email, "tenant", &invite_url)
+            .send_invitation(tenant_id, &email, "tenant", &invite_url)
             .await;
         info!(tenant_id = %tenant_id, email = %email, "invitation sent");
         Ok((
@@ -329,7 +329,7 @@ impl ResendInvitation {
         let invite_url = format!("https://invalid.local/invitations/{}", token.as_str());
         let _ = self
             .notifications
-            .send_invitation(invitation.email(), "tenant", &invite_url)
+            .send_invitation(tenant_id, invitation.email(), "tenant", &invite_url)
             .await;
         Ok(InvitationView {
             invitation_id: invitation.id().to_string(),

@@ -82,6 +82,11 @@ pub trait TranslationRepository: Send + Sync {
 
     async fn list_platform(&self, pool: &PgPool) -> Result<Vec<Translation>, LocalizationError>;
 
+    async fn list_platform_scoped(
+        &self,
+        scope: &mut PlatformScope<'_>,
+    ) -> Result<Vec<Translation>, LocalizationError>;
+
     async fn upsert_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -99,6 +104,13 @@ pub trait TranslationRepository: Send + Sync {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: Uuid,
+        key: &str,
+        locale: &str,
+    ) -> Result<(), LocalizationError>;
+
+    async fn delete_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
         key: &str,
         locale: &str,
     ) -> Result<(), LocalizationError>;

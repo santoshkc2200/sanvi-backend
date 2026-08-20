@@ -34,6 +34,7 @@ pub use domain::{
 pub mod routes {
     pub use crate::adapters::http::routes::{
         theming_platform_routes, theming_public_routes, theming_tenant_scope_routes,
+        theming_tenant_scope_routes_with_asset_limit,
     };
 }
 

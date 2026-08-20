@@ -170,6 +170,16 @@ fn placeholders(pattern: &str) -> anyhow::Result<BTreeSet<String>> {
     Ok(sanvi_localization::domain::message_format::placeholder_names(&segments))
 }
 
+fn placeholder_differences(
+    source: &BTreeSet<String>,
+    target: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    (
+        source.difference(target).cloned().collect(),
+        target.difference(source).cloned().collect(),
+    )
+}
+
 pub fn run(action: I18nAction) -> anyhow::Result<()> {
     match action {
         I18nAction::Extract => {
@@ -235,12 +245,16 @@ fn check() -> anyhow::Result<()> {
             };
             let source_placeholders = placeholders(source_pattern)?;
             let target_placeholders = placeholders(target)?;
-            let missing: Vec<&String> = source_placeholders
-                .difference(&target_placeholders)
-                .collect();
+            let (missing, unexpected) =
+                placeholder_differences(&source_placeholders, &target_placeholders);
             for placeholder in &missing {
                 problems.push(format!(
                     "ja/{domain}/{key} is missing placeholder {{{placeholder}}}"
+                ));
+            }
+            for placeholder in &unexpected {
+                problems.push(format!(
+                    "ja/{domain}/{key} has unexpected placeholder {{{placeholder}}}"
                 ));
             }
         }
@@ -335,5 +349,14 @@ mod tests {
     fn ignores_dynamic_keys() {
         let content = r#"translator.translate(scope, locale, key, &[]);"#;
         assert!(t_keys_in(content).is_empty());
+    }
+
+    #[test]
+    fn placeholder_parity_rejects_missing_and_unexpected_names() {
+        let source = placeholders("Hi {name}, {count, plural, other {# items}}").unwrap();
+        let target = placeholders("こんにちは {person}、{count, plural, other {#件}}").unwrap();
+        let (missing, unexpected) = placeholder_differences(&source, &target);
+        assert_eq!(missing, vec!["name"]);
+        assert_eq!(unexpected, vec!["person"]);
     }
 }

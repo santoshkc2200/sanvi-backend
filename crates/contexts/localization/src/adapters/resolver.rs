@@ -186,15 +186,25 @@ impl LocaleResolver for LocaleResolverService {
 
             let explicit = input.explicit_locale.map(str::to_string);
             let accept_language = input.accept_language.map(str::to_string);
+            let explicit_supported = LocaleSet {
+                supported: self
+                    .config
+                    .explicit_locale_allowlist
+                    .iter()
+                    .filter_map(|tag| Locale::parse(tag).ok())
+                    .filter(|locale| platform_set.contains(locale))
+                    .collect(),
+                default: platform_set.default.clone(),
+            };
 
             let negotiated = negotiate(&NegotiationInput {
                 explicit: explicit.as_deref(),
                 user_preference: user_preference.as_deref(),
                 tenant_default: tenant_default.as_deref(),
                 accept_language: accept_language.as_deref(),
-                platform_default: &self.config.default_locale,
+                platform_default: platform_set.default.as_str(),
                 supported: (*supported).clone(),
-                platform_supported: (*platform_set).clone(),
+                platform_supported: explicit_supported,
             });
 
             let timezone = settings

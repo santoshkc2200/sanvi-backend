@@ -10,11 +10,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use sanvi_persistence::{DatabaseConfig, Migrator, build_pool};
+use sanvi_privacy::domain::{EraseMode, PersonalDataProvider, SubjectRef};
 use sanvi_theming::{
     ThemingConfig,
     adapters::{
         LocalFileStore, OutboxEventPublisher, ResolvedThemeCache, SqlxTenantThemeRepository,
-        SqlxThemeRepository, SystemClock, ThemingMetrics,
+        SqlxThemeRepository, SystemClock, ThemingMetrics, privacy_provider::ThemingPrivacyProvider,
     },
     application::{
         InstallThemeVersion, InstallThemeVersionCommand, ListAvailableThemes, PublishTenantTheme,
@@ -22,9 +23,9 @@ use sanvi_theming::{
         UpdateTenantThemeDraftCommand,
     },
     domain::{
-        BrandAssetStore, Clock, EventPublisher, ResolvedTenantRef, TenantContextResolver,
-        TenantThemeRepository, ThemeFeatureGate, ThemeRepository, ThemeState, ThemingError,
-        TokenValue,
+        ArtifactStore, BrandAssetStore, Clock, EventPublisher, ResolvedTenantRef,
+        TenantContextResolver, TenantThemeRepository, ThemeFeatureGate, ThemeRepository,
+        ThemeState, ThemingError, TokenValue,
     },
 };
 use testcontainers::runners::AsyncRunner;
@@ -150,6 +151,19 @@ struct TestResolver {
     slug: String,
 }
 
+struct TestArtifactStore;
+
+#[async_trait::async_trait]
+impl ArtifactStore for TestArtifactStore {
+    async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), ThemingError> {
+        Ok(())
+    }
+
+    async fn verify(&self, _key: &str, _digest: &str) -> Result<(), ThemingError> {
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl TenantContextResolver for TestResolver {
     async fn resolve(&self, host: &str) -> Result<Option<ResolvedTenantRef>, ThemingError> {
@@ -233,6 +247,7 @@ fn build_harness(pool: sanvi_persistence::PgPool, gate: Arc<dyn ThemeFeatureGate
             events.clone(),
             clock.clone(),
             pool.clone(),
+            Arc::new(TestArtifactStore),
         )),
         available: Arc::new(ListAvailableThemes::new(
             themes.clone(),
@@ -475,6 +490,18 @@ async fn publish_rollback_and_resolution_round_trip() {
     assert!(matches!(err, ThemingError::NothingToRollBack), "{err}");
     let _ = scope.rollback().await;
 
+    // Publishing a newer registry version must not silently upgrade an
+    // existing draft when the tenant only edits an override.
+    let mut newer = aurora_command();
+    newer.manifest["version"] = serde_json::json!("1.1.0");
+    newer.artifact_uri = "aurora-1.1.0.zip".to_string();
+    let mut scope = tx
+        .begin_unscoped("test.install-newer", "test")
+        .await
+        .unwrap();
+    harness.install.execute(&mut scope, &newer).await.unwrap();
+    scope.commit().await.unwrap();
+
     // A second publish (with a different override) makes revision 1
     // restorable.
     let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
@@ -487,7 +514,7 @@ async fn publish_rollback_and_resolution_round_trip() {
             description: None,
         },
     );
-    harness
+    let updated = harness
         .update_draft
         .execute(
             &mut scope,
@@ -504,6 +531,7 @@ async fn publish_rollback_and_resolution_round_trip() {
         )
         .await
         .unwrap();
+    assert_eq!(updated.version, "1.0.0");
     let view = harness
         .publish
         .execute(&mut scope, tenant_id, None, "en")
@@ -817,9 +845,9 @@ async fn brand_asset_upload_validates_and_stores() {
     let upload = sanvi_theming::application::UploadBrandAsset::new(
         tenants.clone(),
         themes,
-        store,
-        events,
-        clock,
+        store.clone(),
+        events.clone(),
+        clock.clone(),
         pool.clone(),
         2 * 1024 * 1024,
     );
@@ -850,6 +878,31 @@ async fn brand_asset_upload_validates_and_stores() {
         .join(format!("{}.{}", logo.digest, logo.ext));
     assert!(stored.exists());
 
+    // Once published, removing the asset from the mutable draft must not
+    // delete the content-addressed object still referenced by live/revision.
+    let harness = build_harness(pool.clone(), Arc::new(TestGate::default()));
+    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    harness
+        .publish
+        .execute(&mut scope, tenant_id, None, "en")
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+    let remove = sanvi_theming::application::RemoveBrandAsset::new(tenants, events, clock);
+    let mut scope = tx_manager.begin_for(tenant_id).await.unwrap();
+    remove
+        .execute(
+            &mut scope,
+            tenant_id,
+            None,
+            "en",
+            sanvi_theming::BrandAssetKind::Logo,
+        )
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert!(stored.exists());
+
     // SVG with a script marker is refused.
     let mut scope = tx_manager.begin_for(tenant_id).await.unwrap();
     let err = upload
@@ -870,4 +923,59 @@ async fn brand_asset_upload_validates_and_stores() {
     assert!(matches!(err, ThemingError::InvalidBrandAsset(_)), "{err}");
     let _ = scope.rollback().await;
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn privacy_erasure_anonymises_theme_revision_actors() {
+    let (pool, _node) = prepare().await;
+    let tenant_id = seed_tenant(&pool, "privacy-theme").await;
+    let actor = uuid::Uuid::now_v7();
+    let harness = build_harness(pool.clone(), Arc::new(TestGate::default()));
+
+    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    harness
+        .update_draft
+        .execute(
+            &mut scope,
+            tenant_id,
+            Some(actor),
+            "en",
+            &UpdateTenantThemeDraftCommand {
+                theme_key: None,
+                version: None,
+                token_overrides: None,
+                layout_overrides: None,
+                custom_css: None,
+            },
+        )
+        .await
+        .unwrap();
+    harness
+        .publish
+        .execute(&mut scope, tenant_id, Some(actor), "en")
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let provider = ThemingPrivacyProvider::new(harness.tx.clone());
+    let report = provider
+        .erase(&SubjectRef::user(actor), EraseMode::Full)
+        .await
+        .unwrap();
+    assert_eq!(report.anonymised, 3);
+
+    let mut scope = harness
+        .tx
+        .begin_unscoped("test.verify-erasure", "test")
+        .await
+        .unwrap();
+    let revision_actors: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM theming.tenant_theme_revisions WHERE published_by = $1",
+    )
+    .bind(actor)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(revision_actors, 0);
+    scope.commit().await.unwrap();
 }

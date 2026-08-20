@@ -29,6 +29,12 @@ impl TranslationRepository for EmptyRepos {
     ) -> Result<Vec<sanvi_localization::Translation>, LocalizationError> {
         Ok(Vec::new())
     }
+    async fn list_platform_scoped(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+    ) -> Result<Vec<sanvi_localization::Translation>, LocalizationError> {
+        Ok(Vec::new())
+    }
     async fn upsert_tenant(
         &self,
         _scope: &mut ScopedTx<'_>,
@@ -48,6 +54,14 @@ impl TranslationRepository for EmptyRepos {
         &self,
         _scope: &mut ScopedTx<'_>,
         _tenant_id: uuid::Uuid,
+        _key: &str,
+        _locale: &str,
+    ) -> Result<(), LocalizationError> {
+        Ok(())
+    }
+    async fn delete_platform(
+        &self,
+        _scope: &mut PlatformScope<'_>,
         _key: &str,
         _locale: &str,
     ) -> Result<(), LocalizationError> {

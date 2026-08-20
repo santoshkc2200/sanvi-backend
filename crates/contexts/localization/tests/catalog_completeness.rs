@@ -74,3 +74,36 @@ fn known_keys_cover_all_embedded_keys() {
     let all_refs: BTreeSet<&str> = all.iter().map(String::as_str).collect();
     assert_eq!(all_refs, known, "the generated KNOWN_KEYS table drifted");
 }
+
+#[test]
+fn every_translation_has_exact_placeholder_parity_with_english() {
+    let mut catalogs: BTreeMap<(String, String), BTreeMap<String, String>> = BTreeMap::new();
+    for (locale, domain, content) in CATALOG_FILES {
+        catalogs.insert(
+            (locale.to_string(), domain.to_string()),
+            serde_json::from_str(content).unwrap(),
+        );
+    }
+    for domain in ["billing", "emails", "errors", "privacy"] {
+        let source = &catalogs[&("en".to_string(), domain.to_string())];
+        for locale in SHIPPED_LOCALES
+            .iter()
+            .copied()
+            .filter(|locale| *locale != "en")
+        {
+            let target = &catalogs[&(locale.to_string(), domain.to_string())];
+            for (key, source_pattern) in source {
+                let source_segments = sanvi_localization::parse_pattern(source_pattern).unwrap();
+                let target_segments = sanvi_localization::parse_pattern(&target[key]).unwrap();
+                let source_names =
+                    sanvi_localization::domain::message_format::placeholder_names(&source_segments);
+                let target_names =
+                    sanvi_localization::domain::message_format::placeholder_names(&target_segments);
+                assert_eq!(
+                    source_names, target_names,
+                    "{locale}/{domain}/{key} placeholder mismatch"
+                );
+            }
+        }
+    }
+}

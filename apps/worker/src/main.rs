@@ -43,11 +43,10 @@ use sanvi_audit::{
 use sanvi_billing::{
     BillingConfig,
     adapters::{
-        AccessEntitlementSyncer, HttpStripeClient, LoggingNotifications,
-        OutboxEventPublisher as BillingEventPublisher, SqlxInvoiceRepository,
-        SqlxPlanEntitlementRepository, SqlxPlanPriceRepository, SqlxPlanRepository,
-        SqlxSubscriptionRepository, SqlxWebhookEventRepository, StripeMetrics, SystemClock,
-        SystemIdGenerator, TenancyTenantLifecycle, metrics::BillingMetrics,
+        AccessEntitlementSyncer, HttpStripeClient, OutboxEventPublisher as BillingEventPublisher,
+        SqlxInvoiceRepository, SqlxPlanEntitlementRepository, SqlxPlanPriceRepository,
+        SqlxPlanRepository, SqlxSubscriptionRepository, SqlxWebhookEventRepository, StripeMetrics,
+        SystemClock, SystemIdGenerator, TenancyTenantLifecycle, metrics::BillingMetrics,
     },
     application::{CheckTaxRegistrations, DunningSweep, ReconcileSubscriptions, WebhookDispatcher},
     domain::{
@@ -61,9 +60,10 @@ use sanvi_domains::{DomainsConfig, adapters::events::domains_event_handler};
 use sanvi_localization::{
     LocalizationConfig,
     adapters::{
-        LocalizationCache, LocalizationMetrics, LocalizationService, SqlxTranslationRepository,
-        events::localization_event_handler,
+        LocalizationCache, LocalizationMetrics, LocalizationService, NotificationLocalizer,
+        SqlxTranslationRepository, events::localization_event_handler,
     },
+    domain::Arg as LocalizationArg,
 };
 use sanvi_messaging::{
     ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
@@ -73,15 +73,14 @@ use sanvi_persistence::{DatabaseConfig, build_pool};
 use sanvi_privacy::{
     PrivacyConfig,
     adapters::{
-        DisabledEnvelopeCrypto, LoggingNotifications as PrivacyLoggingNotifications,
-        LoggingSubProcessorNotifier, OutboxEventPublisher as PrivacyEvents, PrivacyContextProvider,
-        Sha256Hasher, SqlxAppealRepository, SqlxAuthorizedAgentRepository, SqlxBreachRepository,
-        SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository, SqlxEnvelopeCrypto,
-        SqlxExportArtifactRepository, SqlxJurisdictionRepository, SqlxLegalHoldRepository,
-        SqlxParticipantRepository, SqlxRequestMetricsRepository, SqlxRetentionRuleRepository,
-        SqlxSignalRepository, SqlxSubProcessorRepository, SqlxSubjectKeyRepository,
-        SqlxSubjectRepository, SqlxVerificationRepository, SystemClock as PrivacySystemClock,
-        ZipPackager,
+        DisabledEnvelopeCrypto, LoggingSubProcessorNotifier, OutboxEventPublisher as PrivacyEvents,
+        PrivacyContextProvider, Sha256Hasher, SqlxAppealRepository, SqlxAuthorizedAgentRepository,
+        SqlxBreachRepository, SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository,
+        SqlxEnvelopeCrypto, SqlxExportArtifactRepository, SqlxJurisdictionRepository,
+        SqlxLegalHoldRepository, SqlxParticipantRepository, SqlxRequestMetricsRepository,
+        SqlxRetentionRuleRepository, SqlxSignalRepository, SqlxSubProcessorRepository,
+        SqlxSubjectKeyRepository, SqlxSubjectRepository, SqlxVerificationRepository,
+        SystemClock as PrivacySystemClock, ZipPackager,
     },
     application::{
         CleanupExpiredExports, GenerateAnnualMetrics, ProcessDsrBatch, PropagateOptOuts,
@@ -111,6 +110,175 @@ use sanvi_theming::{
     adapters::{ResolvedThemeCache, events::theming_event_handler},
 };
 use serde::{Deserialize, Serialize};
+
+struct WorkerBillingNotifications {
+    localizer: Arc<NotificationLocalizer>,
+}
+
+impl WorkerBillingNotifications {
+    async fn render(
+        &self,
+        tenant_id: uuid::Uuid,
+        subject_key: &str,
+        body_key: &str,
+        extra_args: &[(&str, LocalizationArg)],
+    ) {
+        let context = self.localizer.tenant_locale(tenant_id).await;
+        let tenant = tenant_id.to_string();
+        let tenant_arg = [("tenant", LocalizationArg::from(tenant))];
+        let subject = self.localizer.render(&context, subject_key, &tenant_arg);
+        let mut body_args = tenant_arg.to_vec();
+        body_args.extend_from_slice(extra_args);
+        let body = self.localizer.render(&context, body_key, &body_args);
+        tracing::info!(tenant_id = %tenant_id, locale = %context.locale, subject, body, "localized billing notification rendered");
+    }
+}
+
+#[async_trait::async_trait]
+impl Notifications for WorkerBillingNotifications {
+    async fn payment_failed(
+        &self,
+        tenant_id: uuid::Uuid,
+    ) -> Result<(), sanvi_billing::domain::BillingError> {
+        self.render(
+            tenant_id,
+            "emails.payment_failed.subject",
+            "emails.payment_failed.body",
+            &[],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn grace_expired(
+        &self,
+        tenant_id: uuid::Uuid,
+    ) -> Result<(), sanvi_billing::domain::BillingError> {
+        self.render(
+            tenant_id,
+            "emails.grace_expired.subject",
+            "emails.grace_expired.body",
+            &[],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn trial_ending(
+        &self,
+        tenant_id: uuid::Uuid,
+        trial_end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), sanvi_billing::domain::BillingError> {
+        self.render(
+            tenant_id,
+            "emails.trial_ending.subject",
+            "emails.trial_ending.body",
+            &[("date", LocalizationArg::from(trial_end))],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn subscription_canceled(
+        &self,
+        tenant_id: uuid::Uuid,
+    ) -> Result<(), sanvi_billing::domain::BillingError> {
+        self.render(
+            tenant_id,
+            "emails.subscription_canceled.subject",
+            "emails.subscription_canceled.body",
+            &[],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn subscription_restored(
+        &self,
+        tenant_id: uuid::Uuid,
+    ) -> Result<(), sanvi_billing::domain::BillingError> {
+        self.render(
+            tenant_id,
+            "emails.subscription_restored.subject",
+            "emails.subscription_restored.body",
+            &[],
+        )
+        .await;
+        Ok(())
+    }
+}
+
+struct WorkerPrivacyNotifications {
+    localizer: Arc<NotificationLocalizer>,
+}
+
+#[async_trait::async_trait]
+impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
+    async fn send_verification_code(
+        &self,
+        to: &str,
+        code: &str,
+    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
+        let context = self.localizer.platform_locale().await;
+        let subject = self
+            .localizer
+            .render(&context, "emails.verification.subject", &[]);
+        let body = self.localizer.render(
+            &context,
+            "emails.verification.body",
+            &[("code", LocalizationArg::from(code))],
+        );
+        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy notification rendered");
+        Ok(())
+    }
+
+    async fn send_export_credentials(
+        &self,
+        subject_ref: &sanvi_privacy::domain::SubjectRef,
+        token: &str,
+        passphrase: &str,
+        request_id: &str,
+    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
+        let context = match subject_ref.tenant_id {
+            Some(tenant_id) => self.localizer.tenant_locale(tenant_id).await,
+            None => self.localizer.platform_locale().await,
+        };
+        let subject = self
+            .localizer
+            .render(&context, "emails.export_passphrase.subject", &[]);
+        let body = self.localizer.render(
+            &context,
+            "emails.export_passphrase.body",
+            &[
+                ("request_id", LocalizationArg::from(request_id)),
+                ("passphrase", LocalizationArg::from(passphrase)),
+            ],
+        );
+        tracing::info!(subject_ref = %subject_ref.canonical_key(), token, locale = %context.locale, subject, body, "localized privacy export notification rendered");
+        Ok(())
+    }
+
+    async fn send_request_status(
+        &self,
+        to: &str,
+        request_subject: &str,
+        status: &str,
+    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
+        let context = self.localizer.platform_locale().await;
+        let subject = self.localizer.render(
+            &context,
+            "emails.privacy_status.subject",
+            &[("subject", LocalizationArg::from(request_subject))],
+        );
+        let body = self.localizer.render(
+            &context,
+            "emails.privacy_status.body",
+            &[("status", LocalizationArg::from(status))],
+        );
+        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy status notification rendered");
+        Ok(())
+    }
+}
 
 /// Outbox dispatcher tuning.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -384,6 +552,11 @@ async fn main() -> ExitCode {
         Arc::new(LocalizationMetrics::new(registry)),
         config.localization.clone(),
     ));
+    let notification_localizer = Arc::new(NotificationLocalizer::new(
+        pool.clone(),
+        localization_service.clone(),
+        config.localization.clone(),
+    ));
     let localization_consumer = StreamConsumer::new(pool.clone(), streams.clone());
     let localization_consumer_metrics = Arc::new(ConsumerMetrics::new("localization"));
     if let Err(err) = localization_consumer_metrics.register(registry) {
@@ -519,7 +692,9 @@ async fn main() -> ExitCode {
     let billing_events: std::sync::Arc<dyn BillingEvents> =
         std::sync::Arc::new(BillingEventPublisher::new());
     let billing_notifications: std::sync::Arc<dyn Notifications> =
-        std::sync::Arc::new(LoggingNotifications::new());
+        std::sync::Arc::new(WorkerBillingNotifications {
+            localizer: notification_localizer.clone(),
+        });
     let billing_ids: std::sync::Arc<dyn BillingIds> = std::sync::Arc::new(SystemIdGenerator);
     let billing_clock: std::sync::Arc<dyn BillingClock> = std::sync::Arc::new(SystemClock);
     let billing_syncer: std::sync::Arc<dyn EntitlementSyncer> =
@@ -762,7 +937,9 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(SqlxRequestMetricsRepository::new());
     let privacy_events = std::sync::Arc::new(PrivacyEvents::new());
     let privacy_notifications: std::sync::Arc<dyn PrivacyNotificationsTrait> =
-        std::sync::Arc::new(PrivacyLoggingNotifications);
+        std::sync::Arc::new(WorkerPrivacyNotifications {
+            localizer: notification_localizer.clone(),
+        });
     let privacy_clock = std::sync::Arc::new(PrivacySystemClock);
     let privacy_hasher: std::sync::Arc<dyn Hasher> =
         std::sync::Arc::new(Sha256Hasher::new(if config.privacy.kek.is_empty() {

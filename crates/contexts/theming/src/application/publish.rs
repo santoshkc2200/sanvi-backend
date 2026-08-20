@@ -61,6 +61,7 @@ impl PublishTenantTheme {
         published_by: Option<Uuid>,
         locale: &str,
     ) -> Result<TenantThemeView, ThemingError> {
+        lock_tenant_theme_workflow(scope, tenant_id).await?;
         let draft = self
             .tenants
             .get(scope, tenant_id, ThemeState::Draft)
@@ -169,6 +170,7 @@ impl RollbackTenantTheme {
         published_by: Option<Uuid>,
         locale: &str,
     ) -> Result<TenantThemeView, ThemingError> {
+        lock_tenant_theme_workflow(scope, tenant_id).await?;
         let revision = self
             .tenants
             .rollback(scope, tenant_id, published_by, self.clock.now())
@@ -195,4 +197,19 @@ impl RollbackTenantTheme {
         self.cache.invalidate_local(tenant_id);
         Ok(to_view(&live))
     }
+}
+
+/// Serialize publish and rollback for one tenant, including the first
+/// publish where no live row exists yet and therefore no row lock is
+/// available. The lock is released automatically with the transaction.
+async fn lock_tenant_theme_workflow(
+    scope: &mut sanvi_persistence::ScopedTx<'_>,
+    tenant_id: Uuid,
+) -> Result<(), ThemingError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("theming:{tenant_id}"))
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| ThemingError::Storage(format!("failed to lock theme workflow: {err}")))?;
+    Ok(())
 }

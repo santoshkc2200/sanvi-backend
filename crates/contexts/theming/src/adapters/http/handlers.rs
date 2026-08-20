@@ -11,7 +11,8 @@ use sanvi_http::{
     ApiError, CurrentLocale, CurrentSubject, CurrentTenant, ProblemDetail, RequiredPermission,
 };
 use sanvi_persistence::{PlatformScope, ScopedTx};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::adapters::http::state::ThemingState;
@@ -20,7 +21,7 @@ use crate::application::draft::UpdateTenantThemeDraftCommand;
 use crate::application::install::InstallThemeVersionCommand;
 use crate::application::views::TenantThemeView;
 use crate::domain::tenant_theme::{BrandAssetKind, ThemeState};
-use crate::domain::{ThemingError, verify_preview_token};
+use crate::domain::{ThemingError, sign_preview_token, verify_preview_token};
 
 /// The theming context's domain-error → HTTP mapping.
 pub fn api_error(err: ThemingError) -> ApiError {
@@ -134,13 +135,53 @@ pub async fn get_public_theme(
             .map(|value| value == resolved.etag)
             .unwrap_or(false)
     {
-        return Ok(HttpResponse::NotModified().finish());
+        return Ok(HttpResponse::NotModified()
+            .insert_header(("etag", resolved.etag.clone()))
+            .insert_header(("cache-control", "public, no-cache"))
+            .finish());
     }
 
     Ok(HttpResponse::Ok()
         .insert_header(("etag", resolved.etag.clone()))
-        .insert_header(("cache-control", "public, max-age=86400"))
+        // The response may be retained by shared caches, but every reuse
+        // must revalidate the ETag so a publish is visible immediately.
+        .insert_header(("cache-control", "public, no-cache"))
         .json(resolved))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreviewTokenView {
+    pub token: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// `POST /api/v1/tenant/theme/preview-token` — mint a short-lived token for
+/// the current tenant's draft.
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/theme/preview-token",
+    tag = "theming",
+    operation_id = "mint_theme_preview_token",
+    responses(
+        (status = 200, description = "Signed draft preview token", body = PreviewTokenView),
+        (status = 500, description = "Preview signing is not configured", body = ProblemDetail)
+    )
+)]
+pub async fn mint_theme_preview_token(
+    state: web::Data<ThemingState>,
+    tenant: CurrentTenant,
+    _guard: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let secret = preview_secret(&state)?;
+    let now = chrono::Utc::now();
+    let ttl = state.config.preview_token_ttl_secs;
+    let view = PreviewTokenView {
+        token: sign_preview_token(&secret, tenant.0.tenant_id, ThemeState::Draft, ttl, now),
+        expires_at: now + chrono::Duration::seconds(ttl as i64),
+    };
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store, private"))
+        .json(view))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -173,19 +214,7 @@ pub async fn preview_tenant_theme(
     query: web::Query<PreviewThemeQuery>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
-    if state.config.preview_token_secret.is_empty() {
-        return Err(ApiError::internal(
-            "preview signing is not configured on this deployment",
-        ));
-    }
-    let secret = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &state.config.preview_token_secret,
-    )
-    .map_err(|err| {
-        tracing::error!(error = %err, "preview token secret is not valid base64");
-        ApiError::internal("preview signing is misconfigured")
-    })?;
+    let secret = preview_secret(&state)?;
     let payload =
         verify_preview_token(&secret, &query.token, chrono::Utc::now()).map_err(api_error)?;
     if payload.tenant_id != tenant.0.tenant_id
@@ -205,6 +234,22 @@ pub async fn preview_tenant_theme(
         .insert_header(("cache-control", "no-store, private"))
         .insert_header(("x-robots-tag", "noindex, nofollow"))
         .json(resolved))
+}
+
+fn preview_secret(state: &ThemingState) -> Result<Vec<u8>, ApiError> {
+    if state.config.preview_token_secret.is_empty() {
+        return Err(ApiError::internal(
+            "preview signing is not configured on this deployment",
+        ));
+    }
+    base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &state.config.preview_token_secret,
+    )
+    .map_err(|err| {
+        tracing::error!(error = %err, "preview token secret is not valid base64");
+        ApiError::internal("preview signing is misconfigured")
+    })
 }
 
 /// `GET /api/v1/tenant/themes/available`.

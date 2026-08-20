@@ -13,7 +13,7 @@ use crate::domain::contrast::check_theme;
 use crate::domain::error::ThemingError;
 use crate::domain::manifest::Manifest;
 use crate::domain::theme::{Theme, ThemeStatus, ThemeVersion, ThemeVisibility, TokenModes};
-use crate::domain::{Clock, EventPublisher, ThemeRepository, ThemingEvent};
+use crate::domain::{ArtifactStore, Clock, EventPublisher, ThemeRepository, ThemingEvent};
 
 /// The command a theme artifact resolves to after the publish pipeline
 /// validated it (manifest schema, token schema, contrast gate).
@@ -46,6 +46,7 @@ pub struct InstallThemeVersion {
     events: Arc<dyn EventPublisher>,
     clock: Arc<dyn Clock>,
     pool: PgPool,
+    artifact_store: Arc<dyn ArtifactStore>,
 }
 
 impl InstallThemeVersion {
@@ -54,12 +55,14 @@ impl InstallThemeVersion {
         events: Arc<dyn EventPublisher>,
         clock: Arc<dyn Clock>,
         pool: PgPool,
+        artifact_store: Arc<dyn ArtifactStore>,
     ) -> Self {
         Self {
             themes,
             events,
             clock,
             pool,
+            artifact_store,
         }
     }
 
@@ -70,6 +73,11 @@ impl InstallThemeVersion {
     ) -> Result<ThemeVersionAdminView, ThemingError> {
         // 1. The manifest must be schema-valid and themeApi-compatible.
         let manifest = Manifest::parse(&command.manifest)?;
+
+        validate_artifact_reference(&command.artifact_uri, &command.artifact_digest)?;
+        self.artifact_store
+            .verify(&command.artifact_uri, &command.artifact_digest)
+            .await?;
 
         // 2. Tokens must validate as DTCG documents.
         let tokens = TokenModes::parse(&command.tokens)?;
@@ -152,6 +160,25 @@ impl InstallThemeVersion {
 
         Ok((&version).into())
     }
+}
+
+fn validate_artifact_reference(uri: &str, digest: &str) -> Result<(), ThemingError> {
+    let path = std::path::Path::new(uri);
+    let safe_uri = !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !safe_uri {
+        return Err(ThemingError::InvalidManifest(
+            "artifact_uri must be a relative artifact key".to_string(),
+        ));
+    }
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ThemingError::InvalidManifest(
+            "artifact_digest must be a 64-character sha256 hex digest".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// `POST /api/v1/platform/themes/{key}/versions/{version}/yank` — the kill
@@ -252,5 +279,18 @@ impl ListThemeVersionsAdmin {
             .ok_or_else(|| ThemingError::UnknownTheme(theme_key.to_string()))?;
         let versions = self.themes.list_versions(&self.pool, theme.id).await?;
         Ok(versions.iter().map(ThemeVersionAdminView::from).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_artifact_reference;
+
+    #[test]
+    fn artifact_reference_rejects_traversal_and_bad_digests() {
+        assert!(validate_artifact_reference("theme.zip", &"a".repeat(64)).is_ok());
+        assert!(validate_artifact_reference("../theme.zip", &"a".repeat(64)).is_err());
+        assert!(validate_artifact_reference("/theme.zip", &"a".repeat(64)).is_err());
+        assert!(validate_artifact_reference("theme.zip", "not-a-digest").is_err());
     }
 }

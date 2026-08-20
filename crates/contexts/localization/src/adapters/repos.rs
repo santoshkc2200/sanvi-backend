@@ -246,6 +246,24 @@ impl TranslationRepository for SqlxTranslationRepository {
             .collect())
     }
 
+    async fn list_platform_scoped(
+        &self,
+        scope: &mut PlatformScope<'_>,
+    ) -> Result<Vec<Translation>, LocalizationError> {
+        let rows = sqlx::query_as::<_, TranslationRow>(
+            "SELECT scope, key, locale, value, updated_by, updated_at
+             FROM localization.translations
+             WHERE scope = 'platform'",
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| LocalizationError::Storage(err.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(TranslationRow::into_translation)
+            .collect())
+    }
+
     async fn upsert_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -310,6 +328,24 @@ impl TranslationRepository for SqlxTranslationRepository {
             key,
             locale,
         )
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| LocalizationError::Storage(err.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        key: &str,
+        locale: &str,
+    ) -> Result<(), LocalizationError> {
+        sqlx::query(
+            "DELETE FROM localization.translations
+             WHERE scope = 'platform' AND key = $1 AND locale = $2",
+        )
+        .bind(key)
+        .bind(locale)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| LocalizationError::Storage(err.to_string()))?;

@@ -166,7 +166,6 @@ impl UploadBrandAsset {
 /// `DELETE /api/v1/tenant/theme/assets/{kind}`.
 pub struct RemoveBrandAsset {
     tenants: Arc<dyn TenantThemeRepository>,
-    store: Arc<dyn BrandAssetStore>,
     events: Arc<dyn EventPublisher>,
     clock: Arc<dyn Clock>,
 }
@@ -174,13 +173,11 @@ pub struct RemoveBrandAsset {
 impl RemoveBrandAsset {
     pub fn new(
         tenants: Arc<dyn TenantThemeRepository>,
-        store: Arc<dyn BrandAssetStore>,
         events: Arc<dyn EventPublisher>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             tenants,
-            store,
             events,
             clock,
         }
@@ -203,16 +200,14 @@ impl RemoveBrandAsset {
                 "there is no draft to remove an asset from".to_string(),
             ));
         };
-        let removed = match kind {
+        match kind {
             BrandAssetKind::Logo => draft.assets.logo.take(),
             BrandAssetKind::Favicon => draft.assets.favicon.take(),
             BrandAssetKind::OgImage => draft.assets.og_image.take(),
         };
-        if let Some(asset) = removed {
-            self.store
-                .delete(tenant_id, &asset.digest, &asset.ext)
-                .await?;
-        }
+        // Brand objects are content-addressed and may still be referenced by
+        // the live row or an immutable revision. Physical deletion belongs
+        // to a reference-aware garbage collector, not a draft mutation.
         draft.updated_by = updated_by;
         draft.updated_at = self.clock.now();
         self.tenants.upsert(scope, &draft).await?;

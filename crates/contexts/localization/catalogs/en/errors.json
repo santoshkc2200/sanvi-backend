@@ -11,5 +11,18 @@
   "errors.title.request-timeout": "Gateway Timeout",
   "errors.title.service-unavailable": "Service Unavailable",
   "errors.title.internal-error": "Internal Server Error",
-  "errors.title.error": "Error"
+  "errors.title.error": "Error",
+  "errors.detail.bad-request": "The request could not be processed.",
+  "errors.detail.unauthorized": "Authentication is required to access this resource.",
+  "errors.detail.forbidden": "You do not have permission to perform this action.",
+  "errors.detail.not-found": "The requested resource could not be found.",
+  "errors.detail.conflict": "The request conflicts with the current resource state.",
+  "errors.detail.gone": "The requested resource is no longer available.",
+  "errors.detail.bad-gateway": "An upstream service rejected the request.",
+  "errors.detail.tenant-suspended": "This tenant is currently suspended.",
+  "errors.detail.too-many-requests": "Too many requests were sent. Please try again later.",
+  "errors.detail.request-timeout": "The request did not complete in time.",
+  "errors.detail.service-unavailable": "The service is temporarily unavailable.",
+  "errors.detail.internal-error": "An unexpected server error occurred.",
+  "errors.detail.error": "The request could not be completed."
 }

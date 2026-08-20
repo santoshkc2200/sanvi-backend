@@ -199,7 +199,8 @@ pub struct NegotiationInput<'a> {
     pub platform_default: &'a str,
     /// What the tenant allows (falls back to the platform set).
     pub supported: LocaleSet,
-    /// The platform-wide allow-list (bounds `?locale=` and the default).
+    /// The configured explicit-query allow-list, intersected with shipped
+    /// platform locales by the resolver.
     pub platform_supported: LocaleSet,
 }
 
@@ -293,12 +294,14 @@ fn best_accept_language(raw: &str, supported: &LocaleSet) -> Option<Locale> {
         if tag.is_empty() || tag == "*" {
             continue;
         }
-        let quality = parts
-            .find_map(|param| {
-                let (key, value) = param.trim().split_once('=')?;
-                (key.trim() == "q").then(|| value.trim().parse::<f64>().ok())?
-            })
-            .unwrap_or(1.0);
+        let quality = match parts.find_map(|param| {
+            let (key, value) = param.trim().split_once('=')?;
+            (key.trim() == "q").then(|| value.trim().parse::<f64>())
+        }) {
+            Some(Ok(quality)) if quality.is_finite() && quality > 0.0 && quality <= 1.0 => quality,
+            Some(_) => continue,
+            None => 1.0,
+        };
         candidates.push((quality, index, tag.to_string()));
     }
     // Highest quality first; the header order breaks ties.
@@ -446,6 +449,15 @@ mod tests {
         assert_eq!(result.locale.as_str(), "en");
         assert_eq!(result.source, LocaleSource::PlatformDefault);
 
+        let mut restricted = input(Some("ja"));
+        restricted.platform_supported = LocaleSet {
+            supported: vec![Locale::parse("en").unwrap()],
+            default: Locale::parse("en").unwrap(),
+        };
+        let result = negotiate(&restricted);
+        assert_eq!(result.locale.as_str(), "en");
+        assert_eq!(result.source, LocaleSource::PlatformDefault);
+
         let result = negotiate(&input(Some("../../evil")));
         assert_eq!(result.locale.as_str(), "en");
         assert_eq!(result.source, LocaleSource::PlatformDefault);
@@ -480,6 +492,19 @@ mod tests {
         // Unparseable header entries are skipped.
         let result = negotiate(&NegotiationInput {
             accept_language: Some("%%%%%, en"),
+            ..input(None)
+        });
+        assert_eq!(result.locale.as_str(), "en");
+
+        // q=0 means "not acceptable" and invalid quality values are
+        // ignored rather than accidentally promoted above the fallback.
+        let result = negotiate(&NegotiationInput {
+            accept_language: Some("ja;q=0, en;q=0.5"),
+            ..input(None)
+        });
+        assert_eq!(result.locale.as_str(), "en");
+        let result = negotiate(&NegotiationInput {
+            accept_language: Some("ja;q=2, en;q=0.5"),
             ..input(None)
         });
         assert_eq!(result.locale.as_str(), "en");

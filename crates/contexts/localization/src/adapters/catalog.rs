@@ -113,6 +113,9 @@ impl LocalizationService {
     /// the negotiation middleware, handlers that render, and worker jobs —
     /// never by the synchronous translate path.
     pub async fn warm(&self, scope: &str, locale: &str) -> Result<(), LocalizationError> {
+        if self.cached_merged(scope, locale).is_some() {
+            return Ok(());
+        }
         let merged = self.build_merged(scope, locale).await?;
         self.cache.set_merged(scope, locale, Arc::new(merged));
         Ok(())
@@ -121,7 +124,11 @@ impl LocalizationService {
     /// Invalidate one scope's merged snapshots (also published as an event
     /// so other processes do the same).
     pub fn invalidate_scope(&self, scope: &str) {
-        self.cache.invalidate_scope(scope);
+        if scope == "platform" {
+            self.cache.invalidate_all_merged();
+        } else {
+            self.cache.invalidate_scope(scope);
+        }
     }
 
     pub fn invalidate_tenant(&self, tenant_id: Uuid) {
@@ -148,7 +155,10 @@ impl LocalizationService {
 
         // 2. Platform overrides (public copy, readable without a scope).
         let platform_overrides = self.translations.list_platform(&self.pool).await?;
-        for translation in platform_overrides {
+        for translation in platform_overrides
+            .into_iter()
+            .filter(|translation| translation.locale == locale)
+        {
             apply_override(&mut merged, &translation)?;
         }
 
@@ -166,7 +176,10 @@ impl LocalizationService {
             scoped.rollback().await.map_err(|err| {
                 LocalizationError::Storage(format!("failed to close tenant scope: {err}"))
             })?;
-            for translation in tenant_overrides {
+            for translation in tenant_overrides
+                .into_iter()
+                .filter(|translation| translation.locale == locale)
+            {
                 apply_override(&mut merged, &translation)?;
             }
         }
@@ -181,19 +194,40 @@ impl LocalizationService {
         &self,
         scope: &str,
         locale: &str,
+        timezone: &str,
         key: &str,
         args: &[(&str, Arg)],
     ) -> Option<String> {
-        let ttl = std::time::Duration::from_secs(self.config.merge_cache_ttl_secs);
-        let merged = self.cache.get_merged(scope, locale, ttl)?;
-        render_from(&merged, key, args, locale)
+        let merged = self.cached_merged(scope, locale)?;
+        render_from(&merged, key, args, locale, timezone)
     }
 
-    fn translate_static(&self, locale: &str, key: &str, args: &[(&str, Arg)]) -> String {
+    fn cached_merged(&self, scope: &str, locale: &str) -> Option<Arc<MergedCatalog>> {
+        let ttl = std::time::Duration::from_secs(self.config.merge_cache_ttl_secs);
+        match self.cache.get_merged(scope, locale, ttl) {
+            Some(merged) => {
+                self.metrics.cache_hits.inc();
+                Some(merged)
+            }
+            None => {
+                self.cache.record_miss();
+                self.metrics.cache_misses.inc();
+                None
+            }
+        }
+    }
+
+    fn translate_static(
+        &self,
+        locale: &str,
+        timezone: &str,
+        key: &str,
+        args: &[(&str, Arg)],
+    ) -> String {
         let statics = static_catalogs();
         for (_, domain) in statics.by_locale.get(locale).into_iter().flatten() {
             if let Some(segments) = domain.patterns.get(key) {
-                return render_with_policy(segments, args, locale, key);
+                return render_with_policy(segments, args, locale, timezone, key);
             }
         }
         // Final guard: the t! macro guarantees this cannot happen for
@@ -227,20 +261,22 @@ fn render_from(
     key: &str,
     args: &[(&str, Arg)],
     locale: &str,
+    timezone: &str,
 ) -> Option<String> {
     let segments = merged.patterns.get(key)?;
-    Some(render_with_policy(segments, args, locale, key))
+    Some(render_with_policy(segments, args, locale, timezone, key))
 }
 
 fn render_with_policy(
     segments: &[Segment],
     args: &[(&str, Arg)],
     locale: &str,
+    timezone: &str,
     key: &str,
 ) -> String {
     let policy = crate::domain::FormattingPolicy::for_locale(
         Locale::parse(locale).unwrap_or_default(),
-        locale_timezone(locale),
+        timezone,
     )
     .unwrap_or_else(|_| {
         crate::domain::FormattingPolicy::for_locale(Locale::default(), "UTC")
@@ -268,6 +304,17 @@ fn locale_timezone(locale: &str) -> &'static str {
 
 impl Translator for LocalizationService {
     fn translate(&self, scope: &str, locale: &str, key: &str, args: &[(&str, Arg)]) -> String {
+        self.translate_with_timezone(scope, locale, locale_timezone(locale), key, args)
+    }
+
+    fn translate_with_timezone(
+        &self,
+        scope: &str,
+        locale: &str,
+        timezone: &str,
+        key: &str,
+        args: &[(&str, Arg)],
+    ) -> String {
         // Walk the fallback chain: most specific locale first, ending in
         // the source locale (en).
         let mut tried: Vec<&str> = Vec::new();
@@ -277,19 +324,18 @@ impl Translator for LocalizationService {
                 continue;
             }
             tried.push(candidate.as_str());
-            if let Some(rendered) = self.translate_cached(scope, candidate, key, args) {
+            if let Some(rendered) = self.translate_cached(scope, candidate, timezone, key, args) {
                 return rendered;
             }
         }
-        self.cache.record_miss();
         // Static fallback (never touches the DB, never empty).
         for candidate in &chain {
-            let rendered = self.translate_static(candidate, key, args);
+            let rendered = self.translate_static(candidate, timezone, key, args);
             if !rendered.is_empty() && rendered != key {
                 return rendered;
             }
         }
-        self.translate_static("en", key, args)
+        self.translate_static("en", timezone, key, args)
     }
 }
 
@@ -307,7 +353,7 @@ fn fallback_chain(locale: &str) -> Vec<String> {
 }
 
 impl sanvi_http::ProblemTranslator for LocalizationService {
-    fn title(&self, type_slug: &str, locale: &str) -> Option<String> {
+    fn title(&self, type_slug: &str, scope: &str, locale: &str) -> Option<String> {
         use crate::t;
         let key = match type_slug {
             "bad-request" => t!("errors.title.bad-request"),
@@ -325,7 +371,174 @@ impl sanvi_http::ProblemTranslator for LocalizationService {
             "error" => t!("errors.title.error"),
             _ => return None,
         };
-        let rendered = self.translate("platform", locale, key.key, &[]);
+        let rendered = self.translate(scope, locale, key.key, &[]);
         (rendered != key.key && !rendered.is_empty()).then_some(rendered)
+    }
+
+    fn detail(&self, type_slug: &str, scope: &str, locale: &str) -> Option<String> {
+        use crate::t;
+        let key = match type_slug {
+            "bad-request" => t!("errors.detail.bad-request"),
+            "unauthorized" => t!("errors.detail.unauthorized"),
+            "forbidden" => t!("errors.detail.forbidden"),
+            "not-found" => t!("errors.detail.not-found"),
+            "conflict" => t!("errors.detail.conflict"),
+            "gone" => t!("errors.detail.gone"),
+            "bad-gateway" => t!("errors.detail.bad-gateway"),
+            "tenant-suspended" => t!("errors.detail.tenant-suspended"),
+            "too-many-requests" => t!("errors.detail.too-many-requests"),
+            "request-timeout" => t!("errors.detail.request-timeout"),
+            "service-unavailable" => t!("errors.detail.service-unavailable"),
+            "internal-error" => t!("errors.detail.internal-error"),
+            "error" => t!("errors.detail.error"),
+            _ => return None,
+        };
+        let rendered = self.translate(scope, locale, key.key, &[]);
+        (rendered != key.key && !rendered.is_empty()).then_some(rendered)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use chrono::{TimeZone, Utc};
+    use sanvi_persistence::{PlatformScope, ScopedTx};
+
+    use super::*;
+
+    struct CatalogRepo {
+        platform_reads: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl TranslationRepository for CatalogRepo {
+        async fn list_tenant(
+            &self,
+            _scope: &mut ScopedTx<'_>,
+            _tenant_id: Uuid,
+        ) -> Result<Vec<Translation>, LocalizationError> {
+            Ok(Vec::new())
+        }
+
+        async fn list_platform(
+            &self,
+            _pool: &PgPool,
+        ) -> Result<Vec<Translation>, LocalizationError> {
+            self.platform_reads.fetch_add(1, Ordering::Relaxed);
+            Ok(vec![
+                translation("en", "Invoice override"),
+                translation("ja", "請求書の上書き"),
+            ])
+        }
+
+        async fn list_platform_scoped(
+            &self,
+            _scope: &mut PlatformScope<'_>,
+        ) -> Result<Vec<Translation>, LocalizationError> {
+            Ok(Vec::new())
+        }
+
+        async fn upsert_tenant(
+            &self,
+            _scope: &mut ScopedTx<'_>,
+            _tenant_id: Uuid,
+            _translation: &Translation,
+        ) -> Result<(), LocalizationError> {
+            Ok(())
+        }
+
+        async fn upsert_platform(
+            &self,
+            _scope: &mut PlatformScope<'_>,
+            _translation: &Translation,
+        ) -> Result<(), LocalizationError> {
+            Ok(())
+        }
+
+        async fn delete_tenant(
+            &self,
+            _scope: &mut ScopedTx<'_>,
+            _tenant_id: Uuid,
+            _key: &str,
+            _locale: &str,
+        ) -> Result<(), LocalizationError> {
+            Ok(())
+        }
+
+        async fn delete_platform(
+            &self,
+            _scope: &mut PlatformScope<'_>,
+            _key: &str,
+            _locale: &str,
+        ) -> Result<(), LocalizationError> {
+            Ok(())
+        }
+    }
+
+    fn translation(locale: &str, value: &str) -> Translation {
+        Translation {
+            scope: "platform".to_string(),
+            key: "billing.invoice.label".to_string(),
+            locale: locale.to_string(),
+            value: value.to_string(),
+            updated_by: None,
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn service(repo: Arc<CatalogRepo>) -> LocalizationService {
+        let pool = PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
+            .expect("lazy pool construction never connects");
+        LocalizationService::new(
+            pool,
+            repo,
+            Arc::new(LocalizationCache::new()),
+            Arc::new(LocalizationMetrics::new(&prometheus::Registry::new())),
+            LocalizationConfig::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn merge_applies_only_overrides_for_the_requested_locale() {
+        let repo = Arc::new(CatalogRepo {
+            platform_reads: AtomicUsize::new(0),
+        });
+        let service = service(repo);
+        service.warm("platform", "en").await.unwrap();
+        assert_eq!(
+            service.translate("platform", "en", "billing.invoice.label", &[]),
+            "Invoice override"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_reuses_fresh_catalog_and_records_prometheus_cache_metrics() {
+        let repo = Arc::new(CatalogRepo {
+            platform_reads: AtomicUsize::new(0),
+        });
+        let service = service(repo.clone());
+        service.warm("platform", "en").await.unwrap();
+        service.warm("platform", "en").await.unwrap();
+        assert_eq!(repo.platform_reads.load(Ordering::Relaxed), 1);
+        assert_eq!(service.metrics().cache_misses.get(), 1);
+        assert!(service.metrics().cache_hits.get() >= 1);
+    }
+
+    #[tokio::test]
+    async fn rendering_uses_the_subject_timezone_when_supplied() {
+        let repo = Arc::new(CatalogRepo {
+            platform_reads: AtomicUsize::new(0),
+        });
+        let service = service(repo);
+        let date = Utc.with_ymd_and_hms(2026, 8, 15, 23, 30, 0).unwrap();
+        let rendered = service.translate_with_timezone(
+            "platform",
+            "en",
+            "Asia/Tokyo",
+            "billing.invoice.due_date",
+            &[("date", Arg::from(date))],
+        );
+        assert_eq!(rendered, "Due Aug 16, 2026");
     }
 }

@@ -11,6 +11,12 @@
   "emails.payment_failed.body": "Your latest payment for {tenant} failed. Please update your billing details to avoid interruption.",
   "emails.subscription_canceled.subject": "Your {tenant} subscription was canceled",
   "emails.subscription_canceled.body": "Your {tenant} subscription has been canceled.",
+  "emails.subscription_restored.subject": "Your {tenant} subscription was restored",
+  "emails.subscription_restored.body": "Your {tenant} subscription is active again.",
+  "emails.grace_expired.subject": "Your {tenant} subscription has been suspended",
+  "emails.grace_expired.body": "The payment grace period for {tenant} expired. Update your billing details to restore service.",
   "emails.trial_ending.subject": "Your {tenant} trial ends soon",
-  "emails.trial_ending.body": "Your {tenant} trial ends on {date}."
+  "emails.trial_ending.body": "Your {tenant} trial ends on {date, date}.",
+  "emails.privacy_status.subject": "Privacy request update: {subject}",
+  "emails.privacy_status.body": "Your privacy request status is now {status}."
 }

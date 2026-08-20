@@ -160,6 +160,12 @@ impl LocalizationCache {
         guard.entries.retain(|key, _| !key.starts_with(&prefix));
     }
 
+    /// Platform copy is embedded in every scope's merged catalog.
+    pub fn invalidate_all_merged(&self) {
+        let mut guard = self.inner.write().expect("cache lock is not poisoned");
+        guard.entries.retain(|key, _| !key.starts_with("merged:"));
+    }
+
     /// Invalidate one tenant's locale settings (and its merged catalogs,
     /// which embed its overrides and default locale).
     pub fn invalidate_tenant(&self, tenant_id: Uuid) {
