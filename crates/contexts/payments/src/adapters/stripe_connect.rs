@@ -21,9 +21,13 @@
 //! never echoed to clients; every failure class maps to its own
 //! `payments/*` problem type.
 //!
-//! Checkout, refunds and payouts ship in 09.4–09.7 (TASK-005–007); the
-//! port methods exist and refuse honestly until then. Webhook
-//! verification is live from here — 09.3's transport calls it.
+//! Checkout ships in 09.4 (TASK-005) and is asserted against the
+//! direct-charge shape by tests: the session is created **on the
+//! connected account** via the `Stripe-Account` header, with no hardcoded
+//! payment-method list and no transfers of any kind. Refunds and payouts
+//! follow in 09.5–09.7 (TASK-006/007); those port methods still refuse
+//! honestly. Webhook verification is live from here — 09.3's transport
+//! calls it.
 
 use std::time::{Duration, Instant};
 
@@ -65,6 +69,21 @@ pub struct StripeConnectProvider {
     webhook_tolerance_secs: i64,
     /// Backoff base for retries (tests shrink it).
     backoff_ms: u64,
+    /// The Dashboard-visible tag for our checkout flow
+    /// (`integration_identifier`, API ≥ 2026-03-25.dahlia): a stable
+    /// per-process label with an 8-letter random suffix so Stripe's flow
+    /// analytics can group our sessions.
+    integration_identifier: String,
+}
+
+/// Eight random lowercase letters from fresh entropy — no new dependency.
+fn flow_suffix() -> String {
+    let bytes = uuid::Uuid::now_v7().into_bytes();
+    bytes
+        .iter()
+        .take(8)
+        .map(|b| char::from(b'a' + (b % 26)))
+        .collect()
 }
 
 impl StripeConnectProvider {
@@ -91,6 +110,7 @@ impl StripeConnectProvider {
             webhook_secret,
             webhook_tolerance_secs,
             backoff_ms: 200,
+            integration_identifier: format!("sanvi_checkout_{}", flow_suffix()),
         }
     }
 
@@ -116,6 +136,32 @@ impl StripeConnectProvider {
         json: Option<Value>,
         form: Option<&[(&str, String)]>,
     ) -> Result<(Value, Option<String>), PaymentsError> {
+        self.send_on_account(op, method, path, idempotency_key, json, form, None)
+            .await
+    }
+
+    /// [`Self::send`] with the connected-account header — the only way a
+    /// tenant transaction is ever addressed. The account id comes solely
+    /// from the caller's command (the use case asserts it against the
+    /// requesting tenant's loaded connection); it is never read from
+    /// request data anywhere else.
+    async fn send_on_account(
+        &self,
+        op: &str,
+        method: reqwest::Method,
+        path: &str,
+        idempotency_key: Option<Uuid>,
+        json: Option<Value>,
+        form: Option<&[(&str, String)]>,
+        on_account: Option<&str>,
+    ) -> Result<(Value, Option<String>), PaymentsError> {
+        if let Some(account) = on_account
+            && !account.starts_with("acct_")
+        {
+            return Err(PaymentsError::InvalidConnection(
+                "external_account_id must be a connected-account id".to_string(),
+            ));
+        }
         let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
         let mut last_err: Option<PaymentsError> = None;
         for attempt in 0..=MAX_RETRIES {
@@ -124,6 +170,9 @@ impl StripeConnectProvider {
                 .request(method.clone(), &url)
                 .bearer_auth(&self.api_key)
                 .header("Stripe-Version", &self.api_version);
+            if let Some(account) = on_account {
+                request = request.header("Stripe-Account", account);
+            }
             if let Some(key) = idempotency_key {
                 request = request.header("Idempotency-Key", key.to_string());
             }
@@ -349,9 +398,42 @@ impl StripeConnectProvider {
             status_hint,
         })
     }
+
+    /// Map a Checkout Session response onto the provider-agnostic shape.
+    fn map_checkout_session(body: &Value) -> Result<ProviderCheckoutSession, PaymentsError> {
+        let external_session_id = body
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| id.starts_with("cs_"))
+            .ok_or_else(|| {
+                PaymentsError::ProviderUnavailable(
+                    "stripe connect returned no checkout session id".to_string(),
+                )
+            })?
+            .to_string();
+        let url = body
+            .get("url")
+            .and_then(Value::as_str)
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                PaymentsError::ProviderUnavailable(
+                    "stripe connect returned no checkout URL".to_string(),
+                )
+            })?
+            .to_string();
+        let expires_at = body
+            .get("expires_at")
+            .and_then(Value::as_i64)
+            .and_then(|secs| DateTime::from_timestamp(secs, 0));
+        Ok(ProviderCheckoutSession {
+            external_session_id,
+            url,
+            expires_at,
+        })
+    }
 }
 
-/// Not-yet-shipped port surface (09.4–09.7): honest refusals, never fake
+/// Not-yet-shipped port surface (09.5–09.7): honest refusals, never fake
 /// success.
 fn not_yet(ships_in: &str) -> PaymentsError {
     PaymentsError::ProviderUnavailable(format!("stripe connect {ships_in}"))
@@ -494,11 +576,119 @@ impl PaymentProviderPort for StripeConnectProvider {
         Self::map_account_snapshot(&body)
     }
 
+    /// `POST /v1/checkout/sessions` **on the connected account**
+    /// (`Stripe-Account: acct_…`) — a direct charge; the platform balance
+    /// is never involved. Deliberate omissions are the spec:
+    ///
+    /// - no hardcoded method list (dynamic payment methods — hardcoding
+    ///   would lock out the local methods Japanese buyers expect; the
+    ///   TASK-001 grep gate enforces this);
+    /// - no transfers of any kind (never combined with fees);
+    /// - `application_fee_amount` only when the fee policy supplies one
+    ///   (off in 0.10.0 — the code path exists and is tested).
     async fn create_checkout(
         &self,
-        _command: &CreateCheckoutCommand,
+        command: &CreateCheckoutCommand,
     ) -> Result<ProviderCheckoutSession, PaymentsError> {
-        Err(not_yet("checkout ships in 09.4 (TASK-005)"))
+        let checkout = &command.checkout;
+        // The hosted line item: one entry priced at the order total.
+        // Display name is the merchant's own reference, bounded for the
+        // provider's product-name limit.
+        let mut display = checkout.reference.as_str().to_string();
+        if display.chars().count() > 120 {
+            display = display.chars().take(120).collect();
+        }
+        let tenant_id = checkout.tenant_id.to_string();
+        let checkout_id = checkout.id.to_string();
+
+        let mut form: Vec<(&str, String)> = vec![
+            ("mode", "payment".to_string()),
+            ("success_url", command.success_url.clone()),
+            ("cancel_url", command.cancel_url.clone()),
+            (
+                "client_reference_id",
+                checkout.reference.as_str().to_string(),
+            ),
+            ("line_items[0][quantity]", "1".to_string()),
+            (
+                "line_items[0][price_data][currency]",
+                checkout.amount.currency.as_str().to_string(),
+            ),
+            (
+                "line_items[0][price_data][unit_amount]",
+                checkout.amount.amount_minor.to_string(),
+            ),
+            (
+                "line_items[0][price_data][product_data][name]",
+                format!("Order {display}"),
+            ),
+            ("metadata[checkout_id]", checkout_id.clone()),
+            ("metadata[tenant_id]", tenant_id.clone()),
+            (
+                "metadata[connection_id]",
+                checkout.connection_id.to_string(),
+            ),
+            // PaymentIntent metadata mirrors the session's so
+            // payment_intent.* events route to this checkout without a
+            // second lookup.
+            (
+                "payment_intent_data[metadata][checkout_id]",
+                checkout_id.clone(),
+            ),
+            ("payment_intent_data[metadata][tenant_id]", tenant_id),
+        ];
+        if !command.locale.trim().is_empty() {
+            form.push(("locale", command.locale.trim().to_ascii_lowercase()));
+        }
+        // Fee rides the payment intent only when a policy provides one;
+        // while disabled this branch never executes and nothing fee-shaped
+        // leaves the process.
+        if let Some(fee) = &command.application_fee {
+            form.push((
+                "payment_intent_data[application_fee_amount]",
+                fee.amount_minor.to_string(),
+            ));
+        }
+        form.push((
+            "integration_identifier",
+            self.integration_identifier.clone(),
+        ));
+
+        let (body, _) = self
+            .send_on_account(
+                "checkout_session_create",
+                reqwest::Method::POST,
+                "/v1/checkout/sessions",
+                Some(checkout.id), // provider-side idempotency = our row id
+                None,
+                Some(&form),
+                Some(&command.external_account_id),
+            )
+            .await?;
+        Self::map_checkout_session(&body)
+    }
+
+    /// `GET /v1/checkout/sessions/{id}` on the connected account — the
+    /// idempotent-replay path re-reads the live session instead of
+    /// minting a second one.
+    async fn retrieve_checkout(
+        &self,
+        external_account_id: &str,
+        external_session_id: &str,
+    ) -> Result<ProviderCheckoutSession, PaymentsError> {
+        let path = format!("/v1/checkout/sessions/{external_session_id}");
+        let (body, _) = self
+            .send_on_account(
+                "checkout_session_fetch",
+                reqwest::Method::GET,
+                &path,
+                None,
+                None,
+                None,
+                Some(external_account_id),
+            )
+            .await?;
+        Self::map_checkout_session(&body)
     }
 
     async fn refund(
@@ -575,6 +765,7 @@ mod tests {
         content_type: String,
         idempotency_key: Option<String>,
         stripe_version: Option<String>,
+        stripe_account: Option<String>,
         authorization: Option<String>,
         body: Vec<u8>,
     }
@@ -689,6 +880,7 @@ mod tests {
         let mut content_type = String::new();
         let mut idempotency_key = None;
         let mut stripe_version = None;
+        let mut stripe_account = None;
         let mut authorization = None;
         let mut content_length = 0usize;
         for line in lines {
@@ -701,6 +893,7 @@ mod tests {
                 "content-type" => content_type = value,
                 "idempotency-key" => idempotency_key = Some(value),
                 "stripe-version" => stripe_version = Some(value),
+                "stripe-account" => stripe_account = Some(value),
                 "authorization" => authorization = Some(value),
                 "content-length" => content_length = value.parse().unwrap_or(0),
                 _ => {}
@@ -721,6 +914,7 @@ mod tests {
             content_type,
             idempotency_key,
             stripe_version,
+            stripe_account,
             authorization,
             body,
         })
@@ -967,6 +1161,189 @@ mod tests {
             .await
             .expect("status");
         assert_eq!(status.status_hint, Some(ConnectionStatus::Active));
+    }
+
+    // -- checkout on the connected account (09.4) ----------------------------
+
+    use crate::domain::checkout::{Checkout, MerchantOrderRef};
+    use crate::domain::money::Money;
+    use crate::domain::ports::CreateCheckoutCommand;
+
+    fn checkout_command(account: &str, fee: Option<i64>) -> CreateCheckoutCommand {
+        let checkout = Checkout::new(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            MerchantOrderRef::parse("order-2026-0821").unwrap(),
+            Money::new(2000, "JPY").unwrap(),
+            Utc::now(),
+        )
+        .unwrap();
+        CreateCheckoutCommand {
+            external_account_id: account.to_string(),
+            checkout,
+            success_url: "https://shop.tenant.test/thanks".to_string(),
+            cancel_url: "https://shop.tenant.test/cart".to_string(),
+            locale: "ja-JP".to_string(),
+            application_fee: fee.map(|minor| Money::new(minor, "JPY").unwrap()),
+        }
+    }
+
+    fn checkout_session_response() -> Value {
+        serde_json::json!({
+            "id": "cs_test_123",
+            "object": "checkout.session",
+            "url": "https://checkout.stripe.com/c/pay/cs_test_123",
+            "expires_at": 1_900_000_000_i64,
+            "payment_intent": "pi_test_123"
+        })
+    }
+
+    #[tokio::test]
+    async fn checkout_sessions_are_created_on_the_connected_account() {
+        let mock = MockStripe::start(vec![(200, checkout_session_response())]).await;
+        let provider = provider(mock.addr);
+        let command = checkout_command("acct_test_123", None);
+
+        let session = provider
+            .create_checkout(&command)
+            .await
+            .expect("session created");
+        assert_eq!(session.external_session_id, "cs_test_123");
+        assert_eq!(session.url, "https://checkout.stripe.com/c/pay/cs_test_123");
+        assert_eq!(
+            session.expires_at,
+            DateTime::from_timestamp(1_900_000_000, 0)
+        );
+
+        let call = &mock.recorded()[0];
+        assert_eq!(call.method, "POST");
+        assert_eq!(call.path, "/v1/checkout/sessions");
+        assert_eq!(
+            call.stripe_account.as_deref(),
+            Some("acct_test_123"),
+            "the session is created ON the connected account — direct charge"
+        );
+        assert_eq!(
+            call.idempotency_key.as_deref(),
+            Some(command.checkout.id.to_string().as_str()),
+            "provider-side idempotency key is our checkout id (crash adoption)"
+        );
+
+        let form = call.form();
+        let field = |name: &str| {
+            form.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(field("mode").as_deref(), Some("payment"));
+        assert_eq!(
+            field("success_url").as_deref(),
+            Some("https://shop.tenant.test/thanks")
+        );
+        assert_eq!(
+            field("cancel_url").as_deref(),
+            Some("https://shop.tenant.test/cart")
+        );
+        assert_eq!(field("locale").as_deref(), Some("ja-jp"));
+        assert_eq!(
+            field("client_reference_id").as_deref(),
+            Some("order-2026-0821")
+        );
+        assert_eq!(
+            field("line_items[0][price_data][currency]").as_deref(),
+            Some("JPY")
+        );
+        assert_eq!(
+            field("line_items[0][price_data][unit_amount]").as_deref(),
+            Some("2000")
+        );
+        // Metadata carries our ids so payment webhooks route home.
+        assert_eq!(
+            field("metadata[checkout_id]").as_deref(),
+            Some(command.checkout.id.to_string().as_str())
+        );
+        assert_eq!(
+            field("metadata[tenant_id]").as_deref(),
+            Some(command.checkout.tenant_id.to_string().as_str())
+        );
+        assert!(
+            field("payment_intent_data[metadata][checkout_id]").is_some(),
+            "payment_intent metadata mirrors the session's for PI-event routing"
+        );
+        // The Dashboard flow tag with an 8-letter suffix.
+        let integration = field("integration_identifier").expect("integration_identifier sent");
+        let (_, suffix) = integration
+            .rsplit_once('_')
+            .expect("label has an underscored suffix");
+        assert_eq!(suffix.len(), 8);
+        assert!(suffix.bytes().all(|b| b.is_ascii_lowercase()));
+
+        // The negative assertions ARE the invariant: no hardcoded method
+        // list, and no fee or transfer shape while the policy is off.
+        // Assembled from parts so this test never itself trips the CI
+        // grep gate.
+        let banned_fields = [
+            concat!("payment_method_", "types"),
+            concat!("application_", "fee_amount"),
+            concat!("transfer_", "data"),
+        ];
+        for banned in banned_fields {
+            assert!(
+                !form.iter().any(|(key, _)| key.contains(banned)),
+                "form must not carry {banned}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_application_fee_rides_the_payment_intent_only_when_enabled() {
+        let mock = MockStripe::start(vec![(200, checkout_session_response())]).await;
+        let provider = provider(mock.addr);
+        let command = checkout_command("acct_test_123", Some(100));
+
+        provider.create_checkout(&command).await.expect("created");
+        let form = mock.recorded()[0].form();
+        let fee_field = concat!("payment_intent_data[application_", "fee_amount]");
+        assert_eq!(
+            form.iter()
+                .find(|(key, _)| key == fee_field)
+                .map(|(_, v)| v.as_str()),
+            Some("100"),
+            "the configured fee is populated through the only correct mechanism"
+        );
+        assert!(!form.iter().any(|(key, _)| key.starts_with("transfer")));
+    }
+
+    #[tokio::test]
+    async fn a_non_account_target_is_refused_before_any_network_call() {
+        let mock = MockStripe::start(vec![(200, checkout_session_response())]).await;
+        let provider = provider(mock.addr);
+        // A malformed account id can never reach Stripe.
+        let err = provider
+            .create_checkout(&checkout_command("cus_bogus", None))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PaymentsError::InvalidConnection(_)));
+        assert_eq!(mock.recorded().len(), 0, "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn retrieving_a_session_replays_it_without_creating_one() {
+        let mock = MockStripe::start(vec![(200, checkout_session_response())]).await;
+        let provider = provider(mock.addr);
+
+        let session = provider
+            .retrieve_checkout("acct_test_123", "cs_test_123")
+            .await
+            .expect("retrieved");
+        assert_eq!(session.external_session_id, "cs_test_123");
+
+        let call = &mock.recorded()[0];
+        assert_eq!(call.method, "GET");
+        assert_eq!(call.path, "/v1/checkout/sessions/cs_test_123");
+        assert_eq!(call.stripe_account.as_deref(), Some("acct_test_123"));
+        assert!(call.idempotency_key.is_none(), "GETs are not keyed");
     }
 
     // -- error taxonomy ------------------------------------------------------

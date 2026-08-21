@@ -7,10 +7,11 @@ use sanvi_persistence::TxManager;
 
 use crate::adapters::PaymentsMetrics;
 use crate::application::{
-    CreateAccountSession, ListProviders, ProviderRegistry, StartProviderConnection, WebhookReceiver,
+    CreateAccountSession, CreateCheckout, ListProviders, ProviderRegistry, StartProviderConnection,
+    WebhookReceiver,
 };
 use crate::config::PaymentsConfig;
-use crate::domain::ProviderConnectionRepository;
+use crate::domain::{CheckoutRepository, CheckoutThrottle, ProviderConnectionRepository};
 
 #[derive(Clone)]
 pub struct PaymentsState {
@@ -31,4 +32,12 @@ pub struct PaymentsState {
     /// `POST /internal/webhooks/stripe/connect` (09.3): verify → store →
     /// ack; the worker processes what lands here.
     pub webhook_receiver: Arc<WebhookReceiver>,
+    /// Tenant-scoped persistence for the checkout aggregate (09.4).
+    pub checkouts: Arc<dyn CheckoutRepository>,
+    /// `POST /tenant/checkout` (09.4): validate → persist → create the
+    /// provider session on the connected account.
+    pub create_checkout: Arc<CreateCheckout>,
+    /// The checkout throttle (09.4): per tenant / IP / customer-ref
+    /// buckets, checked before any database or provider work.
+    pub checkout_throttle: Arc<dyn CheckoutThrottle>,
 }

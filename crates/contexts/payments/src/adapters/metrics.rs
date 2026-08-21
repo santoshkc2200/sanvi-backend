@@ -47,6 +47,9 @@ pub struct PaymentsMetrics {
     /// Reconciliation passes' work counters.
     pub reconciliation_checked: IntCounter,
     pub reconciliation_updated: IntCounter,
+    /// Checkout creations by outcome (`created` / `replay`) — the top of
+    /// the conversion funnel phase 10 measures downstream (09.4).
+    pub checkout_creates: IntCounterVec,
 }
 
 impl PaymentsMetrics {
@@ -145,6 +148,15 @@ impl PaymentsMetrics {
         )
         .expect("counter construction is infallible");
         let _ = registry.register(Box::new(reconciliation_updated.clone()));
+        let checkout_creates = IntCounterVec::new(
+            Opts::new(
+                "payments_checkout_creates_total",
+                "Checkout session creations by outcome (`checkout_created_total{result}` in the plan's vocabulary)",
+            ),
+            &["result"],
+        )
+        .expect("counter vec construction is infallible");
+        let _ = registry.register(Box::new(checkout_creates.clone()));
 
         Self {
             catalog_requests,
@@ -160,6 +172,7 @@ impl PaymentsMetrics {
             connection_activations,
             reconciliation_checked,
             reconciliation_updated,
+            checkout_creates,
         }
     }
 

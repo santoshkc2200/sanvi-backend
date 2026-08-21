@@ -137,12 +137,13 @@ use sanvi_localization::{
 use sanvi_payments::{
     PaymentsConfig,
     adapters::{
-        FakeProvider, OutboxEventPublisher as PaymentsEvents, PaymentsMetrics,
-        SqlxProviderConnectionRepository,
+        FakeProvider, FixedWindowThrottle, OutboxEventPublisher as PaymentsEvents, PaymentsMetrics,
+        SqlxCheckoutRepository, SqlxProviderConnectionRepository,
     },
     application::{
-        ListProviders, ProviderRegistry as PaymentsProviderRegistry, RegistryProviderCatalog,
-        RuntimeEnvironment, StartProviderConnection,
+        CreateCheckout, ListProviders, NoApplicationFee,
+        ProviderRegistry as PaymentsProviderRegistry, RegistryProviderCatalog, RuntimeEnvironment,
+        StartProviderConnection,
     },
     routes as payments_routes,
 };
@@ -2452,6 +2453,33 @@ pub fn build_domains_lookup(
 // Stripe Connect adapter joins the registry with 09.2.
 // ---------------------------------------------------------------------------
 
+/// The phase-08 verified-domain allow-list for checkout redirect URLs,
+/// read from the domains context's live-hostname projection (no RLS by
+/// design — it is the resolution hot path). A host is allowed only when
+/// it is live **and belongs to the requesting tenant**: another tenant's
+/// verified domain is as useless here as an unverified one.
+struct DomainsLiveAllowList {
+    pool: sanvi_persistence::PgPool,
+}
+
+#[async_trait::async_trait]
+impl sanvi_payments::TenantDomainAllowList for DomainsLiveAllowList {
+    async fn allows(
+        &self,
+        tenant_id: uuid::Uuid,
+        hostname: &str,
+    ) -> Result<bool, sanvi_payments::PaymentsError> {
+        let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT tenant_id FROM domains.live_hostnames WHERE normalized_hostname = $1",
+        )
+        .bind(hostname.trim_end_matches('.').to_ascii_lowercase())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
+        Ok(row.is_some_and(|(owner,)| owner == tenant_id))
+    }
+}
+
 /// Build the payments context's application state.
 ///
 /// The registry decides what exists: the fake provider is registered
@@ -2547,6 +2575,27 @@ pub fn build_payments_state(
         config.webhook_allowed_clients.clone(),
     ));
 
+    // 09.4: checkout on the connected account. The verified-domain
+    // allow-list is the phase-08 projection; the fee policy ships off;
+    // the throttle is the in-process fixed window over the configured
+    // per-minute budget (the platform's Redis limiters already ran ahead
+    // of this handler; cross-instance hardening lands with 09.7).
+    let checkouts: std::sync::Arc<dyn sanvi_payments::domain::CheckoutRepository> =
+        std::sync::Arc::new(SqlxCheckoutRepository::new());
+    let create_checkout = std::sync::Arc::new(CreateCheckout::new(
+        tx.clone(),
+        providers.clone(),
+        connections.clone(),
+        checkouts.clone(),
+        std::sync::Arc::new(DomainsLiveAllowList { pool: pool.clone() }),
+        std::sync::Arc::new(PaymentsEvents::new()),
+        std::sync::Arc::new(NoApplicationFee),
+    ));
+    let checkout_throttle: std::sync::Arc<dyn sanvi_payments::domain::CheckoutThrottle> =
+        std::sync::Arc::new(FixedWindowThrottle::new(
+            config.checkout_rate_limit_per_minute,
+        ));
+
     sanvi_payments::adapters::http::PaymentsState {
         config: config.clone(),
         metrics: std::sync::Arc::new(PaymentsMetrics::new(registry)),
@@ -2557,6 +2606,9 @@ pub fn build_payments_state(
         create_connection,
         account_session,
         webhook_receiver,
+        checkouts,
+        create_checkout,
+        checkout_throttle,
     }
 }
 

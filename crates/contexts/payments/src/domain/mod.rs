@@ -20,11 +20,12 @@ pub use events::{EventPublisher, PaymentsEvent, PaymentsEventName};
 pub use money::{Currency, Money};
 pub use payment::{PaymentFailure, PaymentRecord, PaymentStatus, RefundRecord, RefundStatus};
 pub use ports::{
-    ConnectionLifecycleStore, ConnectionNotifier, CreateAccountRequest, CreateCheckoutCommand,
-    PaymentProviderPort, PayoutReadPort, PayoutStatus, ProviderAccount, ProviderAccountSession,
-    ProviderAccountStatus, ProviderCheckoutSession, ProviderConnectionRepository,
-    ProviderDescriptor, ProviderPayout, ProviderRefund, ProviderRefundCommand,
-    WebhookEventRepository, WebhookVerifierPort,
+    CheckoutLifecycleStore, CheckoutRepository, CheckoutThrottle, ConnectionLifecycleStore,
+    ConnectionNotifier, CreateAccountRequest, CreateCheckoutCommand, PaymentProviderPort,
+    PayoutReadPort, PayoutStatus, ProviderAccount, ProviderAccountSession, ProviderAccountStatus,
+    ProviderCheckoutSession, ProviderConnectionRepository, ProviderDescriptor, ProviderPayout,
+    ProviderRefund, ProviderRefundCommand, TenantDomainAllowList, WebhookEventRepository,
+    WebhookVerifierPort,
 };
 pub use provider::{ConnectionStatus, CountryCode, ProviderKind};
 pub use webhook::{

@@ -7,6 +7,7 @@
 
 pub mod account_session;
 pub mod catalog;
+pub mod create_checkout;
 pub mod create_connection;
 pub mod lifecycle;
 pub mod registry;
@@ -18,6 +19,10 @@ use utoipa::ToSchema;
 
 pub use account_session::CreateAccountSession;
 pub use catalog::{EmptyProviderCatalog, ListProviders, ProviderCatalog, RegistryProviderCatalog};
+pub use create_checkout::{
+    ApplicationFeePolicy, CheckoutOutcome, CreateCheckout, NewCheckoutCommand, NoApplicationFee,
+    conversion_event_id,
+};
 pub use create_connection::{StartConnectionCommand, StartProviderConnection};
 pub use lifecycle::{DEADLINE_REMINDER_WINDOW_DAYS, apply_account_snapshot, target_steps};
 pub use registry::{ProviderRegistry, RuntimeEnvironment};

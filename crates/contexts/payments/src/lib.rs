@@ -24,11 +24,11 @@ pub mod domain;
 pub use config::PaymentsConfig;
 
 pub use domain::{
-    CapabilitySet, CapabilityStatus, Checkout, CheckoutStatus, ConnectionLifecycleStore,
-    ConnectionNotifier, ConnectionStatus, CountryCode, Currency, MerchantOrderRef, Money,
-    PaymentRecord, PaymentStatus, PaymentsError, PaymentsEvent, ProviderConnection, ProviderKind,
-    RefundRecord, RefundStatus, WebhookEventRecord, WebhookEventRepository,
-    WebhookVerificationError,
+    CapabilitySet, CapabilityStatus, Checkout, CheckoutLifecycleStore, CheckoutRepository,
+    CheckoutStatus, CheckoutThrottle, ConnectionLifecycleStore, ConnectionNotifier,
+    ConnectionStatus, CountryCode, Currency, MerchantOrderRef, Money, PaymentRecord, PaymentStatus,
+    PaymentsError, PaymentsEvent, ProviderConnection, ProviderKind, RefundRecord, RefundStatus,
+    TenantDomainAllowList, WebhookEventRecord, WebhookEventRepository, WebhookVerificationError,
 };
 
 /// Wire payments routes into an actix `ServiceConfig`.

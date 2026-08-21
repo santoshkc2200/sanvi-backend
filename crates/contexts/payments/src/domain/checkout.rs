@@ -3,8 +3,9 @@
 //! belongs to the tenant, and Sanvi's fee (if ever configured) rides the
 //! payment intent, never the session total.
 //!
-//! Persistence lands in 09.4; the aggregate and its invariants exist now
-//! because the ports (this slice) already speak them.
+//! Persisted since 09.0 (the schema landed first); 09.4 drives the
+//! lifecycle: the create use case opens the session, and the payment
+//! webhooks — never the browser redirect — close it.
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -82,6 +83,13 @@ impl CheckoutStatus {
             _ => return None,
         })
     }
+
+    /// Still awaiting money: session not yet created, or created and
+    /// payable. Webhook handlers may drive any transition *into* a
+    /// terminal state from here; nothing leaves terminal states.
+    pub const fn is_live(self) -> bool {
+        matches!(self, Self::Pending | Self::Open)
+    }
 }
 
 /// A checkout for one merchant order on the tenant's connected account.
@@ -99,7 +107,14 @@ pub struct Checkout {
     pub status: CheckoutStatus,
     /// The provider's session id (`cs_…` for Stripe), once created.
     pub external_session_id: Option<String>,
+    /// The caller's `Idempotency-Key` — the double-clicked buy button's
+    /// owner. Unique per tenant at the schema; replay returns this row.
+    pub idempotency_key: Option<Uuid>,
+    /// Presentation locale for the provider-hosted page (phase 06).
+    pub locale: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
+    /// When a webhook first reported success (never set by the redirect).
+    pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -107,6 +122,7 @@ impl Checkout {
     /// A checkout awaiting its provider session. The amount must be
     /// positive: a zero-money checkout is a programming error, and the
     /// provider would reject it after the round-trip we can catch here.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: Uuid,
         tenant_id: Uuid,
@@ -130,7 +146,10 @@ impl Checkout {
             amount,
             status: CheckoutStatus::Pending,
             external_session_id: None,
+            idempotency_key: None,
+            locale: None,
             expires_at: None,
+            completed_at: None,
             created_at: now,
         })
     }
@@ -155,6 +174,59 @@ impl Checkout {
         self.expires_at = expires_at;
         self.status = CheckoutStatus::Open;
         Ok(())
+    }
+
+    /// A payment succeeded (webhook truth only). Terminal: `Open` and
+    /// `Pending` may complete — a lost `session.created` path must not
+    /// strand a paid order in limbo — but nothing leaves a terminal
+    /// state, and completing twice never moves `completed_at`.
+    pub fn complete(&mut self, now: DateTime<Utc>) -> Result<(), PaymentsError> {
+        if matches!(
+            self.status,
+            CheckoutStatus::Expired | CheckoutStatus::Canceled
+        ) {
+            return Err(self.illegal("complete"));
+        }
+        if self.status == CheckoutStatus::Complete {
+            return Ok(()); // idempotent redelivery
+        }
+        self.completed_at.get_or_insert(now);
+        self.status = CheckoutStatus::Complete;
+        Ok(())
+    }
+
+    /// No payment happened before the deadline (provider event or our
+    /// own expiry sweep). Idempotent like [`Checkout::complete`].
+    pub fn expire(&mut self) -> Result<(), PaymentsError> {
+        match self.status {
+            CheckoutStatus::Pending | CheckoutStatus::Open => {
+                self.status = CheckoutStatus::Expired;
+                Ok(())
+            }
+            CheckoutStatus::Expired => Ok(()),
+            _ => Err(self.illegal("expire")),
+        }
+    }
+
+    /// The customer abandoned at the provider (`payment_intent.canceled`
+    /// / an explicit cancel at the hosted page).
+    pub fn cancel(&mut self) -> Result<(), PaymentsError> {
+        match self.status {
+            CheckoutStatus::Pending | CheckoutStatus::Open => {
+                self.status = CheckoutStatus::Canceled;
+                Ok(())
+            }
+            CheckoutStatus::Canceled => Ok(()),
+            _ => Err(self.illegal("cancel")),
+        }
+    }
+
+    fn illegal(&self, action: &str) -> PaymentsError {
+        PaymentsError::InvalidConnection(format!(
+            "checkout {} cannot {action} from status {}",
+            self.id,
+            self.status.as_str()
+        ))
     }
 }
 
@@ -224,5 +296,67 @@ mod tests {
                 .is_err()
         );
         assert_eq!(checkout.external_session_id.as_deref(), Some("cs_fake_1"));
+    }
+
+    #[test]
+    fn webhook_transitions_close_the_checkout_forward_only() {
+        let paid_at = Utc::now();
+
+        // Open → Complete, stamped once; a redelivered completion is a no-op.
+        let mut paid = open_checkout();
+        paid.complete(paid_at).unwrap();
+        assert_eq!(paid.status, CheckoutStatus::Complete);
+        assert_eq!(paid.completed_at, Some(paid_at));
+        paid.complete(paid_at).unwrap();
+        assert_eq!(paid.completed_at, Some(paid_at));
+        // Terminal states never reopen or re-cancel.
+        assert!(paid.expire().is_err());
+        assert!(paid.cancel().is_err());
+
+        // A paid order is never stranded by a lost session-open event:
+        // Pending → Complete is legal too.
+        let mut unopened = new_checkout();
+        unopened.complete(paid_at).unwrap();
+        assert_eq!(unopened.status, CheckoutStatus::Complete);
+
+        // Expired and canceled are terminal from Pending/Open.
+        for closer in [CheckoutCloser::Expire, CheckoutCloser::Cancel] {
+            let mut fresh = open_checkout();
+            match closer {
+                CheckoutCloser::Expire => fresh.expire().unwrap(),
+                CheckoutCloser::Cancel => fresh.cancel().unwrap(),
+            }
+            assert!(fresh.complete(paid_at).is_err());
+            // Idempotent redelivery of the same closing event.
+            match closer {
+                CheckoutCloser::Expire => fresh.expire().unwrap(),
+                CheckoutCloser::Cancel => fresh.cancel().unwrap(),
+            }
+        }
+    }
+
+    enum CheckoutCloser {
+        Expire,
+        Cancel,
+    }
+
+    fn new_checkout() -> Checkout {
+        Checkout::new(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            MerchantOrderRef::parse("order-x").unwrap(),
+            Money::new(1500, "JPY").unwrap(),
+            Utc::now(),
+        )
+        .unwrap()
+    }
+
+    fn open_checkout() -> Checkout {
+        let mut checkout = new_checkout();
+        checkout
+            .session_created("cs_fake_x".to_string(), None)
+            .unwrap();
+        checkout
     }
 }

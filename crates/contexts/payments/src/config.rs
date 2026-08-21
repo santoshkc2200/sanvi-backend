@@ -97,6 +97,24 @@ pub struct PaymentsConfig {
     /// Application-fee switch — off in 0.10.0.
     #[serde(default)]
     pub application_fee: ApplicationFeeConfig,
+    /// Checkout-creation budget per bucket per minute (tenant, IP,
+    /// customer reference each get their own bucket).
+    #[serde(default = "default_checkout_rate_limit")]
+    pub checkout_rate_limit_per_minute: u32,
+    /// The `payments.checkout` release flag (09.4). Off → both checkout
+    /// endpoints answer 503 `payments/provider-unavailable` while the
+    /// payment webhook handlers stay deployed. On by default from this
+    /// slice on; TASK-008 owns the staged-rollout cleanup.
+    #[serde(default = "default_true")]
+    pub checkout_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_checkout_rate_limit() -> u32 {
+    30
 }
 
 impl Default for PaymentsConfig {
@@ -111,6 +129,8 @@ impl Default for PaymentsConfig {
             webhook_allowed_clients: vec![],
             requirement_keys: default_requirement_keys(),
             application_fee: ApplicationFeeConfig::default(),
+            checkout_rate_limit_per_minute: default_checkout_rate_limit(),
+            checkout_enabled: true,
         }
     }
 }
@@ -132,6 +152,9 @@ impl PaymentsConfig {
         }
         if self.webhook_tolerance_secs <= 0 {
             anyhow::bail!("payments.webhook_tolerance_secs must be >= 1");
+        }
+        if self.checkout_rate_limit_per_minute == 0 {
+            anyhow::bail!("payments.checkout_rate_limit_per_minute must be >= 1");
         }
         Ok(())
     }

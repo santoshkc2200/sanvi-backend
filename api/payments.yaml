@@ -7,6 +7,122 @@ info:
   version: 0.9.0
 openapi: 3.1.0
 paths:
+  /api/v1/tenant/checkout:
+    post:
+      operationId: create_tenant_checkout
+      parameters:
+      - description: Required. The same key returns the same checkout — one double-clicked buy button, one session
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCheckoutRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutView'
+          description: 'Idempotent replay: the same checkout the Idempotency-Key already owns'
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutView'
+          description: Session created on the connected account
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed request, non-positive amount, or a redirect URL off the verified-domain allow-list (payments/domain-not-allowed)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.checkout permission or the payments.stripe_connect entitlement
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: The connected account cannot accept payments (payments/connection-not-active)
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Rate limit exceeded per tenant, client or customer reference (payments/rate-limited)
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Provider unavailable (payments/provider-unavailable)
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: The payments.checkout flag is off (payments/provider-unavailable)
+      summary: |-
+        `POST /api/v1/tenant/checkout` — start a purchase on the tenant's own
+        connected account. Direct charge: money lands in the **tenant's**
+        Stripe balance; nothing transits Sanvi. The response URL is a hint —
+        the confirmation page trusts only `GET /tenant/checkout/{id}`.
+      tags:
+      - payments
+  /api/v1/tenant/checkout/{id}:
+    get:
+      operationId: get_tenant_checkout
+      parameters:
+      - description: The checkout id returned by POST /api/v1/tenant/checkout
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutView'
+          description: The webhook-truthful checkout state (the only thing the confirmation page trusts)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.checkout permission or the entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such checkout for this tenant
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: The payments.checkout flag is off (payments/provider-unavailable)
+      summary: |-
+        `GET /api/v1/tenant/checkout/{id}` — the confirming state. Polled by
+        the confirmation page and trusted over any redirect: a customer who
+        never returns still ends with a paid order here, a forged return URL
+        yields nothing.
+      tags:
+      - payments
   /api/v1/tenant/payments/connections:
     post:
       operationId: create_payment_connection

@@ -79,6 +79,17 @@ pub enum PaymentsError {
     #[error("connection already exists: {0}")]
     ConnectionExists(String),
 
+    /// A success/cancel URL is not on one of the tenant's *verified*
+    /// domains (phase 08). An open redirect here is a phishing
+    /// primitive: allow-list, never sanitize. `payments/domain-not-allowed`.
+    #[error("domain not allowed: {0}")]
+    DomainNotAllowed(String),
+
+    /// Checkout creation exceeded a per-tenant / per-IP / per-customer
+    /// rate limit. `payments/rate-limited`.
+    #[error("rate limited: {0}")]
+    RateLimited(String),
+
     /// Persistence failure (logged, never leaked to the client).
     #[error("storage failure: {0}")]
     Storage(String),
@@ -100,6 +111,8 @@ impl PaymentsError {
             Self::InvalidCountry(_) => "payments/invalid-country",
             Self::CountryUnsupported(_) => "payments/country-unsupported",
             Self::ConnectionExists(_) => "payments/connection-exists",
+            Self::DomainNotAllowed(_) => "payments/domain-not-allowed",
+            Self::RateLimited(_) => "payments/rate-limited",
             Self::InvalidMoney(_) | Self::InvalidConnection(_) => "bad-request",
             Self::NotEntitled(_) => "entitlement-required",
             Self::WebhookRejected(_) => "unauthorized",
@@ -177,6 +190,16 @@ mod tests {
         assert_eq!(
             PaymentsError::ConnectionExists("active".into()).type_slug(),
             "payments/connection-exists"
+        );
+        // 09.4's additions: the verified-domain allow-list and the
+        // checkout throttle each get their own addressable problem type.
+        assert_eq!(
+            PaymentsError::DomainNotAllowed("evil.test".into()).type_slug(),
+            "payments/domain-not-allowed"
+        );
+        assert_eq!(
+            PaymentsError::RateLimited("tenant bucket".into()).type_slug(),
+            "payments/rate-limited"
         );
     }
 }

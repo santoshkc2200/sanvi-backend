@@ -146,6 +146,11 @@ pub struct CreateCheckoutCommand {
     pub success_url: String,
     pub cancel_url: String,
     pub locale: String,
+    /// The platform's fee on this payment, when a fee policy is enabled
+    /// (off in 0.10.0). Rides `payment_intent_data.application_fee_amount`
+    /// — the only correct mechanism for direct charges, and never sent
+    /// alongside transfers (there are none in this charge pattern).
+    pub application_fee: Option<Money>,
 }
 
 /// The provider-side checkout session.
@@ -212,6 +217,19 @@ pub trait PaymentProviderPort: Send + Sync {
         &self,
         command: &CreateCheckoutCommand,
     ) -> Result<ProviderCheckoutSession, PaymentsError>;
+
+    /// Re-fetch a live checkout session by its provider id — the
+    /// idempotent-replay path returns the same hosted URL without
+    /// creating a second session. Default: not shipped by this adapter.
+    async fn retrieve_checkout(
+        &self,
+        _external_account_id: &str,
+        _external_session_id: &str,
+    ) -> Result<ProviderCheckoutSession, PaymentsError> {
+        Err(PaymentsError::ProviderUnavailable(
+            "checkout retrieval is not supported by this adapter".to_string(),
+        ))
+    }
 
     async fn refund(
         &self,
@@ -421,4 +439,124 @@ pub trait ConnectionNotifier: Send + Sync {
         connection_id: Uuid,
         deadline: DateTime<Utc>,
     ) -> Result<(), PaymentsError>;
+}
+
+// ---------------------------------------------------------------------------
+// 09.4: checkout persistence, the phase-08 domain allow-list and the
+// checkout throttle.
+// ---------------------------------------------------------------------------
+
+/// Tenant-scoped persistence for the checkout aggregate. Every access is
+/// RLS-scoped like [`ProviderConnectionRepository`]: a checkout id
+/// another tenant sends resolves to `None`, never to someone else's row.
+#[async_trait]
+pub trait CheckoutRepository: Send + Sync {
+    /// Persist a fresh checkout (the create use case writes it *before*
+    /// calling the provider, so an interrupted request is recoverable
+    /// and the idempotency key has an owner).
+    async fn insert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        checkout: &Checkout,
+    ) -> Result<(), PaymentsError>;
+
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Checkout>, PaymentsError>;
+
+    /// The idempotency key's owner, if any (`checkouts_idempotency_idx`).
+    async fn find_by_idempotency_key(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        key: Uuid,
+    ) -> Result<Option<Checkout>, PaymentsError>;
+
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        checkout: &Checkout,
+    ) -> Result<(), PaymentsError>;
+
+    /// The newest payment recorded against this checkout, if any — the
+    /// confirmation view derives its public status from it.
+    async fn latest_payment_for_checkout(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        checkout_id: Uuid,
+    ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
+}
+
+/// Platform-scope access for the webhook dispatcher — payment events
+/// arrive cross-tenant and route by provider object id, exactly like the
+/// connection lifecycle store above. Tenant request paths never touch
+/// this port.
+#[async_trait]
+pub trait CheckoutLifecycleStore: Send + Sync {
+    /// The checkout owning this provider session (checkout.session.*).
+    async fn find_by_external_session(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        external_session_id: &str,
+    ) -> Result<Option<Checkout>, PaymentsError>;
+
+    /// The checkout named by event metadata (payment_intent.*) — scoped
+    /// by the tenant id the metadata carries so one tenant's webhook can
+    /// never move another tenant's row even with a forged metadata value.
+    async fn find_by_id(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        checkout_id: Uuid,
+    ) -> Result<Option<Checkout>, PaymentsError>;
+
+    /// Persist an aggregate updated by a webhook handler.
+    async fn save(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        checkout: &Checkout,
+    ) -> Result<(), PaymentsError>;
+
+    /// Insert-or-update by `(tenant_id, external_payment_id)` — the
+    /// unique index is the dedupe that makes every handler idempotent.
+    async fn upsert_payment(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        payment: &super::payment::PaymentRecord,
+    ) -> Result<(), PaymentsError>;
+
+    /// An existing payment record for this provider id, if we wrote one
+    /// before (redelivery / sibling-event ordering).
+    async fn find_payment_by_external_id(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_payment_id: &str,
+    ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
+}
+
+/// The phase-08 verified-domain allow-list. A checkout's success/cancel
+/// URLs are accepted only when their host is a live domain *of this
+/// tenant*; implemented against the domains context's live-hostname
+/// projection in the composition root. A port, not a query: the payments
+/// context stays decoupled from how phase 08 stores its truth.
+#[async_trait]
+pub trait TenantDomainAllowList: Send + Sync {
+    async fn allows(&self, tenant_id: Uuid, hostname: &str) -> Result<bool, PaymentsError>;
+}
+
+/// The checkout throttle. Session-creation flooding is Sanvi's problem
+/// (card-testing at the hosted page is the tenant's): buckets per
+/// tenant, per client IP and per customer reference, checked before any
+/// database or provider work. Implemented over Redis in production;
+/// an in-process fixed window ships for tests and degraded mode.
+#[async_trait]
+pub trait CheckoutThrottle: Send + Sync {
+    /// Consume one token from the named bucket. `Err(RateLimited)`
+    /// denies; any other error fails closed.
+    async fn acquire(&self, bucket: &str) -> Result<(), PaymentsError>;
 }

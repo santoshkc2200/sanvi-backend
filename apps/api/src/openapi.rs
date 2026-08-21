@@ -149,6 +149,8 @@ use utoipa::OpenApi;
         sanvi_payments::adapters::http::handlers::create_payment_connection,
         sanvi_payments::adapters::http::handlers::create_payment_connection_session,
         sanvi_payments::adapters::http::handlers::get_payment_connection,
+        sanvi_payments::adapters::http::handlers::create_tenant_checkout,
+        sanvi_payments::adapters::http::handlers::get_tenant_checkout,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(

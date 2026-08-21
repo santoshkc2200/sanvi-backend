@@ -44,6 +44,15 @@ pub fn api_error(err: PaymentsError) -> ApiError {
         PaymentsError::ConnectionNotActive(detail) | PaymentsError::IdempotencyConflict(detail) => {
             ApiError::Conflict { detail }
         }
+        // A redirect target off the tenant's verified-domain allow-list:
+        // a client mistake, stated plainly (the detail names only what
+        // was rejected, never an internal host list).
+        PaymentsError::DomainNotAllowed(detail) => ApiError::BadRequest { detail },
+        // Checkout-creation flooding — ours to stop, per tenant / IP /
+        // customer reference.
+        PaymentsError::RateLimited(_) => ApiError::TooManyRequests {
+            retry_after_secs: 60,
+        },
         PaymentsError::CapabilityMissing { capability, detail } => ApiError::Conflict {
             detail: format!("capability {capability} is not active: {detail}"),
         },
@@ -499,6 +508,401 @@ pub async fn get_payment_connection(
 ) -> Result<HttpResponse, actix_web::Error> {
     let connection = load_connection(&state, tenant.0.tenant_id, path.into_inner()).await?;
     Ok(HttpResponse::Ok().json(ConnectionView::of(&connection, &state.config)))
+}
+
+/// `POST /api/v1/tenant/checkout` — create a checkout session on the
+/// tenant's connected account (09.4, direct charges). Idempotency-Key is
+/// required: a double-clicked buy button must not create two sessions.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateCheckoutRequest {
+    /// The merchant's order reference, echoed on every read model.
+    #[schema(example = "order-2026-0821")]
+    pub reference: String,
+    /// Minor units — ¥2,000 is `2000` (JPY is zero-decimal).
+    #[schema(example = 2000)]
+    pub amount_minor: i64,
+    /// ISO-4217 code; must match the connected account's settlement
+    /// currency.
+    #[schema(example = "JPY")]
+    pub currency: String,
+    /// Free-form customer/order context (provider-passthrough; no card
+    /// data ever). Rate limiting buckets one key per distinct value.
+    #[schema(value_type = Option<Object>)]
+    pub customer_ref: Option<Value>,
+    /// Presentation locale for the hosted page (`ja`, `en-US`, …).
+    pub locale: Option<String>,
+    /// Redirect target on a **verified** tenant domain (phase 08). A
+    /// success URL on any other host is rejected outright.
+    #[schema(example = "https://shop.tenant.test/thanks")]
+    pub success_url: String,
+    #[schema(example = "https://shop.tenant.test/cart")]
+    pub cancel_url: String,
+}
+
+/// The checkout as the storefront sees it. `status` is the only source
+/// the confirmation page trusts: derived from webhook-recorded truth,
+/// never from the redirect.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CheckoutView {
+    pub id: Uuid,
+    /// `pending` | `paid` | `failed` | `expired` | `canceled`.
+    #[schema(example = "pending")]
+    pub status: String,
+    pub reference: String,
+    #[schema(example = 2000)]
+    pub amount_minor: i64,
+    #[schema(example = "JPY", value_type = String)]
+    pub currency: String,
+    #[schema(value_type = Option<Object>)]
+    pub customer_ref: Option<Value>,
+    /// The provider-hosted payment URL, while the checkout can still be
+    /// paid. Absent once terminal.
+    #[schema(example = "https://checkout.stripe.com/c/pay/cs_…", value_type = Option<String>)]
+    pub url: Option<String>,
+    #[schema(value_type = Option<String>)]
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Server-issued exactly once per order when paid; identical on every
+    /// refresh of the confirmation page, so phase 10's conversion
+    /// pipeline cannot double-count.
+    #[schema(value_type = Option<Uuid>)]
+    pub conversion_event_id: Option<Uuid>,
+    #[schema(value_type = String)]
+    pub created_at: DateTime<Utc>,
+}
+
+/// The public status vocabulary mapped from webhook-recorded truth:
+/// lifecycle state plus the newest recorded payment attempt ("failed"
+/// while the checkout can still be retried at the hosted page).
+fn public_status(
+    checkout: &crate::domain::Checkout,
+    latest: Option<&crate::domain::PaymentRecord>,
+) -> &'static str {
+    use crate::domain::CheckoutStatus;
+    use crate::domain::payment::PaymentStatus;
+    match checkout.status {
+        CheckoutStatus::Complete => "paid",
+        CheckoutStatus::Expired => "expired",
+        CheckoutStatus::Canceled => "canceled",
+        CheckoutStatus::Pending | CheckoutStatus::Open => {
+            if latest.is_some_and(|p| p.status == PaymentStatus::Failed) {
+                "failed"
+            } else {
+                "pending"
+            }
+        }
+    }
+}
+
+async fn load_checkout(
+    state: &PaymentsState,
+    tenant_id: Uuid,
+    checkout_id: Uuid,
+) -> Result<
+    (
+        crate::domain::Checkout,
+        Option<crate::domain::PaymentRecord>,
+    ),
+    actix_web::Error,
+> {
+    let mut scope = state
+        .tx
+        .begin_for(tenant_id)
+        .await
+        .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
+    let checkout = state
+        .checkouts
+        .find_by_id(&mut scope, tenant_id, checkout_id)
+        .await
+        .map_err(payments_problem)?
+        .ok_or_else(|| {
+            actix_web::Error::from(ApiError::NotFound {
+                resource: format!("checkout {checkout_id}"),
+            })
+        })?;
+    let latest = state
+        .checkouts
+        .latest_payment_for_checkout(&mut scope, tenant_id, checkout_id)
+        .await
+        .map_err(payments_problem)?;
+    let _ = scope.rollback().await;
+    Ok((checkout, latest))
+}
+
+/// The newest payment recorded against a checkout (RLS-scoped read).
+async fn load_latest_payment(
+    state: &PaymentsState,
+    tenant_id: Uuid,
+    checkout_id: Uuid,
+) -> Result<Option<crate::domain::PaymentRecord>, actix_web::Error> {
+    let mut scope = state
+        .tx
+        .begin_for(tenant_id)
+        .await
+        .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
+    let latest = state
+        .checkouts
+        .latest_payment_for_checkout(&mut scope, tenant_id, checkout_id)
+        .await
+        .map_err(payments_problem);
+    let _ = scope.rollback().await;
+    latest
+}
+
+/// The confirmation payload for a checkout + its newest payment record.
+fn checkout_view(
+    tenant_id: Uuid,
+    checkout: &crate::domain::Checkout,
+    latest: Option<&crate::domain::PaymentRecord>,
+    url: Option<String>,
+) -> CheckoutView {
+    let status = public_status(checkout, latest);
+    // Issued server-side and derivable forever from (tenant, payment):
+    // the refreshed-confirmation-page dedupe phase 10 leans on.
+    let conversion_event_id = (status == "paid")
+        .then(|| {
+            latest.map(|payment| crate::application::conversion_event_id(tenant_id, payment.id))
+        })
+        .flatten();
+    CheckoutView {
+        id: checkout.id,
+        status: status.to_string(),
+        reference: checkout.reference.as_str().to_string(),
+        amount_minor: checkout.amount.amount_minor,
+        currency: checkout.amount.currency.as_str().to_string(),
+        customer_ref: checkout.customer_ref.clone(),
+        url: url.filter(|_| {
+            matches!(
+                checkout.status,
+                crate::domain::CheckoutStatus::Pending | crate::domain::CheckoutStatus::Open
+            )
+        }),
+        expires_at: checkout.expires_at,
+        conversion_event_id,
+        created_at: checkout.created_at,
+    }
+}
+
+/// Throttle bucket keys for one create request: per tenant, per client
+/// IP, per customer reference. Customer refs hash so arbitrary JSON never
+/// becomes a map key of unbounded size.
+fn throttle_buckets(
+    tenant_id: Uuid,
+    ip: Option<IpAddr>,
+    customer_ref: Option<&Value>,
+) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    let mut buckets = vec![format!("checkout:t:{tenant_id}")];
+    if let Some(ip) = ip {
+        buckets.push(format!("checkout:ip:{ip}"));
+    }
+    if let Some(customer_ref) = customer_ref {
+        let digest = Sha256::digest(customer_ref.to_string().as_bytes());
+        buckets.push(format!("checkout:c:{}", hex::encode(&digest[..8])));
+    }
+    buckets
+}
+
+/// The flag-off answer shared by both checkout endpoints: an honest
+/// 503 carrying the context's `payments/provider-unavailable` problem
+/// type, so the frontend renders "temporarily unavailable" rather than a
+/// dead route. Webhook handlers stay deployed while this is on the wire.
+fn checkout_disabled() -> actix_web::Error {
+    let status = ApiError::ServiceUnavailable {
+        detail: String::new(),
+    }
+    .status();
+    let mut problem = ApiError::ServiceUnavailable {
+        detail: "checkout is temporarily unavailable".to_string(),
+    }
+    .problem();
+    problem.r#type = format!(
+        "{PROBLEM_TYPE_BASE}/{}",
+        PaymentsError::ProviderUnavailable(String::new()).type_slug()
+    );
+    actix_web::error::InternalError::from_response(
+        "checkout disabled",
+        HttpResponse::build(status).json(problem),
+    )
+    .into()
+}
+
+/// `POST /api/v1/tenant/checkout` — start a purchase on the tenant's own
+/// connected account. Direct charge: money lands in the **tenant's**
+/// Stripe balance; nothing transits Sanvi. The response URL is a hint —
+/// the confirmation page trusts only `GET /tenant/checkout/{id}`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/checkout",
+    tag = "payments",
+    operation_id = "create_tenant_checkout",
+    request_body = CreateCheckoutRequest,
+    responses(
+        (status = 201, description = "Session created on the connected account", body = CheckoutView),
+        (status = 200, description = "Idempotent replay: the same checkout the Idempotency-Key already owns", body = CheckoutView),
+        (status = 400, description = "Malformed request, non-positive amount, or a redirect URL off the verified-domain allow-list (payments/domain-not-allowed)", body = ProblemDetail),
+        (status = 403, description = "Missing payments.checkout permission or the payments.stripe_connect entitlement", body = ProblemDetail),
+        (status = 409, description = "The connected account cannot accept payments (payments/connection-not-active)", body = ProblemDetail),
+        (status = 429, description = "Rate limit exceeded per tenant, client or customer reference (payments/rate-limited)", body = ProblemDetail),
+        (status = 502, description = "Provider unavailable (payments/provider-unavailable)", body = ProblemDetail),
+        (status = 503, description = "The payments.checkout flag is off (payments/provider-unavailable)", body = ProblemDetail)
+    ),
+    params(
+        ("Idempotency-Key" = uuid::Uuid, Header, description = "Required. The same key returns the same checkout — one double-clicked buy button, one session")
+    )
+)]
+pub async fn create_tenant_checkout(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    req: HttpRequest,
+    body: web::Json<CreateCheckoutRequest>,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    // Rollback switch: flag off → honest 503 with the context's problem
+    // type. Webhook handlers stay deployed regardless, so money taken at
+    // Stripe is never without a local record.
+    if !state.config.checkout_enabled {
+        return Err(checkout_disabled());
+    }
+
+    let tenant_id = tenant.0.tenant_id;
+    let idempotency_key = idempotency_key(&req)?;
+    let ip = client_ip(&req);
+
+    // Abuse control before any database or provider work: session-
+    // creation flooding is ours to stop.
+    for bucket in throttle_buckets(tenant_id, ip, body.customer_ref.as_ref()) {
+        state
+            .checkout_throttle
+            .acquire(&bucket)
+            .await
+            .map_err(payments_problem)?;
+    }
+
+    let outcome = state
+        .create_checkout
+        .execute(crate::application::NewCheckoutCommand {
+            tenant_id,
+            reference: body.reference.clone(),
+            amount_minor: body.amount_minor,
+            currency: body.currency.clone(),
+            customer_ref: body.customer_ref.clone(),
+            locale: body.locale.clone(),
+            success_url: body.success_url.clone(),
+            cancel_url: body.cancel_url.clone(),
+            idempotency_key,
+        })
+        .await
+        .map_err(payments_problem)?;
+
+    // A replayed key whose order already closed answers from recorded
+    // truth (status + conversion id), exactly as GET would.
+    let latest = if outcome.replayed {
+        load_latest_payment(&state, tenant_id, outcome.checkout.id).await?
+    } else {
+        None
+    };
+
+    let view = checkout_view(tenant_id, &outcome.checkout, latest.as_ref(), outcome.url);
+    state
+        .metrics
+        .checkout_creates
+        .with_label_values(&[if outcome.replayed {
+            "replay"
+        } else {
+            "created"
+        }])
+        .inc();
+    if outcome.replayed {
+        Ok(HttpResponse::Ok().json(view))
+    } else {
+        Ok(HttpResponse::Created().json(view))
+    }
+}
+
+/// `GET /api/v1/tenant/checkout/{id}` — the confirming state. Polled by
+/// the confirmation page and trusted over any redirect: a customer who
+/// never returns still ends with a paid order here, a forged return URL
+/// yields nothing.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/checkout/{id}",
+    tag = "payments",
+    operation_id = "get_tenant_checkout",
+    params(
+        ("id" = Uuid, Path, description = "The checkout id returned by POST /api/v1/tenant/checkout")
+    ),
+    responses(
+        (status = 200, description = "The webhook-truthful checkout state (the only thing the confirmation page trusts)", body = CheckoutView),
+        (status = 403, description = "Missing payments.checkout permission or the entitlement", body = ProblemDetail),
+        (status = 404, description = "No such checkout for this tenant", body = ProblemDetail),
+        (status = 503, description = "The payments.checkout flag is off (payments/provider-unavailable)", body = ProblemDetail)
+    )
+)]
+pub async fn get_tenant_checkout(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    path: web::Path<Uuid>,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    if !state.config.checkout_enabled {
+        return Err(checkout_disabled());
+    }
+
+    let tenant_id = tenant.0.tenant_id;
+    let (checkout, latest) = load_checkout(&state, tenant_id, path.into_inner()).await?;
+
+    // While the checkout can still be paid, hand back its hosted URL:
+    // re-read from the provider so a replayed confirmation link works,
+    // never minting anything. Terminal checkouts have nothing to say.
+    let url = if checkout.status.is_live() {
+        match checkout.external_session_id.as_deref() {
+            Some(session_id) => hosted_url(&state, tenant_id, &checkout, session_id).await,
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store"))
+        .json(checkout_view(tenant_id, &checkout, latest.as_ref(), url)))
+}
+
+/// Re-fetch the provider-hosted payment URL for a live checkout.
+/// Best-effort: a retrieval failure degrades to `None` (the confirmation
+/// page still gets truthful status), never to an invented link.
+async fn hosted_url(
+    state: &PaymentsState,
+    tenant_id: Uuid,
+    checkout: &crate::domain::Checkout,
+    session_id: &str,
+) -> Option<String> {
+    let mut scope = state.tx.begin_for(tenant_id).await.ok()?;
+    let connection = state
+        .connections
+        .find_by_id(&mut scope, tenant_id, checkout.connection_id)
+        .await
+        .ok()
+        .flatten();
+    let _ = scope.rollback().await;
+    let connection = connection?;
+    let adapter = state.registry.get(connection.provider)?;
+    match adapter
+        .retrieve_checkout(&connection.external_account_id, session_id)
+        .await
+    {
+        Ok(session) => Some(session.url),
+        Err(err) => {
+            tracing::warn!(
+                checkout_id = %checkout.id,
+                error = %err,
+                "checkout GET could not refresh its hosted URL"
+            );
+            None
+        }
+    }
 }
 
 /// RLS-scoped read: a connection id another tenant sent resolves to 404,

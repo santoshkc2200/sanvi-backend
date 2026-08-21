@@ -86,6 +86,10 @@ struct FakeState {
     /// the same account, exactly like the provider-side idempotency the
     /// real adapter relies on for crash adoption.
     by_idempotency_key: BTreeMap<uuid::Uuid, String>,
+    /// Live checkout sessions by their id — retrieval is the replay path
+    /// (09.4): a retried request re-reads the same session instead of
+    /// minting a second one.
+    sessions: BTreeMap<String, ProviderCheckoutSession>,
 }
 
 impl FakeProvider {
@@ -306,7 +310,7 @@ impl PaymentProviderPort for FakeProvider {
         &self,
         command: &CreateCheckoutCommand,
     ) -> Result<ProviderCheckoutSession, PaymentsError> {
-        let state = self.state.lock().expect("fake provider state lock");
+        let mut state = self.state.lock().expect("fake provider state lock");
         if !state.accounts.contains_key(&command.external_account_id) {
             return Err(PaymentsError::ProviderUnavailable(format!(
                 "fake provider knows no account {:?}",
@@ -315,9 +319,17 @@ impl PaymentProviderPort for FakeProvider {
         }
         let external_session_id = self.next_id("cs_fake");
         let url = format!(
-            "https://pay.fake.sanvi.dev/{}/{}",
+            "https://pay.fake.sanvi.dev/{}/{}/{}",
             external_session_id,
-            checkout_locale(command)
+            checkout_locale(command),
+            command.checkout.id.simple()
+        );
+        // The application fee rides only when a policy supplies one; the
+        // fake records the fact so tests can assert the wiring end to end.
+        tracing::debug!(
+            checkout_id = %command.checkout.id,
+            application_fee = ?command.application_fee.as_ref().map(|fee| fee.amount_minor),
+            "fake provider checkout session created"
         );
         let session = ProviderCheckoutSession {
             external_session_id: external_session_id.clone(),
@@ -327,7 +339,31 @@ impl PaymentProviderPort for FakeProvider {
                 .expires_at
                 .or_else(|| Some(Utc::now() + Duration::minutes(30))),
         };
+        state.sessions.insert(external_session_id, session.clone());
         Ok(session)
+    }
+
+    /// The replay path: same session, same URL — retrieval, not creation.
+    async fn retrieve_checkout(
+        &self,
+        external_account_id: &str,
+        external_session_id: &str,
+    ) -> Result<ProviderCheckoutSession, PaymentsError> {
+        let state = self.state.lock().expect("fake provider state lock");
+        if !state.accounts.contains_key(external_account_id) {
+            return Err(PaymentsError::ProviderUnavailable(format!(
+                "fake provider knows no account {external_account_id:?}"
+            )));
+        }
+        state
+            .sessions
+            .get(external_session_id)
+            .cloned()
+            .ok_or_else(|| {
+                PaymentsError::ProviderUnavailable(format!(
+                    "fake provider knows no checkout session {external_session_id:?}"
+                ))
+            })
     }
 
     async fn refund(
@@ -437,6 +473,7 @@ mod tests {
             success_url: "https://shop.example.test/thanks".to_string(),
             cancel_url: "https://shop.example.test/cart".to_string(),
             locale: "ja".to_string(),
+            application_fee: None,
         }
     }
 

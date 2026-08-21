@@ -20,11 +20,14 @@ use uuid::Uuid;
 
 use sanvi_http::{FeatureGate, PermissionGate, ResourceRef, Subject, tenancy::TenantContext};
 use sanvi_payments::adapters::http::PaymentsState;
-use sanvi_payments::adapters::repos::SqlxProviderConnectionRepository;
-use sanvi_payments::adapters::{FakeProvider, OutboxEventPublisher, PaymentsMetrics};
+use sanvi_payments::adapters::repos::{SqlxCheckoutRepository, SqlxProviderConnectionRepository};
+use sanvi_payments::adapters::{
+    FakeProvider, FixedWindowThrottle, OutboxEventPublisher, PaymentsMetrics,
+};
 use sanvi_payments::application::{
-    CreateAccountSession, ListProviders, ProviderRegistry, RegistryProviderCatalog,
-    RuntimeEnvironment, StartConnectionCommand, StartProviderConnection,
+    ApplicationFeePolicy, CreateAccountSession, CreateCheckout, ListProviders, NewCheckoutCommand,
+    ProviderRegistry, RegistryProviderCatalog, RuntimeEnvironment, StartConnectionCommand,
+    StartProviderConnection,
 };
 use sanvi_payments::config::PaymentsConfig;
 use sanvi_payments::domain::ports::{CreateAccountRequest, PaymentProviderPort};
@@ -34,6 +37,36 @@ use sanvi_payments::routes::payments_tenant_scope_routes;
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
+
+/// Test double for the phase-08 verified-domain allow-list: exactly one
+/// hostname is live, for whichever tenant asks — cross-tenant behaviour
+/// of the *projection* belongs to phase 08's own suite.
+struct AllowShopTest;
+
+#[async_trait::async_trait]
+impl sanvi_payments::domain::ports::TenantDomainAllowList for AllowShopTest {
+    async fn allows(
+        &self,
+        _tenant_id: uuid::Uuid,
+        hostname: &str,
+    ) -> Result<bool, sanvi_payments::PaymentsError> {
+        Ok(hostname == "shop.test")
+    }
+}
+
+/// Fees are off everywhere in this release; the test twin proves the
+/// wiring point exists by turning on only where a test opts in.
+struct TestFeePolicy(bool);
+
+impl ApplicationFeePolicy for TestFeePolicy {
+    fn application_fee(&self, amount: &sanvi_payments::Money) -> Option<i64> {
+        if self.0 {
+            Some(amount.amount_minor / 10)
+        } else {
+            None
+        }
+    }
+}
 
 fn migrations_dir() -> std::path::PathBuf {
     std::env::var("CARGO_MANIFEST_DIR")
@@ -427,6 +460,8 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
     let tx = TxManager::new(lazy_pool);
     let connections: Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
         Arc::new(SqlxProviderConnectionRepository::new());
+    let checkouts: Arc<dyn sanvi_payments::domain::CheckoutRepository> =
+        Arc::new(SqlxCheckoutRepository::new());
     let audit: Arc<dyn sanvi_audit::domain::AuditWriter> =
         Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new());
 
@@ -449,7 +484,7 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
             ),
-            providers,
+            providers.clone(),
             connections,
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
         )),
@@ -462,6 +497,20 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             Arc::new(FakeProvider::new()),
             vec!["127.0.0.1".to_string(), "::1".to_string()],
         )),
+        checkouts,
+        create_checkout: Arc::new(CreateCheckout::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            providers,
+            Arc::new(SqlxProviderConnectionRepository::new()),
+            Arc::new(SqlxCheckoutRepository::new()),
+            Arc::new(AllowShopTest),
+            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(TestFeePolicy(false)),
+        )),
+        checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
     }
 }
 
@@ -1198,12 +1247,14 @@ fn epoch(secs_from_now: i64) -> i64 {
 
 /// The full 09.3 stack on a real pool: receiver (fake-secret verifier,
 /// loopback allow-list), dispatcher and reconciler sharing one fake
-/// provider handle the test scripts.
+/// provider handle the test scripts. 09.4 wires the checkout store into
+/// the dispatcher so the payment handlers are live.
 struct WebhookFixture {
     receiver: Arc<WebhookReceiver>,
     dispatcher: Arc<WebhookDispatcher>,
     sync: Arc<SyncConnections>,
     webhooks: Arc<dyn WebhookEventRepository>,
+    checkouts: Arc<dyn CheckoutLifecycleStore>,
     tx: TxManager,
     provider: FakeProvider,
 }
@@ -1227,14 +1278,18 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         Arc::new(provider.clone()),
         vec!["127.0.0.1".to_string(), "::1".to_string()],
     ));
-    let dispatcher = Arc::new(WebhookDispatcher::new(
-        tx.clone(),
-        webhooks.clone(),
-        lifecycle.clone(),
-        registry.clone(),
-        events.clone(),
-        notifier.clone(),
-    ));
+    let checkouts: Arc<dyn CheckoutLifecycleStore> = Arc::new(SqlxCheckoutRepository::new());
+    let dispatcher = Arc::new(
+        WebhookDispatcher::new(
+            tx.clone(),
+            webhooks.clone(),
+            lifecycle.clone(),
+            registry.clone(),
+            events.clone(),
+            notifier.clone(),
+        )
+        .with_checkout_store(checkouts.clone()),
+    );
     let sync = Arc::new(SyncConnections::new(
         tx.clone(),
         lifecycle.clone(),
@@ -1248,6 +1303,7 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         dispatcher,
         sync,
         webhooks,
+        checkouts,
         tx,
         provider,
     }
@@ -1773,29 +1829,32 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                     // helper would never reach the database).
                     let prometheus_registry = prometheus::Registry::new();
                     let providers = ProviderRegistry::new();
+                    let registry = Arc::new(providers);
+                    let connections: Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
+                        Arc::new(SqlxProviderConnectionRepository::new());
                     PaymentsState {
                         config: PaymentsConfig::default(),
                         metrics: Arc::new(PaymentsMetrics::new(&prometheus_registry)),
                         list_providers: Arc::new(ListProviders::new(Arc::new(
                             RegistryProviderCatalog::new(
-                                Arc::new(providers),
+                                registry.clone(),
                                 RuntimeEnvironment::Production,
                             ),
                         ))),
-                        registry: Arc::new(ProviderRegistry::new()),
+                        registry,
                         tx: TxManager::new(pool.clone()),
-                        connections: Arc::new(SqlxProviderConnectionRepository::new()),
+                        connections: connections.clone(),
                         create_connection: Arc::new(StartProviderConnection::new(
                             TxManager::new(pool.clone()),
                             Arc::new(ProviderRegistry::new()),
-                            Arc::new(SqlxProviderConnectionRepository::new()),
+                            connections.clone(),
                             Arc::new(OutboxEventPublisher::new()),
                             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
                         )),
                         account_session: Arc::new(CreateAccountSession::new(
                             TxManager::new(pool.clone()),
                             Arc::new(ProviderRegistry::new()),
-                            Arc::new(SqlxProviderConnectionRepository::new()),
+                            connections,
                             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
                         )),
                         webhook_receiver: Arc::new(WebhookReceiver::new(
@@ -1804,6 +1863,17 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             Arc::new(FakeProvider::new()),
                             vec!["127.0.0.1".to_string()],
                         )),
+                        checkouts: Arc::new(SqlxCheckoutRepository::new()),
+                        create_checkout: Arc::new(CreateCheckout::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(ProviderRegistry::new()),
+                            Arc::new(SqlxProviderConnectionRepository::new()),
+                            Arc::new(SqlxCheckoutRepository::new()),
+                            Arc::new(AllowShopTest),
+                            Arc::new(OutboxEventPublisher::new()),
+                            Arc::new(TestFeePolicy(false)),
+                        )),
+                        checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
                     }
                 };
                 state.config.requirement_keys.insert(
@@ -1855,4 +1925,1071 @@ async fn get_connection_returns_the_enriched_truthful_view() {
             "render key present: {key}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 09.4: checkout on the connected account — direct charges, idempotent
+// creation, the verified-domain allow-list, and webhook-driven truth.
+// ---------------------------------------------------------------------------
+
+use sanvi_payments::adapters::SqlxWebhookEventRepository as WebhookEventsRepo;
+use sanvi_payments::application::conversion_event_id;
+use sanvi_payments::domain::{CheckoutLifecycleStore, CheckoutRepository};
+
+/// A full payments state on a real pool, sharing one fake-provider handle
+/// with the test (for scripting) — the checkout slice's composition root.
+fn checkout_fixture(
+    pool: &sanvi_persistence::PgPool,
+    provider: FakeProvider,
+    throttle_limit: u32,
+    fee_enabled: bool,
+) -> PaymentsState {
+    let prometheus_registry = prometheus::Registry::new();
+    let mut providers = ProviderRegistry::new();
+    providers.register(Arc::new(provider.clone())).unwrap();
+    let providers = Arc::new(providers);
+    let connections: Arc<dyn ProviderConnectionRepository> =
+        Arc::new(SqlxProviderConnectionRepository::new());
+    let checkouts: Arc<dyn CheckoutRepository> = Arc::new(SqlxCheckoutRepository::new());
+    PaymentsState {
+        config: PaymentsConfig::default(),
+        metrics: Arc::new(PaymentsMetrics::new(&prometheus_registry)),
+        list_providers: Arc::new(ListProviders::new(Arc::new(RegistryProviderCatalog::new(
+            providers.clone(),
+            RuntimeEnvironment::NonProduction,
+        )))),
+        registry: providers.clone(),
+        tx: TxManager::new(pool.clone()),
+        connections: connections.clone(),
+        create_connection: Arc::new(StartProviderConnection::new(
+            TxManager::new(pool.clone()),
+            providers.clone(),
+            connections.clone(),
+            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
+        account_session: Arc::new(CreateAccountSession::new(
+            TxManager::new(pool.clone()),
+            providers.clone(),
+            connections.clone(),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
+        webhook_receiver: Arc::new(WebhookReceiver::new(
+            TxManager::new(pool.clone()),
+            Arc::new(WebhookEventsRepo::new()),
+            Arc::new(provider.clone()),
+            vec!["127.0.0.1".to_string()],
+        )),
+        checkouts: checkouts.clone(),
+        create_checkout: Arc::new(CreateCheckout::new(
+            TxManager::new(pool.clone()),
+            providers,
+            connections,
+            checkouts,
+            Arc::new(AllowShopTest),
+            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(TestFeePolicy(fee_enabled)),
+        )),
+        checkout_throttle: Arc::new(FixedWindowThrottle::new(throttle_limit)),
+    }
+}
+
+/// The tenant app with REAL middleware products on a real pool.
+async fn checkout_app(
+    state: PaymentsState,
+    tenant_id: Uuid,
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse,
+    Error = actix_web::Error,
+> {
+    let subject = Subject {
+        user_id: Uuid::now_v7(),
+        session_id: "sess_test".to_string(),
+        aal: "aal2".to_string(),
+        methods: vec!["password".to_string()],
+        tenant_id: Some(tenant_id),
+        role_ids: vec![],
+        authenticated_at: Some(Utc::now()),
+    };
+    let tenant_context = TenantContext {
+        tenant_id,
+        slug: "checkout".to_string(),
+        display_name: "Checkout".to_string(),
+        status: sanvi_http::tenancy::TenantRuntimeStatus::Active,
+        region: "jp".to_string(),
+        default_locale: "en".to_string(),
+        resolution_source: sanvi_http::tenancy::ResolutionSource::Subdomain,
+    };
+    let permission_gate: Arc<dyn PermissionGate> = Arc::new(FakePermissionGate { allowed: true });
+    let feature_gate: Arc<dyn FeatureGate> = Arc::new(FakeFeatureGate { enabled: true });
+    actix_test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .app_data(web::Data::new(permission_gate))
+            .app_data(web::Data::new(feature_gate))
+            .wrap(actix_web::middleware::from_fn(
+                move |req: actix_web::dev::ServiceRequest,
+                      srv: actix_web::middleware::Next<actix_web::body::BoxBody>| {
+                    let subject = subject.clone();
+                    let tenant_context = tenant_context.clone();
+                    async move {
+                        req.extensions_mut().insert(subject);
+                        req.extensions_mut().insert(tenant_context);
+                        srv.call(req).await
+                    }
+                },
+            ))
+            .service(web::scope("/api/v1/tenant").configure(payments_tenant_scope_routes)),
+    )
+    .await
+}
+
+/// Drive a connection all the way to `Active` through the *legal*
+/// lifecycle edges (Pending → Onboarding → Active) so checkout may exist
+/// against it.
+async fn activate_connection(
+    pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    provider: &FakeProvider,
+) -> ProviderConnection {
+    let connection = pending_connection(pool, tenant_id, provider).await;
+
+    let repo = SqlxProviderConnectionRepository::new();
+    let tx = TxManager::new(pool.clone());
+
+    // First edge: onboarding begins.
+    let early = provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    let mut conn = connection.clone();
+    conn.apply_status(&early, ConnectionStatus::Onboarding, Utc::now())
+        .unwrap();
+
+    // Second edge: onboarding completes with the capability active.
+    provider.approve_onboarding(&connection.external_account_id);
+    let ready = provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    conn.apply_status(&ready, ConnectionStatus::Active, Utc::now())
+        .unwrap();
+
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    repo.update(&mut scope, &conn).await.unwrap();
+    scope.commit().await.unwrap();
+    conn
+}
+
+fn checkout_body(reference: &str, amount_minor: i64, currency: &str) -> serde_json::Value {
+    serde_json::json!({
+        "reference": reference,
+        "amount_minor": amount_minor,
+        "currency": currency,
+        "customer_ref": {"customer": "c-1"},
+        "locale": "ja",
+        "success_url": "https://shop.test/thanks",
+        "cancel_url": "https://shop.test/cart"
+    })
+}
+
+#[tokio::test]
+async fn a_double_click_creates_one_checkout_and_a_replayed_key_returns_the_same_session() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "double-click").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    let state = checkout_fixture(&pool, provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+    let key = Uuid::now_v7();
+
+    let first = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(checkout_body("order-1", 2000, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let created: serde_json::Value = actix_test::read_body_json(first).await;
+    assert_eq!(created["status"], "pending");
+    assert_eq!(created["amount_minor"], 2000, "JPY minor units end to end");
+    assert_eq!(created["currency"], "JPY");
+    assert_eq!(created["conversion_event_id"], serde_json::Value::Null);
+
+    // The double-click replays the SAME key…
+    let second = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(checkout_body("order-1", 2000, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let replayed: serde_json::Value = actix_test::read_body_json(second).await;
+    assert_eq!(replayed["id"], created["id"], "same key → same checkout");
+    assert_eq!(replayed["url"], created["url"], "same hosted session");
+
+    // …and exactly one row and one event landed.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM payments.checkouts WHERE idempotency_key = $1")
+            .bind(key)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    let stored_status: String =
+        sqlx::query_scalar("SELECT status FROM payments.checkouts WHERE idempotency_key = $1")
+            .bind(key)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(rows, 1);
+    assert_eq!(stored_status, "open", "the session opened the checkout");
+
+    // One buy button, one CheckoutCreated event.
+    let outbox: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM platform.outbox WHERE event_type = 'payments.checkout_created'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(outbox, 1);
+
+    // The fake provider holds exactly one live session for it —
+    // retrieval reused the same session instead of minting another.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_unscoped("t", "tests").await.unwrap();
+    let account: String =
+        sqlx::query_scalar("SELECT external_account_id FROM payments.provider_connections LIMIT 1")
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    let session_id = created["url"]
+        .as_str()
+        .unwrap()
+        .split('/')
+        .nth(3)
+        .unwrap()
+        .to_string();
+    provider
+        .retrieve_checkout(&account, &session_id)
+        .await
+        .expect("the same session is retrievable — nothing was minted twice");
+}
+
+#[tokio::test]
+async fn checkout_is_refused_while_the_connection_cannot_accept_payments() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "not-active").await;
+    let provider = FakeProvider::new();
+    // A connection exists but never finished onboarding.
+    pending_connection(&pool, tenant_id, &provider).await;
+
+    let app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        tenant_id,
+    )
+    .await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(checkout_body("order-2", 500, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value = actix_test::read_body_json(response).await;
+    assert!(
+        body["type"]
+            .as_str()
+            .unwrap()
+            .ends_with("payments/connection-not-active"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_redirect_off_the_verified_domain_allow_list_is_rejected() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "allow-list").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    let app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        tenant_id,
+    )
+    .await;
+    for evil in [
+        serde_json::json!({
+            "reference": "o", "amount_minor": 100, "currency": "JPY",
+            "success_url": "https://evil.test/thanks", "cancel_url": "https://shop.test/cart"
+        }),
+        // Plaintext redirect targets are refused before the allow-list.
+        serde_json::json!({
+            "reference": "o", "amount_minor": 100, "currency": "JPY",
+            "success_url": "http://shop.test/thanks", "cancel_url": "https://shop.test/cart"
+        }),
+        // Userinfo smuggling dies at URL parsing, not at DNS.
+        serde_json::json!({
+            "reference": "o", "amount_minor": 100, "currency": "JPY",
+            "success_url": "https://evil.test@shop.test/thanks", "cancel_url": "https://shop.test/cart"
+        }),
+    ] {
+        let response = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::post()
+                .uri("/api/v1/tenant/checkout")
+                .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+                .set_json(evil)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert!(
+            body["type"]
+                .as_str()
+                .unwrap()
+                .contains("domain-not-allowed"),
+            "{body}"
+        );
+    }
+
+    // Nothing was persisted for any rejected attempt.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM payments.checkouts")
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[tokio::test]
+async fn tenant_b_cannot_create_on_or_read_tenant_as_checkouts() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_a = seed_tenant(&pool, "alpha-buyer").await;
+    let tenant_b = seed_tenant(&pool, "beta-buyer").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_a, &provider).await;
+
+    let b_app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        tenant_b,
+    )
+    .await;
+    let a_app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        tenant_a,
+    )
+    .await;
+
+    // Tenant B has no connection of its own: its buy request gets the
+    // connection blocker — never tenant A's account (the use case loads
+    // only the requesting tenant's connection through RLS, and the
+    // outbound command carries that account id alone).
+    let response = actix_test::call_service(
+        &b_app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(checkout_body("sneaky", 100, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let b_rows: i64 = {
+        let tx = TxManager::new(pool.clone());
+        let mut scope = tx.begin_for(tenant_b).await.unwrap();
+        let rows = sqlx::query_scalar("SELECT count(*) FROM payments.checkouts")
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+        scope.rollback().await.unwrap();
+        rows
+    };
+    assert_eq!(b_rows, 0);
+
+    // Give A a real checkout…
+    let created = actix_test::call_service(
+        &a_app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(checkout_body("a-order", 300, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let view: serde_json::Value = actix_test::read_body_json(created).await;
+
+    // …and B cannot read it even knowing the id (RLS door): 404, not
+    // someone else's order state.
+    let forbidden = actix_test::call_service(
+        &b_app,
+        actix_test::TestRequest::get()
+            .uri(&format!(
+                "/api/v1/tenant/checkout/{}",
+                view["id"].as_str().unwrap()
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(
+        forbidden.status(),
+        StatusCode::NOT_FOUND,
+        "RLS: another tenant's checkout does not exist"
+    );
+}
+
+#[tokio::test]
+async fn a_currency_the_account_cannot_settle_is_refused_before_stripe() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "currency").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    let app = checkout_app(checkout_fixture(&pool, provider, 1000, false), tenant_id).await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(checkout_body("usd-order", 1999, "USD"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = actix_test::read_body_json(response).await;
+    assert!(
+        body["type"]
+            .as_str()
+            .unwrap()
+            .contains("currency-unsupported"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn checkout_creation_flooding_is_throttled_per_tenant() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "throttled").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    // Two per minute, per tenant bucket.
+    let app = checkout_app(checkout_fixture(&pool, provider, 2, false), tenant_id).await;
+    for i in 0..2 {
+        let ok = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::post()
+                .uri("/api/v1/tenant/checkout")
+                .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+                .set_json(checkout_body(&format!("o-{i}"), 100, "JPY"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(ok.status(), StatusCode::CREATED, "request {i}");
+    }
+    let denied = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(checkout_body("o-3", 100, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body: serde_json::Value = actix_test::read_body_json(denied).await;
+    assert!(
+        body["type"].as_str().unwrap().contains("rate-limited"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn missing_idempotency_key_is_a_bad_request_not_a_second_session() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "no-key").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    let app = checkout_app(checkout_fixture(&pool, provider, 1000, false), tenant_id).await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .set_json(checkout_body("o", 100, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A signed `checkout.session.completed` for a Sanvi-created session.
+fn session_completed_event(
+    event_id: &str,
+    account: &str,
+    checkout_id: Uuid,
+    tenant_id: Uuid,
+    session_id: &str,
+    payment_intent: Option<&str>,
+    created: i64,
+) -> serde_json::Value {
+    let mut object = serde_json::json!({
+        "id": session_id,
+        "object": "checkout.session",
+        "amount_total": 2000,
+        "currency": "jpy",
+        "client_reference_id": "order-1",
+        "metadata": {
+            "checkout_id": checkout_id.to_string(),
+            "tenant_id": tenant_id.to_string()
+        }
+    });
+    if let Some(pi) = payment_intent {
+        object["payment_intent"] = serde_json::json!(pi);
+    }
+    serde_json::json!({
+        "id": event_id,
+        "type": "checkout.session.completed",
+        "created": created,
+        "account": account,
+        "data": {"object": object}
+    })
+}
+
+fn payment_intent_event(
+    event_id: &str,
+    event_type: &str,
+    account: &str,
+    checkout_id: Uuid,
+    tenant_id: Uuid,
+    pi_id: &str,
+    failure_code: Option<&str>,
+    created: i64,
+) -> serde_json::Value {
+    let mut object = serde_json::json!({
+        "id": pi_id,
+        "object": "payment_intent",
+        "amount": 2000,
+        "currency": "jpy",
+        "metadata": {
+            "checkout_id": checkout_id.to_string(),
+            "tenant_id": tenant_id.to_string()
+        }
+    });
+    if let Some(code) = failure_code {
+        object["last_payment_error"] =
+            serde_json::json!({"code": code, "message": "card declined"});
+    }
+    serde_json::json!({
+        "id": event_id,
+        "type": event_type,
+        "created": created,
+        "account": account,
+        "data": {"object": object}
+    })
+}
+
+/// Create one checkout through the use case, against the SAME fake
+/// provider handle that owns the tenant's connection.
+async fn create_checkout_via_use_case(
+    pool: &sqlx::PgPool,
+    provider: &FakeProvider,
+    tenant_id: Uuid,
+    reference: &str,
+) -> (Uuid, String) {
+    let state = checkout_fixture(pool, provider.clone(), 1000, false);
+    let outcome = state
+        .create_checkout
+        .execute(NewCheckoutCommand {
+            tenant_id,
+            reference: reference.to_string(),
+            amount_minor: 2000,
+            currency: "JPY".to_string(),
+            customer_ref: None,
+            locale: Some("ja".to_string()),
+            success_url: "https://shop.test/thanks".to_string(),
+            cancel_url: "https://shop.test/cart".to_string(),
+            idempotency_key: Uuid::now_v7(),
+        })
+        .await
+        .unwrap();
+    (
+        outcome.checkout.id,
+        outcome.checkout.external_session_id.unwrap(),
+    )
+}
+
+/// The live connection row's account id (platform-scope read: money-webhook
+/// routing runs cross-tenant by design).
+async fn live_account_id(fixture: &WebhookFixture, tenant_id: Uuid) -> String {
+    let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
+    let acct: String = sqlx::query_scalar(
+        "SELECT external_account_id FROM payments.provider_connections
+         WHERE tenant_id = $1 AND disconnected_at IS NULL LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    acct
+}
+
+#[tokio::test]
+async fn the_webhook_is_the_fact_a_customer_who_never_returns_still_ends_paid() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "webhook-truth").await;
+    let fixture = webhook_fixture(&pool).await;
+
+    // One connection, activated through the legal lifecycle edges.
+    let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
+    let repo = SqlxProviderConnectionRepository::new();
+    let mut conn = connection.clone();
+    let early = fixture
+        .provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    conn.apply_status(&early, ConnectionStatus::Onboarding, Utc::now())
+        .unwrap();
+    fixture
+        .provider
+        .approve_onboarding(&connection.external_account_id);
+    let ready = fixture
+        .provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    conn.apply_status(&ready, ConnectionStatus::Active, Utc::now())
+        .unwrap();
+    {
+        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        repo.update(&mut scope, &conn).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    // …and the checkout created against it.
+    let (checkout_id, session_id) =
+        create_checkout_via_use_case(&pool, &fixture.provider, tenant_id, "order-webhook").await;
+    let account = live_account_id(&fixture, tenant_id).await;
+    assert_eq!(account, connection.external_account_id);
+
+    // The customer pays at Stripe and closes the tab — the redirect never
+    // happens. The webhook arrives instead.
+    let event = session_completed_event(
+        "evt_paid_1",
+        &account,
+        checkout_id,
+        tenant_id,
+        &session_id,
+        Some("pi_paid_1"),
+        epoch(5),
+    );
+    assert!(fixture.deliver(&event).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "{report:?}");
+
+    // The read model: one succeeded JPY payment at minor units…
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let row: (String, i64, String, Option<Uuid>) = sqlx::query_as(
+        "SELECT status, amount_minor, currency, checkout_id FROM payments.payments
+         WHERE external_payment_id = 'pi_paid_1'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    // …the checkout completed with its timestamp…
+    let stored = <SqlxCheckoutRepository as CheckoutRepository>::find_by_id(
+        &SqlxCheckoutRepository::new(),
+        &mut scope,
+        tenant_id,
+        checkout_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(row.0, "succeeded");
+    assert_eq!(
+        row.1, 2000,
+        "\u{a5}2,000 IS 2000 \u{2014} no hidden \u{f7}100"
+    );
+    assert_eq!(row.2, "JPY");
+    assert_eq!(row.3, Some(checkout_id));
+    assert_eq!(stored.status.as_str(), "complete");
+    assert!(stored.completed_at.is_some());
+
+    // …and the conversion pipeline's event fired exactly once.
+    assert_eq!(fixture.outbox_events("payments.payment_succeeded").await, 1);
+
+    // Redelivery of the same event changes nothing.
+    assert!(!fixture.deliver(&event).await.unwrap(), "deduped");
+    fixture.dispatcher.dispatch(10).await.unwrap();
+
+    // The sibling event (pi.succeeded) converges on the same row and adds
+    // no second success event.
+    assert!(
+        fixture
+            .deliver(&payment_intent_event(
+                "evt_paid_2",
+                "payment_intent.succeeded",
+                &account,
+                checkout_id,
+                tenant_id,
+                "pi_paid_1",
+                None,
+                epoch(6),
+            ))
+            .await
+            .unwrap()
+    );
+    fixture.dispatcher.dispatch(10).await.unwrap();
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let payments: i64 = sqlx::query_scalar("SELECT count(*) FROM payments.payments")
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(payments, 1, "sibling events upsert, never duplicate");
+    assert_eq!(
+        fixture.outbox_events("payments.payment_succeeded").await,
+        1,
+        "one paid order, one PaymentSucceeded"
+    );
+}
+
+#[tokio::test]
+async fn a_forged_return_url_yields_no_order_and_failures_expire_correctly() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "forged-return").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
+    // Activate through the legal lifecycle edges so the buy path is open.
+    let mut conn = connection.clone();
+    let early = fixture
+        .provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    conn.apply_status(&early, ConnectionStatus::Onboarding, Utc::now())
+        .unwrap();
+    fixture
+        .provider
+        .approve_onboarding(&connection.external_account_id);
+    let ready = fixture
+        .provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    conn.apply_status(&ready, ConnectionStatus::Active, Utc::now())
+        .unwrap();
+    {
+        let repo = SqlxProviderConnectionRepository::new();
+        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        repo.update(&mut scope, &conn).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+    let account = connection.external_account_id.clone();
+
+    let (checkout_id, session_id) =
+        create_checkout_via_use_case(&pool, &fixture.provider, tenant_id, "order-forge").await;
+
+    // Someone crafts a return URL claiming success. No webhook ever
+    // arrived: the checkout MUST still be open.
+    let stored = fixture
+        .checkouts
+        .find_by_external_session(
+            &mut fixture.tx.begin_unscoped("t", "tests").await.unwrap(),
+            &session_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.status.as_str(),
+        "open",
+        "the redirect is a hint; it moves nothing"
+    );
+    assert_eq!(stored.id, checkout_id);
+
+    // A real decline arrives: failed payment recorded, outbox event fired,
+    // but the checkout stays live (retryable at the hosted page).
+    assert!(
+        fixture
+            .deliver(&payment_intent_event(
+                "evt_failed_1",
+                "payment_intent.payment_failed",
+                &account,
+                checkout_id,
+                tenant_id,
+                "pi_declined_1",
+                Some("card_declined"),
+                epoch(7),
+            ))
+            .await
+            .unwrap()
+    );
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "{report:?}");
+
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let (status, failure): (String, serde_json::Value) = sqlx::query_as(
+        "SELECT status, failure FROM payments.payments WHERE external_payment_id = 'pi_declined_1'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(status, "failed");
+    assert_eq!(failure["code"], "card_declined");
+    assert_eq!(fixture.outbox_events("payments.payment_failed").await, 1);
+    let still_open = fixture
+        .checkouts
+        .find_by_external_session(
+            &mut fixture.tx.begin_unscoped("t", "tests").await.unwrap(),
+            &session_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(still_open.status.as_str(), "open");
+
+    // The customer gives up; the session expires at the provider.
+    let expired = serde_json::json!({
+        "id": "evt_expired_1",
+        "type": "checkout.session.expired",
+        "created": epoch(3600),
+        "account": account,
+        "data": {"object": {
+            "id": session_id,
+            "object": "checkout.session",
+            "metadata": {
+                "checkout_id": checkout_id.to_string(),
+                "tenant_id": tenant_id.to_string()
+            }
+        }}
+    });
+    assert!(fixture.deliver(&expired).await.unwrap());
+    fixture.dispatcher.dispatch(10).await.unwrap();
+    let expired_row = fixture
+        .checkouts
+        .find_by_external_session(
+            &mut fixture.tx.begin_unscoped("t", "tests").await.unwrap(),
+            &session_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(expired_row.status.as_str(), "expired");
+
+    // An unknown-account money event is alerted and acknowledged — never
+    // provisioned, never dead-lettered.
+    assert!(
+        fixture
+            .deliver(&session_completed_event(
+                "evt_stranger_1",
+                "acct_never_seen_money",
+                Uuid::now_v7(),
+                tenant_id,
+                "cs_unknown",
+                None,
+                epoch(10),
+            ))
+            .await
+            .unwrap()
+    );
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.failed, 0, "unknown accounts are not poison");
+    let stranger_rows: i64 = {
+        let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
+        let n = sqlx::query_scalar(
+            "SELECT count(*) FROM payments.payments WHERE external_payment_id LIKE 'cs_%'",
+        )
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+        scope.rollback().await.unwrap();
+        n
+    };
+    assert_eq!(
+        stranger_rows, 0,
+        "nothing was written for a stranger's session"
+    );
+}
+
+#[tokio::test]
+async fn the_confirmation_view_is_webhook_truthful_and_the_conversion_id_is_stable() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "confirmation").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
+    let repo = SqlxProviderConnectionRepository::new();
+    let mut conn = connection.clone();
+    let early = fixture
+        .provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    conn.apply_status(&early, ConnectionStatus::Onboarding, Utc::now())
+        .unwrap();
+    fixture
+        .provider
+        .approve_onboarding(&connection.external_account_id);
+    let ready = fixture
+        .provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    conn.apply_status(&ready, ConnectionStatus::Active, Utc::now())
+        .unwrap();
+    {
+        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        repo.update(&mut scope, &conn).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    let app = checkout_app(
+        checkout_fixture(&pool, fixture.provider.clone(), 1000, false),
+        tenant_id,
+    )
+    .await;
+    let key = Uuid::now_v7();
+    let created = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(checkout_body("order-confirm", 2000, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let view: serde_json::Value = actix_test::read_body_json(created).await;
+    let checkout_id: Uuid = Uuid::parse_str(view["id"].as_str().unwrap()).unwrap();
+    let session_id: String = view["url"]
+        .as_str()
+        .unwrap()
+        .split('/')
+        .nth(3)
+        .unwrap()
+        .to_string();
+
+    // Before any webhook: pending, hosted URL still attached, no
+    // conversion id.
+    let polled = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri(&format!("/api/v1/tenant/checkout/{checkout_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(polled.status(), StatusCode::OK);
+    let before: serde_json::Value = actix_test::read_body_json(polled).await;
+    assert_eq!(before["status"], "pending");
+    assert!(before["url"].as_str().is_some());
+    assert_eq!(before["conversion_event_id"], serde_json::Value::Null);
+
+    // Pay through the transport (in production: the worker process).
+    let account = live_account_id(&fixture, tenant_id).await;
+    assert!(
+        fixture
+            .deliver(&session_completed_event(
+                "evt_confirm_1",
+                &account,
+                checkout_id,
+                tenant_id,
+                &session_id,
+                Some("pi_confirm_1"),
+                epoch(5),
+            ))
+            .await
+            .unwrap()
+    );
+    fixture.dispatcher.dispatch(10).await.unwrap();
+
+    let polled = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri(&format!("/api/v1/tenant/checkout/{checkout_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(polled.status(), StatusCode::OK);
+    let after: serde_json::Value = actix_test::read_body_json(polled).await;
+    assert_eq!(after["status"], "paid", "{after}");
+    // The URL is gone once terminal — the hosted page has nothing to say.
+    assert_eq!(after["url"], serde_json::Value::Null);
+
+    // The conversion id equals the server-side derivation from the payment
+    // row, identical across refreshes.
+    let expected_payment_id: Uuid = {
+        let tx = TxManager::new(pool.clone());
+        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM payments.payments WHERE external_payment_id = 'pi_confirm_1'",
+        )
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+        scope.rollback().await.unwrap();
+        id
+    };
+    assert_eq!(
+        after["conversion_event_id"],
+        serde_json::json!(conversion_event_id(tenant_id, expected_payment_id)),
+        "derived once per order, stable across refreshes"
+    );
+    let again = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri(&format!("/api/v1/tenant/checkout/{checkout_id}"))
+            .to_request(),
+    )
+    .await;
+    let refreshed: serde_json::Value = actix_test::read_body_json(again).await;
+    assert_eq!(
+        refreshed["conversion_event_id"],
+        after["conversion_event_id"]
+    );
 }
