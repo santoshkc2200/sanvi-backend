@@ -1,7 +1,7 @@
 # TASK-004: 09.3 Connection lifecycle & Connect webhooks
 
 **Phase:** 09
-**Status:** todo
+**Status:** done
 **Requirement(s):** FR-903, FR-904, NFR-905
 **Depends on:** TASK-003
 **Created:** 2026-08-20
