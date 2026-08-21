@@ -32,6 +32,7 @@ impl PaymentsMetrics {
             &["result"],
         )
         .expect("counter vec construction is infallible");
+        let _ = registry.register(Box::new(catalog_requests.clone()));
         let entitlement_denied = IntCounter::new(
             "payments_entitlement_denied_total",
             "Payments routes denied by the payments.stripe_connect entitlement gate",
