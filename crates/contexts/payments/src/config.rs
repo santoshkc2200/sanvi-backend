@@ -6,6 +6,7 @@
 //! permissions — the composition root validates both distinctions at boot.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Application-fee configuration. Off by default in 0.10.0 (the platform
 /// monetises via subscription); when a commercial model calls for it, the
@@ -18,6 +19,45 @@ pub struct ApplicationFeeConfig {
     /// tenant-transaction request.
     #[serde(default)]
     pub enabled: bool,
+}
+
+/// The i18n key an unmapped provider requirement code falls back to. The
+/// catalog entry tells the tenant the raw code plus Stripe's requirements
+/// help link — a new Stripe requirement degrades, never breaks (09.3).
+pub const UNMAPPED_REQUIREMENT_KEY: &str = "payments.req.unmapped";
+
+/// The requirement-code → i18n-key map shipped as data. Operators extend
+/// or override it per environment from `[payments.requirement_keys]` in
+/// config; codes added by the provider before this map learns them fall
+/// back to [`UNMAPPED_REQUIREMENT_KEY`].
+pub const DEFAULT_REQUIREMENT_KEYS: &[(&str, &str)] = &[
+    (
+        "individual.verification.document",
+        "payments.req.id_document",
+    ),
+    (
+        "company.verification.document",
+        "payments.req.company_document",
+    ),
+    ("individual.id_number", "payments.req.id_number"),
+    ("company.tax_id", "payments.req.tax_id"),
+    ("business_profile.url", "payments.req.business_url"),
+    (
+        "business_profile.product_description",
+        "payments.req.business_description",
+    ),
+    ("external_account", "payments.req.bank_account"),
+    ("individual.address", "payments.req.address"),
+    ("company.address", "payments.req.address"),
+    ("individual.phone", "payments.req.phone"),
+    ("individual.email", "payments.req.email"),
+];
+
+fn default_requirement_keys() -> HashMap<String, String> {
+    DEFAULT_REQUIREMENT_KEYS
+        .iter()
+        .map(|(code, key)| ((*code).to_string(), (*key).to_string()))
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -48,6 +88,12 @@ pub struct PaymentsConfig {
     /// Client IPs allowed to POST Connect webhooks (defence in depth on
     /// top of signature verification). Empty = fail closed.
     pub webhook_allowed_clients: Vec<String>,
+    /// Provider requirement code → i18n message key (`payments.req.*`).
+    /// Data, not code: new codes fall back to
+    /// [`UNMAPPED_REQUIREMENT_KEY`] until this map (or the config file
+    /// override) learns them.
+    #[serde(default = "default_requirement_keys")]
+    pub requirement_keys: HashMap<String, String>,
     /// Application-fee switch — off in 0.10.0.
     #[serde(default)]
     pub application_fee: ApplicationFeeConfig,
@@ -63,6 +109,7 @@ impl Default for PaymentsConfig {
             connect_webhook_secret: String::new(),
             webhook_tolerance_secs: 300,
             webhook_allowed_clients: vec![],
+            requirement_keys: default_requirement_keys(),
             application_fee: ApplicationFeeConfig::default(),
         }
     }
@@ -121,5 +168,22 @@ mod tests {
             ..PaymentsConfig::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn requirement_keys_ship_as_data_with_a_documented_fallback() {
+        let config = PaymentsConfig::default();
+        // A known Stripe code maps to its message key…
+        assert_eq!(
+            config
+                .requirement_keys
+                .get("individual.verification.document")
+                .map(String::as_str),
+            Some("payments.req.id_document")
+        );
+        // …and the fallback key exists for everything the map has not
+        // learned yet (new provider requirements degrade, never break).
+        assert_ne!(UNMAPPED_REQUIREMENT_KEY, "payments.req.id_document");
+        assert!(UNMAPPED_REQUIREMENT_KEY.starts_with("payments.req."));
     }
 }

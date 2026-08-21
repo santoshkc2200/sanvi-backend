@@ -1,0 +1,16 @@
+{
+  "payments.req.id_document": "本人確認書類の提出",
+  "payments.req.company_document": "法人確認書類の提出",
+  "payments.req.id_number": "本人確認番号",
+  "payments.req.tax_id": "税務番号",
+  "payments.req.business_url": "ビジネスプロフィールURL",
+  "payments.req.business_description": "商品・サービスの説明",
+  "payments.req.bank_account": "送金用の銀行口座",
+  "payments.req.address": "住所",
+  "payments.req.phone": "電話番号",
+  "payments.req.email": "メールアドレス",
+  "payments.req.unmapped": "Stripeから追加の要件があります: {code}（Stripeのヘルプをご確認ください）",
+  "payments.blocker.onboarding_not_started": "オンボーディングがまだ開始されていません",
+  "payments.blocker.card_payments_inactive": "このアカウントではまだカード決済が有効になっていません",
+  "payments.blocker.requirements_past_due": "必要な情報の提出期限が過ぎています"
+}

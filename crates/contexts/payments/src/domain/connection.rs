@@ -134,6 +134,50 @@ impl ProviderConnection {
         Ok(())
     }
 
+    /// Out-of-order guard (NFR-905): an event older than the last state
+    /// we already applied is dropped, never re-applied.
+    ///
+    /// `last_synced_at` carries *provider* time after a webhook-driven
+    /// update (the event's own `created`), and wall-clock time after a
+    /// full sync — which observed every event created before it, so
+    /// dropping those remains correct. Comparison is strictly older;
+    /// same-second events are applied (redeliveries are already deduped
+    /// by event id).
+    pub fn is_event_stale(&self, event_created: DateTime<Utc>) -> bool {
+        self.last_synced_at.is_some_and(|last| event_created < last)
+    }
+
+    /// Refresh the provider-state projection (capabilities, requirements,
+    /// country, currency) **without** a status transition — requirements
+    /// move while onboarding stays onboarding. Returns whether anything
+    /// changed; `last_synced_at` moves to `now` either way so the
+    /// reconciliation job's "not seen recently" cadence and the stale
+    /// guard both advance.
+    pub fn refresh_snapshot(
+        &mut self,
+        snapshot: &ProviderAccountStatus,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let capabilities = snapshot.capabilities.to_provider_json();
+        let requirements =
+            serde_json::to_value(&snapshot.requirements).expect("requirement summaries serialize");
+        let country = snapshot.country.as_ref().map(|c| c.as_str().to_string());
+        let default_currency = snapshot
+            .default_currency
+            .as_ref()
+            .map(|c| c.as_str().to_string());
+        let changed = self.capabilities != capabilities
+            || self.requirements != requirements
+            || self.country != country
+            || self.default_currency != default_currency;
+        self.capabilities = capabilities;
+        self.requirements = requirements;
+        self.country = country;
+        self.default_currency = default_currency;
+        self.last_synced_at = Some(now);
+        changed
+    }
+
     /// The typed capability view over the stored provider JSON.
     pub fn capability_set(&self) -> CapabilitySet {
         CapabilitySet::from_provider_json(&self.capabilities)
@@ -267,5 +311,71 @@ mod tests {
         // Terminal: a second disconnect is an illegal transition.
         assert!(conn.disconnect(Utc::now()).is_err());
         assert_eq!(conn.disconnected_at, stamped);
+    }
+
+    #[test]
+    fn stale_events_are_dropped_fresh_ones_are_not() {
+        let t0 = Utc::now();
+        // A fresh Pending row carries last_synced_at = its creation time.
+        let mut conn = ProviderConnection::pending(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            ProviderKind::Fake,
+            "acct_stale".to_string(),
+            t0,
+        )
+        .unwrap();
+        assert!(conn.is_event_stale(t0 - chrono::Duration::seconds(1)));
+        // Same second (a distinct event, redelivery is deduped by id): not stale.
+        assert!(!conn.is_event_stale(t0));
+        assert!(!conn.is_event_stale(t0 + chrono::Duration::seconds(1)));
+
+        // Applying an event moves the anchor to that event's provider time.
+        conn.apply_status(
+            &snapshot(None),
+            ConnectionStatus::Onboarding,
+            t0 + chrono::Duration::seconds(5),
+        )
+        .unwrap();
+        assert!(conn.is_event_stale(t0 + chrono::Duration::seconds(4)));
+        assert!(!conn.is_event_stale(t0 + chrono::Duration::seconds(5)));
+
+        // A never-synced connection accepts anything.
+        let fresh = ProviderConnection {
+            last_synced_at: None,
+            ..ProviderConnection::pending(
+                Uuid::now_v7(),
+                Uuid::now_v7(),
+                ProviderKind::Fake,
+                "acct_stale_2".to_string(),
+                t0,
+            )
+            .unwrap()
+        };
+        assert!(!fresh.is_event_stale(t0 - chrono::Duration::hours(1)));
+    }
+
+    #[test]
+    fn refresh_snapshot_updates_projection_without_a_transition() {
+        let mut conn = onboarding();
+        let before = conn.clone();
+
+        let mut updated = snapshot(None);
+        updated.requirements.currently_due = vec!["individual.verification.document".to_string()];
+        assert!(
+            conn.refresh_snapshot(&updated, Utc::now()),
+            "changed requirements report as changed"
+        );
+        assert_eq!(conn.status, before.status, "no transition happened");
+        assert_eq!(
+            conn.requirement_summary().currently_due,
+            ["individual.verification.document"]
+        );
+        assert!(conn.last_synced_at > before.last_synced_at);
+
+        // The same snapshot again: nothing changed, clock still advances.
+        let last_synced = conn.last_synced_at;
+        assert!(!conn.refresh_snapshot(&updated, Utc::now()));
+        assert!(conn.last_synced_at.unwrap() >= last_synced.unwrap());
     }
 }

@@ -3,9 +3,13 @@
 //! 09.0 wires the catalog path so observability arrives with the first
 //! route, not retrofitted in 09.7. The money-path metrics from the parent
 //! plan (`checkout_created_total`, `payment_succeeded_total`, …) register
-//! with the slices that first emit them.
+//! with the slices that first emit them; 09.3 adds the Connect webhook
+//! transport's lag/backlog/DLQ depth and the connection-status gauge.
 
-use prometheus::{IntCounter, IntCounterVec, Opts, Registry};
+use chrono::{DateTime, Utc};
+use prometheus::{
+    Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+};
 
 #[derive(Clone)]
 pub struct PaymentsMetrics {
@@ -20,6 +24,29 @@ pub struct PaymentsMetrics {
     /// Account Sessions minted by outcome (09.2) — every render of the
     /// embedded onboarding component.
     pub account_sessions: IntCounterVec,
+    /// Reception → processing lag for Connect webhooks (09.3); alerting
+    /// watches the backlog gauge, this shows how far behind we run.
+    pub webhook_lag_seconds: Histogram,
+    /// Stored but unprocessed Connect events (the queue's depth).
+    pub webhook_unprocessed: IntGauge,
+    /// Events whose retry budget is exhausted (dead-letter depth — any
+    /// value above zero pages).
+    pub webhook_dead_letter: IntGauge,
+    /// Dispatch outcomes per pass (`processed` / `skipped` / `failed`).
+    pub webhook_events: IntCounterVec,
+    /// Events for accounts we do not know — a leaked endpoint or an
+    /// orphan create; any sustained rate is investigated.
+    pub webhook_unknown_account: IntCounter,
+    /// Live connections per status (`connection_status_gauge{status}` in
+    /// the plan's vocabulary; stuck-Onboarding and Restricted alerts read
+    /// it).
+    pub connection_status: IntGaugeVec,
+    /// Connections reaching `Active` (`connect_onboarding_completed`
+    /// semantics — the funnel's exit).
+    pub connection_activations: IntCounter,
+    /// Reconciliation passes' work counters.
+    pub reconciliation_checked: IntCounter,
+    pub reconciliation_updated: IntCounter,
 }
 
 impl PaymentsMetrics {
@@ -57,11 +84,89 @@ impl PaymentsMetrics {
         .expect("counter vec construction is infallible");
         let _ = registry.register(Box::new(connection_creates.clone()));
         let _ = registry.register(Box::new(account_sessions.clone()));
+
+        let webhook_lag_seconds = Histogram::with_opts(HistogramOpts::new(
+            "payments_webhook_lag_seconds",
+            "Connect webhook reception → processing lag in seconds",
+        ))
+        .expect("histogram construction is infallible");
+        let _ = registry.register(Box::new(webhook_lag_seconds.clone()));
+        let webhook_unprocessed = IntGauge::new(
+            "payments_webhook_unprocessed_gauge",
+            "Stored but unprocessed Connect webhook events",
+        )
+        .expect("gauge construction is infallible");
+        let _ = registry.register(Box::new(webhook_unprocessed.clone()));
+        let webhook_dead_letter = IntGauge::new(
+            "payments_webhook_dead_letter_gauge",
+            "Connect webhook events with an exhausted retry budget",
+        )
+        .expect("gauge construction is infallible");
+        let _ = registry.register(Box::new(webhook_dead_letter.clone()));
+        let webhook_events = IntCounterVec::new(
+            Opts::new(
+                "payments_webhook_events_total",
+                "Connect webhook dispatch outcomes",
+            ),
+            &["result"],
+        )
+        .expect("counter vec construction is infallible");
+        let _ = registry.register(Box::new(webhook_events.clone()));
+        let webhook_unknown_account = IntCounter::new(
+            "payments_webhook_unknown_account_total",
+            "Connect webhook events for accounts Sanvi does not know",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(webhook_unknown_account.clone()));
+        let connection_status = IntGaugeVec::new(
+            Opts::new(
+                "payments_connection_status_gauge",
+                "Live provider connections by lifecycle status",
+            ),
+            &["status"],
+        )
+        .expect("gauge vec construction is infallible");
+        let _ = registry.register(Box::new(connection_status.clone()));
+        let connection_activations = IntCounter::new(
+            "payments_connection_activations_total",
+            "Connections reaching Active (connect onboarding completions)",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(connection_activations.clone()));
+        let reconciliation_checked = IntCounter::new(
+            "payments_reconciliation_checked_total",
+            "Connections re-synced by the reconciliation job",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(reconciliation_checked.clone()));
+        let reconciliation_updated = IntCounter::new(
+            "payments_reconciliation_updated_total",
+            "Connections changed by the reconciliation job (lost-webhook repairs)",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(reconciliation_updated.clone()));
+
         Self {
             catalog_requests,
             entitlement_denied,
             connection_creates,
             account_sessions,
+            webhook_lag_seconds,
+            webhook_unprocessed,
+            webhook_dead_letter,
+            webhook_events,
+            webhook_unknown_account,
+            connection_status,
+            connection_activations,
+            reconciliation_checked,
+            reconciliation_updated,
         }
+    }
+
+    /// Observe reception → processing lag for one event.
+    pub fn observe_webhook_lag(&self, received_at: DateTime<Utc>, now: DateTime<Utc>) {
+        let lag = (now - received_at).num_milliseconds();
+        self.webhook_lag_seconds
+            .observe((lag.max(0) as f64) / 1000.0);
     }
 }

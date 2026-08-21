@@ -18,5 +18,11 @@
   "emails.trial_ending.subject": "{tenant} のトライアルはまもなく終了します",
   "emails.trial_ending.body": "{tenant} のトライアルは {date, date} に終了します。",
   "emails.privacy_status.subject": "プライバシーリクエストの更新: {subject}",
-  "emails.privacy_status.body": "プライバシーリクエストの現在の状態は {status} です。"
+  "emails.privacy_status.body": "プライバシーリクエストの現在の状態は {status} です。",
+  "emails.payments_connection_activated.subject": "{tenant} の決済アカウントが有効になりました",
+  "emails.payments_connection_activated.body": "{tenant} の決済アカウント（接続 {connection}）で、お客様のお客様からの決済を受け付けられるようになりました。",
+  "emails.payments_connection_restricted.subject": "対応が必要です: {tenant} の決済アカウントが制限されています",
+  "emails.payments_connection_restricted.body": "{tenant} の決済アカウント（接続 {connection}）は現在決済を受け付けられません: {detail}。ダッシュボードにログインして、未完了の要件を解消してください。",
+  "emails.payments_requirement_deadline.subject": "{tenant} の決済アカウントの期限が近づいています",
+  "emails.payments_requirement_deadline.body": "Stripe から、決済アカウント（接続 {connection}）について {date, date} までに追加情報の提出を求められています。提出されない場合、アカウントは制限されます。"
 }

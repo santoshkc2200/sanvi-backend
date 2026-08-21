@@ -86,7 +86,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConnectionView'
-          description: Status, capabilities, requirements and the server-computed can_accept_payments
+          description: Status, capabilities, requirements, blockers and the server-computed can_accept_payments
         '403':
           content:
             application/json:
@@ -101,8 +101,10 @@ paths:
           description: No such connection for this tenant
       summary: |-
         `GET /api/v1/tenant/payments/connections/{id}` — the connection's
-        status, capabilities and outstanding requirements (thin until 09.3's
-        webhooks make it truthful; the shape is contract-stable now).
+        status, capabilities, outstanding requirements (with i18n render keys
+        and deadline), blockers, and the server-computed `can_accept_payments`
+        (FR-903). Truthful because 09.3's webhooks and reconciliation job keep
+        the row current.
       tags:
       - payments
   /api/v1/tenant/payments/connections/{id}/session:

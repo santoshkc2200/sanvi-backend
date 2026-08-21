@@ -1,0 +1,16 @@
+{
+  "payments.req.id_document": "Identity document verification",
+  "payments.req.company_document": "Company document verification",
+  "payments.req.id_number": "Identity number",
+  "payments.req.tax_id": "Tax identification number",
+  "payments.req.business_url": "Business profile URL",
+  "payments.req.business_description": "Description of your products or services",
+  "payments.req.bank_account": "Bank account for payouts",
+  "payments.req.address": "Address",
+  "payments.req.phone": "Phone number",
+  "payments.req.email": "Email address",
+  "payments.req.unmapped": "Additional requirement from Stripe: {code} (see Stripe's requirements help)",
+  "payments.blocker.onboarding_not_started": "Onboarding has not started yet",
+  "payments.blocker.card_payments_inactive": "Card payments are not active on this account yet",
+  "payments.blocker.requirements_past_due": "Required information is past due"
+}

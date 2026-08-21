@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::adapters::http::PaymentsState;
 use crate::application::{ProvidersView, StartConnectionCommand};
+use crate::config::PaymentsConfig;
 use crate::domain::connection::ProviderConnection;
 use crate::domain::error::PaymentsError;
 use crate::domain::money::Currency;
@@ -124,6 +125,40 @@ fn client_ip(req: &HttpRequest) -> Option<IpAddr> {
 // View models
 // ---------------------------------------------------------------------------
 
+/// One outstanding provider requirement, with the i18n message key the
+/// frontend renders it from. The mapping is data
+/// (`payments.requirement_keys`); a code the map has not learned falls
+/// back to `payments.req.unmapped`, whose catalog entry shows the raw code
+/// plus Stripe's requirements help link — new requirements degrade,
+/// never break.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct RequirementEntryView {
+    /// The provider's requirement code, verbatim.
+    #[schema(example = "individual.verification.document")]
+    pub code: String,
+    /// The i18n key to render (`payments.req.*`).
+    #[schema(example = "payments.req.id_document")]
+    pub summary_key: String,
+}
+
+/// The connection's outstanding-requirements summary, projected with
+/// render keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct RequirementsView {
+    pub currently_due: Vec<RequirementEntryView>,
+    pub eventually_due: Vec<RequirementEntryView>,
+    pub past_due: Vec<RequirementEntryView>,
+    #[schema(value_type = Option<String>)]
+    pub deadline: Option<DateTime<Utc>>,
+}
+
+/// One reason the connection cannot take payments yet, keyed for i18n.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct BlockerView {
+    #[schema(example = "payments.blocker.card_payments_inactive")]
+    pub summary_key: String,
+}
+
 /// A tenant's connection to a payment provider: identifiers and status
 /// only — no PII, no credentials (the session secret is a separate,
 /// never-persisted response).
@@ -134,11 +169,15 @@ pub struct ConnectionView {
     pub provider: String,
     #[schema(example = "onboarding")]
     pub status: String,
-    /// The provider's capability map, verbatim from the last sync
-    /// (`{"card_payments": {"status": "active"}}` for Stripe v2).
+    /// The capability map as flat `name → status` strings
+    /// (`{"card_payments": "active"}`), normalised from the provider's
+    /// stored JSON (flat or v2-nested).
     pub capabilities: Value,
-    /// The provider's outstanding-requirements summary, verbatim.
-    pub requirements: Value,
+    /// Outstanding requirements with their i18n render keys and deadline.
+    pub requirements: RequirementsView,
+    /// Why checkout is blocked right now, if it is — server-computed,
+    /// ordered, empty once active with nothing past due.
+    pub blockers: Vec<BlockerView>,
     pub country: Option<String>,
     pub default_currency: Option<String>,
     #[schema(value_type = Option<String>)]
@@ -146,23 +185,69 @@ pub struct ConnectionView {
     #[schema(value_type = Option<String>)]
     pub last_synced_at: Option<DateTime<Utc>>,
     /// Server-computed from the v2 `card_payments` capability — never a
-    /// deprecated boolean.
+    /// deprecated boolean. The frontend renders this; it never recomputes
+    /// readiness from capability strings (one definition, one place).
     pub can_accept_payments: bool,
 }
 
 impl ConnectionView {
-    pub fn of(connection: &ProviderConnection) -> Self {
+    pub fn of(connection: &ProviderConnection, config: &PaymentsConfig) -> Self {
+        let capability_set = connection.capability_set();
+        let can_accept_payments = capability_set.is_card_payments_active();
+        let summary = connection.requirement_summary();
+
+        let entry = |code: &str| RequirementEntryView {
+            code: code.to_string(),
+            summary_key: config
+                .requirement_keys
+                .get(code)
+                .cloned()
+                .unwrap_or_else(|| crate::config::UNMAPPED_REQUIREMENT_KEY.to_string()),
+        };
+        let list = |codes: &[String]| codes.iter().map(|c| entry(c)).collect();
+        let requirements = RequirementsView {
+            currently_due: list(&summary.currently_due),
+            eventually_due: list(&summary.eventually_due),
+            past_due: list(&summary.past_due),
+            deadline: summary.deadline,
+        };
+
+        // Blockers are derived here, in one place, in stable order.
+        let mut blockers = Vec::new();
+        match connection.status {
+            crate::domain::ConnectionStatus::Pending => {
+                blockers.push(BlockerView {
+                    summary_key: "payments.blocker.onboarding_not_started".to_string(),
+                });
+            }
+            crate::domain::ConnectionStatus::Onboarding
+            | crate::domain::ConnectionStatus::Restricted
+                if !can_accept_payments =>
+            {
+                blockers.push(BlockerView {
+                    summary_key: "payments.blocker.card_payments_inactive".to_string(),
+                });
+            }
+            _ => {}
+        }
+        if !summary.past_due.is_empty() {
+            blockers.push(BlockerView {
+                summary_key: "payments.blocker.requirements_past_due".to_string(),
+            });
+        }
+
         Self {
             id: connection.id,
             provider: connection.provider.as_str().to_string(),
             status: connection.status.as_str().to_string(),
-            capabilities: connection.capabilities.clone(),
-            requirements: connection.requirements.clone(),
+            capabilities: capability_set.to_provider_json(),
+            requirements,
+            blockers,
             country: connection.country.clone(),
             default_currency: connection.default_currency.clone(),
             connected_at: connection.connected_at,
             last_synced_at: connection.last_synced_at,
-            can_accept_payments: connection.capability_set().is_card_payments_active(),
+            can_accept_payments,
         }
     }
 }
@@ -325,7 +410,7 @@ pub async fn create_payment_connection(
         .connection_creates
         .with_label_values(&["ok"])
         .inc();
-    Ok(HttpResponse::Created().json(ConnectionView::of(&connection)))
+    Ok(HttpResponse::Created().json(ConnectionView::of(&connection, &state.config)))
 }
 
 /// `POST /api/v1/tenant/payments/connections/{id}/session` — mint a
@@ -386,8 +471,10 @@ pub async fn create_payment_connection_session(
 }
 
 /// `GET /api/v1/tenant/payments/connections/{id}` — the connection's
-/// status, capabilities and outstanding requirements (thin until 09.3's
-/// webhooks make it truthful; the shape is contract-stable now).
+/// status, capabilities, outstanding requirements (with i18n render keys
+/// and deadline), blockers, and the server-computed `can_accept_payments`
+/// (FR-903). Truthful because 09.3's webhooks and reconciliation job keep
+/// the row current.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/payments/connections/{id}",
@@ -397,7 +484,7 @@ pub async fn create_payment_connection_session(
         ("id" = Uuid, Path, description = "The connection id")
     ),
     responses(
-        (status = 200, description = "Status, capabilities, requirements and the server-computed can_accept_payments", body = ConnectionView),
+        (status = 200, description = "Status, capabilities, requirements, blockers and the server-computed can_accept_payments", body = ConnectionView),
         (status = 403, description = "Missing payments.read permission or the entitlement", body = ProblemDetail),
         (status = 404, description = "No such connection for this tenant", body = ProblemDetail)
     )
@@ -411,7 +498,7 @@ pub async fn get_payment_connection(
     _entitlement: RequiredFeature,
 ) -> Result<HttpResponse, actix_web::Error> {
     let connection = load_connection(&state, tenant.0.tenant_id, path.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(ConnectionView::of(&connection)))
+    Ok(HttpResponse::Ok().json(ConnectionView::of(&connection, &state.config)))
 }
 
 /// RLS-scoped read: a connection id another tenant sent resolves to 404,

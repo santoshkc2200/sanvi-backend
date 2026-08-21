@@ -19,7 +19,7 @@ use anyhow::{Context, bail};
 const CATALOGS_DIR: &str = "crates/contexts/localization/catalogs";
 
 /// The domains that gate at 100 % coverage (everything the binary ships).
-const SHIPPED_DOMAINS: &[&str] = &["billing", "emails", "errors", "privacy"];
+const SHIPPED_DOMAINS: &[&str] = &["billing", "emails", "errors", "payments", "privacy"];
 
 /// The workspace root (this binary is `apps/cli`).
 fn workspace_root() -> PathBuf {

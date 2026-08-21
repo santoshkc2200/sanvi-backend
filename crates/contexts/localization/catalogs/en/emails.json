@@ -18,5 +18,11 @@
   "emails.trial_ending.subject": "Your {tenant} trial ends soon",
   "emails.trial_ending.body": "Your {tenant} trial ends on {date, date}.",
   "emails.privacy_status.subject": "Privacy request update: {subject}",
-  "emails.privacy_status.body": "Your privacy request status is now {status}."
+  "emails.privacy_status.body": "Your privacy request status is now {status}.",
+  "emails.payments_connection_activated.subject": "Your {tenant} payment account is live",
+  "emails.payments_connection_activated.body": "Your payment account for {tenant} (connection {connection}) can now accept payments from your customers.",
+  "emails.payments_connection_restricted.subject": "Action needed: your {tenant} payment account is restricted",
+  "emails.payments_connection_restricted.body": "Your payment account for {tenant} (connection {connection}) cannot accept payments right now: {detail}. Sign in to your dashboard to resolve the outstanding requirements.",
+  "emails.payments_requirement_deadline.subject": "Deadline approaching for your {tenant} payment account",
+  "emails.payments_requirement_deadline.body": "Stripe requires additional information for your payment account (connection {connection}) by {date, date}. If it is not provided, the account will be restricted."
 }

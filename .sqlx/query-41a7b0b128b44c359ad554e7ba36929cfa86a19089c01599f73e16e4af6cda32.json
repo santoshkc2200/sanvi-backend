@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE payments.provider_connections\n               SET status = $2, capabilities = $3, requirements = $4,\n                   country = $5, default_currency = $6,\n                   connected_at = $7, last_synced_at = $8,\n                   updated_at = now()\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "41a7b0b128b44c359ad554e7ba36929cfa86a19089c01599f73e16e4af6cda32"
+}

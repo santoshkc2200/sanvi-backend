@@ -7,7 +7,7 @@ use sanvi_persistence::TxManager;
 
 use crate::adapters::PaymentsMetrics;
 use crate::application::{
-    CreateAccountSession, ListProviders, ProviderRegistry, StartProviderConnection,
+    CreateAccountSession, ListProviders, ProviderRegistry, StartProviderConnection, WebhookReceiver,
 };
 use crate::config::PaymentsConfig;
 use crate::domain::ProviderConnectionRepository;
@@ -28,4 +28,7 @@ pub struct PaymentsState {
     pub create_connection: Arc<StartProviderConnection>,
     /// `POST /payments/connections/{id}/session` (09.2).
     pub account_session: Arc<CreateAccountSession>,
+    /// `POST /internal/webhooks/stripe/connect` (09.3): verify → store →
+    /// ack; the worker processes what lands here.
+    pub webhook_receiver: Arc<WebhookReceiver>,
 }

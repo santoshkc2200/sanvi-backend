@@ -9,6 +9,9 @@
 //! never a deprecated boolean.
 
 use chrono::{DateTime, Utc};
+
+#[cfg(test)]
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -133,7 +136,9 @@ impl RequirementSummary {
     }
 
     /// Parse from provider JSON, tolerating both the flat array form
-    /// (`{"currently_due": ["…"]}`) and empty/absent input.
+    /// (`{"currently_due": ["…"]}`) and empty/absent input. The deadline
+    /// arrives as an epoch integer on provider wire formats and as an
+    /// RFC-3339 string once round-tripped through storage — both parse.
     pub fn from_provider_json(value: &Value) -> Self {
         let strings = |key: &str| -> Vec<String> {
             value
@@ -148,14 +153,18 @@ impl RequirementSummary {
                 })
                 .unwrap_or_default()
         };
+        let deadline = match value.get("deadline") {
+            Some(Value::Number(n)) => n
+                .as_i64()
+                .and_then(|secs| DateTime::from_timestamp(secs, 0)),
+            Some(Value::String(raw)) => raw.parse::<DateTime<Utc>>().ok(),
+            _ => None,
+        };
         Self {
             currently_due: strings("currently_due"),
             eventually_due: strings("eventually_due"),
             past_due: strings("past_due"),
-            deadline: value
-                .get("deadline")
-                .and_then(Value::as_i64)
-                .and_then(|secs| DateTime::from_timestamp(secs, 0)),
+            deadline,
         }
     }
 }
@@ -241,5 +250,26 @@ mod tests {
         assert_eq!(due.currently_due, ["business_profile.url"]);
         assert_eq!(due.eventually_due, ["verification.document"]);
         assert!(due.deadline.is_some());
+    }
+
+    #[test]
+    fn deadlines_round_trip_through_epoch_and_storage_forms() {
+        // Provider wire form: epoch seconds.
+        let wire = RequirementSummary::from_provider_json(&serde_json::json!({
+            "deadline": 1_800_000_000
+        }));
+        assert_eq!(wire.deadline, DateTime::from_timestamp(1_800_000_000, 0));
+
+        // Stored form (apply_status serializes the struct): RFC-3339.
+        let stored = RequirementSummary::from_provider_json(&serde_json::json!({
+            "deadline": "2027-01-15T00:00:00Z"
+        }));
+        assert_eq!(stored.deadline.unwrap().year(), 2027);
+
+        // Garbage degrades to None, never an error.
+        let garbage = RequirementSummary::from_provider_json(&serde_json::json!({
+            "deadline": "soon-ish"
+        }));
+        assert_eq!(garbage.deadline, None);
     }
 }

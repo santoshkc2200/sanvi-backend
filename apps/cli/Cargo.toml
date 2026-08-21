@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 chrono.workspace = true
 clap.workspace = true
 figment.workspace = true
@@ -20,6 +21,7 @@ sanvi-billing.workspace = true
 sanvi-http.workspace = true
 sanvi-identity.workspace = true
 sanvi-localization.workspace = true
+sanvi-payments.workspace = true
 sanvi-persistence.workspace = true
 sanvi-platform-admin.workspace = true
 sanvi-system.workspace = true

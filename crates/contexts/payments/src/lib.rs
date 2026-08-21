@@ -24,14 +24,19 @@ pub mod domain;
 pub use config::PaymentsConfig;
 
 pub use domain::{
-    CapabilitySet, CapabilityStatus, Checkout, CheckoutStatus, ConnectionStatus, CountryCode,
-    Currency, MerchantOrderRef, Money, PaymentRecord, PaymentStatus, PaymentsError, PaymentsEvent,
-    ProviderConnection, ProviderKind, RefundRecord, RefundStatus, WebhookVerificationError,
+    CapabilitySet, CapabilityStatus, Checkout, CheckoutStatus, ConnectionLifecycleStore,
+    ConnectionNotifier, ConnectionStatus, CountryCode, Currency, MerchantOrderRef, Money,
+    PaymentRecord, PaymentStatus, PaymentsError, PaymentsEvent, ProviderConnection, ProviderKind,
+    RefundRecord, RefundStatus, WebhookEventRecord, WebhookEventRepository,
+    WebhookVerificationError,
 };
 
 /// Wire payments routes into an actix `ServiceConfig`.
 pub mod routes {
     pub use crate::adapters::http::routes::payments_tenant_scope_routes;
+    /// The internal Connect webhook receiver — mounted by the API binary
+    /// only, never part of the public contract.
+    pub use crate::adapters::http::webhooks::payments_internal_routes;
 }
 
 /// The permission requirements of this context's routes (for the

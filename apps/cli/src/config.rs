@@ -40,6 +40,10 @@ pub struct CliConfig {
     pub theming: sanvi_theming::ThemingConfig,
     #[serde(default)]
     pub domains: sanvi_domains::DomainsConfig,
+    /// Phase 09: the payments section (the requirement-key map rides
+    /// along; secrets stay env-only and are not needed by CLI commands).
+    #[serde(default)]
+    pub payments: sanvi_payments::PaymentsConfig,
 }
 
 /// Load `configs/base.toml` + `configs/{env}.toml` + `SANVI__` env overrides.
@@ -55,6 +59,7 @@ pub fn load(environment: &str) -> anyhow::Result<CliConfig> {
     config.billing.validate()?;
     config.theming.validate()?;
     config.domains.validate()?;
+    config.payments.validate()?;
     Ok(config)
 }
 

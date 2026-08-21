@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use sanvi_persistence::ScopedTx;
+use sanvi_persistence::{PlatformScope, ScopedTx};
 
 use super::capability::{CapabilitySet, RequirementSummary};
 use super::checkout::Checkout;
@@ -286,4 +286,139 @@ pub trait PayoutReadPort: Send + Sync {
 #[async_trait]
 pub trait WebhookVerifierPort: Send + Sync {
     async fn verify(&self, payload: &[u8], signature_header: &str) -> Result<(), PaymentsError>;
+}
+
+// ---------------------------------------------------------------------------
+// 09.3: the webhook transport's persistence and lifecycle ports.
+// ---------------------------------------------------------------------------
+
+/// Storage for raw Connect webhook events (`payments.webhook_events`).
+///
+/// The table is **platform-scoped** (deliberately outside tenant RLS —
+/// events arrive before the tenant is known and are routed by account id),
+/// so every method takes a `PlatformScope`. The primary key on the
+/// provider's event id *is* the dedupe: `insert_ignore` returns `false`
+/// for a redelivery, which still answers Stripe 2xx.
+#[async_trait]
+pub trait WebhookEventRepository: Send + Sync {
+    /// Store-first. `Ok(true)` when newly stored; `Ok(false)` for a
+    /// redelivery of a known event id (a no-op, not an error).
+    async fn insert_ignore(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        record: &super::webhook::WebhookEventRecord,
+    ) -> Result<bool, PaymentsError>;
+
+    /// The work queue: stored but unprocessed, retry budget not exhausted,
+    /// oldest first.
+    async fn fetch_unprocessed(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: u32,
+    ) -> Result<Vec<super::webhook::WebhookEventRecord>, PaymentsError>;
+
+    async fn mark_processed(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stripe_event_id: &str,
+    ) -> Result<(), PaymentsError>;
+
+    /// Record one failed attempt (the error text backs the DLQ alert and
+    /// the CLI replay view). Exhausting the retry budget dead-letters the
+    /// event — it stops being fetched, so a poison event never blocks the
+    /// queue.
+    async fn mark_attempt_failed(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stripe_event_id: &str,
+        error: &str,
+    ) -> Result<(), PaymentsError>;
+
+    async fn unprocessed_count(&self, scope: &mut PlatformScope<'_>) -> Result<i64, PaymentsError>;
+
+    async fn dead_letter_count(&self, scope: &mut PlatformScope<'_>) -> Result<i64, PaymentsError>;
+
+    /// Dead-lettered events, oldest first (the CLI's replay triage list).
+    async fn dead_letters(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: u32,
+    ) -> Result<Vec<super::webhook::WebhookEventRecord>, PaymentsError>;
+
+    /// Requeue one dead-lettered event after the root cause is fixed:
+    /// clears the attempt budget so the dispatcher picks it up again.
+    /// `Ok(false)` when the event is not dead-lettered (nothing to do).
+    async fn replay(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stripe_event_id: &str,
+    ) -> Result<bool, PaymentsError>;
+}
+
+/// Platform-scope access to connection rows for the webhook dispatcher and
+/// the reconciliation job — cross-tenant maintenance that runs under the
+/// audited `PlatformScope` escape hatch of the shared RLS policy. Tenant
+/// request paths keep using [`ProviderConnectionRepository`]; this port
+/// exists so worker code cannot accidentally take a tenant-scoped
+/// transaction around a loop of tenants.
+#[async_trait]
+pub trait ConnectionLifecycleStore: Send + Sync {
+    /// The live connection owning this provider account, if any. Unknown
+    /// accounts resolve to `None` — recorded and alerted, never provisioned.
+    async fn find_live_by_external_account(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        external_account_id: &str,
+    ) -> Result<Option<ProviderConnection>, PaymentsError>;
+
+    /// Live connections not synced since `stale_before`, oldest first —
+    /// the reconciliation job's candidates ("not seen recently").
+    async fn list_due_for_sync(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stale_before: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<ProviderConnection>, PaymentsError>;
+
+    /// Persist an aggregate updated by the dispatcher/sync job.
+    async fn save(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        connection: &ProviderConnection,
+    ) -> Result<(), PaymentsError>;
+
+    /// Live connections per status (the status gauge).
+    async fn count_by_status(
+        &self,
+        scope: &mut PlatformScope<'_>,
+    ) -> Result<Vec<(String, i64)>, PaymentsError>;
+}
+
+/// Tenant-admin notifications on connection-lifecycle changes, through the
+/// phase-05/06 notification path (locale-resolved rendering in the worker;
+/// a logging implementation everywhere else). Failures are logged by the
+/// caller — a lost notification must never fail a committed transition.
+#[async_trait]
+pub trait ConnectionNotifier: Send + Sync {
+    async fn connection_activated(
+        &self,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<(), PaymentsError>;
+
+    async fn connection_restricted(
+        &self,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+        detail: &str,
+    ) -> Result<(), PaymentsError>;
+
+    /// An outstanding requirement's deadline is approaching while the
+    /// connection still cannot take payments.
+    async fn requirement_deadline_approaching(
+        &self,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+        deadline: DateTime<Utc>,
+    ) -> Result<(), PaymentsError>;
 }

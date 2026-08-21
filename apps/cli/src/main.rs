@@ -16,6 +16,7 @@ mod healthcheck;
 mod i18n;
 mod migrate;
 mod openapi;
+mod payments;
 mod tenant;
 mod theme;
 
@@ -94,6 +95,11 @@ enum Command {
     Billing {
         #[command(subcommand)]
         action: BillingAction,
+    },
+    /// Phase-09: payments operator commands (Connect webhook queue).
+    Payments {
+        #[command(subcommand)]
+        action: PaymentsAction,
     },
     /// Load, validate and print the configuration.
     Config,
@@ -249,6 +255,21 @@ enum BillingAction {
     Reconcile,
     /// The webhook store-first queue's backlog.
     Webhooks,
+}
+
+#[derive(Subcommand)]
+enum PaymentsAction {
+    /// The Connect webhook store-first queue's backlog and dead-letter head.
+    Webhooks,
+    /// Requeue one dead-lettered Connect webhook event after fixing the
+    /// root cause.
+    Replay {
+        /// The Stripe event id (`evt_…`) to requeue.
+        event_id: String,
+    },
+    /// One manual connection-status reconciliation pass (the lost-webhook
+    /// safety net).
+    Sync,
 }
 
 #[derive(Subcommand)]
@@ -599,6 +620,20 @@ async fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("billing command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Payments { action } => {
+            let result = match action {
+                PaymentsAction::Webhooks => payments::webhooks(&cli.env).await,
+                PaymentsAction::Replay { event_id } => payments::replay(&cli.env, &event_id).await,
+                PaymentsAction::Sync => payments::sync(&cli.env).await,
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("payments command failed: {err:#}");
                     ExitCode::FAILURE
                 }
             }

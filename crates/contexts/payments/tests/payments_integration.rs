@@ -15,7 +15,7 @@ use std::sync::Arc;
 // bare `use actix_web::test;` would silently turn the plain `#[test]`
 // below into `#[actix_web::test]` and demand an async fn.
 use actix_web::{App, HttpMessage, http::StatusCode, test as actix_test, web};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use sanvi_http::{FeatureGate, PermissionGate, ResourceRef, Subject, tenancy::TenantContext};
@@ -452,6 +452,15 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             providers,
             connections,
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
+        webhook_receiver: Arc::new(sanvi_payments::application::WebhookReceiver::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            Arc::new(sanvi_payments::adapters::SqlxWebhookEventRepository::new()),
+            Arc::new(FakeProvider::new()),
+            vec!["127.0.0.1".to_string(), "::1".to_string()],
         )),
     }
 }
@@ -1145,4 +1154,705 @@ async fn creating_a_connection_requires_the_entitlement() {
         .to_request();
     let response = actix_test::call_service(&app, request).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------
+// 09.3: the Connect webhook transport — signature, dedupe, routing,
+// out-of-order guard, DLQ and the reconciliation safety net.
+// ---------------------------------------------------------------------------
+
+use sanvi_payments::adapters::{LoggingConnectionNotifier, SqlxWebhookEventRepository};
+use sanvi_payments::application::{SyncConnections, WebhookDispatcher, WebhookReceiver};
+use sanvi_payments::domain::{
+    ConnectionLifecycleStore, ConnectionNotifier, EventPublisher, WebhookEventRepository,
+};
+
+type HmacSha256 = hmac::Hmac<sha2::Sha256>;
+
+/// Sign a payload the way Stripe does (`t=…,v1=…` over `{t}.{body}`).
+fn sign_webhook(secret: &str, payload: &[u8]) -> String {
+    use hmac::Mac;
+    let timestamp = Utc::now().timestamp();
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(format!("{timestamp}.{}", String::from_utf8_lossy(payload)).as_bytes());
+    format!(
+        "t={timestamp},v1={}",
+        hex::encode(mac.finalize().into_bytes())
+    )
+}
+
+/// A signed `account.updated` envelope for the given account.
+fn account_event(event_id: &str, account: &str, created: i64) -> serde_json::Value {
+    serde_json::json!({
+        "id": event_id,
+        "type": "account.updated",
+        "created": created,
+        "account": account,
+        "data": {"object": {"id": account}}
+    })
+}
+
+fn epoch(secs_from_now: i64) -> i64 {
+    Utc::now().timestamp() + secs_from_now
+}
+
+/// The full 09.3 stack on a real pool: receiver (fake-secret verifier,
+/// loopback allow-list), dispatcher and reconciler sharing one fake
+/// provider handle the test scripts.
+struct WebhookFixture {
+    receiver: Arc<WebhookReceiver>,
+    dispatcher: Arc<WebhookDispatcher>,
+    sync: Arc<SyncConnections>,
+    webhooks: Arc<dyn WebhookEventRepository>,
+    tx: TxManager,
+    provider: FakeProvider,
+}
+
+async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
+    let provider = FakeProvider::new();
+    let mut providers = ProviderRegistry::new();
+    providers.register(Arc::new(provider.clone())).unwrap();
+    let registry = Arc::new(providers);
+    let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
+    let lifecycle: Arc<dyn ConnectionLifecycleStore> =
+        Arc::new(SqlxProviderConnectionRepository::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let notifier: Arc<dyn ConnectionNotifier> = Arc::new(LoggingConnectionNotifier::new());
+    let tx = TxManager::new(pool.clone());
+    let receiver = Arc::new(WebhookReceiver::new(
+        tx.clone(),
+        webhooks.clone(),
+        // The same adapter family the composition root wires: here the
+        // fake's secret stands in for Stripe's.
+        Arc::new(provider.clone()),
+        vec!["127.0.0.1".to_string(), "::1".to_string()],
+    ));
+    let dispatcher = Arc::new(WebhookDispatcher::new(
+        tx.clone(),
+        webhooks.clone(),
+        lifecycle.clone(),
+        registry.clone(),
+        events.clone(),
+        notifier.clone(),
+    ));
+    let sync = Arc::new(SyncConnections::new(
+        tx.clone(),
+        lifecycle.clone(),
+        registry,
+        events,
+        notifier,
+        chrono::Duration::zero(),
+    ));
+    WebhookFixture {
+        receiver,
+        dispatcher,
+        sync,
+        webhooks,
+        tx,
+        provider,
+    }
+}
+
+impl WebhookFixture {
+    /// Deliver a signed event through the HTTP-boundary contract.
+    async fn deliver(
+        &self,
+        event: &serde_json::Value,
+    ) -> Result<bool, sanvi_payments::domain::PaymentsError> {
+        let body = serde_json::to_vec(event).unwrap();
+        let signature = sign_webhook(sanvi_payments::adapters::FAKE_WEBHOOK_SECRET, &body);
+        self.receiver
+            .receive(&body, Some(&signature), Some("127.0.0.1".parse().unwrap()))
+            .await
+    }
+
+    async fn connection_count_for(&self, account: &str) -> i64 {
+        let mut scope = self
+            .tx
+            .begin_unscoped("test_count_connections", "tests")
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM payments.provider_connections WHERE external_account_id = $1",
+        )
+        .bind(account)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+        scope.rollback().await.unwrap();
+        count
+    }
+
+    async fn outbox_events(&self, event_type: &str) -> i64 {
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM platform.outbox WHERE event_type = $1")
+                .bind(event_type)
+                .fetch_one(self.tx.pool())
+                .await
+                .unwrap();
+        count
+    }
+}
+
+#[tokio::test]
+async fn the_connect_endpoint_verifies_the_signature_before_storing_and_dedupes_redeliveries() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let fixture = webhook_fixture(&pool).await;
+
+    let event = account_event("evt_sig_1", "acct_sig", epoch(0));
+    let body = serde_json::to_vec(&event).unwrap();
+
+    // No signature header: rejected before anything is parsed or stored.
+    let err = fixture
+        .receiver
+        .receive(&body, None, Some("127.0.0.1".parse().unwrap()))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        sanvi_payments::domain::PaymentsError::WebhookRejected(_)
+    ));
+    assert_eq!(fixture.connection_count_for("acct_sig").await, 0);
+
+    // Signed with the phase-04 PLATFORM secret: must not verify against
+    // the Connect endpoint — the cross-secret invariant at the transport.
+    let platform_signed = sign_webhook("whsec_platform_test", &body);
+    assert!(
+        fixture
+            .receiver
+            .receive(
+                &body,
+                Some(&platform_signed),
+                Some("127.0.0.1".parse().unwrap())
+            )
+            .await
+            .is_err()
+    );
+
+    // Tampered body under a valid signature for the original: rejected.
+    let valid_for_original = sign_webhook(sanvi_payments::adapters::FAKE_WEBHOOK_SECRET, &body);
+    let tampered =
+        br#"{"id":"evt_sig_1","type":"account.updated","created":1,"account":"acct_evil"}"#;
+    assert!(
+        fixture
+            .receiver
+            .receive(
+                tampered,
+                Some(&valid_for_original),
+                Some("127.0.0.1".parse().unwrap())
+            )
+            .await
+            .is_err()
+    );
+
+    // Correctly signed: stored once; a redelivery is a no-op, both acked.
+    assert!(
+        fixture.deliver(&event).await.unwrap(),
+        "first delivery stores"
+    );
+    assert!(
+        !fixture.deliver(&event).await.unwrap(),
+        "redelivery dedupes"
+    );
+    let mut scope = fixture
+        .tx
+        .begin_unscoped("test_count_events", "tests")
+        .await
+        .unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM payments.webhook_events")
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(rows, 1, "one row per event id");
+}
+
+#[tokio::test]
+async fn an_event_for_an_unknown_account_is_recorded_but_creates_no_rows() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "unknown-acct").await;
+    let _ = tenant_id;
+    let fixture = webhook_fixture(&pool).await;
+
+    let event = account_event("evt_orphan_1", "acct_never_seen", epoch(0));
+    assert!(fixture.deliver(&event).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+
+    // Acknowledged as skipped (never retried into the DLQ), recorded with
+    // its account id, alerted via the error log + metric — and no
+    // connection row exists for the unknown account.
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.failed, 0);
+    assert_eq!(fixture.connection_count_for("acct_never_seen").await, 0);
+    let mut scope = fixture
+        .tx
+        .begin_unscoped("test_unknown_event", "tests")
+        .await
+        .unwrap();
+    let row: (Option<String>, Option<DateTime<Utc>>, i32) = sqlx::query_as(
+        "SELECT account_id, processed_at, attempts FROM payments.webhook_events
+         WHERE stripe_event_id = 'evt_orphan_1'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(
+        row.0.as_deref(),
+        Some("acct_never_seen"),
+        "the event is recorded"
+    );
+    assert!(row.1.is_some(), "acknowledged, not retried");
+    assert_eq!(row.2, 0);
+}
+
+#[tokio::test]
+async fn the_same_event_delivered_twice_produces_exactly_one_state_change() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "dedupe").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
+    fixture
+        .provider
+        .approve_onboarding(&connection.external_account_id);
+
+    let event = account_event(
+        "evt_once_1",
+        &connection.external_account_id,
+        epoch(5), // after the row's last_synced_at → fresh
+    );
+    assert!(fixture.deliver(&event).await.unwrap());
+    let first = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(first.processed, 1);
+
+    // The redelivery inserts nothing new; there is nothing left to process.
+    assert!(!fixture.deliver(&event).await.unwrap());
+    let second = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(second.processed, 0);
+
+    // Exactly one activation in the outbox despite two deliveries.
+    assert_eq!(
+        fixture
+            .outbox_events("payments.provider_connection_activated")
+            .await,
+        1
+    );
+
+    let repo = SqlxProviderConnectionRepository::new();
+    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let stored = repo
+        .find_by_id(&mut scope, tenant_id, connection.id)
+        .await
+        .unwrap()
+        .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Active);
+    assert!(stored.connected_at.is_some());
+}
+
+#[tokio::test]
+async fn a_stale_pending_event_leaves_an_active_connection_active() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "stale").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
+    fixture
+        .provider
+        .approve_onboarding(&connection.external_account_id);
+
+    // Activation lands first (created now+60).
+    let fresh = account_event(
+        "evt_stale_fresh",
+        &connection.external_account_id,
+        epoch(60),
+    );
+    assert!(fixture.deliver(&fresh).await.unwrap());
+    assert_eq!(fixture.dispatcher.dispatch(10).await.unwrap().processed, 1);
+
+    // …then an OLDER event (created now+10) arrives late. It describes a
+    // state strictly older than what we already applied: dropped, not
+    // re-applied.
+    let stale = account_event("evt_stale_late", &connection.external_account_id, epoch(10));
+    assert!(fixture.deliver(&stale).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.skipped, 1, "the stale event is skipped");
+    assert_eq!(report.processed, 0);
+
+    let repo = SqlxProviderConnectionRepository::new();
+    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let stored = repo
+        .find_by_id(&mut scope, tenant_id, connection.id)
+        .await
+        .unwrap()
+        .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Active, "still active");
+}
+
+#[tokio::test]
+async fn a_poison_event_is_dead_lettered_does_not_block_the_queue_and_is_replayable() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "poison").await;
+    let fixture = webhook_fixture(&pool).await;
+
+    // A connection whose provider adapter is NOT in this registry: every
+    // processing attempt fails — the poison.
+    let poison_connection = ProviderConnection::pending(
+        Uuid::now_v7(),
+        tenant_id,
+        ProviderKind::StripeConnect,
+        "acct_poison".to_string(),
+        Utc::now(),
+    )
+    .unwrap();
+    {
+        let repo = SqlxProviderConnectionRepository::new();
+        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        repo.insert(&mut scope, &poison_connection).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+    let poison = account_event("evt_poison_1", "acct_poison", epoch(5));
+    assert!(fixture.deliver(&poison).await.unwrap());
+
+    // Five attempts exhaust the budget…
+    for _ in 0..5 {
+        let report = fixture.dispatcher.dispatch(10).await.unwrap();
+        assert_eq!(report.failed, 1);
+    }
+    assert_eq!(
+        fixture
+            .webhooks
+            .dead_letter_count(
+                &mut fixture
+                    .tx
+                    .begin_unscoped("test_dlq", "tests")
+                    .await
+                    .unwrap()
+            )
+            .await
+            .unwrap(),
+        1
+    );
+
+    // …and the dead-lettered event stops being fetched: a healthy event
+    // behind it processes anyway.
+    let healthy_tenant = seed_tenant(&pool, "healthy").await;
+    let healthy = pending_connection(&pool, healthy_tenant, &fixture.provider).await;
+    fixture
+        .provider
+        .approve_onboarding(&healthy.external_account_id);
+    let good = account_event("evt_healthy_1", &healthy.external_account_id, epoch(5));
+    assert!(fixture.deliver(&good).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "the poison does not block the queue");
+    assert_eq!(report.failed, 0, "dead-lettered events are not fetched");
+
+    // Replay from the operator surface (`apps/cli` calls exactly this):
+    // the budget resets and the event becomes eligible again.
+    let mut scope = fixture
+        .tx
+        .begin_unscoped("test_replay", "tests")
+        .await
+        .unwrap();
+    let replayed = fixture
+        .webhooks
+        .replay(&mut scope, "evt_poison_1")
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert!(replayed);
+    let mut scope = fixture
+        .tx
+        .begin_unscoped("test_after_replay", "tests")
+        .await
+        .unwrap();
+    let pending_again = fixture
+        .webhooks
+        .fetch_unprocessed(&mut scope, 10)
+        .await
+        .unwrap();
+    scope.rollback().await.unwrap();
+    assert!(
+        pending_again
+            .iter()
+            .any(|record| record.stripe_event_id == "evt_poison_1"),
+        "the replayed event is back in the queue"
+    );
+}
+
+#[tokio::test]
+async fn the_lost_webhook_drill_reconciliation_alone_reaches_active() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "drill").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
+
+    // The tenant finishes onboarding at the provider — but every webhook
+    // is lost. No events are delivered at all.
+    fixture
+        .provider
+        .approve_onboarding(&connection.external_account_id);
+
+    let report = fixture.sync.execute(10).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.updated, 1, "the reconciliation repairs the status");
+
+    let repo = SqlxProviderConnectionRepository::new();
+    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let stored = repo
+        .find_by_id(&mut scope, tenant_id, connection.id)
+        .await
+        .unwrap()
+        .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Active);
+    assert_eq!(
+        fixture
+            .outbox_events("payments.provider_connection_activated")
+            .await,
+        1,
+        "the drill emits the same activation event a webhook would"
+    );
+
+    // A second pass with nothing changed updates nothing.
+    let again = fixture.sync.execute(10).await.unwrap();
+    assert_eq!(again.updated, 0);
+}
+
+// ---------------------------------------------------------------------------
+// 09.3: the enriched connection view (FR-903) — server-computed readiness,
+// requirement render keys and blockers.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_connection_view_maps_requirements_blockers_and_readiness() {
+    use sanvi_payments::domain::{CapabilitySet, CapabilityStatus, RequirementSummary};
+    let config = PaymentsConfig::default();
+    let mut connection = ProviderConnection::pending(
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        ProviderKind::StripeConnect,
+        "acct_view".to_string(),
+        Utc::now(),
+    )
+    .unwrap();
+
+    // Onboarding with a pending capability and mixed requirements.
+    let snapshot = sanvi_payments::domain::ports::ProviderAccountStatus {
+        external_account_id: connection.external_account_id.clone(),
+        capabilities: CapabilitySet::empty().with("card_payments", CapabilityStatus::Pending),
+        requirements: RequirementSummary {
+            currently_due: vec![
+                "business_profile.url".to_string(),
+                "brand.new.requirement".to_string(),
+            ],
+            eventually_due: vec!["individual.verification.document".to_string()],
+            past_due: vec!["individual.id_number".to_string()],
+            deadline: chrono::DateTime::from_timestamp(epoch(86_400), 0),
+        },
+        country: None,
+        default_currency: None,
+        status_hint: None,
+    };
+    connection
+        .apply_status(&snapshot, ConnectionStatus::Onboarding, Utc::now())
+        .unwrap();
+
+    let view = sanvi_payments::adapters::http::handlers::ConnectionView::of(&connection, &config);
+    assert!(
+        !view.can_accept_payments,
+        "pending capability cannot accept"
+    );
+    assert_eq!(view.status, "onboarding");
+    // Capabilities render flat, normalised from the v2-nested form.
+    assert_eq!(view.capabilities["card_payments"], "pending");
+    // Known codes map to their message keys; unknown ones fall back.
+    assert_eq!(
+        view.requirements.currently_due[0].summary_key,
+        "payments.req.business_url"
+    );
+    assert_eq!(
+        view.requirements.currently_due[1].summary_key, "payments.req.unmapped",
+        "a requirement Stripe adds before the map learns it degrades, never breaks"
+    );
+    assert_eq!(
+        view.requirements.eventually_due[0].summary_key,
+        "payments.req.id_document"
+    );
+    assert!(view.requirements.deadline.is_some());
+    // Blockers: capability inactive while onboarding + past-due items.
+    let blocker_keys: Vec<&str> = view
+        .blockers
+        .iter()
+        .map(|blocker| blocker.summary_key.as_str())
+        .collect();
+    assert!(blocker_keys.contains(&"payments.blocker.card_payments_inactive"));
+    assert!(blocker_keys.contains(&"payments.blocker.requirements_past_due"));
+
+    // Once active with nothing past due: readiness flips, blockers clear.
+    let active_snapshot = sanvi_payments::domain::ports::ProviderAccountStatus {
+        capabilities: CapabilitySet::empty().with("card_payments", CapabilityStatus::Active),
+        requirements: RequirementSummary::default(),
+        ..snapshot
+    };
+    connection
+        .apply_status(&active_snapshot, ConnectionStatus::Active, Utc::now())
+        .unwrap();
+    let view = sanvi_payments::adapters::http::handlers::ConnectionView::of(&connection, &config);
+    assert!(view.can_accept_payments);
+    assert!(
+        view.blockers.is_empty(),
+        "no blockers once active and clean"
+    );
+}
+
+#[tokio::test]
+async fn get_connection_returns_the_enriched_truthful_view() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "get-view").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
+
+    // Sync once so the row carries the fake's seeded requirements (the
+    // create use case does this initial projection; the raw helper does
+    // not).
+    let snapshot = fixture
+        .provider
+        .fetch_status(&connection.external_account_id)
+        .await
+        .unwrap();
+    let mut synced = connection.clone();
+    synced.refresh_snapshot(&snapshot, Utc::now());
+    {
+        let repo = SqlxProviderConnectionRepository::new();
+        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        repo.update(&mut scope, &synced).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    // The route with REAL middleware products and a REAL pool.
+    let subject = Subject {
+        user_id: Uuid::now_v7(),
+        session_id: "sess_test".to_string(),
+        aal: "aal2".to_string(),
+        methods: vec!["password".to_string()],
+        tenant_id: Some(tenant_id),
+        role_ids: vec![],
+        authenticated_at: Some(Utc::now()),
+    };
+    let tenant_context = TenantContext {
+        tenant_id,
+        slug: "get-view".to_string(),
+        display_name: "Get View".to_string(),
+        status: sanvi_http::tenancy::TenantRuntimeStatus::Active,
+        region: "jp".to_string(),
+        default_locale: "en".to_string(),
+        resolution_source: sanvi_http::tenancy::ResolutionSource::Subdomain,
+    };
+    let permission_gate: Arc<dyn PermissionGate> = Arc::new(FakePermissionGate { allowed: true });
+    let feature_gate: Arc<dyn FeatureGate> = Arc::new(FakeFeatureGate { enabled: true });
+    let app = actix_test::init_service(
+        App::new()
+            .app_data(web::Data::new({
+                let mut state = {
+                    // Rebuild the state on the real pool (the lazy-pool
+                    // helper would never reach the database).
+                    let prometheus_registry = prometheus::Registry::new();
+                    let providers = ProviderRegistry::new();
+                    PaymentsState {
+                        config: PaymentsConfig::default(),
+                        metrics: Arc::new(PaymentsMetrics::new(&prometheus_registry)),
+                        list_providers: Arc::new(ListProviders::new(Arc::new(
+                            RegistryProviderCatalog::new(
+                                Arc::new(providers),
+                                RuntimeEnvironment::Production,
+                            ),
+                        ))),
+                        registry: Arc::new(ProviderRegistry::new()),
+                        tx: TxManager::new(pool.clone()),
+                        connections: Arc::new(SqlxProviderConnectionRepository::new()),
+                        create_connection: Arc::new(StartProviderConnection::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(ProviderRegistry::new()),
+                            Arc::new(SqlxProviderConnectionRepository::new()),
+                            Arc::new(OutboxEventPublisher::new()),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                        )),
+                        account_session: Arc::new(CreateAccountSession::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(ProviderRegistry::new()),
+                            Arc::new(SqlxProviderConnectionRepository::new()),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                        )),
+                        webhook_receiver: Arc::new(WebhookReceiver::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(SqlxWebhookEventRepository::new()),
+                            Arc::new(FakeProvider::new()),
+                            vec!["127.0.0.1".to_string()],
+                        )),
+                    }
+                };
+                state.config.requirement_keys.insert(
+                    "business_profile.url".to_string(),
+                    "payments.req.business_url".to_string(),
+                );
+                state
+            }))
+            .app_data(web::Data::new(permission_gate))
+            .app_data(web::Data::new(feature_gate))
+            .wrap(actix_web::middleware::from_fn(
+                move |req: actix_web::dev::ServiceRequest,
+                      srv: actix_web::middleware::Next<actix_web::body::BoxBody>| {
+                    let subject = subject.clone();
+                    let tenant_context = tenant_context.clone();
+                    async move {
+                        req.extensions_mut().insert(subject);
+                        req.extensions_mut().insert(tenant_context);
+                        srv.call(req).await
+                    }
+                },
+            ))
+            .service(web::scope("/api/v1/tenant").configure(payments_tenant_scope_routes)),
+    )
+    .await;
+
+    let request = actix_test::TestRequest::get()
+        .uri(&format!(
+            "/api/v1/tenant/payments/connections/{}",
+            connection.id
+        ))
+        .to_request();
+    let response = actix_test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(body["status"], "pending");
+    assert_eq!(body["can_accept_payments"], false);
+    assert_eq!(
+        body["blockers"][0]["summary_key"],
+        "payments.blocker.onboarding_not_started"
+    );
+    // The fake seeds requirements at create time; their codes map to keys.
+    let currently_due = body["requirements"]["currently_due"].as_array().unwrap();
+    assert!(!currently_due.is_empty());
+    for entry in currently_due {
+        let key = entry["summary_key"].as_str().unwrap();
+        assert!(
+            key.starts_with("payments.req."),
+            "render key present: {key}"
+        );
+    }
 }

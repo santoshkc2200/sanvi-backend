@@ -10,12 +10,78 @@
 //! "the two configured secrets must differ" validation make that a
 //! build-time invariant, not an operator memo.
 
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use serde_json::Value;
 use sha2::Sha256;
 
 use super::error::PaymentsError;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// One stored Connect webhook event (`payments.webhook_events`). The row
+/// is the unit of dedupe (PK on the provider's event id), retry
+/// (`attempts`) and dead-lettering (`attempts` exhausted) — the transport's
+/// whole state lives here, never in memory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebhookEventRecord {
+    pub stripe_event_id: String,
+    /// The connected account the event is about (`acct_…`), when the
+    /// payload names one. Events without a routable account are stored,
+    /// alerted and acknowledged — never guessed.
+    pub account_id: Option<String>,
+    pub event_type: String,
+    pub api_version: Option<String>,
+    pub payload: Value,
+    /// The provider's own event time — the out-of-order anchor, never our
+    /// processing clock.
+    pub created: DateTime<Utc>,
+    pub received_at: DateTime<Utc>,
+    pub attempts: i32,
+    /// The last processing error, if any (backs the dead-letter triage
+    /// view; cleared on success).
+    pub last_error: Option<String>,
+}
+
+/// Extract the connected-account id from a webhook payload, tolerating the
+/// envelope shapes Stripe actually sends:
+///
+/// - v1 envelopes put it top-level (`"account": "acct_…"`);
+/// - capability objects carry it as `data.object.account`;
+/// - Accounts-v2 core events reference it as `related_object.id`;
+/// - account objects are themselves `data.object` with an `acct_…` id.
+///
+/// Anything else (or an id that is not an account id) yields `None` — the
+/// dispatcher records and alerts rather than guessing a tenant.
+pub fn event_account_id(payload: &Value) -> Option<String> {
+    payload
+        .get("account")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .pointer("/data/object/account")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            payload
+                .pointer("/related_object/id")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| payload.pointer("/data/object/id").and_then(Value::as_str))
+        .filter(|id| id.starts_with("acct_"))
+        .map(str::to_string)
+}
+
+/// The provider's event time from the payload, falling back to the
+/// receiver's clock when the envelope omits it (it never should; the
+/// fallback keeps a malformed-but-signed event storable).
+pub fn event_created(payload: &Value, fallback: DateTime<Utc>) -> DateTime<Utc> {
+    payload
+        .get("created")
+        .and_then(Value::as_i64)
+        .and_then(|secs| DateTime::from_timestamp(secs, 0))
+        .unwrap_or(fallback)
+}
 
 /// Why a webhook was rejected. Every variant maps to a 401 at the
 /// transport; the detail is logged, never returned raw to the caller.
@@ -196,5 +262,51 @@ mod tests {
             .unwrap_err(),
             WebhookVerificationError::SignatureMismatch
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Account routing: every envelope shape Stripe actually sends must
+    // resolve to the connected account — or to None, never a guess.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn account_ids_extract_from_every_envelope_shape() {
+        // v1 envelope: top-level `account`.
+        let v1 = serde_json::json!({
+            "id": "evt_1", "type": "account.updated",
+            "account": "acct_top",
+            "data": {"object": {"id": "acct_top"}}
+        });
+        assert_eq!(event_account_id(&v1).as_deref(), Some("acct_top"));
+
+        // capability.updated: the object id is the capability; the account
+        // rides on the object.
+        let capability = serde_json::json!({
+            "id": "evt_2", "type": "capability.updated",
+            "data": {"object": {"id": "card_payments", "account": "acct_cap"}}
+        });
+        assert_eq!(event_account_id(&capability).as_deref(), Some("acct_cap"));
+
+        // Accounts-v2 core event: related_object points at the account.
+        let v2 = serde_json::json!({
+            "id": "evt_3", "type": "v2.core.account.updated",
+            "related_object": {"id": "acct_v2", "type": "account"}
+        });
+        assert_eq!(event_account_id(&v2).as_deref(), Some("acct_v2"));
+
+        // No routable account anywhere: None, not a guess.
+        let orphan = serde_json::json!({"id": "evt_4", "type": "payout.paid"});
+        assert_eq!(event_account_id(&orphan), None);
+    }
+
+    #[test]
+    fn event_time_comes_from_the_payload_with_a_fallback() {
+        let payload = serde_json::json!({"created": 1_800_000_000});
+        assert_eq!(
+            event_created(&payload, chrono::DateTime::<Utc>::UNIX_EPOCH).timestamp(),
+            1_800_000_000
+        );
+        let fallback = Utc::now();
+        assert_eq!(event_created(&serde_json::json!({}), fallback), fallback);
     }
 }

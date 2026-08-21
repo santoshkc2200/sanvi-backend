@@ -8,7 +8,10 @@
 pub mod account_session;
 pub mod catalog;
 pub mod create_connection;
+pub mod lifecycle;
 pub mod registry;
+pub mod sync_connection;
+pub mod webhooks;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -16,7 +19,10 @@ use utoipa::ToSchema;
 pub use account_session::CreateAccountSession;
 pub use catalog::{EmptyProviderCatalog, ListProviders, ProviderCatalog, RegistryProviderCatalog};
 pub use create_connection::{StartConnectionCommand, StartProviderConnection};
+pub use lifecycle::{DEADLINE_REMINDER_WINDOW_DAYS, apply_account_snapshot, target_steps};
 pub use registry::{ProviderRegistry, RuntimeEnvironment};
+pub use sync_connection::{SyncConnections, SyncReport};
+pub use webhooks::{DISPATCH_BATCH, MAX_WEBHOOK_ATTEMPTS, WebhookDispatcher, WebhookReceiver};
 
 /// One connectable provider as the settings page renders it. Derived
 /// from the adapter's [`crate::domain::ports::ProviderDescriptor`] —

@@ -3384,6 +3384,7 @@ name = "sanvi-cli"
 version = "0.9.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "figment",
@@ -3396,6 +3397,7 @@ dependencies = [
  "sanvi-http",
  "sanvi-identity",
  "sanvi-localization",
+ "sanvi-payments",
  "sanvi-persistence",
  "sanvi-platform-admin",
  "sanvi-system",

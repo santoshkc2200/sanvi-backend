@@ -2515,6 +2515,38 @@ pub fn build_payments_state(
             audit_writer,
         ));
 
+    // 09.3: the Connect webhook transport. The endpoint's verifier carries
+    // THIS endpoint's signing secret — Stripe's when the Connect adapter
+    // is configured, else the fake provider's in non-production, else a
+    // verifier that fails closed so an unconfigured endpoint rejects
+    // everything. (The cross-secret invariant — never the phase-04
+    // platform secret — is enforced at boot in AppConfig::validate.)
+    let webhook_verifier: std::sync::Arc<dyn sanvi_payments::domain::WebhookVerifierPort> =
+        if providers
+            .get(sanvi_payments::domain::ProviderKind::StripeConnect)
+            .is_some()
+        {
+            std::sync::Arc::new(sanvi_payments::adapters::StripeConnectProvider::new(
+                config.connect_api_base.clone(),
+                config.connect_api_key.clone(),
+                config.stripe_api_version.clone(),
+                config.connect_webhook_secret.clone(),
+                config.webhook_tolerance_secs,
+            ))
+        } else if environment == RuntimeEnvironment::NonProduction {
+            std::sync::Arc::new(sanvi_payments::adapters::FakeProvider::new())
+        } else {
+            std::sync::Arc::new(sanvi_payments::adapters::DenyAllVerifier::new())
+        };
+    let webhook_events: std::sync::Arc<dyn sanvi_payments::domain::WebhookEventRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxWebhookEventRepository::new());
+    let webhook_receiver = std::sync::Arc::new(sanvi_payments::application::WebhookReceiver::new(
+        tx.clone(),
+        webhook_events,
+        webhook_verifier,
+        config.webhook_allowed_clients.clone(),
+    ));
+
     sanvi_payments::adapters::http::PaymentsState {
         config: config.clone(),
         metrics: std::sync::Arc::new(PaymentsMetrics::new(registry)),
@@ -2524,6 +2556,7 @@ pub fn build_payments_state(
         connections,
         create_connection,
         account_session,
+        webhook_receiver,
     }
 }
 
@@ -2822,10 +2855,14 @@ pub fn build_app(
     };
 
     // Phase-09 gate: the payments context's tenant routes mounted above;
-    // all that remains is the state. With the flag off (the default) no
+    // all that remains is the state and the internal Connect webhook
+    // receiver (signature-authenticated, `/internal` sits outside the
+    // authn middleware by design). With the flag off (the default) no
     // payments route exists at all.
     let app = match payments {
-        Some(state) => app.app_data(web::Data::new(state)),
+        Some(state) => app
+            .app_data(web::Data::new(state))
+            .configure(payments_routes::payments_internal_routes),
         None => app,
     };
 

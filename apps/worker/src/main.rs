@@ -69,6 +69,22 @@ use sanvi_messaging::{
     ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
     StreamConsumer, StreamName, StreamsClient, connect_redis,
 };
+use sanvi_payments::{
+    adapters::{
+        OutboxEventPublisher as PaymentsEvents, SqlxProviderConnectionRepository,
+        SqlxWebhookEventRepository as PaymentsWebhookEvents,
+    },
+    application::{
+        ProviderRegistry as PaymentsProviderRegistry,
+        RuntimeEnvironment as PaymentsRuntimeEnvironment, SyncConnections,
+        WebhookDispatcher as ConnectWebhookDispatcher,
+    },
+    domain::{
+        ConnectionLifecycleStore, ConnectionNotifier as PaymentsConnectionNotifier,
+        EventPublisher as PaymentsEventPublisher,
+        WebhookEventRepository as PaymentsWebhookEventRepository,
+    },
+};
 use sanvi_persistence::{DatabaseConfig, build_pool};
 use sanvi_privacy::{
     PrivacyConfig,
@@ -202,6 +218,97 @@ impl Notifications for WorkerBillingNotifications {
             "emails.subscription_restored.subject",
             "emails.subscription_restored.body",
             &[],
+        )
+        .await;
+        Ok(())
+    }
+}
+
+/// Phase-09: tenant-admin notifications for connection-lifecycle changes,
+/// rendered through the phase-06 localizer (tenant locale, override-aware
+/// catalogs) — the same path billing's notifications take.
+struct WorkerPaymentsNotifications {
+    localizer: Arc<NotificationLocalizer>,
+}
+
+impl WorkerPaymentsNotifications {
+    async fn render(
+        &self,
+        tenant_id: uuid::Uuid,
+        subject_key: &str,
+        body_key: &str,
+        extra_args: &[(&str, LocalizationArg)],
+    ) {
+        let context = self.localizer.tenant_locale(tenant_id).await;
+        let tenant = tenant_id.to_string();
+        let tenant_arg = [("tenant", LocalizationArg::from(tenant))];
+        let subject = self.localizer.render(&context, subject_key, &tenant_arg);
+        let mut body_args = tenant_arg.to_vec();
+        body_args.extend_from_slice(extra_args);
+        let body = self.localizer.render(&context, body_key, &body_args);
+        tracing::info!(tenant_id = %tenant_id, locale = %context.locale, subject, body, "localized payments notification rendered");
+    }
+}
+
+#[async_trait::async_trait]
+impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
+    async fn connection_activated(
+        &self,
+        tenant_id: uuid::Uuid,
+        connection_id: uuid::Uuid,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        self.render(
+            tenant_id,
+            "emails.payments_connection_activated.subject",
+            "emails.payments_connection_activated.body",
+            &[(
+                "connection",
+                LocalizationArg::from(connection_id.to_string()),
+            )],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn connection_restricted(
+        &self,
+        tenant_id: uuid::Uuid,
+        connection_id: uuid::Uuid,
+        detail: &str,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        self.render(
+            tenant_id,
+            "emails.payments_connection_restricted.subject",
+            "emails.payments_connection_restricted.body",
+            &[
+                (
+                    "connection",
+                    LocalizationArg::from(connection_id.to_string()),
+                ),
+                ("detail", LocalizationArg::from(detail)),
+            ],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn requirement_deadline_approaching(
+        &self,
+        tenant_id: uuid::Uuid,
+        connection_id: uuid::Uuid,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        self.render(
+            tenant_id,
+            "emails.payments_requirement_deadline.subject",
+            "emails.payments_requirement_deadline.body",
+            &[
+                (
+                    "connection",
+                    LocalizationArg::from(connection_id.to_string()),
+                ),
+                ("date", LocalizationArg::from(deadline)),
+            ],
         )
         .await;
         Ok(())
@@ -348,6 +455,13 @@ pub struct SchedulerConfig {
     pub domains_health_interval_secs: u64,
     /// Purchase saga advancement + refund retries (phase 08).
     pub domains_orders_interval_secs: u64,
+    /// Connect webhook event dispatch (phase 09).
+    pub payments_webhook_dispatch_interval_secs: u64,
+    /// Connection status reconciliation (phase 09) — the safety net for
+    /// missed webhook deliveries.
+    pub payments_connection_sync_interval_secs: u64,
+    /// Payments gauges refresh (phase 09).
+    pub payments_metrics_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -374,6 +488,9 @@ impl Default for SchedulerConfig {
             domains_renewal_interval_secs: 3600,
             domains_health_interval_secs: 3600,
             domains_orders_interval_secs: 60,
+            payments_webhook_dispatch_interval_secs: 10,
+            payments_connection_sync_interval_secs: 3600,
+            payments_metrics_interval_secs: 60,
         }
     }
 }
@@ -755,6 +872,72 @@ async fn main() -> ExitCode {
         billing_stripe.clone(),
         config.billing.automatic_tax_enabled,
     ));
+
+    // --- payments context (phase 09): Connect webhook dispatch, connection
+    // reconciliation and gauges. The registry mirrors the API's: the fake
+    // provider joins in non-production environments, the Stripe Connect
+    // adapter when a restricted key is configured.
+    let payments_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let payments_connections_repo = std::sync::Arc::new(SqlxProviderConnectionRepository::new());
+    let payments_lifecycle: std::sync::Arc<dyn ConnectionLifecycleStore> =
+        payments_connections_repo.clone();
+    let payments_webhooks: std::sync::Arc<dyn PaymentsWebhookEventRepository> =
+        std::sync::Arc::new(PaymentsWebhookEvents::new());
+    let payments_events: std::sync::Arc<dyn PaymentsEventPublisher> =
+        std::sync::Arc::new(PaymentsEvents::new());
+    let payments_notifier: std::sync::Arc<dyn PaymentsConnectionNotifier> =
+        std::sync::Arc::new(WorkerPaymentsNotifications {
+            localizer: notification_localizer.clone(),
+        });
+    let mut payments_providers = PaymentsProviderRegistry::new();
+    if PaymentsRuntimeEnvironment::from_config(&config.telemetry.environment)
+        == PaymentsRuntimeEnvironment::NonProduction
+    {
+        payments_providers
+            .register(std::sync::Arc::new(
+                sanvi_payments::adapters::FakeProvider::new(),
+            ))
+            .expect("the fake provider is the first registration");
+    }
+    if !config.payments.connect_api_key.is_empty() {
+        payments_providers
+            .register(std::sync::Arc::new(
+                sanvi_payments::adapters::StripeConnectProvider::new(
+                    config.payments.connect_api_base.clone(),
+                    config.payments.connect_api_key.clone(),
+                    config.payments.stripe_api_version.clone(),
+                    config.payments.connect_webhook_secret.clone(),
+                    config.payments.webhook_tolerance_secs,
+                ),
+            ))
+            .expect("the stripe connect adapter registers");
+    }
+    let payments_registry = std::sync::Arc::new(payments_providers);
+    let payments_metrics = sanvi_payments::adapters::PaymentsMetrics::new(registry);
+    let connect_dispatcher = std::sync::Arc::new(
+        ConnectWebhookDispatcher::new(
+            payments_tx.clone(),
+            payments_webhooks.clone(),
+            payments_lifecycle.clone(),
+            payments_registry.clone(),
+            payments_events.clone(),
+            payments_notifier.clone(),
+        )
+        .with_metrics(payments_metrics.clone()),
+    );
+    let connection_sync = std::sync::Arc::new(
+        SyncConnections::new(
+            payments_tx.clone(),
+            payments_lifecycle.clone(),
+            payments_registry.clone(),
+            payments_events.clone(),
+            payments_notifier.clone(),
+            chrono::Duration::seconds(
+                config.scheduler.payments_connection_sync_interval_secs as i64,
+            ),
+        )
+        .with_metrics(payments_metrics.clone()),
+    );
 
     // --- billing events consumer: entitlement cache invalidation ------------
     let billing_consumer = StreamConsumer::new(pool.clone(), streams.clone());
@@ -1389,6 +1572,97 @@ async fn main() -> ExitCode {
                             metrics
                                 .status_gauge()
                                 .with_label_values(&[status.as_str()])
+                                .set(count);
+                        }
+                        scope.commit().await.map_err(|err| anyhow::anyhow!(err))?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        // --- phase 09: payments -------------------------------------------------
+        Arc::new(FnJob::new(
+            "payments.webhook_dispatch",
+            Duration::from_secs(config.scheduler.payments_webhook_dispatch_interval_secs),
+            {
+                let dispatcher = connect_dispatcher.clone();
+                move || {
+                    let dispatcher = dispatcher.clone();
+                    Box::pin(async move {
+                        let report = dispatcher
+                            .dispatch(sanvi_payments::application::DISPATCH_BATCH)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.processed > 0 || report.skipped > 0 || report.failed > 0 {
+                            tracing::info!(
+                                processed = report.processed,
+                                skipped = report.skipped,
+                                failed = report.failed,
+                                "connect webhook dispatch pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "payments.connection_sync",
+            Duration::from_secs(config.scheduler.payments_connection_sync_interval_secs),
+            {
+                let sync = connection_sync.clone();
+                move || {
+                    let sync = sync.clone();
+                    Box::pin(async move {
+                        // The safety net for missed webhooks: a lost
+                        // delivery becomes a delay (one sync interval),
+                        // never a stuck connection.
+                        let report = sync
+                            .execute(200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 || report.errors > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                updated = report.updated,
+                                errors = report.errors,
+                                "connection reconciliation pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "payments.metrics",
+            Duration::from_secs(config.scheduler.payments_metrics_interval_secs),
+            {
+                let tx = payments_tx.clone();
+                let webhooks = payments_webhooks.clone();
+                let lifecycle = payments_lifecycle.clone();
+                let metrics = payments_metrics.clone();
+                move || {
+                    let tx = tx.clone();
+                    let webhooks = webhooks.clone();
+                    let lifecycle = lifecycle.clone();
+                    let metrics = metrics.clone();
+                    Box::pin(async move {
+                        let mut scope = tx
+                            .begin_unscoped("payments_metrics", "worker")
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        metrics
+                            .webhook_unprocessed
+                            .set(webhooks.unprocessed_count(&mut scope).await? as i64);
+                        metrics
+                            .webhook_dead_letter
+                            .set(webhooks.dead_letter_count(&mut scope).await? as i64);
+                        metrics.connection_status.reset();
+                        for (status, count) in lifecycle.count_by_status(&mut scope).await? {
+                            metrics
+                                .connection_status
+                                .with_label_values(&[&status])
                                 .set(count);
                         }
                         scope.commit().await.map_err(|err| anyhow::anyhow!(err))?;

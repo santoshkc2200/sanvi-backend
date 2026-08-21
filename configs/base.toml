@@ -333,6 +333,10 @@ domains_cert_issue_interval_secs = 30
 domains_renewal_interval_secs = 3600
 domains_health_interval_secs = 3600
 domains_orders_interval_secs = 60
+# Phase 09 jobs
+payments_webhook_dispatch_interval_secs = 10
+payments_connection_sync_interval_secs = 3600
+payments_metrics_interval_secs = 60
 
 [payments]
 # Phase 09: tenant payment providers (Stripe Connect, direct charges —
@@ -358,3 +362,21 @@ webhook_allowed_clients = ["127.0.0.1", "::1", "172.16.0.0/12", "192.168.0.0/16"
 # the fee rides payment_intent_data.application_fee_amount on a direct
 # charge — the only correct mechanism for this charge pattern.
 enabled = false
+
+[payments.requirement_keys]
+# Provider requirement code → i18n message key (`payments.req.*`, catalogs
+# in crates/contexts/localization/catalogs/{en,ja}/payments.json). Data,
+# not code: a code Stripe adds before this map learns it falls back to
+# `payments.req.unmapped`, whose copy shows the raw code plus Stripe's
+# requirements help link — new requirements degrade, never break.
+"individual.verification.document" = "payments.req.id_document"
+"company.verification.document" = "payments.req.company_document"
+"individual.id_number" = "payments.req.id_number"
+"company.tax_id" = "payments.req.tax_id"
+"business_profile.url" = "payments.req.business_url"
+"business_profile.product_description" = "payments.req.business_description"
+"external_account" = "payments.req.bank_account"
+"individual.address" = "payments.req.address"
+"company.address" = "payments.req.address"
+"individual.phone" = "payments.req.phone"
+"individual.email" = "payments.req.email"
