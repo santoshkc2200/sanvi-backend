@@ -5,15 +5,17 @@
 //! registry → port → repo → outbox vertical, and the Stripe adapter
 //! (09.2) slots in behind the same ports.
 
+pub mod account_session;
 pub mod catalog;
-pub mod connections;
+pub mod create_connection;
 pub mod registry;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+pub use account_session::CreateAccountSession;
 pub use catalog::{EmptyProviderCatalog, ListProviders, ProviderCatalog, RegistryProviderCatalog};
-pub use connections::{ResumeProviderOnboarding, StartConnectionCommand, StartProviderConnection};
+pub use create_connection::{StartConnectionCommand, StartProviderConnection};
 pub use registry::{ProviderRegistry, RuntimeEnvironment};
 
 /// One connectable provider as the settings page renders it. Derived

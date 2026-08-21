@@ -7,6 +7,166 @@ info:
   version: 0.9.0
 openapi: 3.1.0
 paths:
+  /api/v1/tenant/payments/connections:
+    post:
+      operationId: create_payment_connection
+      parameters:
+      - description: Required. The same key returns the same connection; it is also the provider-side idempotency key, so a retry after a crash adopts the created account instead of duplicating it
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectionRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionView'
+          description: Connection created (or the same one returned on an idempotent retry)
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed Idempotency-Key, provider, country or currency
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.manage permission or the payments.stripe_connect entitlement
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: An active connection already exists (payments/connection-exists)
+        '429':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Provider rate limit exhausted (payments/provider-rate-limited)
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Provider unavailable (payments/provider-unavailable)
+      summary: |-
+        `POST /api/v1/tenant/payments/connections` — connect a payment
+        provider. Creates the account at the provider (Accounts v2, keyed by
+        our connection id), persists the `Pending` connection, emits
+        `ProviderConnectionStarted` and writes the audit entry — in that
+        order, so a crashed response never orphans an account.
+      tags:
+      - payments
+  /api/v1/tenant/payments/connections/{id}:
+    get:
+      operationId: get_payment_connection
+      parameters:
+      - description: The connection id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionView'
+          description: Status, capabilities, requirements and the server-computed can_accept_payments
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such connection for this tenant
+      summary: |-
+        `GET /api/v1/tenant/payments/connections/{id}` — the connection's
+        status, capabilities and outstanding requirements (thin until 09.3's
+        webhooks make it truthful; the shape is contract-stable now).
+      tags:
+      - payments
+  /api/v1/tenant/payments/connections/{id}/session:
+    post:
+      operationId: create_payment_connection_session
+      parameters:
+      - description: The connection id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required on every mutating payments endpoint; sessions are minted fresh per call
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionSessionView'
+          description: Account Session client secret + enabled components
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed Idempotency-Key
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.manage permission or the entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such connection for this tenant
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Connection is disconnected or rejected (payments/connection-not-active)
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Provider unavailable (payments/provider-unavailable)
+      summary: |-
+        `POST /api/v1/tenant/payments/connections/{id}/session` — mint a
+        short-lived Account Session for the embedded onboarding component.
+        Fetched per render: never persisted, never logged, single-render;
+        refused outright for a disconnected connection.
+      tags:
+      - payments
   /api/v1/tenant/payments/providers:
     get:
       description: |-
@@ -22,16 +182,6 @@ paths:
         per-tenant availability; an unparseable region leaves the provider
         available rather than locking the tenant out.
       operationId: list_payment_providers
-      parameters:
-      - description: Required on every *mutating* payments endpoint (none exist yet); documented here because the convention is fixed now, before the first one ships
-        in: header
-        name: Idempotency-Key
-        required: false
-        schema:
-          format: uuid
-          type:
-          - string
-          - 'null'
       responses:
         '200':
           content:

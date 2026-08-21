@@ -45,6 +45,21 @@ pub trait ProviderConnectionRepository: Send + Sync {
         scope: &mut ScopedTx<'_>,
         tenant_id: Uuid,
     ) -> Result<Vec<ProviderConnection>, PaymentsError>;
+
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<ProviderConnection>, PaymentsError>;
+
+    /// Persist an aggregate's current state (status transitions stamp
+    /// `connected_at`/`disconnected_at` and refresh capabilities).
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &ProviderConnection,
+    ) -> Result<(), PaymentsError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +93,14 @@ pub struct CreateAccountRequest {
     pub tenant_id: Uuid,
     pub country: Option<CountryCode>,
     pub default_currency: Option<Currency>,
+    /// Business display name prefilled from tenant data (the tenant's
+    /// display name — never user PII).
+    pub display_name: Option<String>,
+    /// The connection id we will persist this account under, sent as the
+    /// provider-side idempotency key: a retry after a crash between
+    /// creation and persistence adopts the same account instead of
+    /// creating a second one.
+    pub idempotency_key: Uuid,
 }
 
 /// The provider-side result of account creation.

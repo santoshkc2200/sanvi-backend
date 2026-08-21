@@ -53,6 +53,32 @@ pub enum PaymentsError {
     #[error("webhook rejected: {0}")]
     WebhookRejected(String),
 
+    /// The provider rejected our credentials — a configuration failure,
+    /// alerted and never retried. `payments/provider-auth`.
+    #[error("payment provider authentication failed")]
+    ProviderAuth,
+
+    /// The provider is rate-limiting us and the in-client retries (with
+    /// backoff) were exhausted. `payments/provider-rate-limited`.
+    #[error("payment provider rate limit exhausted: {0}")]
+    ProviderRateLimited(String),
+
+    /// A country value the provider cannot even parse (not a valid
+    /// ISO-3166-1 code at the provider). `payments/invalid-country`.
+    #[error("invalid country: {0}")]
+    InvalidCountry(String),
+
+    /// The provider cannot onboard accounts in this country — the tenant
+    /// must pick a supported one. `payments/country-unsupported`.
+    #[error("country {0} is not supported by this provider")]
+    CountryUnsupported(String),
+
+    /// The tenant already has a live connection to this provider; a new
+    /// one is refused (reconnecting is a new row after disconnect).
+    /// `payments/connection-exists`.
+    #[error("connection already exists: {0}")]
+    ConnectionExists(String),
+
     /// Persistence failure (logged, never leaked to the client).
     #[error("storage failure: {0}")]
     Storage(String),
@@ -69,6 +95,11 @@ impl PaymentsError {
             Self::CapabilityMissing { .. } => "payments/capability-missing",
             Self::CurrencyUnsupported { .. } => "payments/currency-unsupported",
             Self::IdempotencyConflict(_) => "payments/idempotency-conflict",
+            Self::ProviderAuth => "payments/provider-auth",
+            Self::ProviderRateLimited(_) => "payments/provider-rate-limited",
+            Self::InvalidCountry(_) => "payments/invalid-country",
+            Self::CountryUnsupported(_) => "payments/country-unsupported",
+            Self::ConnectionExists(_) => "payments/connection-exists",
             Self::InvalidMoney(_) | Self::InvalidConnection(_) => "bad-request",
             Self::NotEntitled(_) => "entitlement-required",
             Self::WebhookRejected(_) => "unauthorized",
@@ -120,6 +151,32 @@ mod tests {
         assert_eq!(
             PaymentsError::NotEntitled("payments.stripe_connect".into()).type_slug(),
             "entitlement-required"
+        );
+    }
+
+    #[test]
+    fn every_stripe_error_class_has_its_own_payments_problem_type() {
+        // 09.2's taxonomy: each Stripe failure class the adapter can hit
+        // maps to its own addressable problem type — never a generic 500.
+        assert_eq!(
+            PaymentsError::ProviderAuth.type_slug(),
+            "payments/provider-auth"
+        );
+        assert_eq!(
+            PaymentsError::ProviderRateLimited("retries exhausted".into()).type_slug(),
+            "payments/provider-rate-limited"
+        );
+        assert_eq!(
+            PaymentsError::InvalidCountry("X1".into()).type_slug(),
+            "payments/invalid-country"
+        );
+        assert_eq!(
+            PaymentsError::CountryUnsupported("XX".into()).type_slug(),
+            "payments/country-unsupported"
+        );
+        assert_eq!(
+            PaymentsError::ConnectionExists("active".into()).type_slug(),
+            "payments/connection-exists"
         );
     }
 }

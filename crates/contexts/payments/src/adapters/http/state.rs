@@ -3,9 +3,14 @@
 
 use std::sync::Arc;
 
+use sanvi_persistence::TxManager;
+
 use crate::adapters::PaymentsMetrics;
-use crate::application::{ListProviders, ProviderRegistry, StartProviderConnection};
+use crate::application::{
+    CreateAccountSession, ListProviders, ProviderRegistry, StartProviderConnection,
+};
 use crate::config::PaymentsConfig;
+use crate::domain::ProviderConnectionRepository;
 
 #[derive(Clone)]
 pub struct PaymentsState {
@@ -16,8 +21,11 @@ pub struct PaymentsState {
     /// case. The catalog is *derived* from it; nothing else may enumerate
     /// providers.
     pub registry: Arc<ProviderRegistry>,
-    /// No route yet (09.2's `POST /payments/connections`); wired now so
-    /// the registry → port → repo → outbox vertical is exercised by the
-    /// integration suite end to end.
-    pub start_connection: Arc<StartProviderConnection>,
+    /// Tenant-scoped reads/writes for the connection aggregate.
+    pub tx: TxManager,
+    pub connections: Arc<dyn ProviderConnectionRepository>,
+    /// `POST /payments/connections` (09.2).
+    pub create_connection: Arc<StartProviderConnection>,
+    /// `POST /payments/connections/{id}/session` (09.2).
+    pub account_session: Arc<CreateAccountSession>,
 }

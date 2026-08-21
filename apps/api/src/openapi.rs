@@ -146,6 +146,9 @@ use utoipa::OpenApi;
         sanvi_domains::adapters::http::handlers::list_platform_domains,
         sanvi_domains::adapters::http::handlers::release_platform_domain,
         sanvi_payments::adapters::http::handlers::list_payment_providers,
+        sanvi_payments::adapters::http::handlers::create_payment_connection,
+        sanvi_payments::adapters::http::handlers::create_payment_connection_session,
+        sanvi_payments::adapters::http::handlers::get_payment_connection,
     ),
     components(schemas(ProblemDetail, ApiError)),
     tags(
@@ -160,7 +163,7 @@ use utoipa::OpenApi;
         (name = "localization", description = "Locales, message catalogs, tenant locale settings and copy overrides"),
         (name = "theming", description = "Theme registry, tenant theme drafts/publish/rollback, brand assets and resolved-theme delivery"),
         (name = "domains", description = "Custom domains: claims, verification, registrar search/purchase, TLS authorization and health"),
-        (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header.")
+        (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/provider-auth, payments/provider-rate-limited, payments/invalid-country, payments/country-unsupported, payments/connection-exists, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header; connection creation keys the provider-side idempotency chain, so retries adopt instead of duplicate. Account Session secrets are never persisted or logged.")
     ),
     info(
         title = "Sanvi API",

@@ -33,7 +33,7 @@ pub use authz::{
     Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,
 };
 pub use config::{CorsConfig, RateLimitConfig, ServerConfig, TenantPolicyConfig};
-pub use error::{ApiError, ProblemDetail, ProblemTranslator};
+pub use error::{ApiError, PROBLEM_TYPE_BASE, ProblemDetail, ProblemTranslator};
 pub use features::{FeatureGate, RequiredFeature};
 pub use impersonation::{
     IMPERSONATION_BANNER_HEADER, IMPERSONATION_HEADER, ImpersonatedSubject, ImpersonationContext,

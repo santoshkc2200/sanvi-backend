@@ -1,11 +1,12 @@
-//! The payments context's integration tests (sub-phases 09.0 + 09.1).
+//! The payments context's integration tests (sub-phases 09.0–09.2).
 //!
 //! Real Postgres in containers, the `sanvi_app` role (NOBYPASSRLS), full
 //! migrations — the same recipe the domains/billing suites use. 09.0
-//! covered the schema, RLS and the catalog route's gates; 09.1 adds the
-//! registry-derived catalog (fake provider present in non-production,
-//! absent in production) and the registry → port → repo → outbox
-//! vertical for `ProviderConnectionStarted`.
+//! covered the schema, RLS and the catalog route's gates; 09.1 added the
+//! registry-derived catalog and the registry → port → repo → outbox
+//! vertical; 09.2 adds the idempotent connection create (concurrency and
+//! orphan adoption), the account-session use case's refusals, the route
+//! gates on the new endpoints, and the audit trail.
 
 use std::sync::Arc;
 
@@ -22,10 +23,11 @@ use sanvi_payments::adapters::http::PaymentsState;
 use sanvi_payments::adapters::repos::SqlxProviderConnectionRepository;
 use sanvi_payments::adapters::{FakeProvider, OutboxEventPublisher, PaymentsMetrics};
 use sanvi_payments::application::{
-    ListProviders, ProviderRegistry, RegistryProviderCatalog, RuntimeEnvironment,
-    StartConnectionCommand, StartProviderConnection,
+    CreateAccountSession, ListProviders, ProviderRegistry, RegistryProviderCatalog,
+    RuntimeEnvironment, StartConnectionCommand, StartProviderConnection,
 };
 use sanvi_payments::config::PaymentsConfig;
+use sanvi_payments::domain::ports::{CreateAccountRequest, PaymentProviderPort};
 use sanvi_payments::domain::provider::{ConnectionStatus, ProviderKind};
 use sanvi_payments::domain::{Money, ProviderConnection, ProviderConnectionRepository};
 use sanvi_payments::routes::payments_tenant_scope_routes;
@@ -275,7 +277,12 @@ async fn one_active_connection_per_provider_but_history_is_kept() {
     {
         let mut scope = tx.begin_for(tenant_id).await.unwrap();
         let err = repo.insert(&mut scope, &second).await.unwrap_err();
-        assert!(matches!(err, sanvi_payments::PaymentsError::Storage(_)));
+        // 09.2: the partial unique index maps to the 409-shaped domain
+        // error, not a raw storage failure.
+        assert!(matches!(
+            err,
+            sanvi_payments::PaymentsError::ConnectionExists(_)
+        ));
         let _ = scope.rollback().await;
     }
 
@@ -417,17 +424,34 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
     // execute the connection use case, so there is nothing to dial.
     let lazy_pool = sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
         .expect("lazy pool construction is configuration only");
+    let tx = TxManager::new(lazy_pool);
+    let connections: Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
+        Arc::new(SqlxProviderConnectionRepository::new());
+    let audit: Arc<dyn sanvi_audit::domain::AuditWriter> =
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new());
 
     PaymentsState {
         config: PaymentsConfig::default(),
         metrics: Arc::new(PaymentsMetrics::new(&prometheus_registry)),
         list_providers: Arc::new(ListProviders::new(catalog)),
         registry: providers.clone(),
-        start_connection: Arc::new(StartProviderConnection::new(
-            TxManager::new(lazy_pool),
-            providers,
-            Arc::new(SqlxProviderConnectionRepository::new()),
+        tx: tx.clone(),
+        connections: connections.clone(),
+        create_connection: Arc::new(StartProviderConnection::new(
+            tx,
+            providers.clone(),
+            connections.clone(),
             Arc::new(OutboxEventPublisher::new()),
+            audit,
+        )),
+        account_session: Arc::new(sanvi_payments::application::CreateAccountSession::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            providers,
+            connections,
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
         )),
     }
 }
@@ -614,7 +638,21 @@ fn start_connection_use_case(pool: &sanvi_persistence::PgPool) -> StartProviderC
         Arc::new(providers),
         Arc::new(SqlxProviderConnectionRepository::new()),
         Arc::new(OutboxEventPublisher::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
     )
+}
+
+fn start_command(tenant_id: Uuid, idempotency_key: Uuid) -> StartConnectionCommand {
+    StartConnectionCommand {
+        tenant_id,
+        provider: ProviderKind::Fake,
+        country: None,
+        default_currency: None,
+        display_name: None,
+        idempotency_key,
+        actor: Uuid::now_v7(),
+        ip: None,
+    }
 }
 
 #[tokio::test]
@@ -625,13 +663,9 @@ async fn starting_a_fake_provider_connection_emits_the_started_event_end_to_end(
     let tenant_id = seed_tenant(&pool, "outbox").await;
 
     let use_case = start_connection_use_case(&pool);
+    let key = Uuid::now_v7();
     let connection = use_case
-        .execute(StartConnectionCommand {
-            tenant_id,
-            provider: ProviderKind::Fake,
-            country: None,
-            default_currency: None,
-        })
+        .execute(start_command(tenant_id, key))
         .await
         .unwrap();
 
@@ -665,20 +699,22 @@ async fn starting_a_fake_provider_connection_emits_the_started_event_end_to_end(
         scope.commit().await.unwrap();
     }
 
-    // One live connection per (tenant, provider): a second start is a
-    // conflict, not a duplicate.
+    // Idempotent replay: the same Idempotency-Key returns the SAME
+    // connection — no second row, no second event.
+    let replay = use_case
+        .execute(start_command(tenant_id, key))
+        .await
+        .unwrap();
+    assert_eq!(replay.id, connection.id);
+    // …and a DIFFERENT key while an active connection exists is a
+    // 409-shaped conflict, not a duplicate.
     let err = use_case
-        .execute(StartConnectionCommand {
-            tenant_id,
-            provider: ProviderKind::Fake,
-            country: None,
-            default_currency: None,
-        })
+        .execute(start_command(tenant_id, Uuid::now_v7()))
         .await
         .unwrap_err();
     assert!(matches!(
         err,
-        sanvi_payments::PaymentsError::InvalidConnection(_)
+        sanvi_payments::PaymentsError::ConnectionExists(_)
     ));
     // …and it emitted no second event.
     let count: i64 = sqlx::query_scalar(
@@ -762,4 +798,351 @@ async fn the_provider_check_admits_the_fake_kind_and_reverts_cleanly() {
     .unwrap();
     assert!(check.contains("'stripe_connect'"));
     assert!(check.contains("'fake'"));
+}
+
+// ---------------------------------------------------------------------------
+// 09.2: the idempotent create — concurrency and the orphan drill.
+// ---------------------------------------------------------------------------
+
+/// The use case plus a handle to the same fake provider (for scripting
+/// and for direct adapter calls in the orphan drill).
+fn session_fixture(pool: &sanvi_persistence::PgPool) -> (CreateAccountSession, FakeProvider) {
+    let provider = FakeProvider::new();
+    let mut providers = ProviderRegistry::new();
+    providers.register(Arc::new(provider.clone())).unwrap();
+    let use_case = CreateAccountSession::new(
+        TxManager::new(pool.clone()),
+        Arc::new(providers),
+        Arc::new(SqlxProviderConnectionRepository::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+    );
+    (use_case, provider)
+}
+
+#[tokio::test]
+async fn concurrent_creates_with_the_same_key_yield_one_account_and_one_row() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "concurrent").await;
+
+    let use_case = Arc::new(start_connection_use_case(&pool));
+    let key = Uuid::now_v7();
+
+    // Run concurrently, not sequentially: both requests pass through the
+    // provider call before either insert commits.
+    let (first, second) = {
+        let a = use_case.clone();
+        let b = use_case.clone();
+        tokio::join!(
+            async move { a.execute(start_command(tenant_id, key)).await },
+            async move { b.execute(start_command(tenant_id, key)).await },
+        )
+    };
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.id, second.id, "one connection id — the derived one");
+    assert_eq!(
+        first.external_account_id, second.external_account_id,
+        "one provider account — idempotency-keyed"
+    );
+
+    // RLS: the count runs in a tenant-scoped tx.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM payments.provider_connections WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(rows, 1, "exactly one connection row");
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM platform.outbox WHERE aggregate = 'payments.provider_connection'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 1, "exactly one started event");
+}
+
+#[tokio::test]
+async fn an_orphaned_provider_account_is_adopted_on_retry() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "orphan").await;
+
+    // The crash window: the account was created at the provider, then the
+    // process died before persistence. Simulate by calling the adapter
+    // directly with the connection id the use case will derive.
+    let provider = FakeProvider::new();
+    let key = Uuid::now_v7();
+    let orphaned = provider
+        .create_account(&CreateAccountRequest {
+            tenant_id,
+            country: None,
+            default_currency: None,
+            display_name: None,
+            idempotency_key: key, // the use case derives exactly this id
+        })
+        .await
+        .unwrap();
+
+    // The retry (same Idempotency-Key) adopts the orphaned account.
+    let use_case = start_connection_use_case(&pool);
+    let connection = use_case
+        .execute(start_command(tenant_id, key))
+        .await
+        .unwrap();
+    assert_eq!(connection.id, key_derived_id(tenant_id, key));
+    assert_eq!(connection.external_account_id, orphaned.external_account_id);
+
+    // One row (RLS: the count runs in a tenant-scoped tx), and the fake
+    // provider holds exactly one account for the adopted key.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM payments.provider_connections WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(rows, 1);
+}
+
+/// The derivation is the use case's private function; the test pins its
+/// behaviour through the same construction (tenant ‖ key, v5).
+fn key_derived_id(tenant_id: Uuid, key: Uuid) -> Uuid {
+    let namespace = uuid::Uuid::from_bytes([
+        0x6b, 0x9b, 0x0d, 0x1e, 0x52, 0x6f, 0x4c, 0x2e, 0xa4, 0x1d, 0x7f, 0x3c, 0x90, 0x11, 0xab,
+        0x52,
+    ]);
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(tenant_id.as_bytes());
+    bytes[16..].copy_from_slice(key.as_bytes());
+    uuid::Uuid::new_v5(&namespace, &bytes)
+}
+
+// ---------------------------------------------------------------------------
+// 09.2: the account-session use case.
+// ---------------------------------------------------------------------------
+
+async fn pending_connection(
+    pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    provider: &FakeProvider,
+) -> ProviderConnection {
+    let account = provider
+        .create_account(&CreateAccountRequest {
+            tenant_id,
+            country: None,
+            default_currency: None,
+            display_name: None,
+            idempotency_key: Uuid::now_v7(),
+        })
+        .await
+        .unwrap();
+    let connection = ProviderConnection::pending(
+        Uuid::now_v7(),
+        tenant_id,
+        ProviderKind::Fake,
+        account.external_account_id.clone(),
+        Utc::now(),
+    )
+    .unwrap();
+    let repo = SqlxProviderConnectionRepository::new();
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    repo.insert(&mut scope, &connection).await.unwrap();
+    scope.commit().await.unwrap();
+    connection
+}
+
+#[tokio::test]
+async fn minting_a_session_moves_pending_to_onboarding_and_writes_the_audit_entry() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "session").await;
+    let (use_case, provider) = session_fixture(&pool);
+    let connection = pending_connection(&pool, tenant_id, &provider).await;
+    let actor = Uuid::now_v7();
+
+    let (session, transitioned) = use_case
+        .execute(
+            actor,
+            Some("203.0.113.7".parse().unwrap()),
+            tenant_id,
+            &connection,
+        )
+        .await
+        .unwrap();
+    assert!(session.client_secret.starts_with("fakesession_"));
+    assert!(session.expires_at > Utc::now());
+    let updated = transitioned.expect("Pending moves to Onboarding on first mint");
+    assert_eq!(updated.status, ConnectionStatus::Onboarding);
+
+    // The transition persisted.
+    let repo = SqlxProviderConnectionRepository::new();
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let stored = repo
+        .find_by_id(&mut scope, tenant_id, connection.id)
+        .await
+        .unwrap()
+        .expect("row present");
+
+    // The audit entry: actor, tenant, IP — and never the secret. The
+    // shared RLS policy admits the row's own tenant.
+    let entry: (Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT actor_id, host(ip) FROM audit.entries
+         WHERE action = 'payments.account_session_issued' AND resource_id = $1",
+    )
+    .bind(connection.id.to_string())
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    let after: serde_json::Value = sqlx::query_scalar(
+        "SELECT after FROM audit.entries
+         WHERE action = 'payments.account_session_issued' AND resource_id = $1",
+    )
+    .bind(connection.id.to_string())
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Onboarding);
+    assert_eq!(entry.0, Some(actor));
+    assert_eq!(entry.1.as_deref(), Some("203.0.113.7"));
+    assert!(
+        !after.to_string().contains(&session.client_secret),
+        "the session secret never lands in the audit trail"
+    );
+}
+
+#[tokio::test]
+async fn a_session_is_refused_for_a_disconnected_connection() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "disconnected").await;
+    let (use_case, provider) = session_fixture(&pool);
+    let connection = pending_connection(&pool, tenant_id, &provider).await;
+
+    let repo = SqlxProviderConnectionRepository::new();
+    let tx = TxManager::new(pool.clone());
+    let mut disconnected = connection.clone();
+    disconnected.disconnect(Utc::now()).unwrap();
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    repo.update(&mut scope, &disconnected).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let err = use_case
+        .execute(Uuid::now_v7(), None, tenant_id, &disconnected)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        sanvi_payments::PaymentsError::ConnectionNotActive(_)
+    ));
+}
+
+#[tokio::test]
+async fn an_expired_session_secret_is_rejected() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "expired").await;
+    let (use_case, provider) = session_fixture(&pool);
+    let connection = pending_connection(&pool, tenant_id, &provider).await;
+
+    provider.script(sanvi_payments::adapters::FakeScript {
+        next_session_expired: true,
+        ..Default::default()
+    });
+    let err = use_case
+        .execute(Uuid::now_v7(), None, tenant_id, &connection)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        sanvi_payments::PaymentsError::ProviderUnavailable(_)
+    ));
+}
+
+#[tokio::test]
+async fn creating_a_connection_writes_the_audit_entry() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "audit").await;
+    let use_case = start_connection_use_case(&pool);
+    let actor = Uuid::now_v7();
+
+    let mut command = start_command(tenant_id, Uuid::now_v7());
+    command.actor = actor;
+    command.ip = Some("198.51.100.9".parse().unwrap());
+    let connection = use_case.execute(command).await.unwrap();
+
+    // audit.entries carries a shared RLS policy (platform scope OR the
+    // row's own tenant id), so the read runs in a tenant-scoped tx.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let entry: (Option<Uuid>, Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT actor_id, tenant_id, host(ip) FROM audit.entries
+         WHERE action = 'payments.connection_created' AND resource_id = $1",
+    )
+    .bind(connection.id.to_string())
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(entry.0, Some(actor));
+    assert_eq!(entry.1, Some(tenant_id));
+    assert_eq!(entry.2.as_deref(), Some("198.51.100.9"));
+}
+
+// ---------------------------------------------------------------------------
+// 09.2: the new routes' gates (negative paths — the happy path runs
+// through the DB-backed use-case tests above).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn creating_a_connection_requires_an_idempotency_key() {
+    let app = spawn_app(true, true, RuntimeEnvironment::NonProduction, "jp").await;
+    let request = actix_test::TestRequest::post()
+        .uri("/api/v1/tenant/payments/connections")
+        .set_json(serde_json::json!({"provider": "fake"}))
+        .to_request();
+    let response = actix_test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn creating_a_connection_requires_payments_manage() {
+    let app = spawn_app(false, true, RuntimeEnvironment::NonProduction, "jp").await;
+    let request = actix_test::TestRequest::post()
+        .uri("/api/v1/tenant/payments/connections")
+        .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+        .set_json(serde_json::json!({"provider": "fake"}))
+        .to_request();
+    let response = actix_test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn creating_a_connection_requires_the_entitlement() {
+    let app = spawn_app(true, false, RuntimeEnvironment::NonProduction, "jp").await;
+    let request = actix_test::TestRequest::post()
+        .uri("/api/v1/tenant/payments/connections")
+        .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+        .set_json(serde_json::json!({"provider": "fake"}))
+        .to_request();
+    let response = actix_test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

@@ -95,7 +95,19 @@ impl ProviderConnectionRepository for SqlxProviderConnectionRepository {
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
-        .map_err(storage)?;
+        .map_err(|err| {
+            // The partial unique index is the backstop behind the use
+            // case's guard: a concurrent different-key create loses here
+            // with a 409-shaped domain error, never a raw 500.
+            if let sqlx::Error::Database(db) = &err
+                && db.constraint() == Some("one_active_provider_per_tenant")
+            {
+                return PaymentsError::ConnectionExists(
+                    "an active connection already exists".to_string(),
+                );
+            }
+            storage(err)
+        })?;
         Ok(())
     }
 
@@ -140,5 +152,57 @@ impl ProviderConnectionRepository for SqlxProviderConnectionRepository {
         .await
         .map_err(storage)?;
         rows.into_iter().map(TryFrom::try_from).collect()
+    }
+
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<ProviderConnection>, PaymentsError> {
+        let row = sqlx::query_as!(
+            ProviderConnectionRow,
+            r#"SELECT id, tenant_id, provider, external_account_id, status,
+                      capabilities, requirements, country, default_currency,
+                      connected_at, last_synced_at, disconnected_at
+               FROM payments.provider_connections
+               WHERE tenant_id = $1 AND id = $2"#,
+            tenant_id,
+            id,
+        )
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &ProviderConnection,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query!(
+            r#"UPDATE payments.provider_connections
+               SET external_account_id = $3, status = $4, capabilities = $5,
+                   requirements = $6, country = $7, default_currency = $8,
+                   connected_at = $9, last_synced_at = $10, disconnected_at = $11,
+                   updated_at = now()
+               WHERE id = $1 AND tenant_id = $2"#,
+            connection.id,
+            connection.tenant_id,
+            connection.external_account_id,
+            connection.status.as_str(),
+            connection.capabilities,
+            connection.requirements,
+            connection.country,
+            connection.default_currency,
+            connection.connected_at,
+            connection.last_synced_at,
+            connection.disconnected_at,
+        )
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
     }
 }

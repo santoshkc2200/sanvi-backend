@@ -403,6 +403,7 @@ async fn main() -> ExitCode {
             &config.payments,
             metrics.prometheus_registry(),
             &config.telemetry.environment,
+            audit.writer.clone(),
         ))
     } else {
         None

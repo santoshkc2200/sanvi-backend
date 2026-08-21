@@ -2465,6 +2465,7 @@ pub fn build_payments_state(
     config: &PaymentsConfig,
     registry: &prometheus::Registry,
     environment: &str,
+    audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter>,
 ) -> sanvi_payments::adapters::http::PaymentsState {
     let environment = RuntimeEnvironment::from_config(environment);
 
@@ -2474,10 +2475,23 @@ pub fn build_payments_state(
             .register(std::sync::Arc::new(FakeProvider::new()))
             .expect("the fake provider is the first registration");
     }
-    // 09.2: register the Stripe Connect adapter when `connect_api_key` is
-    // configured. Until then the production registry is empty and the
-    // catalog answers an empty list — the honest state, not a hardcoded
-    // one.
+    // 09.2: the Stripe Connect adapter joins the registry when a Connect
+    // restricted key is configured. Until then a production registry is
+    // empty and the catalog answers an empty list — the honest state, not
+    // a hardcoded one.
+    if !config.connect_api_key.is_empty() {
+        providers
+            .register(std::sync::Arc::new(
+                sanvi_payments::adapters::StripeConnectProvider::new(
+                    config.connect_api_base.clone(),
+                    config.connect_api_key.clone(),
+                    config.stripe_api_version.clone(),
+                    config.connect_webhook_secret.clone(),
+                    config.webhook_tolerance_secs,
+                ),
+            ))
+            .expect("the stripe connect adapter registers");
+    }
     let providers = std::sync::Arc::new(providers);
 
     let catalog = std::sync::Arc::new(RegistryProviderCatalog::new(providers.clone(), environment));
@@ -2486,19 +2500,30 @@ pub fn build_payments_state(
     let events: std::sync::Arc<dyn sanvi_payments::domain::EventPublisher> =
         std::sync::Arc::new(PaymentsEvents::new());
     let tx = sanvi_persistence::TxManager::new(pool.clone());
-    let start_connection = std::sync::Arc::new(StartProviderConnection::new(
-        tx,
+    let create_connection = std::sync::Arc::new(StartProviderConnection::new(
+        tx.clone(),
         providers.clone(),
-        connections,
+        connections.clone(),
         events,
+        audit_writer.clone(),
     ));
+    let account_session =
+        std::sync::Arc::new(sanvi_payments::application::CreateAccountSession::new(
+            tx.clone(),
+            providers.clone(),
+            connections.clone(),
+            audit_writer,
+        ));
 
     sanvi_payments::adapters::http::PaymentsState {
         config: config.clone(),
         metrics: std::sync::Arc::new(PaymentsMetrics::new(registry)),
         list_providers: std::sync::Arc::new(ListProviders::new(catalog)),
         registry: providers,
-        start_connection,
+        tx,
+        connections,
+        create_connection,
+        account_session,
     }
 }
 

@@ -57,6 +57,9 @@ pub struct FakeScript {
     pub card_payments: Option<CapabilityStatus>,
     /// Fail the next refund with this message.
     pub fail_next_refund: Option<String>,
+    /// The next minted account session is already expired — the
+    /// use case must refuse it instead of handing on a dead credential.
+    pub next_session_expired: bool,
 }
 
 struct FakeAccount {
@@ -79,6 +82,10 @@ pub struct FakeProvider {
 struct FakeState {
     script: FakeScript,
     accounts: BTreeMap<String, FakeAccount>,
+    /// Accounts created per caller idempotency key: the same key returns
+    /// the same account, exactly like the provider-side idempotency the
+    /// real adapter relies on for crash adoption.
+    by_idempotency_key: BTreeMap<uuid::Uuid, String>,
 }
 
 impl FakeProvider {
@@ -195,8 +202,15 @@ impl PaymentProviderPort for FakeProvider {
         &self,
         request: &CreateAccountRequest,
     ) -> Result<ProviderAccount, PaymentsError> {
-        let external_account_id = self.next_id("acct_fake");
         let mut state = self.state.lock().expect("fake provider state lock");
+        // Provider-side idempotency: the same key returns the same
+        // account — the property the orphan-adoption path relies on.
+        if let Some(existing) = state.by_idempotency_key.get(&request.idempotency_key) {
+            return Ok(ProviderAccount {
+                external_account_id: existing.clone(),
+            });
+        }
+        let external_account_id = self.next_id("acct_fake");
         // Fresh accounts can take payments only after onboarding — the
         // same shape as a real provider, so the Active invariant is
         // exercised, not bypassed.
@@ -214,7 +228,11 @@ impl PaymentProviderPort for FakeProvider {
                 ..RequirementSummary::default()
             }
         };
-        let _ = request; // tenant_id/country would prefill a real provider's profile
+        let _ = (
+            &request.country,
+            &request.default_currency,
+            &request.display_name,
+        );
         state.accounts.insert(
             external_account_id.clone(),
             FakeAccount {
@@ -224,6 +242,9 @@ impl PaymentProviderPort for FakeProvider {
                 onboarding_submitted: false,
             },
         );
+        state
+            .by_idempotency_key
+            .insert(request.idempotency_key, external_account_id.clone());
         Ok(ProviderAccount {
             external_account_id,
         })
@@ -233,16 +254,23 @@ impl PaymentProviderPort for FakeProvider {
         &self,
         external_account_id: &str,
     ) -> Result<ProviderAccountSession, PaymentsError> {
-        let state = self.state.lock().expect("fake provider state lock");
-        if !state.accounts.contains_key(external_account_id) {
-            return Err(PaymentsError::ProviderUnavailable(format!(
-                "fake provider knows no account {external_account_id:?}"
-            )));
-        }
+        let expired = {
+            let state = self.state.lock().expect("fake provider state lock");
+            if !state.accounts.contains_key(external_account_id) {
+                return Err(PaymentsError::ProviderUnavailable(format!(
+                    "fake provider knows no account {external_account_id:?}"
+                )));
+            }
+            state.script.next_session_expired
+        };
         Ok(ProviderAccountSession {
             external_account_id: external_account_id.to_string(),
             client_secret: format!("fakesession_{}", self.next_id("s")),
-            expires_at: Utc::now() + Duration::hours(1),
+            expires_at: if expired {
+                Utc::now() - Duration::minutes(1)
+            } else {
+                Utc::now() + Duration::hours(1)
+            },
         })
     }
 
@@ -429,6 +457,8 @@ mod tests {
                 tenant_id,
                 country: Some(CountryCode::parse("JP").unwrap()),
                 default_currency: Some(crate::domain::money::Currency::parse("JPY").unwrap()),
+                display_name: Some("Test Tenant".to_string()),
+                idempotency_key: Uuid::now_v7(),
             })
             .await
             .unwrap();
@@ -522,6 +552,8 @@ mod tests {
                 tenant_id: Uuid::now_v7(),
                 country: None,
                 default_currency: None,
+                display_name: None,
+                idempotency_key: Uuid::now_v7(),
             })
             .await
             .unwrap();

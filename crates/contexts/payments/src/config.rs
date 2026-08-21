@@ -26,6 +26,9 @@ pub struct PaymentsConfig {
     /// The entitlement key gating every payments route. Matches the
     /// access context's feature catalog seed (`payments.stripe_connect`).
     pub entitlement_key: String,
+    /// Stripe API base URL for Connect calls (overridable for tests'
+    /// mock servers; production points at `https://api.stripe.com`).
+    pub connect_api_base: String,
     /// Stripe restricted API key (`rk_`) for Connect operations —
     /// Connect permissions only, distinct from the phase-04 platform key.
     /// Empty disables provider calls (the catalog still answers). Secrets
@@ -54,6 +57,7 @@ impl Default for PaymentsConfig {
     fn default() -> Self {
         Self {
             entitlement_key: "payments.stripe_connect".to_string(),
+            connect_api_base: "https://api.stripe.com".to_string(),
             connect_api_key: String::new(),
             stripe_api_version: "2026-06-24.dahlia".to_string(),
             connect_webhook_secret: String::new(),

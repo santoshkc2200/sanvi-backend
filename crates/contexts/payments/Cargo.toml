@@ -15,9 +15,12 @@ chrono.workspace = true
 hex.workspace = true
 hmac.workspace = true
 prometheus.workspace = true
+sanvi-audit.workspace = true
 sanvi-http.workspace = true
 sanvi-kernel.workspace = true
 sanvi-messaging.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
 sanvi-persistence.workspace = true
 sanvi-privacy.workspace = true
 serde.workspace = true
@@ -31,6 +34,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 actix-http.workspace = true
+reqwest.workspace = true
+serde_urlencoded.workspace = true
 testcontainers.workspace = true
 testcontainers-modules.workspace = true
 tokio.workspace = true
+tracing-subscriber.workspace = true

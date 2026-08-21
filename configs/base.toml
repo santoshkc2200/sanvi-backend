@@ -343,6 +343,9 @@ domains_orders_interval_secs = 60
 #                                            billing.stripe_webhook_secret;
 #                                            validated at boot)
 entitlement_key = "payments.stripe_connect"
+# Stripe API base for Connect calls — overridable only for tests'
+# mock servers; every real environment leaves this at the default.
+connect_api_base = "https://api.stripe.com"
 connect_api_key = ""
 stripe_api_version = "2026-06-24.dahlia"
 connect_webhook_secret = ""
