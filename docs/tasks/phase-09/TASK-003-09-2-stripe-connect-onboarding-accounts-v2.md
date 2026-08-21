@@ -1,7 +1,7 @@
 # TASK-003: 09.2 Stripe Connect onboarding (Accounts v2)
 
 **Phase:** 09
-**Status:** todo
+**Status:** done
 **Requirement(s):** FR-901, NFR-901, NFR-904, NFR-909
 **Depends on:** TASK-002
 **Created:** 2026-08-20
