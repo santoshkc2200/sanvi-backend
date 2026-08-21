@@ -73,11 +73,21 @@ fn is_public(address: IpAddr) -> bool {
                 || v4.octets()[0] >= 240)
         }
         IpAddr::V6(v6) => {
+            // An IPv4-mapped address carries an IPv4 literal: judge it as
+            // one, so `::ffff:10.0.0.1` is refused exactly like `10.0.0.1`.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public(IpAddr::V4(v4));
+            }
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
                 || v6.is_multicast()
-                || (v6.segments()[0] & 0xfe00) == 0x2000
+                // 2001:db8::/32 documentation.
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+                // 2001::/32 Teredo tunnels an inner address we cannot see.
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0)
+                // 2002::/16 6to4 likewise embeds an arbitrary IPv4 target.
+                || v6.segments()[0] == 0x2002
                 || (v6.segments()[0] & 0xffc0) == 0xfe80)
         }
     }
@@ -160,6 +170,9 @@ mod tests {
     fn public_addresses_pass() {
         assert!(is_public("93.184.216.34".parse().unwrap()));
         assert!(is_public("8.8.8.8".parse().unwrap()));
+        // Real public IPv6 space (the old mask wrongly refused 2000::/9).
+        assert!(is_public("2001:4860:4860::8888".parse().unwrap()));
+        assert!(is_public("2606:4700:4700::1111".parse().unwrap()));
     }
 
     #[test]
@@ -186,5 +199,9 @@ mod tests {
         assert!(!is_public("fe80::1".parse().unwrap()));
         assert!(!is_public("fc00::1".parse().unwrap()));
         assert!(!is_public("2001:db8::1".parse().unwrap()));
+        // Mapped, Teredo and 6to4 embed addresses we cannot inspect.
+        assert!(!is_public("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!is_public("2001::10.0.0.1".parse().unwrap()));
+        assert!(!is_public("2002:0a00:0001::1".parse().unwrap()));
     }
 }

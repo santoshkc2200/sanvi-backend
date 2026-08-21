@@ -220,13 +220,42 @@ impl DomainOrder {
         Ok(())
     }
 
+    /// Charged, registration failed, and the refund call itself failed:
+    /// the order closes as `failed` with `refund_error` recorded, which is
+    /// the marker the order sweep keys its refund retries on.
+    pub fn mark_failed_pending_refund(
+        &mut self,
+        detail: String,
+        refund_error: String,
+        now: DateTime<Utc>,
+    ) -> Result<(), DomainsError> {
+        self.require(&[OrderStatus::Pending, OrderStatus::Charged], "fail")?;
+        self.status = OrderStatus::Failed;
+        self.failure_detail = Some(serde_json::json!({
+            "detail": detail,
+            "refund_error": refund_error,
+        }));
+        self.updated_at = now;
+        Ok(())
+    }
+
     /// Charged, then the registrar failed: refunded and closed.
+    ///
+    /// Also legal from `failed` — that is the refund-retry path: the refund
+    /// call itself failed, the order sweep retried it until it landed.
     pub fn mark_refunded(
         &mut self,
         detail: String,
         now: DateTime<Utc>,
     ) -> Result<(), DomainsError> {
-        self.require(&[OrderStatus::Charged, OrderStatus::Registered], "refund")?;
+        self.require(
+            &[
+                OrderStatus::Charged,
+                OrderStatus::Registered,
+                OrderStatus::Failed,
+            ],
+            "refund",
+        )?;
         self.status = OrderStatus::Refunded;
         self.failure_detail = Some(serde_json::json!({ "detail": detail }));
         self.updated_at = now;
@@ -345,6 +374,37 @@ mod tests {
         assert!(order.mark_refunded("x".to_string(), now).is_err());
         order.mark_charged("ch_1".to_string(), now).unwrap();
         order.mark_refunded("x".to_string(), now).unwrap();
+        assert_eq!(order.status, OrderStatus::Refunded);
+    }
+
+    #[test]
+    fn a_failed_refund_is_retried_by_the_order_sweep() {
+        let mut order = order();
+        let now = Utc::now();
+        order.mark_charged("ch_1".to_string(), now).unwrap();
+        // Registration failed and the refund call itself failed: the order
+        // closes as `failed` carrying the refund_error marker the sweep
+        // keys its retries on.
+        order
+            .mark_failed_pending_refund(
+                "registration failed; refund failed".to_string(),
+                "connection reset".to_string(),
+                now,
+            )
+            .unwrap();
+        assert_eq!(order.status, OrderStatus::Failed);
+        assert!(
+            order
+                .failure_detail
+                .as_ref()
+                .unwrap()
+                .get("refund_error")
+                .is_some()
+        );
+        // The retry lands: failed → refunded is legal.
+        order
+            .mark_refunded("refunded on retry".to_string(), now)
+            .unwrap();
         assert_eq!(order.status, OrderStatus::Refunded);
     }
 }

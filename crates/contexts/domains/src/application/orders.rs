@@ -25,9 +25,9 @@ use sanvi_persistence::{ScopedTx, TxManager};
 use crate::application::instructions::{challenge_record, routing_records};
 use crate::application::views::OrderView;
 use crate::domain::{
-    Clock, CustomDomain, CustomDomainRepository, DnsProviderPort, DomainFeatureGate, DomainKind,
-    DomainOrder, DomainOrderRepository, DomainRole, DomainsError, DomainsEvent, EventPublisher,
-    Hostname, PurchaseCharger, RegistrantContact, storage,
+    Clock, CustomDomain, CustomDomainRepository, DnsProviderPort, DomainErrorCode,
+    DomainFeatureGate, DomainKind, DomainOrder, DomainOrderRepository, DomainRole, DomainsError,
+    DomainsEvent, EventPublisher, Hostname, PurchaseCharger, RegistrantContact, storage,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -287,8 +287,9 @@ impl PlaceDomainOrder {
                     Err(refund_err) => {
                         // Money unresolved: record it, the order sweep
                         // retries the refund.
-                        order.mark_failed(
+                        order.mark_failed_pending_refund(
                             format!("registration failed ({err}); refund failed ({refund_err})"),
+                            refund_err.to_string(),
                             self.clock.now(),
                         )?;
                         self.persist_failed_with_refund(&mut order, tenant_id)
@@ -362,43 +363,84 @@ impl PlaceDomainOrder {
 
         self.provider.create_zone(&mut scope, hostname).await?;
 
+        let now = self.clock.now();
+        let claim_id = Uuid::now_v7();
         let mut token_bytes = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut token_bytes);
-        let token = hex::encode(token_bytes);
+        let mut token = hex::encode(token_bytes);
+        let mut role = match self.domains.find_primary(&mut scope, tenant_id).await? {
+            Some(_) => DomainRole::Alias,
+            None => DomainRole::Primary,
+        };
+
+        // Resolve the claim this order flows through. An existing active
+        // claim for the same hostname is either this saga's own retry
+        // (reuse its id and challenge token — the token is what the
+        // verification sweep compares the applied TXT record against) or a
+        // connect-journey claim superseded by the purchase: close it and
+        // let the purchased claim take over, inheriting the primary role.
+        // The hostname can never hold a *live* claim here — the order was
+        // rejected up front if it did.
+        let claim_id = match self
+            .domains
+            .find_active_by_hostname_for_tenant(&mut scope, tenant_id, hostname.as_str())
+            .await?
+        {
+            Some(existing) if existing.kind == DomainKind::Purchased => {
+                if let Some(challenge) = &existing.challenge {
+                    token = challenge.token.clone();
+                }
+                existing.id
+            }
+            Some(existing) => {
+                let inherits_primary = existing.role == DomainRole::Primary;
+                let mut superseded = existing;
+                superseded.remove(
+                    DomainErrorCode::SUPERSEDED_BY_PURCHASE,
+                    "closed when the tenant purchased the hostname through Sanvi".to_string(),
+                    now,
+                )?;
+                self.domains.update(&mut scope, &superseded).await?;
+                if inherits_primary {
+                    role = DomainRole::Primary;
+                }
+                let claim = CustomDomain::claim(
+                    claim_id,
+                    tenant_id,
+                    hostname.clone(),
+                    DomainKind::Purchased,
+                    role,
+                    token.clone(),
+                    now,
+                    self.challenge_ttl_hours,
+                    self.backoff_base_secs,
+                );
+                self.domains.insert(&mut scope, &claim).await?;
+                claim.id
+            }
+            None => {
+                let claim = CustomDomain::claim(
+                    claim_id,
+                    tenant_id,
+                    hostname.clone(),
+                    DomainKind::Purchased,
+                    role,
+                    token.clone(),
+                    now,
+                    self.challenge_ttl_hours,
+                    self.backoff_base_secs,
+                );
+                self.domains.insert(&mut scope, &claim).await?;
+                claim.id
+            }
+        };
+
         let mut records = vec![challenge_record(&token)];
         records.extend(routing_records(
             hostname,
             &self.edge_hostname,
             &self.anycast_ips,
         ));
-
-        let claim_id = Uuid::now_v7();
-        let now = self.clock.now();
-        let role = match self.domains.find_primary(&mut scope, tenant_id).await? {
-            Some(_) => DomainRole::Alias,
-            None => DomainRole::Primary,
-        };
-        let claim = CustomDomain::claim(
-            claim_id,
-            tenant_id,
-            hostname.clone(),
-            DomainKind::Purchased,
-            role,
-            token,
-            now,
-            self.challenge_ttl_hours,
-            self.backoff_base_secs,
-        );
-
-        // Only create the claim once, however many retries happen.
-        if self
-            .domains
-            .find_active_by_hostname_for_tenant(&mut scope, tenant_id, hostname.as_str())
-            .await?
-            .is_none()
-        {
-            self.domains.insert(&mut scope, &claim).await?;
-        }
 
         self.provider
             .apply_records(&mut scope, claim_id, &records)

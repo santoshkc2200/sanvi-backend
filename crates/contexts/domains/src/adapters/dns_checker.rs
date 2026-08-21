@@ -80,6 +80,9 @@ impl DohDnsVerifier {
             .client
             .get(resolver)
             .query(&[("name", name), ("type", &kind.to_string())])
+            // The Cloudflare/Google JSON API is content-negotiated:
+            // without this header Cloudflare answers 406 (wireformat only).
+            .header(reqwest::header::ACCEPT, "application/dns-json")
             .send()
             .await
             .map_err(|err| DomainsError::VerificationUnavailable(err.to_string()))?
@@ -117,6 +120,16 @@ impl DohDnsVerifier {
     }
 }
 
+/// DoH JSON APIs (Google, Cloudflare) return TXT answer data as one quoted
+/// character-string — `sanvi-verify=…` arrives as `"sanvi-verify=…"`.
+/// Strip exactly one pair of surrounding quotes; anything else compares
+/// as-is.
+fn unquote_txt(data: &str) -> &str {
+    data.strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(data)
+}
+
 #[async_trait]
 impl DnsVerifierPort for DohDnsVerifier {
     async fn verify_txt(
@@ -126,7 +139,9 @@ impl DnsVerifierPort for DohDnsVerifier {
     ) -> Result<DnsCheckResult, DomainsError> {
         let name = format!("_sanvi-challenge.{hostname}");
         let per_resolver = self.query(&name, TYPE_TXT).await?;
-        Ok(self.agreed(&per_resolver, |data| data == expected_value))
+        // TXT answer data arrives as a quoted character-string
+        // (`"\"sanvi-verify=…\""`); strip the quotes before comparing.
+        Ok(self.agreed(&per_resolver, |data| unquote_txt(data) == expected_value))
     }
 
     async fn verify_routing(
@@ -202,5 +217,30 @@ mod tests {
         let checker = DohDnsVerifier::new(Vec::new(), 2, 5);
         let result = checker.agreed(&[vec!["sanvi-verify=abc".to_string()]], |_| true);
         assert!(!result.confirmed);
+    }
+
+    #[test]
+    fn txt_answers_match_with_or_without_quotes() {
+        let checker = DohDnsVerifier::new(Vec::new(), 1, 5);
+        let expected = "sanvi-verify=abc";
+        let quoted = checker.agreed(&[vec!["\"sanvi-verify=abc\"".to_string()]], |data| {
+            unquote_txt(data) == expected
+        });
+        assert!(quoted.confirmed);
+        let bare = checker.agreed(&[vec!["sanvi-verify=abc".to_string()]], |data| {
+            unquote_txt(data) == expected
+        });
+        assert!(bare.confirmed);
+        let wrong = checker.agreed(&[vec!["\"sanvi-verify=xyz\"".to_string()]], |data| {
+            unquote_txt(data) == expected
+        });
+        assert!(!wrong.confirmed);
+    }
+
+    #[test]
+    fn unquote_strips_one_pair_of_quotes_only() {
+        assert_eq!(unquote_txt("\"abc\""), "abc");
+        assert_eq!(unquote_txt("abc"), "abc");
+        assert_eq!(unquote_txt("\"abc"), "\"abc");
     }
 }

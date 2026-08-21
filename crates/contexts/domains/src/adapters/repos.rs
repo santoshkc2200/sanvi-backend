@@ -444,13 +444,15 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
         scope: &mut PlatformScope<'_>,
         limit: u32,
     ) -> Result<Vec<CustomDomain>, DomainsError> {
+        // `issuing_cert` rows are crash- or failure-stranded issuance
+        // attempts: the sweep retries them alongside fresh `verified` rows.
         let rows = sqlx::query_as!(
             CustomDomainRow,
             "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, \
              challenge_token, challenge_type, challenge_created_at, challenge_expires_at, \
              detected_registrar, verified_at, last_checked_at, next_check_at, \
              verification_attempts, failure_code, failure_detail, created_at, updated_at \
-             FROM domains.custom_domains WHERE status = 'verified' \
+             FROM domains.custom_domains WHERE status IN ('verified', 'issuing_cert') \
              ORDER BY verified_at ASC LIMIT $1",
             limit as i64
         )

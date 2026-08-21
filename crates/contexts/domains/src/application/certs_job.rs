@@ -10,8 +10,8 @@ use std::sync::Arc;
 use sanvi_persistence::TxManager;
 
 use crate::domain::{
-    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomainRepository, DomainsError,
-    DomainsEvent, EventPublisher, storage,
+    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomainRepository, DomainStatus,
+    DomainsError, DomainsEvent, EventPublisher, storage,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -61,9 +61,13 @@ impl RunCertIssuanceSweep {
         for mut domain in awaiting {
             let now = self.clock.now();
             // Move to issuing_cert first so a crash mid-issuance leaves an
-            // unambiguous state to retry from.
-            domain.start_cert_issuance(now)?;
-            self.persist_domain(&domain).await?;
+            // unambiguous state to retry from. Rows already in
+            // `issuing_cert` (a previous failure or crash) are picked up
+            // again here without a transition.
+            if domain.status == DomainStatus::Verified {
+                domain.start_cert_issuance(now)?;
+                self.persist_domain(&domain).await?;
+            }
 
             match self.ca.issue(&domain).await {
                 Ok(cert) => {

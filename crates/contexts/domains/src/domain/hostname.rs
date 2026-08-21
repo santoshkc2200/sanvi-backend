@@ -134,7 +134,7 @@ impl Hostname {
         self_lower == candidate_lower || self_lower.ends_with(&format!(".{candidate_lower}"))
     }
 
-    /// The final label (`www` for `www.example.com`).
+    /// The first label (`www` for `www.example.com`).
     pub fn first_label(&self) -> &str {
         self.0.split('.').next().unwrap_or(&self.0)
     }

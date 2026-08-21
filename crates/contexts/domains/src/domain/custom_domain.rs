@@ -195,6 +195,7 @@ impl DomainErrorCode {
     pub const PROBE_FAILED: &'static str = "probe_failed";
     pub const REMOVED_BY_TENANT: &'static str = "removed_by_tenant";
     pub const PLATFORM_RELEASE: &'static str = "platform_release";
+    pub const SUPERSEDED_BY_PURCHASE: &'static str = "superseded_by_purchase";
 }
 
 /// The custom-domain aggregate.

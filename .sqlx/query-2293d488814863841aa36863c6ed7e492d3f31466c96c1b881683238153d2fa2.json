@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, challenge_token, challenge_type, challenge_created_at, challenge_expires_at, detected_registrar, verified_at, last_checked_at, next_check_at, verification_attempts, failure_code, failure_detail, created_at, updated_at FROM domains.custom_domains WHERE status = 'verified' ORDER BY verified_at ASC LIMIT $1",
+  "query": "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, challenge_token, challenge_type, challenge_created_at, challenge_expires_at, detected_registrar, verified_at, last_checked_at, next_check_at, verification_attempts, failure_code, failure_detail, created_at, updated_at FROM domains.custom_domains WHERE status IN ('verified', 'issuing_cert') ORDER BY verified_at ASC LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -252,5 +252,5 @@
       false
     ]
   },
-  "hash": "178e68058fd81d37c3ae27b5a6262276c83b36ddc1d627f7a6cb761f460af765"
+  "hash": "2293d488814863841aa36863c6ed7e492d3f31466c96c1b881683238153d2fa2"
 }

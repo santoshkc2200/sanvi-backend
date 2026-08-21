@@ -18,15 +18,16 @@ use sanvi_domains::adapters::{
 };
 use sanvi_domains::application::{
     AuthorizeTls, ClaimCustomDomain, PlaceDomainOrder, PromotePrimaryDomain, RemoveCustomDomain,
-    RequestVerification, RunCertIssuanceSweep, RunHealthSweep, RunRenewalSweep,
+    RequestVerification, RunCertIssuanceSweep, RunHealthSweep, RunOrderSweep, RunRenewalSweep,
     RunVerificationSweep, SetOrderAutoRenew,
 };
 use sanvi_domains::config::DomainsConfig;
 use sanvi_domains::domain::{
-    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomainRepository, DnsCheckResult,
-    DnsProviderPort, DnsRecordType, DnsVerifierPort, DomainFeatureGate, DomainOrderRepository,
-    DomainRegistrarPort, DomainRole, DomainStatus, DomainsError, EventPublisher, Hostname,
-    Notifications, ProbeResult, PurchaseCharger, StorefrontProbePort, TenantState,
+    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomain, CustomDomainRepository,
+    DnsCheckResult, DnsProviderPort, DnsRecordType, DnsVerifierPort, DomainFeatureGate,
+    DomainOrderRepository, DomainQuote, DomainRegistrarPort, DomainRole, DomainStatus,
+    DomainsError, EventPublisher, Hostname, Notifications, ProbeResult, PurchaseCharger,
+    RegistrationResult, RenewalResult, StorefrontProbePort, TenantState, TldPrice,
 };
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
 use testcontainers::runners::AsyncRunner;
@@ -308,6 +309,89 @@ struct Harness {
     events: Arc<dyn EventPublisher>,
     clock: Arc<FakeClock>,
     config: DomainsConfig,
+}
+
+/// A registrar that quotes normally but always fails `register` — the
+/// "charged, then the registrar breaks" saga corner.
+struct RegisterFailsRegistrar {
+    inner: SandboxRegistrar,
+}
+
+#[async_trait::async_trait]
+impl DomainRegistrarPort for RegisterFailsRegistrar {
+    fn registrar_id(&self) -> String {
+        self.inner.registrar_id()
+    }
+
+    fn catalog(&self) -> Vec<TldPrice> {
+        self.inner.catalog()
+    }
+
+    async fn search(&self, query: &str) -> Result<Vec<DomainQuote>, DomainsError> {
+        self.inner.search(query).await
+    }
+
+    async fn quote(
+        &self,
+        hostname: &Hostname,
+        term_years: u8,
+    ) -> Result<DomainQuote, DomainsError> {
+        self.inner.quote(hostname, term_years).await
+    }
+
+    async fn register(
+        &self,
+        _order_id: Uuid,
+        _hostname: &Hostname,
+        _term_years: u8,
+        _whois_privacy: bool,
+    ) -> Result<RegistrationResult, DomainsError> {
+        Err(DomainsError::Registrar(
+            "simulated registrar outage".to_string(),
+        ))
+    }
+
+    async fn renew(
+        &self,
+        external_ref: &str,
+        hostname: &Hostname,
+        term_years: u8,
+    ) -> Result<RenewalResult, DomainsError> {
+        self.inner.renew(external_ref, hostname, term_years).await
+    }
+}
+
+/// A CA whose issuance can be switched off mid-test.
+struct FlakyCa {
+    inner: SandboxCertificateAuthority,
+    fail: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl CertificateAuthorityPort for FlakyCa {
+    async fn issue(
+        &self,
+        domain: &CustomDomain,
+    ) -> Result<sanvi_domains::domain::Certificate, DomainsError> {
+        if self.fail.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(DomainsError::CertificateAuthority(
+                "simulated CA outage".to_string(),
+            ));
+        }
+        self.inner.issue(domain).await
+    }
+
+    async fn renew(
+        &self,
+        cert: &sanvi_domains::domain::Certificate,
+        domain: &CustomDomain,
+    ) -> Result<sanvi_domains::domain::Certificate, DomainsError> {
+        self.inner.renew(cert, domain).await
+    }
+
+    async fn revoke(&self, cert: &sanvi_domains::domain::Certificate) -> Result<(), DomainsError> {
+        self.inner.revoke(cert).await
+    }
 }
 
 fn test_config() -> DomainsConfig {
@@ -1174,4 +1258,255 @@ async fn auto_renew_toggle_updates_the_order() {
         .unwrap();
     assert!(!view.auto_renew);
     scope.commit().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Saga-safety regressions.
+// ---------------------------------------------------------------------------
+
+fn place_order_command(hostname: &str) -> sanvi_domains::application::PlaceDomainOrderCommand {
+    sanvi_domains::application::PlaceDomainOrderCommand {
+        hostname: hostname.to_string(),
+        term_years: 1,
+        auto_renew: true,
+        whois_privacy: true,
+        registrant_contact: sanvi_domains::domain::RegistrantContact {
+            name: "Acme".to_string(),
+            email: "ops@acme.test".to_string(),
+            phone: "+81-3-0000-0000".to_string(),
+            organization: None,
+            country_code: "jp".to_string(),
+        },
+        idempotency_key: None,
+    }
+}
+
+#[tokio::test]
+async fn failed_refund_is_retried_by_the_order_sweep_until_it_lands() {
+    let (pool, _node) = prepare().await;
+    let tenant_id = seed_tenant(&pool, "acme").await;
+    let clock = Arc::new(FakeClock::new(Utc::now()));
+    let charger = FakeCharger {
+        fail_refund: true,
+        ..FakeCharger::default()
+    };
+    let harness = build_harness(
+        pool.clone(),
+        FakeVerifier::new(true, true),
+        FakeProber { ok: true },
+        clock.clone(),
+    );
+
+    // The registrar breaks after the charge, and the refund call breaks
+    // too: the order must close as `failed` carrying the `refund_error`
+    // marker the order sweep keys its retries on.
+    let place_order = Arc::new(PlaceDomainOrder::new(
+        harness.orders.clone(),
+        harness.domains.clone(),
+        Arc::new(RegisterFailsRegistrar {
+            inner: SandboxRegistrar::new(
+                "sandbox".to_string(),
+                &DomainsConfig::default().registrar.tlds,
+            ),
+        }),
+        harness.provider.clone(),
+        Arc::new(charger.clone()),
+        Arc::new(FakeGate { enabled: true }),
+        harness.events.clone(),
+        harness.clock.clone(),
+        harness.tx.clone(),
+        harness.config.platform_domain.clone(),
+        harness.config.edge_hostname.clone(),
+        harness.config.anycast_ips.clone(),
+        harness.config.purchase_entitlement_key.clone(),
+        harness.config.verification_timeout_hours,
+        harness.config.verification_backoff_base_secs,
+    ));
+    let view = place_order
+        .execute(tenant_id, None, &place_order_command("refund-retry.com"))
+        .await
+        .unwrap();
+    assert_eq!(view.status, "failed");
+
+    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let order = harness
+        .orders
+        .find(&mut scope, tenant_id, view.id)
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert!(
+        order
+            .failure_detail
+            .as_ref()
+            .and_then(|detail| detail.get("refund_error"))
+            .is_some(),
+        "the failed refund must be recorded for the sweep to retry"
+    );
+
+    // The sweep retries the refund with a healthy charger: the order lands
+    // in `refunded`, money resolved.
+    let healthy_place_order = Arc::new(PlaceDomainOrder::new(
+        harness.orders.clone(),
+        harness.domains.clone(),
+        harness.registrar.clone(),
+        harness.provider.clone(),
+        Arc::new(FakeCharger::default()),
+        Arc::new(FakeGate { enabled: true }),
+        harness.events.clone(),
+        harness.clock.clone(),
+        harness.tx.clone(),
+        harness.config.platform_domain.clone(),
+        harness.config.edge_hostname.clone(),
+        harness.config.anycast_ips.clone(),
+        harness.config.purchase_entitlement_key.clone(),
+        harness.config.verification_timeout_hours,
+        harness.config.verification_backoff_base_secs,
+    ));
+    let sweep = Arc::new(RunOrderSweep::new(
+        harness.orders.clone(),
+        harness.registrar.clone(),
+        Arc::new(FakeCharger::default()),
+        healthy_place_order,
+        harness.tx.clone(),
+    ));
+    let report = sweep.execute(10).await.unwrap();
+    assert_eq!(report.refunded, 1);
+
+    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let order = harness
+        .orders
+        .find(&mut scope, tenant_id, view.id)
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(order.status, sanvi_domains::domain::OrderStatus::Refunded);
+}
+
+#[tokio::test]
+async fn certificate_issuance_failure_is_retried_on_the_next_sweep() {
+    let (pool, _node) = prepare().await;
+    let tenant_id = seed_tenant(&pool, "acme").await;
+    let clock = Arc::new(FakeClock::new(Utc::now()));
+    let harness = build_harness(
+        pool.clone(),
+        FakeVerifier::new(true, true),
+        FakeProber { ok: true },
+        clock.clone(),
+    );
+
+    let domain_id = claim(&harness, tenant_id, "flaky-ca.com", None).await;
+    verification_sweep(&harness)
+        .execute(clock.now(), 10)
+        .await
+        .unwrap();
+
+    // The CA is down: the domain moves to issuing_cert and must not be
+    // stranded there when the query only looks for `verified` rows.
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let flaky_sweep = Arc::new(RunCertIssuanceSweep::new(
+        harness.domains.clone(),
+        harness.certs.clone(),
+        Arc::new(FlakyCa {
+            inner: SandboxCertificateAuthority::new(90),
+            fail: fail.clone(),
+        }),
+        harness.events.clone(),
+        harness.clock.clone(),
+        harness.tx.clone(),
+    ));
+    let report = flaky_sweep.execute(10).await.unwrap();
+    assert_eq!(report.failures, 1);
+    assert_eq!(
+        find_domain(&harness, tenant_id, domain_id).await.status,
+        DomainStatus::IssuingCert
+    );
+
+    // CA recovered: the stranded issuance is retried and goes live.
+    fail.store(false, std::sync::atomic::Ordering::Relaxed);
+    let report = flaky_sweep.execute(10).await.unwrap();
+    assert_eq!(report.issued, 1);
+    assert_eq!(
+        find_domain(&harness, tenant_id, domain_id).await.status,
+        DomainStatus::Live
+    );
+}
+
+#[tokio::test]
+async fn purchasing_a_hostname_the_tenant_already_claimed_supersedes_the_connect_claim() {
+    let (pool, _node) = prepare().await;
+    let tenant_id = seed_tenant(&pool, "acme").await;
+    let clock = Arc::new(FakeClock::new(Utc::now()));
+    let harness = build_harness(
+        pool.clone(),
+        FakeVerifier::new(true, true),
+        FakeProber { ok: true },
+        clock.clone(),
+    );
+
+    // The tenant first tries the connect journey (claim, never verified),
+    // then buys the same hostname through Sanvi.
+    let connect_id = claim(&harness, tenant_id, "dual-journey.com", None).await;
+    assert_eq!(
+        find_domain(&harness, tenant_id, connect_id).await.role,
+        DomainRole::Primary
+    );
+
+    let place_order = Arc::new(PlaceDomainOrder::new(
+        harness.orders.clone(),
+        harness.domains.clone(),
+        harness.registrar.clone(),
+        harness.provider.clone(),
+        Arc::new(FakeCharger::default()),
+        Arc::new(FakeGate { enabled: true }),
+        harness.events.clone(),
+        harness.clock.clone(),
+        harness.tx.clone(),
+        harness.config.platform_domain.clone(),
+        harness.config.edge_hostname.clone(),
+        harness.config.anycast_ips.clone(),
+        harness.config.purchase_entitlement_key.clone(),
+        harness.config.verification_timeout_hours,
+        harness.config.verification_backoff_base_secs,
+    ));
+    let view = place_order
+        .execute(tenant_id, None, &place_order_command("dual-journey.com"))
+        .await
+        .unwrap();
+    assert_eq!(view.status, "active");
+
+    // The connect claim closed with the supersession reason; the purchased
+    // claim inherited the primary role.
+    let connect_claim = find_domain(&harness, tenant_id, connect_id).await;
+    assert_eq!(connect_claim.status, DomainStatus::Removed);
+    assert_eq!(
+        connect_claim
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("superseded_by_purchase")
+    );
+
+    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let domains = harness.domains.list(&mut scope, tenant_id).await.unwrap();
+    scope.commit().await.unwrap();
+    let purchased = domains
+        .iter()
+        .find(|domain| {
+            domain.hostname.as_str() == "dual-journey.com"
+                && domain.kind == sanvi_domains::domain::DomainKind::Purchased
+        })
+        .expect("the purchased claim exists");
+    assert_eq!(purchased.role, DomainRole::Primary);
+
+    // And the purchased claim verifies from the provider's records — the
+    // challenge token and the applied TXT record must agree.
+    clock.set(clock.now() + Duration::seconds(30));
+    let report = verification_sweep(&harness)
+        .execute(clock.now(), 10)
+        .await
+        .unwrap();
+    assert_eq!(report.verified, 1);
 }
