@@ -30,7 +30,7 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | TASK-002 | 09 | 09.1 Provider-agnostic domain, ports & catalog | done | TASK-001 | shipped: domain+ports+fake provider, registry-derived catalog, ProviderConnectionStarted outbox e2e (09.1) |
 | TASK-003 | 09 | 09.2 Stripe Connect onboarding (Accounts v2) | done | TASK-002 | d799455 |
 | TASK-004 | 09 | 09.3 Connection lifecycle & Connect webhooks | done | TASK-003 | commit 8234c33 |
-| TASK-005 | 09 | 09.4 Checkout on the connected account | todo | TASK-004 | |
+| TASK-005 | 09 | 09.4 Checkout on the connected account | done | TASK-004 | 09.4 shipped: checkout sessions on the connected account (Stripe-Account direct charges), idempotent create with persist-before-provider, verified-domain allow-list, per-tenant/IP/customer throttle, 5 payment webhook handlers writing payments.payments + outbox PaymentSucceeded/PaymentFailed, server-derived conversion_event_id, contract regenerated |
 | TASK-006 | 09 | 09.5 Payments, refunds & disputes | todo | TASK-005 | |
 | TASK-007 | 09 | 09.6 Payouts, tax liability & application fee | todo | TASK-004, TASK-005 | |
 | TASK-008 | 09 | 09.7 Disconnect, hardening & release | todo | TASK-006, TASK-007 | |

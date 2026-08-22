@@ -1,7 +1,7 @@
 # TASK-005: 09.4 Checkout on the connected account
 
 **Phase:** 09
-**Status:** todo
+**Status:** done
 **Requirement(s):** FR-905, NFR-901, NFR-904
 **Depends on:** TASK-004
 **Created:** 2026-08-20
