@@ -792,10 +792,8 @@ pub trait RefundRepository: Send + Sync {
     ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
 
     /// Record the provider's answer: external id + status, only when the
-    /// row has not already been finalized. Returns whether this call
-    /// performed the pending/failed → succeeded transition — the caller
-    /// emits `RefundIssued` exactly when it did (the outbox has no
-    /// dedupe, so the transition is the once-guard).
+    /// row has not already succeeded. Returns whether the row changed; the
+    /// caller emits `RefundIssued` only when the provider status succeeded.
     async fn try_finalize(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -820,6 +818,16 @@ pub trait RefundRepository: Send + Sync {
         scope: &mut ScopedTx<'_>,
         tenant_id: Uuid,
         refund_id: Uuid,
+    ) -> Result<(), PaymentsError>;
+
+    /// Attach an API idempotency key to a webhook-created winner after its
+    /// superseded local row has been removed.
+    async fn claim_idempotency_key(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        refund_id: Uuid,
+        idempotency_key: Uuid,
     ) -> Result<(), PaymentsError>;
 
     /// Insert-or-update by `(tenant_id, external_refund_id)` for webhook

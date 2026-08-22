@@ -1459,6 +1459,31 @@ impl RefundRepository for SqlxRefundRepository {
         .map_err(storage)?;
         Ok(())
     }
+
+    async fn claim_idempotency_key(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        refund_id: Uuid,
+        idempotency_key: Uuid,
+    ) -> Result<(), PaymentsError> {
+        let result = sqlx::query(
+            "UPDATE payments.refunds SET idempotency_key = $3, updated_at = now()
+             WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(refund_id)
+        .bind(tenant_id)
+        .bind(idempotency_key)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        if result.rows_affected() != 1 {
+            return Err(PaymentsError::Storage(format!(
+                "refund {refund_id} disappeared while claiming idempotency key"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

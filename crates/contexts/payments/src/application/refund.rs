@@ -473,14 +473,26 @@ impl IssueRefund {
             Some(existing) if existing.id != refund.id => Some(existing),
             _ => None,
         };
-        if let Some(winner) = winner {
+        if let Some(mut winner) = winner {
             self.refunds
                 .delete_by_id(&mut scope, command.tenant_id, refund.id)
+                .await?;
+            // The webhook-created row owns the provider refund, but the
+            // local row owns the caller's key. Move that ownership before
+            // committing so every later retry still replays this refund.
+            self.refunds
+                .claim_idempotency_key(
+                    &mut scope,
+                    command.tenant_id,
+                    winner.id,
+                    command.idempotency_key,
+                )
                 .await?;
             scope
                 .commit()
                 .await
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+            winner.idempotency_key = Some(command.idempotency_key);
             return Ok(winner);
         }
         let transitioned = self
@@ -508,9 +520,6 @@ impl IssueRefund {
             .commit()
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
-        if transitioned {
-            refund.status = RefundStatus::Succeeded;
-        }
         Ok(refund)
     }
 
