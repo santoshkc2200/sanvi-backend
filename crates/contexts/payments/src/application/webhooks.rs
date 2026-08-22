@@ -476,8 +476,6 @@ impl WebhookDispatcher {
         })
     }
 
-    /// Store-and-ack for event types whose handlers ship later — the row
-    /// is marked processed so it neither retries nor blocks the queue.
     /// One payment event: route by connected account → locate the
     /// checkout → write the read-model row → transition the checkout →
     /// emit the outbox event. The webhook is the fact; nothing here ever

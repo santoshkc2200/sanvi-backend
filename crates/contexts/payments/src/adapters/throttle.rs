@@ -19,6 +19,12 @@ use crate::domain::ports::CheckoutThrottle;
 
 const WINDOW: Duration = Duration::from_secs(60);
 
+/// Cap on tracked buckets. Past it the map is swept of expired windows:
+/// keys are partly attacker-churned (client IPs, customer-ref hashes),
+/// so without eviction the abuse control would itself be a memory
+/// leak. Live buckets always survive the sweep.
+const MAX_BUCKETS: usize = 65_536;
+
 struct Bucket {
     window_start: Instant,
     count: u32,
@@ -44,6 +50,9 @@ impl CheckoutThrottle for FixedWindowThrottle {
     async fn acquire(&self, bucket: &str) -> Result<(), PaymentsError> {
         let mut buckets = self.buckets.lock().expect("throttle lock");
         let now = Instant::now();
+        if buckets.len() >= MAX_BUCKETS {
+            buckets.retain(|_, entry| now.duration_since(entry.window_start) < WINDOW);
+        }
         let entry = buckets.entry(bucket.to_string()).or_insert(Bucket {
             window_start: now,
             count: 0,
@@ -86,5 +95,48 @@ mod tests {
         // A misconfigured zero would brick checkout entirely; it clamps
         // to one request per window instead.
         assert_eq!(FixedWindowThrottle::new(0).limit, 1);
+    }
+
+    #[tokio::test]
+    async fn expired_buckets_are_swept_once_the_map_reaches_its_cap() {
+        // Some(Instant) requires the monotonic clock to be at least one
+        // window old; on a machine booted within the last minute there is
+        // no representable past instant and the sweep cannot be exercised.
+        let Some(expired_at) = Instant::now().checked_sub(WINDOW + Duration::from_secs(1)) else {
+            return;
+        };
+        let throttle = FixedWindowThrottle::new(30);
+        {
+            let mut buckets = throttle.buckets.lock().expect("throttle lock");
+            for i in 0..MAX_BUCKETS as u32 {
+                buckets.insert(
+                    format!("churn:{i}"),
+                    Bucket {
+                        window_start: expired_at,
+                        count: 1,
+                    },
+                );
+            }
+            // One still-live bucket the sweep must keep.
+            buckets.insert(
+                "live".to_string(),
+                Bucket {
+                    window_start: Instant::now(),
+                    count: 1,
+                },
+            );
+        }
+        throttle
+            .acquire("fresh")
+            .await
+            .expect("acquire sweeps first");
+        let buckets = throttle.buckets.lock().expect("throttle lock");
+        assert_eq!(
+            buckets.len(),
+            2,
+            "only the live and the fresh bucket remain"
+        );
+        assert!(buckets.contains_key("live"));
+        assert!(buckets.contains_key("fresh"));
     }
 }

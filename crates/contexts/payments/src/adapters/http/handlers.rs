@@ -917,14 +917,15 @@ async fn load_connection(
         .begin_for(tenant_id)
         .await
         .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
-    state
+    let connection = state
         .connections
         .find_by_id(&mut scope, tenant_id, connection_id)
         .await
-        .map_err(payments_problem)?
-        .ok_or_else(|| {
-            actix_web::Error::from(ApiError::NotFound {
-                resource: format!("connection {connection_id}"),
-            })
+        .map_err(payments_problem)?;
+    let _ = scope.rollback().await;
+    connection.ok_or_else(|| {
+        actix_web::Error::from(ApiError::NotFound {
+            resource: format!("connection {connection_id}"),
         })
+    })
 }
