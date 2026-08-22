@@ -69,6 +69,21 @@ impl ConnectionNotifier for LoggingConnectionNotifier {
         );
         Ok(())
     }
+
+    async fn dispute_opened(
+        &self,
+        tenant_id: Uuid,
+        dispute_id: Uuid,
+        due_by: Option<DateTime<Utc>>,
+    ) -> Result<(), PaymentsError> {
+        tracing::warn!(
+            tenant_id = %tenant_id,
+            dispute_id = %dispute_id,
+            due_by = ?due_by,
+            "payments notification: chargeback dispute opened"
+        );
+        Ok(())
+    }
 }
 
 /// The fail-closed verifier for an endpoint with no configured provider:

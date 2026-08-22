@@ -1204,60 +1204,31 @@ pub async fn get_payment(
             }
             other => payments_problem(other),
         })?;
-    // Resolve dashboard URLs for disputes: need the connected account id.
-    let disputes: Vec<DisputeView> = {
-        // For the dashboard link we need the payment's account. Try to
-        // load the checkout's connection, fallback to the tenant's first
-        // live connection.
-        let account_id = {
-            let mut scope = state
-                .tx
-                .begin_for(tenant_id)
-                .await
-                .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
-            let account = if let Some(checkout_id) = detail.payment.checkout_id {
-                state
-                    .checkouts
-                    .find_by_id(&mut scope, tenant_id, checkout_id)
-                    .await
-                    .map_err(payments_problem)?
-                    .and_then(|c| {
-                        // Find connection synchronously via another query?
-                        // We already have detail; we can look up connection
-                        // via the same path but we need the repo — for now
-                        // we just return None and avoid a second round-trip
-                        // when the dispute's dashboard_url is not needed in
-                        // tests. The worst case is a missing link, not a
-                        // missing dispute.
-                        None::<String>
-                    })
-            } else {
-                None
-            };
-            let _ = scope.rollback().await;
-            account
-        };
-        detail
-            .disputes
-            .into_iter()
-            .map(|d| {
-                let dashboard_url = account_id.as_deref().and_then(|acct| d.dashboard_url(acct));
-                DisputeView {
-                    id: d.id,
-                    payment_id: d.payment_id,
-                    external_dispute_id: d.external_dispute_id,
-                    status: d.status.as_str().to_string(),
-                    amount_minor: d.amount.amount_minor,
-                    currency: d.amount.currency.as_str().to_string(),
-                    reason: d.reason,
-                    due_by: d.due_by,
-                    charge_id: d.charge_id,
-                    dashboard_url,
-                    created_at: d.created_at,
-                }
-            })
-            .collect()
-    };
+    // The use case resolves the connected account (the deep-link anchor);
+    // a missing link is never a failed detail view.
+    let disputes: Vec<DisputeView> = detail
+        .disputes
+        .into_iter()
+        .map(|d| {
+            let dashboard_url = detail
+                .account_external_id
+                .as_deref()
+                .and_then(|acct| d.dashboard_url(acct));
+            DisputeView {
+                id: d.id,
+                payment_id: d.payment_id,
+                external_dispute_id: d.external_dispute_id,
+                status: d.status.as_str().to_string(),
+                amount_minor: d.amount.amount_minor,
+                currency: d.amount.currency.as_str().to_string(),
+                reason: d.reason,
+                due_by: d.due_by,
+                charge_id: d.charge_id,
+                dashboard_url,
+                created_at: d.created_at,
+            }
+        })
+        .collect();
     let view = PaymentDetailView {
         payment: PaymentView::from(detail.payment),
         refunds: detail.refunds.into_iter().map(RefundView::from).collect(),
@@ -1286,11 +1257,12 @@ pub async fn get_payment(
     operation_id = "refund_tenant_payment",
     params(
         ("id" = Uuid, Path, description = "The payment id"),
-        ("Idempotency-Key" = String, Header, description = "Required. The same key with the same amount/reason replays the same refund; a different payload conflicts")
+        ("Idempotency-Key" = Uuid, Header, description = "Required (UUID). The same key with the same amount/reason replays the same refund; a different payload conflicts")
     ),
     request_body = RefundRequest,
     responses(
-        (status = 201, description = "Refund issued (or the same refund replayed)", body = RefundView),
+        (status = 200, description = "Idempotent replay: the same refund the Idempotency-Key already owns", body = RefundView),
+        (status = 201, description = "Refund issued on the connected account", body = RefundView),
         (status = 400, description = "Missing reason, malformed amount, over-refund (payments/over-refund reports remaining), currency mismatch", body = ProblemDetail),
         (status = 403, description = "Missing payments.refund permission or the entitlement", body = ProblemDetail),
         (status = 404, description = "No such payment for this tenant", body = ProblemDetail),
@@ -1328,21 +1300,22 @@ pub async fn refund_payment(
         actor: subject.0.user_id,
         ip: client_ip(&req),
     };
-    let refund = state
-        .issue_refund
-        .execute(command)
-        .await
-        .map_err(|err| match err {
-            PaymentsError::InvalidConnection(detail) if detail.contains("not found") => {
-                actix_web::Error::from(ApiError::NotFound {
-                    resource: format!("payment {payment_id}"),
-                })
-            }
-            other => payments_problem(other),
-        })?;
-    // The response is the refund record, never a bare 204.
-    let existed_before = refund.created_at < Utc::now() - chrono::Duration::seconds(1);
-    let status = if existed_before {
+    let (refund, replayed) =
+        state
+            .issue_refund
+            .execute(command)
+            .await
+            .map_err(|err| match err {
+                PaymentsError::InvalidConnection(detail) if detail.contains("not found") => {
+                    actix_web::Error::from(ApiError::NotFound {
+                        resource: format!("payment {payment_id}"),
+                    })
+                }
+                other => payments_problem(other),
+            })?;
+    // The response is the refund record, never a bare 204. 201 issued it,
+    // 200 is a replay of the same refund under the same key.
+    let status = if replayed {
         actix_web::http::StatusCode::OK
     } else {
         actix_web::http::StatusCode::CREATED
@@ -1394,18 +1367,21 @@ pub async fn list_disputes(
     let items = page
         .items
         .into_iter()
-        .map(|d| DisputeView {
-            id: d.id,
-            payment_id: d.payment_id,
-            external_dispute_id: d.external_dispute_id,
-            status: d.status.as_str().to_string(),
-            amount_minor: d.amount.amount_minor,
-            currency: d.amount.currency.as_str().to_string(),
-            reason: d.reason,
-            due_by: d.due_by,
-            charge_id: d.charge_id,
-            dashboard_url: None,
-            created_at: d.created_at,
+        .map(|item| {
+            let d = item.record;
+            DisputeView {
+                id: d.id,
+                payment_id: d.payment_id,
+                external_dispute_id: d.external_dispute_id,
+                status: d.status.as_str().to_string(),
+                amount_minor: d.amount.amount_minor,
+                currency: d.amount.currency.as_str().to_string(),
+                reason: d.reason,
+                due_by: d.due_by,
+                charge_id: d.charge_id,
+                dashboard_url: item.dashboard_url,
+                created_at: d.created_at,
+            }
         })
         .collect();
     Ok(HttpResponse::Ok()
@@ -1458,9 +1434,9 @@ pub async fn export_payments(
         date_from: query.date_from,
         date_to: query.date_to,
     };
-    let bytes = state
+    let stream = state
         .export_payments
-        .execute(command)
+        .execute_stream(command)
         .await
         .map_err(payments_problem)?;
     Ok(HttpResponse::Ok()
@@ -1470,5 +1446,5 @@ pub async fn export_payments(
             "attachment; filename=\"payments.csv\"".to_string(),
         ))
         .insert_header(("cache-control", "no-store"))
-        .body(bytes))
+        .streaming(stream))
 }

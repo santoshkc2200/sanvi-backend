@@ -313,6 +313,38 @@ impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
         .await;
         Ok(())
     }
+
+    async fn dispute_opened(
+        &self,
+        tenant_id: uuid::Uuid,
+        dispute_id: uuid::Uuid,
+        due_by: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        let dispute_arg = [("dispute", LocalizationArg::from(dispute_id.to_string()))];
+        match due_by {
+            Some(due) => {
+                let mut args = dispute_arg.to_vec();
+                args.push(("due", LocalizationArg::from(due)));
+                self.render(
+                    tenant_id,
+                    "emails.payments_dispute_opened.subject",
+                    "emails.payments_dispute_opened.body_due",
+                    &args,
+                )
+                .await;
+            }
+            None => {
+                self.render(
+                    tenant_id,
+                    "emails.payments_dispute_opened.subject",
+                    "emails.payments_dispute_opened.body",
+                    &dispute_arg,
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
 }
 
 struct WorkerPrivacyNotifications {

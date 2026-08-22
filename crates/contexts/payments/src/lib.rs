@@ -38,9 +38,9 @@ pub use domain::{
     CheckoutStatus, CheckoutThrottle, ConnectionLifecycleStore, ConnectionNotifier,
     ConnectionStatus, CountryCode, Currency, DisputeFilter, DisputePage, DisputeRecord,
     DisputeRepository, DisputeStatus, MerchantOrderRef, Money, PaymentFilter, PaymentPage,
-    PaymentRecord, PaymentRepository, PaymentStatus, PaymentTimeline, PaymentTimelineStore,
-    PaymentsError, PaymentsEvent, ProviderConnection, ProviderKind, RefundRecord, RefundRepository,
-    RefundStatus, TenantDomainAllowList, TimelineEntry, WebhookEventRecord, WebhookEventRepository,
+    PaymentRecord, PaymentRepository, PaymentStatus, PaymentTimeline, PaymentsError, PaymentsEvent,
+    ProviderConnection, ProviderKind, RefundRecord, RefundRepository, RefundStatus,
+    TenantDomainAllowList, TimelineEntry, WebhookEventRecord, WebhookEventRepository,
     WebhookVerificationError,
 };
 

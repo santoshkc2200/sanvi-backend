@@ -710,7 +710,7 @@ impl WebhookDispatcher {
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             return Ok(ApplyOutcome::Skipped);
         };
-        let outcome = handle_dispute_event(
+        let (outcome, opened) = handle_dispute_event(
             &mut scope,
             checkouts.as_ref(),
             disputes_repo.as_ref(),
@@ -726,6 +726,21 @@ impl WebhookDispatcher {
             .commit()
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        if let Some(signal) = opened {
+            // Best-effort, post-commit: a notification failure is logged,
+            // never a failed (or retried) dispute projection.
+            if let Err(err) = self
+                .notifier
+                .dispute_opened(connection.tenant_id, signal.dispute_id, signal.due_by)
+                .await
+            {
+                warn!(
+                    dispute_id = %signal.dispute_id,
+                    error = %err,
+                    "dispute-opened notification failed; the dispute row is committed"
+                );
+            }
+        }
         Ok(outcome)
     }
 
@@ -1165,7 +1180,9 @@ async fn handle_refund_event(
         let currency = refund_obj
             .get("currency")
             .and_then(Value::as_str)
-            .unwrap_or("usd");
+            .ok_or_else(|| {
+                PaymentsError::Storage(format!("refund {} carries no currency", external_refund_id))
+            })?;
         let money = Money::new(amount, currency)?;
         let status_raw = refund_obj
             .get("status")
@@ -1268,11 +1285,16 @@ async fn handle_refund_event(
             refund_record.created_at = existing.created_at;
         }
         refunds.upsert_platform(scope, &refund_record).await?;
-        // Emit RefundIssued on first time we see a succeeded refund; the
-        // idempotency is on the outbox's aggregate id (refund_id) but we
-        // only publish when we created the row (existing is None and
-        // status is succeeded) to avoid duplicate events on redelivery.
-        if existing.is_none() && status == RefundStatus::Succeeded {
+        // Emit RefundIssued exactly when this row transitions into
+        // Succeeded: a refund first seen pending (`refund.updated`) emits
+        // when it lands, redelivery is a no-op. The outbox has no dedupe,
+        // so the observed transition is the once-guard — not the row's
+        // newness and not any outbox-side key.
+        let transitioned = status == RefundStatus::Succeeded
+            && existing
+                .as_ref()
+                .is_none_or(|r| r.status != RefundStatus::Succeeded);
+        if transitioned {
             events
                 .publish(
                     scope,
@@ -1303,7 +1325,7 @@ async fn handle_dispute_event(
     events: &dyn EventPublisher,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
-) -> Result<ApplyOutcome, PaymentsError> {
+) -> Result<(ApplyOutcome, Option<DisputeOpenedSignal>), PaymentsError> {
     let object = record
         .payload
         .pointer("/data/object")
@@ -1337,7 +1359,12 @@ async fn handle_dispute_event(
     let currency = object
         .get("currency")
         .and_then(Value::as_str)
-        .unwrap_or("usd");
+        .ok_or_else(|| {
+            PaymentsError::Storage(format!(
+                "dispute {} carries no currency",
+                external_dispute_id
+            ))
+        })?;
     let money = Money::new(amount, currency)?;
     let reason = object
         .get("reason")
@@ -1364,35 +1391,44 @@ async fn handle_dispute_event(
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
-    // Route to payment: dispute's charge → payment's external id.
-    let external_payment_id = charge_id.clone().or_else(|| {
-        object
-            .get("payment_intent")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    });
-    let Some(external_payment_id) = external_payment_id else {
+
+    // Route to the payment. Payment rows are keyed by payment-intent id
+    // (pi_…) — that is what checkout.session.completed and
+    // payment_intent.* store — while dispute objects name the charge
+    // (ch_…). Try every candidate id the payload carries: the payment
+    // intent first (the key our rows actually use), the charge id last.
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(pi) = object.get("payment_intent").and_then(Value::as_str) {
+        candidates.push(pi.to_string());
+    }
+    if let Some(charge) = charge_id.clone() {
+        candidates.push(charge);
+    }
+    if candidates.is_empty() {
         warn!(
             event = %record.stripe_event_id,
             dispute = %external_dispute_id,
             "dispute has no routable charge/payment id; skipped"
         );
-        return Ok(ApplyOutcome::Skipped);
-    };
-    let payment = match checkouts
-        .find_payment_by_external_id(scope, tenant_id, &external_payment_id)
-        .await?
-    {
-        Some(p) => p,
-        None => {
-            warn!(
-                event = %record.stripe_event_id,
-                dispute = %external_dispute_id,
-                payment = %external_payment_id,
-                "dispute for unknown payment; skipped"
-            );
-            return Ok(ApplyOutcome::Skipped);
+        return Ok((ApplyOutcome::Skipped, None));
+    }
+    let mut payment = None;
+    for candidate in &candidates {
+        payment = checkouts
+            .find_payment_by_external_id(scope, tenant_id, candidate)
+            .await?;
+        if payment.is_some() {
+            break;
         }
+    }
+    let Some(payment) = payment else {
+        warn!(
+            event = %record.stripe_event_id,
+            dispute = %external_dispute_id,
+            candidates = %candidates.join(","),
+            "dispute for unknown payment; skipped"
+        );
+        return Ok((ApplyOutcome::Skipped, None));
     };
     let created = object
         .get("created")
@@ -1421,6 +1457,7 @@ async fn handle_dispute_event(
         dispute.created_at = at;
     }
     disputes.upsert(scope, &dispute).await?;
+    let mut signal = None;
     if is_new {
         events
             .publish(
@@ -1434,17 +1471,21 @@ async fn handle_dispute_event(
                 }],
             )
             .await?;
-        // Tenant notification: dispute opened. Failures are logged by the
-        // caller, not retried — a lost notification must not fail the
-        // committed dispute row.
-        tracing::info!(
-            tenant_id = %tenant_id,
-            dispute_id = %dispute.id,
-            status = %status.as_str(),
-            "dispute opened for payment {}", payment.id
-        );
+        // The tenant notification fires after the row commits — a lost
+        // notification must never fail a committed dispute projection.
+        signal = Some(DisputeOpenedSignal {
+            dispute_id: dispute.id,
+            due_by,
+        });
     }
-    Ok(ApplyOutcome::Applied)
+    Ok((ApplyOutcome::Applied, signal))
+}
+
+/// What `apply_dispute_event` needs to notify about once the transaction
+/// has committed.
+struct DisputeOpenedSignal {
+    dispute_id: Uuid,
+    due_by: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[cfg(test)]

@@ -90,6 +90,14 @@ struct FakeState {
     /// (09.4): a retried request re-reads the same session instead of
     /// minting a second one.
     sessions: BTreeMap<String, ProviderCheckoutSession>,
+    /// Refunds by caller idempotency key — the same key returns the same
+    /// refund, mirroring the provider-side idempotency the refund use
+    /// case's re-drive path relies on (a retry after a lost response
+    /// must never move money twice).
+    refunds_by_key: BTreeMap<uuid::Uuid, ProviderRefund>,
+    /// How many refunds the provider actually executed (tests assert
+    /// "a retried key issues exactly one refund" against this).
+    refund_executions: u64,
 }
 
 impl FakeProvider {
@@ -128,6 +136,16 @@ impl FakeProvider {
                 .with("transfers", CapabilityStatus::Active);
             account.requirements = RequirementSummary::default();
         }
+    }
+
+    /// How many refunds the provider actually executed (idempotent
+    /// replays excluded) — the "exactly one refund at the provider"
+    /// assertion for retried refund requests.
+    pub fn refund_executions(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("fake provider state lock")
+            .refund_executions
     }
 
     fn snapshot(
@@ -370,30 +388,36 @@ impl PaymentProviderPort for FakeProvider {
         &self,
         command: &ProviderRefundCommand,
     ) -> Result<ProviderRefund, PaymentsError> {
-        {
-            let state = self.state.lock().expect("fake provider state lock");
-            if !state.accounts.contains_key(&command.external_account_id) {
-                return Err(PaymentsError::ProviderUnavailable(format!(
-                    "fake provider knows no account {:?}",
-                    command.external_account_id
-                )));
-            }
-            if state.script.fail_next_refund.is_some() {
-                // Fall through to scripted failure handling below (needs mutable lock).
-            }
-        }
         let mut state = self.state.lock().expect("fake provider state lock");
+        if !state.accounts.contains_key(&command.external_account_id) {
+            return Err(PaymentsError::ProviderUnavailable(format!(
+                "fake provider knows no account {:?}",
+                command.external_account_id
+            )));
+        }
+        // Provider-side idempotency, like Stripe: a key that already
+        // produced a refund replays it — the re-drive path in the refund
+        // use case depends on this to be safe after a lost response.
+        if let Some(existing) = state.refunds_by_key.get(&command.idempotency_key) {
+            return Ok(existing.clone());
+        }
+        // Every attempt reaches the provider (even a scripted rejection)
+        // — exactly what Stripe bills an idempotency-keyed call against.
+        state.refund_executions += 1;
         if let Some(reason) = state.script.fail_next_refund.take() {
             return Err(PaymentsError::ProviderUnavailable(format!(
                 "scripted refund failure: {reason}"
             )));
         }
-        let external_refund_id = self.next_id("re_fake");
-        Ok(ProviderRefund {
-            external_refund_id,
+        let refund = ProviderRefund {
+            external_refund_id: self.next_id("re_fake"),
             status: RefundStatus::Succeeded,
             amount: command.refund.amount.clone(),
-        })
+        };
+        state
+            .refunds_by_key
+            .insert(command.idempotency_key, refund.clone());
+        Ok(refund)
     }
 
     async fn list_payouts(

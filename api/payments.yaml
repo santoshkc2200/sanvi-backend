@@ -556,11 +556,12 @@ paths:
         schema:
           format: uuid
           type: string
-      - description: Required. The same key with the same amount/reason replays the same refund; a different payload conflicts
+      - description: Required (UUID). The same key with the same amount/reason replays the same refund; a different payload conflicts
         in: header
         name: Idempotency-Key
         required: true
         schema:
+          format: uuid
           type: string
       requestBody:
         content:
@@ -569,12 +570,18 @@ paths:
               $ref: '#/components/schemas/RefundRequest'
         required: true
       responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundView'
+          description: 'Idempotent replay: the same refund the Idempotency-Key already owns'
         '201':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RefundView'
-          description: Refund issued (or the same refund replayed)
+          description: Refund issued on the connected account
         '400':
           content:
             application/json:

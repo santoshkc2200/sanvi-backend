@@ -24,5 +24,8 @@
   "emails.payments_connection_restricted.subject": "Action needed: your {tenant} payment account is restricted",
   "emails.payments_connection_restricted.body": "Your payment account for {tenant} (connection {connection}) cannot accept payments right now: {detail}. Sign in to your dashboard to resolve the outstanding requirements.",
   "emails.payments_requirement_deadline.subject": "Deadline approaching for your {tenant} payment account",
-  "emails.payments_requirement_deadline.body": "Stripe requires additional information for your payment account (connection {connection}) by {date, date}. If it is not provided, the account will be restricted."
+  "emails.payments_requirement_deadline.body": "Stripe requires additional information for your payment account (connection {connection}) by {date, date}. If it is not provided, the account will be restricted.",
+  "emails.payments_dispute_opened.subject": "A chargeback dispute was opened on your account",
+  "emails.payments_dispute_opened.body": "A customer disputed a payment on your store. Handle dispute {dispute} in the Stripe Dashboard.",
+  "emails.payments_dispute_opened.body_due": "A customer disputed a payment on your store. Dispute {dispute} needs your response in the Stripe Dashboard by {due, date}."
 }

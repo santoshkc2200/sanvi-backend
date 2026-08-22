@@ -7,9 +7,11 @@
 //! Idempotency is enforced locally **and** passed to Stripe, so a
 //! retried request after a lost response never issues a second refund.
 //!
-//! Order: validate reason → load payment → compute remaining →
-//! idempotency check → persist pending → call provider on the
-//! **connected account** → persist success + outbox + audit.
+//! Order: validate reason → load payment → replay/re-drive an existing
+//! key → compute remaining → persist pending → call provider on the
+//! **connected account** → finalize (external id + status + outbox) →
+//! audit. A provider rejection marks the row failed so a retried key can
+//! re-drive; the provider-side idempotency key keeps the re-drive safe.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -101,7 +103,13 @@ impl IssueRefund {
         }
     }
 
-    pub async fn execute(&self, command: RefundCommand) -> Result<RefundRecord, PaymentsError> {
+    /// Issue (or replay, or re-drive) a refund. Returns the refund record
+    /// and whether this call replayed an already-finalized refund (the
+    /// handler answers 200 for a replay, 201 for a fresh issue).
+    pub async fn execute(
+        &self,
+        command: RefundCommand,
+    ) -> Result<(RefundRecord, bool), PaymentsError> {
         let reason = command.reason.trim().to_string();
         if reason.is_empty() {
             return Err(PaymentsError::InvalidConnection(
@@ -144,6 +152,50 @@ impl IssueRefund {
                 payment.id,
                 payment.status.as_str()
             )));
+        }
+
+        // Replay BEFORE any remaining-amount guard: a retried key whose
+        // refund already succeeded must answer with that refund, not with
+        // an over-refund error computed against the refunded total.
+        let existing = {
+            let mut scope = self
+                .tx_manager
+                .begin_for(command.tenant_id)
+                .await
+                .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+            let existing = self
+                .refunds
+                .find_by_idempotency_key(&mut scope, command.tenant_id, command.idempotency_key)
+                .await?;
+            let _ = scope.rollback().await;
+            existing
+        };
+        if let Some(existing) = existing {
+            if existing.payment_id != payment.id {
+                return Err(PaymentsError::IdempotencyConflict(
+                    "Idempotency-Key already used for another payment".to_string(),
+                ));
+            }
+            if !payload_matches(&existing, &command.amount, &reason) {
+                return Err(PaymentsError::IdempotencyConflict(
+                    "Idempotency-Key reused with different amount or reason".to_string(),
+                ));
+            }
+            match existing.status {
+                RefundStatus::Succeeded => return Ok((existing, true)),
+                // Pending or failed: the provider call either never
+                // happened (crash between insert and call) or was
+                // rejected. Re-drive it — the provider-side idempotency
+                // key guarantees a refund that already exists at the
+                // provider is replayed, never duplicated.
+                RefundStatus::Pending | RefundStatus::Failed => {
+                    let connection = self.resolve_connection(command.tenant_id, &payment).await?;
+                    let finalized = self
+                        .drive_and_finalize(&command, &payment, &connection, existing)
+                        .await?;
+                    return Ok((finalized, false));
+                }
+            }
         }
 
         // Compute remaining refundable amount: total minus already-succeeded
@@ -215,37 +267,6 @@ impl IssueRefund {
             }
         };
 
-        // Idempotency: same key → same refund, same payload → same row;
-        // same key + different payload → conflict.
-        {
-            let mut scope = self
-                .tx_manager
-                .begin_for(command.tenant_id)
-                .await
-                .map_err(|err| PaymentsError::Storage(err.to_string()))?;
-            if let Some(existing) = self
-                .refunds
-                .find_by_idempotency_key(&mut scope, command.tenant_id, command.idempotency_key)
-                .await?
-            {
-                let _ = scope.rollback().await;
-                if existing.payment_id != payment.id {
-                    return Err(PaymentsError::IdempotencyConflict(
-                        "Idempotency-Key already used for another payment".to_string(),
-                    ));
-                }
-                if existing.amount != requested
-                    || existing.reason.as_deref() != Some(reason.as_str())
-                {
-                    return Err(PaymentsError::IdempotencyConflict(
-                        "Idempotency-Key reused with different amount or reason".to_string(),
-                    ));
-                }
-                return Ok(existing);
-            }
-            let _ = scope.rollback().await;
-        }
-
         let refund_id = refund_id_for(command.tenant_id, payment.id, command.idempotency_key);
         let now = Utc::now();
         let mut refund = RefundRecord::against(
@@ -258,67 +279,9 @@ impl IssueRefund {
         )?;
         refund.idempotency_key = Some(command.idempotency_key);
 
-        // Resolve the connected account this refund is against. The payment
-        // belongs to a checkout (the normal path); that checkout belongs to
-        // a connection; that connection is the `Stripe-Account` we send.
-        let connection = {
-            let mut scope = self
-                .tx_manager
-                .begin_for(command.tenant_id)
-                .await
-                .map_err(|err| PaymentsError::Storage(err.to_string()))?;
-            let connection = if let Some(checkout_id) = payment.checkout_id {
-                let checkout = self
-                    .checkouts
-                    .find_by_id(&mut scope, command.tenant_id, checkout_id)
-                    .await?
-                    .ok_or_else(|| {
-                        PaymentsError::Storage(format!("checkout {checkout_id} not found"))
-                    })?;
-                self.connections
-                    .find_by_id(&mut scope, command.tenant_id, checkout.connection_id)
-                    .await?
-                    .ok_or_else(|| {
-                        PaymentsError::Storage("connection for checkout not found".to_string())
-                    })?
-            } else {
-                // Fallback: the tenant's live connection (payments without a
-                // checkout are rare and only appear via direct PaymentIntent
-                // webhooks; the newest live connection is the honest owner).
-                let connections = self.connections.list(&mut scope, command.tenant_id).await?;
-                connections
-                    .into_iter()
-                    .find(|c| c.disconnected_at.is_none())
-                    .ok_or_else(|| {
-                        PaymentsError::ConnectionNotActive(
-                            "no live connection for refund".to_string(),
-                        )
-                    })?
-            };
-            let _ = scope.rollback().await;
-            connection
-        };
-
-        // Guard: disconnected connections cannot move money.
-        if connection.disconnected_at.is_some()
-            || connection.status == crate::domain::ConnectionStatus::Disconnected
-            || connection.status == crate::domain::ConnectionStatus::Rejected
-        {
-            return Err(PaymentsError::ConnectionNotActive(format!(
-                "connection is {}",
-                connection.status.as_str()
-            )));
-        }
-
-        let adapter = self.registry.get(connection.provider).ok_or_else(|| {
-            PaymentsError::InvalidConnection(format!(
-                "provider {:?} is not available",
-                connection.provider.as_str()
-            ))
-        })?;
-
         // Persist Pending before the provider call — the idempotency key
         // now has an owner even if the HTTP response is lost.
+        let mut replayed_winner = None;
         {
             let mut scope = self
                 .tx_manager
@@ -334,7 +297,10 @@ impl IssueRefund {
                 }
                 Err(PaymentsError::IdempotencyConflict(detail)) => {
                     let _ = scope.rollback().await;
-                    // Adopt the winner: concurrent same-key insert won.
+                    // Adopt the winner of a concurrent same-key insert —
+                    // after the same payload validation the replay path
+                    // applies. A different payload under the same key is a
+                    // conflict, not a success.
                     let mut scope2 = self
                         .tx_manager
                         .begin_for(command.tenant_id)
@@ -350,7 +316,14 @@ impl IssueRefund {
                         .await?
                         .ok_or(PaymentsError::IdempotencyConflict(detail))?;
                     let _ = scope2.rollback().await;
-                    return Ok(winner);
+                    if winner.payment_id != payment.id
+                        || !payload_matches(&winner, &command.amount, &reason)
+                    {
+                        return Err(PaymentsError::IdempotencyConflict(
+                            "Idempotency-Key reused with different amount or reason".to_string(),
+                        ));
+                    }
+                    replayed_winner = Some(winner);
                 }
                 Err(err) => {
                     let _ = scope.rollback().await;
@@ -358,11 +331,94 @@ impl IssueRefund {
                 }
             }
         }
+        if let Some(winner) = replayed_winner {
+            // The concurrent winner may itself still be mid-flight; its
+            // record is the answer either way (a pending record for an
+            // in-flight call, succeeded for a finished one).
+            return Ok((winner, true));
+        }
 
-        // Call the provider on the connected account. The refund is the
-        // tenant's money moving; Sanvi never holds it. The provider's
-        // idempotency key is our `idempotency_key` (UUID), not the row id.
-        let provider_refund = adapter
+        let connection = self.resolve_connection(command.tenant_id, &payment).await?;
+        let finalized = self
+            .drive_and_finalize(&command, &payment, &connection, refund)
+            .await?;
+        Ok((finalized, false))
+    }
+
+    /// The connected account this payment's money moved through — the
+    /// `Stripe-Account` the refund is executed on. The normal path is
+    /// payment → checkout → connection; payments without a checkout (direct
+    /// PaymentIntent webhooks) fall back to the tenant's live connection.
+    async fn resolve_connection(
+        &self,
+        tenant_id: Uuid,
+        payment: &crate::domain::PaymentRecord,
+    ) -> Result<crate::domain::ProviderConnection, PaymentsError> {
+        let mut scope = self
+            .tx_manager
+            .begin_for(tenant_id)
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        let connection = if let Some(checkout_id) = payment.checkout_id {
+            let checkout = self
+                .checkouts
+                .find_by_id(&mut scope, tenant_id, checkout_id)
+                .await?
+                .ok_or_else(|| {
+                    PaymentsError::Storage(format!("checkout {checkout_id} not found"))
+                })?;
+            self.connections
+                .find_by_id(&mut scope, tenant_id, checkout.connection_id)
+                .await?
+                .ok_or_else(|| {
+                    PaymentsError::Storage("connection for checkout not found".to_string())
+                })?
+        } else {
+            let connections = self.connections.list(&mut scope, tenant_id).await?;
+            connections
+                .into_iter()
+                .find(|c| c.disconnected_at.is_none())
+                .ok_or_else(|| {
+                    PaymentsError::ConnectionNotActive("no live connection for refund".to_string())
+                })?
+        };
+        let _ = scope.rollback().await;
+
+        // Guard: disconnected connections cannot move money.
+        if connection.disconnected_at.is_some()
+            || connection.status == crate::domain::ConnectionStatus::Disconnected
+            || connection.status == crate::domain::ConnectionStatus::Rejected
+        {
+            return Err(PaymentsError::ConnectionNotActive(format!(
+                "connection is {}",
+                connection.status.as_str()
+            )));
+        }
+        Ok(connection)
+    }
+
+    /// Call the provider on the connected account, then persist its answer.
+    /// The refund is the tenant's money moving; Sanvi never holds it. The
+    /// provider's idempotency key is our `idempotency_key`, so a re-drive of
+    /// a key the provider already served replays that refund instead of
+    /// issuing a second one. A provider rejection marks the local row
+    /// failed — the read model must never show a pending refund that does
+    /// not exist at the provider, and a retried key stays re-drivable.
+    async fn drive_and_finalize(
+        &self,
+        command: &RefundCommand,
+        payment: &crate::domain::PaymentRecord,
+        connection: &crate::domain::ProviderConnection,
+        mut refund: RefundRecord,
+    ) -> Result<RefundRecord, PaymentsError> {
+        let adapter = self.registry.get(connection.provider).ok_or_else(|| {
+            PaymentsError::InvalidConnection(format!(
+                "provider {:?} is not available",
+                connection.provider.as_str()
+            ))
+        })?;
+
+        let provider_refund = match adapter
             .refund(&ProviderRefundCommand {
                 external_account_id: connection.external_account_id.clone(),
                 external_payment_id: payment.external_payment_id.clone(),
@@ -370,23 +426,70 @@ impl IssueRefund {
                 idempotency_key: command.idempotency_key,
             })
             .await
-            .map_err(|err| {
-                // Mark the local row as failed so the timeline and the
-                // remaining-amount guard both see it.
-                err
-            })?;
+        {
+            Ok(provider_refund) => provider_refund,
+            Err(err) => {
+                self.mark_failed(command.tenant_id, refund.id).await;
+                return Err(err);
+            }
+        };
 
-        // Persist the provider's answer: external id + succeeded status.
         refund.external_refund_id = Some(provider_refund.external_refund_id.clone());
         refund.status = provider_refund.status;
+        let finalized = self.finalize(command, payment, connection, refund).await?;
+
+        // Audit: actor, amount, currency, reason, plus the note when present.
+        self.audit_refund(command, payment, &finalized, connection)
+            .await;
+        Ok(finalized)
+    }
+
+    /// Persist the provider's answer in one transaction with the
+    /// `RefundIssued` outbox event. If the refund webhook won the race and
+    /// already created a row for this provider refund id, that row wins:
+    /// ours is deleted and returned (the webhook path already finalized
+    /// and emitted for it).
+    async fn finalize(
+        &self,
+        command: &RefundCommand,
+        payment: &crate::domain::PaymentRecord,
+        connection: &crate::domain::ProviderConnection,
+        mut refund: RefundRecord,
+    ) -> Result<RefundRecord, PaymentsError> {
+        let external_refund_id = refund
+            .external_refund_id
+            .clone()
+            .ok_or_else(|| PaymentsError::Storage("refund has no provider id".to_string()))?;
+        let mut scope = self
+            .tx_manager
+            .begin_for(command.tenant_id)
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        let winner = match self
+            .refunds
+            .find_by_external_id(&mut scope, command.tenant_id, &external_refund_id)
+            .await?
         {
-            let mut scope = self
-                .tx_manager
-                .begin_for(command.tenant_id)
+            Some(existing) if existing.id != refund.id => Some(existing),
+            _ => None,
+        };
+        if let Some(winner) = winner {
+            self.refunds
+                .delete_by_id(&mut scope, command.tenant_id, refund.id)
+                .await?;
+            scope
+                .commit()
                 .await
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
-            self.refunds.update(&mut scope, &refund).await?;
-            // Outbox event: RefundIssued, committed with the row.
+            return Ok(winner);
+        }
+        let transitioned = self
+            .refunds
+            .try_finalize(&mut scope, command.tenant_id, &refund)
+            .await?;
+        if transitioned && refund.status == RefundStatus::Succeeded {
+            // The outbox has no dedupe — the row's pending/failed →
+            // succeeded transition is the once-guard for RefundIssued.
             self.events
                 .publish_scoped(
                     &mut scope,
@@ -400,17 +503,35 @@ impl IssueRefund {
                     }],
                 )
                 .await?;
-            scope
-                .commit()
-                .await
-                .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         }
-
-        // Audit: actor, amount, currency, reason, plus the note when present.
-        self.audit_refund(&command, &payment, &refund, &connection, requested)
-            .await;
-
+        scope
+            .commit()
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        if transitioned {
+            refund.status = RefundStatus::Succeeded;
+        }
         Ok(refund)
+    }
+
+    /// Best-effort failure marking: a storage failure here is logged and
+    /// swamped by the provider error the caller already holds — the row
+    /// stays pending and the next same-key retry re-drives it.
+    async fn mark_failed(&self, tenant_id: Uuid, refund_id: Uuid) {
+        let Ok(mut scope) = self.tx_manager.begin_for(tenant_id).await else {
+            tracing::error!(refund_id = %refund_id, "failed to open scope to mark refund failed");
+            return;
+        };
+        if let Err(err) = self
+            .refunds
+            .mark_failed(&mut scope, tenant_id, refund_id)
+            .await
+        {
+            tracing::error!(refund_id = %refund_id, error = %err, "failed to mark refund failed");
+        }
+        if let Err(err) = scope.commit().await {
+            tracing::error!(refund_id = %refund_id, error = %err, "failed to commit refund failure");
+        }
     }
 
     async fn audit_refund(
@@ -419,7 +540,6 @@ impl IssueRefund {
         payment: &crate::domain::PaymentRecord,
         refund: &RefundRecord,
         connection: &crate::domain::ProviderConnection,
-        requested: Money,
     ) {
         let Ok(mut scope) = self
             .tx_manager
@@ -434,8 +554,8 @@ impl IssueRefund {
             "external_payment_id": payment.external_payment_id,
             "refund_id": refund.id,
             "external_refund_id": refund.external_refund_id,
-            "amount_minor": requested.amount_minor,
-            "currency": requested.currency.as_str(),
+            "amount_minor": refund.amount.amount_minor,
+            "currency": refund.amount.currency.as_str(),
             "reason": refund.reason,
             "note": command.note,
             "provider": connection.provider.as_str(),
@@ -449,7 +569,6 @@ impl IssueRefund {
                     occurred_at: Utc::now(),
                     actor_type: ActorType::User,
                     actor_id: Some(command.actor),
-                    on_behalf_of: None,
                     tenant_id: Some(command.tenant_id),
                     action: "payments.refund_issued".to_string(),
                     resource_type: Some("payments.refund".to_string()),
@@ -459,6 +578,7 @@ impl IssueRefund {
                     request_id: None,
                     ip: command.ip,
                     user_agent: None,
+                    on_behalf_of: None,
                 },
             )
             .await
@@ -469,6 +589,16 @@ impl IssueRefund {
             tracing::error!(refund_id = %refund.id, error = %err, "failed to commit refund audit");
         }
     }
+}
+
+/// Whether a retried request's payload describes the same refund as the
+/// row its Idempotency-Key owns: same payment, same reason, and — when the
+/// retry names an explicit amount — the exact amount. A `null` amount ("all
+/// of it") replays whatever the key owns, because that is what "all of it"
+/// resolved to when the key was first spent.
+fn payload_matches(existing: &RefundRecord, requested: &Option<Money>, reason: &str) -> bool {
+    existing.reason.as_deref() == Some(reason)
+        && requested.as_ref().map_or(true, |m| *m == existing.amount)
 }
 
 #[cfg(test)]
@@ -496,5 +626,46 @@ mod tests {
             refund_id_for(tenant, payment, key),
             refund_id_for(tenant, payment, Uuid::now_v7())
         );
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    fn record(amount_minor: i64, reason: &str) -> RefundRecord {
+        RefundRecord {
+            id: Uuid::now_v7(),
+            tenant_id: Uuid::now_v7(),
+            payment_id: Uuid::now_v7(),
+            external_refund_id: Some("re_x".to_string()),
+            amount: Money::new(amount_minor, "JPY").unwrap(),
+            reason: Some(reason.to_string()),
+            status: RefundStatus::Succeeded,
+            created_by: None,
+            created_at: Utc::now(),
+            idempotency_key: None,
+        }
+    }
+
+    #[test]
+    fn a_null_amount_replays_whatever_the_key_owns() {
+        let existing = record(1500, "duplicate order");
+        assert!(payload_matches(&existing, &None, "duplicate order"));
+    }
+
+    #[test]
+    fn an_explicit_amount_must_match_exactly() {
+        let existing = record(1500, "duplicate order");
+        let same = Money::new(1500, "JPY").unwrap();
+        let other = Money::new(500, "JPY").unwrap();
+        assert!(payload_matches(&existing, &Some(same), "duplicate order"));
+        assert!(!payload_matches(&existing, &Some(other), "duplicate order"));
+    }
+
+    #[test]
+    fn a_changed_reason_conflicts() {
+        let existing = record(1500, "duplicate order");
+        assert!(!payload_matches(&existing, &None, "goodwill"));
     }
 }

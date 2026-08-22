@@ -106,13 +106,6 @@ impl PaymentRecord {
             created_at: None,
         })
     }
-
-    /// The amount still refundable: total minus nothing yet (refund
-    /// accounting lands with the 09.5 read model); the guard that matters
-    /// lives on [`RefundRecord::against`].
-    pub fn refundable(&self) -> Money {
-        self.amount.clone()
-    }
 }
 
 /// The refund lifecycle. Values are fixed by the 09.0 schema CHECK on

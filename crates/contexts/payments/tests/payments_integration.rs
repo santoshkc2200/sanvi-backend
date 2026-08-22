@@ -1,12 +1,13 @@
-//! The payments context's integration tests (sub-phases 09.0–09.2).
+//! The payments context's integration tests (sub-phases 09.0–09.5).
 //!
 //! Real Postgres in containers, the `sanvi_app` role (NOBYPASSRLS), full
 //! migrations — the same recipe the domains/billing suites use. 09.0
 //! covered the schema, RLS and the catalog route's gates; 09.1 added the
 //! registry-derived catalog and the registry → port → repo → outbox
-//! vertical; 09.2 adds the idempotent connection create (concurrency and
-//! orphan adoption), the account-session use case's refusals, the route
-//! gates on the new endpoints, and the audit trail.
+//! vertical; 09.2 the idempotent connection create, session refusals and
+//! audit trail; 09.4 checkout on the connected account with webhook-driven
+//! truth; 09.5 the refund use case's idempotency and recovery, dispute
+//! reconciliation, deep links, and the streamed tenant-scoped CSV export.
 
 use std::sync::Arc;
 
@@ -25,7 +26,7 @@ use sanvi_payments::adapters::repos::{
     SqlxProviderConnectionRepository, SqlxRefundRepository,
 };
 use sanvi_payments::adapters::{
-    FakeProvider, FixedWindowThrottle, OutboxEventPublisher, PaymentsMetrics,
+    FakeProvider, FakeScript, FixedWindowThrottle, OutboxEventPublisher, PaymentsMetrics,
 };
 use sanvi_payments::application::{
     ApplicationFeePolicy, CreateAccountSession, CreateCheckout, ListProviders, NewCheckoutCommand,
@@ -539,6 +540,7 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             refunds.clone(),
             disputes.clone(),
             checkouts.clone(),
+            Arc::new(SqlxProviderConnectionRepository::new()),
         )),
         issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
             TxManager::new(
@@ -559,6 +561,9 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
                     .expect("lazy pool construction is configuration only"),
             ),
             disputes.clone(),
+            payments.clone(),
+            checkouts.clone(),
+            Arc::new(SqlxProviderConnectionRepository::new()),
         )),
         export_payments: Arc::new(sanvi_payments::application::ExportPayments::new(
             TxManager::new(
@@ -1348,7 +1353,9 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
             events.clone(),
             notifier.clone(),
         )
-        .with_checkout_store(checkouts.clone()),
+        .with_checkout_store(checkouts.clone())
+        .with_refund_store(Arc::new(SqlxRefundRepository::new()))
+        .with_dispute_store(Arc::new(SqlxDisputeRepository::new())),
     );
     let sync = Arc::new(SyncConnections::new(
         tx.clone(),
@@ -1947,6 +1954,7 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             Arc::new(SqlxRefundRepository::new()),
                             Arc::new(SqlxDisputeRepository::new()),
                             Arc::new(SqlxCheckoutRepository::new()),
+                            Arc::new(SqlxProviderConnectionRepository::new()),
                         )),
                         issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
                             TxManager::new(pool.clone()),
@@ -1961,6 +1969,9 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
                             TxManager::new(pool.clone()),
                             Arc::new(SqlxDisputeRepository::new()),
+                            Arc::new(SqlxPaymentRepository::new()),
+                            Arc::new(SqlxCheckoutRepository::new()),
+                            Arc::new(SqlxProviderConnectionRepository::new()),
                         )),
                         export_payments: Arc::new(
                             sanvi_payments::application::ExportPayments::new(
@@ -2081,7 +2092,7 @@ fn checkout_fixture(
         checkouts: checkouts.clone(),
         create_checkout: Arc::new(CreateCheckout::new(
             TxManager::new(pool.clone()),
-            providers,
+            providers.clone(),
             connections,
             checkouts,
             Arc::new(AllowShopTest),
@@ -2102,10 +2113,11 @@ fn checkout_fixture(
             Arc::new(SqlxRefundRepository::new()),
             Arc::new(SqlxDisputeRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
+            Arc::new(SqlxProviderConnectionRepository::new()),
         )),
         issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
             TxManager::new(pool.clone()),
-            Arc::new(ProviderRegistry::new()),
+            providers.clone(),
             Arc::new(SqlxPaymentRepository::new()),
             Arc::new(SqlxRefundRepository::new()),
             Arc::new(SqlxProviderConnectionRepository::new()),
@@ -2116,6 +2128,9 @@ fn checkout_fixture(
         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
             TxManager::new(pool.clone()),
             Arc::new(SqlxDisputeRepository::new()),
+            Arc::new(SqlxPaymentRepository::new()),
+            Arc::new(SqlxCheckoutRepository::new()),
+            Arc::new(SqlxProviderConnectionRepository::new()),
         )),
         export_payments: Arc::new(sanvi_payments::application::ExportPayments::new(
             TxManager::new(pool.clone()),
@@ -2181,16 +2196,28 @@ async fn checkout_app(
 
 /// Drive a connection all the way to `Active` through the *legal*
 /// lifecycle edges (Pending → Onboarding → Active) so checkout may exist
-/// against it.
+/// against it. Idempotent: a tenant that already has a live connection
+/// gets it back, so tests can seed several payments against one setup.
 async fn activate_connection(
     pool: &sqlx::PgPool,
     tenant_id: Uuid,
     provider: &FakeProvider,
 ) -> ProviderConnection {
-    let connection = pending_connection(pool, tenant_id, provider).await;
-
     let repo = SqlxProviderConnectionRepository::new();
     let tx = TxManager::new(pool.clone());
+    {
+        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        if let Some(live) = repo
+            .find_active(&mut scope, tenant_id, "fake")
+            .await
+            .unwrap()
+        {
+            scope.rollback().await.unwrap();
+            return live;
+        }
+    }
+
+    let connection = pending_connection(pool, tenant_id, provider).await;
 
     // First edge: onboarding begins.
     let early = provider
@@ -3126,4 +3153,661 @@ async fn the_confirmation_view_is_webhook_truthful_and_the_conversion_id_is_stab
         refreshed["conversion_event_id"],
         after["conversion_event_id"]
     );
+}
+
+// ---------------------------------------------------------------------------
+// 09.5: payments, refunds & disputes — the read models, the refund use
+// case (idempotency + recovery), webhook reconciliation, and the CSV
+// export. Each test names the acceptance criterion or review finding it
+// pins.
+// ---------------------------------------------------------------------------
+
+/// One connection driven to Active, one checkout, one
+/// `checkout.session.completed` dispatched — a succeeded JPY payment of
+/// 2000 minor units in the read model under `pi_id`.
+async fn seed_paid_payment(
+    pool: &sqlx::PgPool,
+    fixture: &WebhookFixture,
+    tenant_id: Uuid,
+    reference: &str,
+    pi_id: &str,
+) -> String {
+    activate_connection(pool, tenant_id, &fixture.provider).await;
+    let (_checkout_id, session_id) =
+        create_checkout_via_use_case(pool, &fixture.provider, tenant_id, reference).await;
+    let account = live_account_id(fixture, tenant_id).await;
+    let event = session_completed_event(
+        &format!("evt_{pi_id}"),
+        &account,
+        Uuid::now_v7(),
+        tenant_id,
+        &session_id,
+        Some(pi_id),
+        epoch(5),
+    );
+    assert!(
+        fixture.deliver(&event).await.unwrap(),
+        "the payment event stores"
+    );
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "{report:?}");
+    account
+}
+
+fn refund_body(minor_units: i64, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "amount": {"minor_units": minor_units, "currency": "JPY"},
+        "reason": reason,
+    })
+}
+
+/// The payment row id for an external payment-intent id.
+async fn payment_row_id(pool: &sqlx::PgPool, tenant_id: Uuid, pi_id: &str) -> Uuid {
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let id: Uuid =
+        sqlx::query_scalar("SELECT id FROM payments.payments WHERE external_payment_id = $1")
+            .bind(pi_id)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    id
+}
+
+#[tokio::test]
+async fn a_retried_refund_key_issues_exactly_one_provider_refund_and_replays_the_record() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "refund-retry").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-retry", "pi_retry_1").await;
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+    let payment_id = payment_row_id(&pool, tenant_id, "pi_retry_1").await;
+    let key = Uuid::now_v7();
+
+    let first = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(refund_body(500, "duplicate order"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let issued: serde_json::Value = actix_test::read_body_json(first).await;
+    assert_eq!(issued["status"], "succeeded");
+    assert_eq!(issued["amount_minor"], 500);
+
+    // The retry with the same key replays the SAME refund — never a second one.
+    let retry = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(refund_body(500, "duplicate order"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(retry.status(), StatusCode::OK, "a replay is a 200");
+    let replayed: serde_json::Value = actix_test::read_body_json(retry).await;
+    assert_eq!(replayed["id"], issued["id"]);
+
+    // Exactly one provider execution and one outbox event.
+    assert_eq!(
+        fixture.provider.refund_executions(),
+        1,
+        "the retried key must not move money twice at the provider"
+    );
+    assert_eq!(fixture.outbox_events("payments.refund_issued").await, 1);
+}
+
+#[tokio::test]
+async fn a_failed_provider_call_marks_the_refund_failed_and_a_retried_key_redrives_it() {
+    // Review finding: the old code left the row Pending forever after a
+    // provider rejection — a phantom pending refund that owned its
+    // idempotency key and never re-executed.
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "refunde-fail").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-fail", "pi_fail_1").await;
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+    let payment_id = payment_row_id(&pool, tenant_id, "pi_fail_1").await;
+    let key = Uuid::now_v7();
+
+    fixture.provider.script(FakeScript {
+        fail_next_refund: Some("insufficient_balance".to_string()),
+        ..FakeScript::default()
+    });
+
+    let first = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(refund_body(500, "duplicate order"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
+
+    // The row is honestly failed — no phantom pending.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM payments.refunds WHERE idempotency_key = $1")
+            .bind(key)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(status, "failed");
+
+    // The retried key RE-DRIVES: the failed attempt owns nothing, and the
+    // provider-side idempotency keeps it to exactly one refund.
+    let retry = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(refund_body(500, "duplicate order"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(
+        retry.status(),
+        StatusCode::CREATED,
+        "a re-driven key issues the refund fresh"
+    );
+    let reissued: serde_json::Value = actix_test::read_body_json(retry).await;
+    assert_eq!(reissued["status"], "succeeded");
+    assert_eq!(
+        fixture.provider.refund_executions(),
+        2,
+        "one failed attempt + one successful drive"
+    );
+    assert_eq!(
+        fixture.outbox_events("payments.refund_issued").await,
+        1,
+        "exactly one RefundIssued across both attempts"
+    );
+}
+
+#[tokio::test]
+async fn partial_refunds_sum_to_the_total_and_an_over_refund_reports_the_remaining() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "refund-partial").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-partial", "pi_partial_1").await;
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+    let payment_id = payment_row_id(&pool, tenant_id, "pi_partial_1").await;
+
+    for minor in [500, 1500] {
+        let res = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::post()
+                .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+                .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+                .set_json(refund_body(minor, "partial by line item"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+    // The detail view's refunded sum now covers the full amount…
+    let detail = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let view: serde_json::Value = actix_test::read_body_json(detail).await;
+    let refunded_sum: i64 = view["refunds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["amount_minor"].as_i64().unwrap())
+        .sum();
+    assert_eq!(refunded_sum, 2000);
+
+    // …so any further refund is rejected WITH the remaining amount.
+    let over = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(refund_body(100, "one too many"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(over.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = actix_test::read_body_json(over).await;
+    let detail_text = body["detail"].as_str().unwrap();
+    assert!(
+        detail_text.contains("exceeds remaining") && detail_text.contains('0'),
+        "over-refund reports remaining refundable 0: {detail_text}"
+    );
+}
+
+#[tokio::test]
+async fn a_replayed_key_answers_with_the_refund_even_after_the_total_is_consumed() {
+    // Review finding: the over-refund guard ran BEFORE the idempotency
+    // lookup, so replaying a fully-consumed refund answered 400 instead
+    // of the record it already owed.
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "refund-full").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-full", "pi_full_1").await;
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+    let payment_id = payment_row_id(&pool, tenant_id, "pi_full_1").await;
+    let key = Uuid::now_v7();
+
+    // A FULL refund (null amount = remaining) consumes the payment…
+    let full = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(serde_json::json!({"amount": null, "reason": "chargeback"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(full.status(), StatusCode::CREATED);
+    let issued: serde_json::Value = actix_test::read_body_json(full).await;
+    assert_eq!(issued["amount_minor"], 2000);
+
+    // …and the replay still answers with that refund, not an over-refund error.
+    let replay = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}/refund"))
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(serde_json::json!({"amount": null, "reason": "chargeback"}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replayed: serde_json::Value = actix_test::read_body_json(replay).await;
+    assert_eq!(replayed["id"], issued["id"]);
+}
+
+#[tokio::test]
+async fn a_dashboard_refund_lands_in_the_read_model_without_manual_intervention() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "refund-dashboard").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-dash", "pi_dash_1").await;
+
+    // The tenant refunds from Stripe's Dashboard: only `charge.refunded`
+    // arrives, naming the charge AND its payment intent.
+    let charge_event = serde_json::json!({
+        "id": "evt_dash_refund",
+        "type": "charge.refunded",
+        "created": epoch(6),
+        "account": live_account_id(&fixture, tenant_id).await,
+        "data": {"object": {
+            "id": "ch_dash_1",
+            "object": "charge",
+            "payment_intent": "pi_dash_1",
+            "refunds": {"data": [{
+                "id": "re_dash_1",
+                "object": "refund",
+                "amount": 800,
+                "currency": "jpy",
+                "status": "succeeded",
+                "created": epoch(6)
+            }]}
+        }}
+    });
+    assert!(fixture.deliver(&charge_event).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "{report:?}");
+
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let row: (i64, String, String) = sqlx::query_as(
+        "SELECT r.amount_minor, r.currency, r.status
+         FROM payments.refunds r
+         JOIN payments.payments p ON p.id = r.payment_id
+         WHERE r.external_refund_id = 're_dash_1' AND p.external_payment_id = 'pi_dash_1'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(row, (800, "JPY".to_string(), "succeeded".to_string()));
+    assert_eq!(fixture.outbox_events("payments.refund_issued").await, 1);
+
+    // Redelivery stays idempotent: the transport dedupes the event and
+    // the dispatcher finds nothing new.
+    assert!(
+        !fixture.deliver(&charge_event).await.unwrap(),
+        "the redelivery is deduped at the transport"
+    );
+    let again = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(again.processed, 0, "nothing new to process");
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_unscoped("t", "tests").await.unwrap();
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM payments.refunds WHERE external_refund_id = 're_dash_1'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(rows, 1, "one row per provider refund id");
+}
+
+#[tokio::test]
+async fn a_dispute_lifecycle_routes_by_payment_intent_shows_disputed_then_closed() {
+    // Review finding: disputes routed ONLY by charge id while payments are
+    // keyed by payment intent — every real dispute was silently dropped.
+    // The fixture carries a charge id that matches nothing, forcing the
+    // payment_intent route.
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "disputes").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-dispute", "pi_dispute_1").await;
+    let account = live_account_id(&fixture, tenant_id).await;
+    let payment_id = payment_row_id(&pool, tenant_id, "pi_dispute_1").await;
+
+    let opened = serde_json::json!({
+        "id": "evt_dp_open",
+        "type": "charge.dispute.created",
+        "created": epoch(7),
+        "account": account,
+        "data": {"object": {
+            "id": "dp_test_1",
+            "object": "dispute",
+            "amount": 2000,
+            "currency": "jpy",
+            "charge": "ch_no_such_charge",
+            "payment_intent": "pi_dispute_1",
+            "status": "needs_response",
+            "reason": "fraudulent",
+            "evidence_details": {"due_by": epoch(86_400)}
+        }}
+    });
+    assert!(fixture.deliver(&opened).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "{report:?}");
+    assert_eq!(fixture.outbox_events("payments.dispute_opened").await, 1);
+
+    // The state machine moves on without Sanvi: the tenant responds at
+    // Stripe and wins; `charge.dispute.closed` lands.
+    let closed = serde_json::json!({
+        "id": "evt_dp_close",
+        "type": "charge.dispute.closed",
+        "created": epoch(8),
+        "account": account,
+        "data": {"object": {
+            "id": "dp_test_1",
+            "object": "dispute",
+            "amount": 2000,
+            "currency": "jpy",
+            "charge": "ch_no_such_charge",
+            "payment_intent": "pi_dispute_1",
+            "status": "won"
+        }}
+    });
+    assert!(fixture.deliver(&closed).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "{report:?}");
+
+    // The detail view tells the whole story with deep links.
+    let app = checkout_app(
+        checkout_fixture(&pool, fixture.provider.clone(), 1000, false),
+        tenant_id,
+    )
+    .await;
+    let detail = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri(&format!("/api/v1/tenant/payments/{payment_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let view: serde_json::Value = actix_test::read_body_json(detail).await;
+    assert_eq!(view["disputes"][0]["status"], "won");
+    let url = view["disputes"][0]["dashboard_url"].as_str().unwrap();
+    assert!(url.contains("dashboard.stripe.com"), "{url}");
+    assert!(url.contains("dp_test_1"));
+    let kinds: Vec<&str> = view["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["kind"].as_str())
+        .collect();
+    assert!(
+        kinds.contains(&"disputed") && kinds.contains(&"dispute_closed"),
+        "timeline holds both facts in order: {kinds:?}"
+    );
+
+    // And the disputes list renders the link too.
+    let list = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/payments/disputes")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let list_view: serde_json::Value = actix_test::read_body_json(list).await;
+    assert_eq!(list_view["items"][0]["external_dispute_id"], "dp_test_1");
+    assert!(
+        list_view["items"][0]["dashboard_url"]
+            .as_str()
+            .unwrap()
+            .contains("acct"),
+        "the deep link anchors on the connected account"
+    );
+}
+
+#[tokio::test]
+async fn the_csv_export_is_streamed_tenant_scoped_and_audited() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+
+    // Two tenants, one succeeded payment each — the export must leak
+    // neither way. One shared provider fixture: account ids are unique
+    // platform-wide, and clones of the fake share its mint.
+    let fixture = webhook_fixture(&pool).await;
+    let mut seeded = Vec::new();
+    for slug in ["export-a", "export-b"] {
+        let tenant_id = seed_tenant(&pool, slug).await;
+        let pi = format!("pi_{}", slug.replace('-', "_"));
+        seed_paid_payment(&pool, &fixture, tenant_id, &format!("order-{slug}"), &pi).await;
+        let payment_id = payment_row_id(&pool, tenant_id, &pi).await;
+        seeded.push((tenant_id, payment_id));
+    }
+
+    for (tenant_id, own_id) in &seeded {
+        let app = checkout_app(
+            checkout_fixture(&pool, fixture.provider.clone(), 1000, false),
+            *tenant_id,
+        )
+        .await;
+        let res = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::get()
+                .uri("/api/v1/tenant/payments/export")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/csv; charset=utf-8"),
+            "the streaming body is CSV"
+        );
+        let body = actix_test::read_body(res).await;
+        let csv_text = std::str::from_utf8(&body).unwrap();
+        // The fixed header is the contract.
+        assert!(
+            csv_text.starts_with(
+                "payment_id,external_payment_id,checkout_reference,amount_minor,currency,status,fee_minor,fee_currency,captured_at,created_at,refunded_minor,dispute_status"
+            ),
+            "{csv_text}"
+        );
+        // Exactly one data row and it is this tenant's — a cross-tenant
+        // probe returns nothing foreign.
+        let rows: Vec<&str> = csv_text
+            .lines()
+            .skip(1)
+            .filter(|line| !line.is_empty())
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains(&own_id.to_string()), "{}", rows[0]);
+    }
+
+    // Both exports audited: actor + filters, visible to each own tenant.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(seeded[0].0).await.unwrap();
+    let after: serde_json::Value = sqlx::query_scalar(
+        "SELECT after FROM audit.entries WHERE action = 'payments.export' LIMIT 1",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(
+        after["streamed"], true,
+        "the export is recorded as streamed"
+    );
+    assert!(after["filters"].is_object());
+}
+
+#[tokio::test]
+async fn the_payments_list_serves_every_filter_and_walks_pages_without_loss_or_duplication() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "list-filters").await;
+    let fixture = webhook_fixture(&pool).await;
+
+    // Three succeeded payments…
+    for i in 1..=3 {
+        seed_paid_payment(
+            &pool,
+            &fixture,
+            tenant_id,
+            &format!("order-list-{i}"),
+            &format!("pi_list_{i}"),
+        )
+        .await;
+    }
+    // …plus one failed one, straight from the provider's truth.
+    activate_connection(&pool, tenant_id, &fixture.provider).await;
+    let (checkout_id, _session_id) =
+        create_checkout_via_use_case(&pool, &fixture.provider, tenant_id, "order-list-dead").await;
+    let account = live_account_id(&fixture, tenant_id).await;
+    let failed_event = payment_intent_event(
+        "evt_failed",
+        "payment_intent.payment_failed",
+        &account,
+        checkout_id,
+        tenant_id,
+        "pi_list_dead",
+        Some("card_declined"),
+        epoch(6),
+    );
+    assert!(fixture.deliver(&failed_event).await.unwrap());
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1);
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+
+    // Walk every page with limit=2: no loss, no duplication.
+    let mut seen: Vec<String> = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let uri = match &cursor {
+            None => "/api/v1/tenant/payments?limit=2".to_string(),
+            Some(c) => format!("/api/v1/tenant/payments?limit=2&cursor={c}"),
+        };
+        let res =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri(&uri).to_request())
+                .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let view: serde_json::Value = actix_test::read_body_json(res).await;
+        for item in view["items"].as_array().unwrap() {
+            seen.push(item["id"].as_str().unwrap().to_string());
+        }
+        match view["next_cursor"].as_str() {
+            Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
+            _ => break,
+        }
+    }
+    seen.sort();
+    seen.dedup();
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let expected: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM payments.payments WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(expected, 4);
+    assert_eq!(seen.len(), 4, "the walk covers every row exactly once");
+
+    // Status filter serves exactly the matching subset; an unknown status
+    // is a 400, not a silent empty page.
+    let res = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/payments?status=succeeded")
+            .to_request(),
+    )
+    .await;
+    let view: serde_json::Value = actix_test::read_body_json(res).await;
+    assert_eq!(view["items"].as_array().unwrap().len(), 3);
+
+    let res = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/payments?status=succeded")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Currency filter: USD exists in no row here.
+    let res = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/payments?currency=USD")
+            .to_request(),
+    )
+    .await;
+    let view: serde_json::Value = actix_test::read_body_json(res).await;
+    assert!(view["items"].as_array().unwrap().is_empty());
 }

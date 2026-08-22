@@ -53,9 +53,15 @@ CREATE INDEX payments_tenant_created_id_idx
 CREATE INDEX payments_tenant_currency_idx
   ON payments.payments (tenant_id, currency);
 
--- Customer substring search is over checkouts.customer_ref JSON text; the
--- GIN index lets that remain a reasonable query without scanning tenants.
--- (The list query joins payments → checkouts when a customer filter is present.)
+-- Customer substring search is over checkouts.customer_ref JSON text.
+-- This GIN index does NOT serve the implemented `customer_ref::text
+-- ILIKE '%…%'` predicate (jsonb_ops GIN supports @> containment, not
+-- text matching): the filter runs as an RLS-bounded scan over the
+-- tenant's own checkouts, which stays reasonable at per-tenant scale.
+-- If customer search ever needs to go wide, add a pg_trgm expression
+-- index on (customer_ref::text) — a deliberate follow-up, not a silent
+-- assumption. (The list query joins payments → checkouts when a
+-- customer filter is present.)
 CREATE INDEX checkouts_customer_ref_idx
   ON payments.checkouts USING gin (customer_ref);
 

@@ -24,5 +24,8 @@
   "emails.payments_connection_restricted.subject": "対応が必要です: {tenant} の決済アカウントが制限されています",
   "emails.payments_connection_restricted.body": "{tenant} の決済アカウント（接続 {connection}）は現在決済を受け付けられません: {detail}。ダッシュボードにログインして、未完了の要件を解消してください。",
   "emails.payments_requirement_deadline.subject": "{tenant} の決済アカウントの期限が近づいています",
-  "emails.payments_requirement_deadline.body": "Stripe から、決済アカウント（接続 {connection}）について {date, date} までに追加情報の提出を求められています。提出されない場合、アカウントは制限されます。"
+  "emails.payments_requirement_deadline.body": "Stripe から、決済アカウント（接続 {connection}）について {date, date} までに追加情報の提出を求められています。提出されない場合、アカウントは制限されます。",
+  "emails.payments_dispute_opened.subject": "アカウントにチャージバック（異議申し立て）が発生しました",
+  "emails.payments_dispute_opened.body": "ストアでの支払いについて顧客から異議申し立てがありました。Stripe ダッシュボードで dispute {dispute} の対応を行ってください。",
+  "emails.payments_dispute_opened.body_due": "ストアでの支払いについて顧客から異議申し立てがありました。dispute {dispute} は {due, date} までに Stripe ダッシュボードでご対応ください。"
 }

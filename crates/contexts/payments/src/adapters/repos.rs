@@ -1202,23 +1202,6 @@ impl PaymentRepository for SqlxPaymentRepository {
             .map_err(storage)?;
         rows.into_iter().map(TryFrom::try_from).collect()
     }
-
-    async fn created_at_for(
-        &self,
-        scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
-    ) -> Result<Option<DateTime<Utc>>, PaymentsError> {
-        let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
-            "SELECT created_at FROM payments.payments WHERE tenant_id = $1 AND id = $2",
-        )
-        .bind(tenant_id)
-        .bind(id)
-        .fetch_optional(&mut **scope.tx_mut().as_inner())
-        .await
-        .map_err(storage)?;
-        Ok(row.and_then(|(at,)| at))
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1315,7 +1298,9 @@ impl RefundRepository for SqlxRefundRepository {
         payment_id: Uuid,
     ) -> Result<i64, PaymentsError> {
         let sum: Option<i64> = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount_minor), 0) FROM payments.refunds
+            // SUM(bigint) yields NUMERIC — cast back so the minor-unit
+            // arithmetic stays an integer end to end.
+            "SELECT COALESCE(SUM(amount_minor), 0)::bigint FROM payments.refunds
              WHERE tenant_id = $1 AND payment_id = $2 AND status = 'succeeded'",
         )
         .bind(tenant_id)
@@ -1372,26 +1357,75 @@ impl RefundRepository for SqlxRefundRepository {
         Ok(())
     }
 
-    async fn update(
+    async fn find_by_external_id(
         &self,
         scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        external_refund_id: &str,
+    ) -> Result<Option<crate::domain::payment::RefundRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, RefundRow>(
+            "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                    reason, status, created_by, idempotency_key, created_at, updated_at
+             FROM payments.refunds WHERE tenant_id = $1 AND external_refund_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(external_refund_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn try_finalize(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
         refund: &crate::domain::payment::RefundRecord,
-    ) -> Result<(), PaymentsError> {
-        sqlx::query(
-            "UPDATE payments.refunds SET external_refund_id = $3, status = $4, amount_minor = $5,
-                    currency = $6, reason = $7, updated_at = now()
-             WHERE id = $1 AND tenant_id = $2",
+    ) -> Result<bool, PaymentsError> {
+        let result = sqlx::query(
+            "UPDATE payments.refunds SET external_refund_id = $3, status = $4, updated_at = now()
+             WHERE id = $1 AND tenant_id = $2 AND status <> 'succeeded'",
         )
         .bind(refund.id)
-        .bind(refund.tenant_id)
+        .bind(tenant_id)
         .bind(&refund.external_refund_id)
         .bind(refund.status.as_str())
-        .bind(refund.amount.amount_minor)
-        .bind(refund.amount.currency.as_str())
-        .bind(&refund.reason)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn mark_failed(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        refund_id: Uuid,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "UPDATE payments.refunds SET status = 'failed', updated_at = now()
+             WHERE id = $1 AND tenant_id = $2 AND status <> 'succeeded'",
+        )
+        .bind(refund_id)
+        .bind(tenant_id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn delete_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        refund_id: Uuid,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query("DELETE FROM payments.refunds WHERE id = $1 AND tenant_id = $2")
+            .bind(refund_id)
+            .bind(tenant_id)
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
         Ok(())
     }
 

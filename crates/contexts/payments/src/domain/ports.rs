@@ -432,6 +432,14 @@ pub trait ConnectionNotifier: Send + Sync {
         detail: &str,
     ) -> Result<(), PaymentsError>;
 
+    /// A dispute was opened on one of the tenant's payments — the
+    /// response deadline is attached when the provider supplies one.
+    async fn dispute_opened(
+        &self,
+        tenant_id: Uuid,
+        dispute_id: Uuid,
+        due_by: Option<DateTime<Utc>>,
+    ) -> Result<(), PaymentsError>;
     /// An outstanding requirement's deadline is approaching while the
     /// connection still cannot take payments.
     async fn requirement_deadline_approaching(
@@ -663,15 +671,6 @@ pub trait PaymentRepository: Send + Sync {
         tenant_id: Uuid,
         filter: &PaymentFilter,
     ) -> Result<Vec<super::payment::PaymentRecord>, PaymentsError>;
-
-    /// The payments table's `created_at` for a payment — needed for
-    /// cursor encoding and timeline ordering.
-    async fn created_at_for(
-        &self,
-        scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
-    ) -> Result<Option<DateTime<Utc>>, PaymentsError>;
 }
 
 /// Filter for `GET /api/v1/tenant/payments/disputes`.
@@ -782,10 +781,45 @@ pub trait RefundRepository: Send + Sync {
         refund: &super::payment::RefundRecord,
     ) -> Result<(), PaymentsError>;
 
-    async fn update(
+    /// Tenant-scoped lookup by the provider's refund id — the finalize
+    /// path checks it to merge with a webhook-created row when the
+    /// webhook won the race (`refunds_external_idx`).
+    async fn find_by_external_id(
         &self,
         scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        external_refund_id: &str,
+    ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
+
+    /// Record the provider's answer: external id + status, only when the
+    /// row has not already been finalized. Returns whether this call
+    /// performed the pending/failed → succeeded transition — the caller
+    /// emits `RefundIssued` exactly when it did (the outbox has no
+    /// dedupe, so the transition is the once-guard).
+    async fn try_finalize(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
         refund: &super::payment::RefundRecord,
+    ) -> Result<bool, PaymentsError>;
+
+    /// Mark a row failed after the provider rejected the refund, so the
+    /// read model never shows a pending refund that does not exist at
+    /// the provider and the key can be re-driven on retry.
+    async fn mark_failed(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        refund_id: Uuid,
+    ) -> Result<(), PaymentsError>;
+
+    /// Delete a superseded local row (the webhook path won the race and
+    /// already owns the provider refund id).
+    async fn delete_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        refund_id: Uuid,
     ) -> Result<(), PaymentsError>;
 
     /// Insert-or-update by `(tenant_id, external_refund_id)` for webhook
@@ -796,25 +830,4 @@ pub trait RefundRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         refund: &super::payment::RefundRecord,
     ) -> Result<(), PaymentsError>;
-}
-
-/// The payment with its refunds — the `GET /payments/{id}` detail
-/// response's primary entity (disputes and timeline are sibling queries).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PaymentWithRefunds {
-    pub payment: super::payment::PaymentRecord,
-    pub refunds: Vec<super::payment::RefundRecord>,
-}
-
-/// The payment detail the timeline is derived from — payment plus its
-/// refunds, disputes and checkout (when it has one). The application
-/// assembles the timeline from these; the UI never does.
-#[async_trait]
-pub trait PaymentTimelineStore: Send + Sync {
-    async fn payment_with_refunds(
-        &self,
-        scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        payment_id: Uuid,
-    ) -> Result<Option<PaymentWithRefunds>, PaymentsError>;
 }

@@ -2613,6 +2613,7 @@ pub fn build_payments_state(
         refunds.clone(),
         disputes.clone(),
         checkouts.clone(),
+        connections.clone(),
     ));
     let issue_refund = std::sync::Arc::new(sanvi_payments::application::IssueRefund::new(
         tx.clone(),
@@ -2627,6 +2628,9 @@ pub fn build_payments_state(
     let list_disputes = std::sync::Arc::new(sanvi_payments::application::ListDisputes::new(
         tx.clone(),
         disputes.clone(),
+        payments.clone(),
+        checkouts.clone(),
+        connections.clone(),
     ));
     let export_payments = std::sync::Arc::new(sanvi_payments::application::ExportPayments::new(
         tx.clone(),

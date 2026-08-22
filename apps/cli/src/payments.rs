@@ -95,6 +95,16 @@ impl PaymentsConnectionNotifier for CliNotifier {
         tracing::info!(tenant_id = %tenant_id, connection_id = %connection_id, deadline = %deadline, "requirement deadline approaching");
         Ok(())
     }
+
+    async fn dispute_opened(
+        &self,
+        tenant_id: uuid::Uuid,
+        dispute_id: uuid::Uuid,
+        due_by: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        tracing::warn!(tenant_id = %tenant_id, dispute_id = %dispute_id, due_by = ?due_by, "dispute opened");
+        Ok(())
+    }
 }
 
 /// `payments webhooks` — the store-first queue's backlog plus its

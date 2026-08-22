@@ -13,7 +13,7 @@ use sanvi_persistence::TxManager;
 
 use crate::domain::dispute::DisputeRecord;
 use crate::domain::error::PaymentsError;
-use crate::domain::payment::{PaymentRecord, RefundRecord};
+use crate::domain::payment::{PaymentRecord, RefundRecord, RefundStatus};
 use crate::domain::ports::{DisputeRepository, PaymentFilter, PaymentRepository, RefundRepository};
 use crate::domain::timeline::{PaymentTimeline, TimelineEntry};
 
@@ -67,25 +67,15 @@ impl ListPayments {
         if let Some(raw) = command.status {
             let raw = raw.trim().to_ascii_lowercase();
             if !raw.is_empty() {
-                filter.status = crate::domain::PaymentStatus::parse(&raw)
-                    .map(Some)
-                    .unwrap_or_else(|| {
-                        // Unknown status → empty page rather than 400? The spec
-                        // says "serves every documented filter" — an
-                        // undocumented status should be a 400 so the caller
-                        // knows it misspelled `succeeded`. We surface it as
-                        // InvalidMoney-for-now (maps to 400) for simplicity.
-                        //But we instead return a dedicated InvalidConnection
-                        // so the handler can render 400 with a clear detail.
-                        // To keep the filter type clean, we store None and
-                        // let the caller check: we handle it here by early
-                        // error.
-                        None
-                    });
-                if filter.status.is_none() && !raw.is_empty() {
-                    return Err(PaymentsError::InvalidConnection(format!(
-                        "unknown payment status {raw:?}"
-                    )));
+                // An undocumented status must 400 so the caller knows it
+                // misspelled `succeeded` — an empty page would hide it.
+                match crate::domain::PaymentStatus::parse(&raw) {
+                    Some(status) => filter.status = Some(status),
+                    None => {
+                        return Err(PaymentsError::InvalidConnection(format!(
+                            "unknown payment status {raw:?}"
+                        )));
+                    }
                 }
             }
         }
@@ -123,9 +113,12 @@ pub struct PaymentDetail {
     pub refunds: Vec<RefundRecord>,
     pub disputes: Vec<DisputeRecord>,
     pub timeline: PaymentTimeline,
-    /// Created at of the payment — duplicated for header use, but the
-    /// timeline's `created` entry is the canonical one.
+    /// The merchant's own reference for the originating checkout, when the
+    /// payment has one.
     pub checkout_reference: Option<String>,
+    /// The connected account the payment lives on — the anchor for
+    /// Stripe Dashboard deep links. None when the connection is gone.
+    pub account_external_id: Option<String>,
 }
 
 pub struct GetPaymentDetail {
@@ -133,9 +126,8 @@ pub struct GetPaymentDetail {
     payments: Arc<dyn PaymentRepository>,
     refunds: Arc<dyn RefundRepository>,
     disputes: Arc<dyn DisputeRepository>,
-    // Checkout reference is optional — we fetch it via a separate query
-    // if the payment has a checkout_id, otherwise it stays None.
     checkouts: Arc<dyn crate::domain::CheckoutRepository>,
+    connections: Arc<dyn crate::domain::ProviderConnectionRepository>,
 }
 
 impl GetPaymentDetail {
@@ -145,6 +137,7 @@ impl GetPaymentDetail {
         refunds: Arc<dyn RefundRepository>,
         disputes: Arc<dyn DisputeRepository>,
         checkouts: Arc<dyn crate::domain::CheckoutRepository>,
+        connections: Arc<dyn crate::domain::ProviderConnectionRepository>,
     ) -> Self {
         Self {
             tx_manager,
@@ -152,6 +145,7 @@ impl GetPaymentDetail {
             refunds,
             disputes,
             checkouts,
+            connections,
         }
     }
 
@@ -180,13 +174,30 @@ impl GetPaymentDetail {
             .disputes
             .list_for_payment(&mut scope, tenant_id, payment_id)
             .await?;
-        let checkout_reference = if let Some(checkout_id) = payment.checkout_id {
+        let checkout = if let Some(checkout_id) = payment.checkout_id {
             self.checkouts
                 .find_by_id(&mut scope, tenant_id, checkout_id)
                 .await?
-                .map(|c| c.reference.as_str().to_string())
         } else {
             None
+        };
+        let checkout_reference = checkout.as_ref().map(|c| c.reference.as_str().to_string());
+        // The connected account the money moved through — the deep-link
+        // anchor. Best effort: a missing checkout or connection only means
+        // no link, never a failed detail view.
+        let account_external_id = match &checkout {
+            Some(checkout) => self
+                .connections
+                .find_by_id(&mut scope, tenant_id, checkout.connection_id)
+                .await?
+                .map(|c| c.external_account_id),
+            None => {
+                let connections = self.connections.list(&mut scope, tenant_id).await?;
+                connections
+                    .into_iter()
+                    .find(|c| c.disconnected_at.is_none())
+                    .map(|c| c.external_account_id)
+            }
         };
         let _ = scope.rollback().await;
 
@@ -197,6 +208,7 @@ impl GetPaymentDetail {
             disputes,
             timeline,
             checkout_reference,
+            account_external_id,
         })
     }
 }
@@ -207,23 +219,17 @@ fn build_timeline(
     disputes: &[DisputeRecord],
 ) -> PaymentTimeline {
     let mut timeline = PaymentTimeline::empty();
-    // Created — use the payment's created_at approximated via its
-    // captured_at or, if absent, the payment's id7 timestamp. In the
-    // real store we have `created_at`; we approximate with Utc::now()
-    // fallback when the domain does not carry it (the repo's row does).
-    // The payment domain's `PaymentRecord` does not carry created_at;
-    // the repo could expose it, but for timeline we treat the captured
-    // time or now as the anchor. In practice the adapters assemble the
-    // timeline with the row's `created_at`, so this builder is the
-    // handler-side fallback — the real timeline is built in the repo
-    // where the timestamp lives.
-    //
-    // For the domain test we still ensure ordering holds; for production
-    // the adapter's query returns an already-sorted timeline, so this
-    // function's sort is the only ordering guarantee.
+    // The payment row always carries created_at (NOT NULL in the store);
+    // captured_at is the in-memory fallback for hand-built records.
+    let opened_at = || {
+        payment
+            .created_at
+            .or(payment.captured_at)
+            .unwrap_or_else(Utc::now)
+    };
     timeline.push(TimelineEntry {
         kind: "created".to_string(),
-        at: payment.captured_at.unwrap_or_else(Utc::now),
+        at: opened_at(),
         actor: None,
         amount: Some(payment.amount.clone()),
         detail: None,
@@ -243,7 +249,7 @@ fn build_timeline(
         crate::domain::PaymentStatus::Failed => {
             timeline.push(TimelineEntry {
                 kind: "failed".to_string(),
-                at: payment.captured_at.unwrap_or_else(Utc::now),
+                at: opened_at(),
                 actor: None,
                 amount: Some(payment.amount.clone()),
                 detail: payment.failure.as_ref().map(|f| f.code.clone()),
@@ -252,7 +258,7 @@ fn build_timeline(
         crate::domain::PaymentStatus::Canceled => {
             timeline.push(TimelineEntry {
                 kind: "canceled".to_string(),
-                at: payment.captured_at.unwrap_or_else(Utc::now),
+                at: opened_at(),
                 actor: None,
                 amount: Some(payment.amount.clone()),
                 detail: None,
@@ -260,7 +266,12 @@ fn build_timeline(
         }
         _ => {}
     }
-    for refund in refunds {
+    // Only money that actually moved back reads as "refunded"; a pending or
+    // failed attempt stays visible in the refunds list, not the timeline.
+    for refund in refunds
+        .iter()
+        .filter(|r| r.status == RefundStatus::Succeeded)
+    {
         timeline.push(TimelineEntry {
             kind: "refunded".to_string(),
             at: refund.created_at,
@@ -270,18 +281,24 @@ fn build_timeline(
         });
     }
     for dispute in disputes {
-        let kind = if dispute.status.is_open() {
-            "disputed"
-        } else {
-            "dispute_closed"
-        };
         timeline.push(TimelineEntry {
-            kind: kind.to_string(),
+            kind: "disputed".to_string(),
             at: dispute.created_at,
             actor: None,
             amount: Some(dispute.amount.clone()),
             detail: dispute.reason.clone(),
         });
+        // A closed dispute is a second fact at a second time — flipping the
+        // first entry's kind would erase when the dispute was raised.
+        if !dispute.status.is_open() {
+            timeline.push(TimelineEntry {
+                kind: "dispute_closed".to_string(),
+                at: dispute.updated_at,
+                actor: None,
+                amount: Some(dispute.amount.clone()),
+                detail: Some(dispute.status.as_str().to_string()),
+            });
+        }
     }
     timeline.sort();
     timeline
@@ -304,7 +321,7 @@ mod tests {
         let mut payment = payment;
         payment.status = crate::domain::PaymentStatus::Succeeded;
         payment.captured_at = Some(Utc::now());
-        let refund = crate::domain::payment::RefundRecord::against(
+        let mut refund = crate::domain::payment::RefundRecord::against(
             Uuid::now_v7(),
             &payment,
             500,
@@ -313,6 +330,7 @@ mod tests {
             Utc::now() + chrono::Duration::seconds(10),
         )
         .unwrap();
+        refund.status = RefundStatus::Succeeded;
         let dispute = crate::domain::dispute::DisputeRecord::new(
             Uuid::now_v7(),
             payment.tenant_id,
@@ -330,5 +348,75 @@ mod tests {
         assert_eq!(timeline.entries[1].kind, "succeeded");
         assert_eq!(timeline.entries[2].kind, "refunded");
         assert_eq!(timeline.entries[3].kind, "disputed");
+        assert_eq!(timeline.entries.len(), 4);
+    }
+
+    #[test]
+    fn pending_refunds_are_not_money_moved_and_closed_disputes_close_twice() {
+        let payment = crate::domain::PaymentRecord::new(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            None,
+            "pi_test_2".to_string(),
+            crate::domain::Money::new(1000, "JPY").unwrap(),
+        )
+        .unwrap();
+        let mut payment = payment;
+        payment.status = crate::domain::PaymentStatus::Succeeded;
+        payment.captured_at = Some(Utc::now());
+        let mut succeeded = crate::domain::payment::RefundRecord::against(
+            Uuid::now_v7(),
+            &payment,
+            300,
+            None,
+            None,
+            Utc::now(),
+        )
+        .unwrap();
+        succeeded.status = RefundStatus::Succeeded;
+        let pending = crate::domain::payment::RefundRecord::against(
+            Uuid::now_v7(),
+            &payment,
+            100,
+            None,
+            None,
+            Utc::now(),
+        )
+        .unwrap();
+        let raised_at = Utc::now() + chrono::Duration::seconds(30);
+        let mut dispute = crate::domain::dispute::DisputeRecord::new(
+            Uuid::now_v7(),
+            payment.tenant_id,
+            payment.id,
+            "dp_test_2".to_string(),
+            crate::domain::DisputeStatus::Won,
+            crate::domain::Money::new(1000, "JPY").unwrap(),
+            None,
+            None,
+            raised_at,
+        )
+        .unwrap();
+        dispute.updated_at = raised_at + chrono::Duration::seconds(30);
+
+        let timeline = build_timeline(&payment, &[pending, succeeded], &[dispute]);
+        let kinds: Vec<&str> = timeline.entries.iter().map(|e| e.kind.as_str()).collect();
+        // The pending attempt never renders as money moved.
+        assert_eq!(
+            kinds,
+            vec![
+                "created",
+                "succeeded",
+                "refunded",
+                "disputed",
+                "dispute_closed"
+            ]
+        );
+        let closed = timeline
+            .entries
+            .iter()
+            .find(|e| e.kind == "dispute_closed")
+            .unwrap();
+        assert_eq!(closed.at, raised_at + chrono::Duration::seconds(30));
+        assert_eq!(closed.detail.as_deref(), Some("won"));
     }
 }

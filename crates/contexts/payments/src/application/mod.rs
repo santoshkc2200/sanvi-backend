@@ -28,7 +28,7 @@ pub use create_checkout::{
     conversion_event_id,
 };
 pub use create_connection::{StartConnectionCommand, StartProviderConnection};
-pub use disputes::{ListDisputes, ListDisputesCommand};
+pub use disputes::{DisputeListItem, DisputePageView, ListDisputes, ListDisputesCommand};
 pub use export::{CSV_COLUMNS, ExportCommand, ExportPayments};
 pub use lifecycle::{DEADLINE_REMINDER_WINDOW_DAYS, apply_account_snapshot, target_steps};
 pub use list_payments::{GetPaymentDetail, ListPayments, ListPaymentsCommand, PaymentDetail};
