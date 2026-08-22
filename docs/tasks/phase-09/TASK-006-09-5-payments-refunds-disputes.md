@@ -1,7 +1,7 @@
 # TASK-006: 09.5 Payments, refunds & disputes
 
 **Phase:** 09
-**Status:** todo
+**Status:** done
 **Requirement(s):** FR-906, FR-907, NFR-904, NFR-907
 **Depends on:** TASK-005
 **Created:** 2026-08-20

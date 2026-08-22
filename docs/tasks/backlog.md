@@ -31,7 +31,7 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | TASK-003 | 09 | 09.2 Stripe Connect onboarding (Accounts v2) | done | TASK-002 | d799455 |
 | TASK-004 | 09 | 09.3 Connection lifecycle & Connect webhooks | done | TASK-003 | commit 8234c33 |
 | TASK-005 | 09 | 09.4 Checkout on the connected account | done | TASK-004 | 09.4 shipped: checkout sessions on the connected account (Stripe-Account direct charges), idempotent create with persist-before-provider, verified-domain allow-list, per-tenant/IP/customer throttle, 5 payment webhook handlers writing payments.payments + outbox PaymentSucceeded/PaymentFailed, server-derived conversion_event_id, contract regenerated |
-| TASK-006 | 09 | 09.5 Payments, refunds & disputes | todo | TASK-005 | |
+| TASK-006 | 09 | 09.5 Payments, refunds & disputes | done | TASK-005 | review findings fixed in ef30312 (refund recovery + idempotent replay, dispute routing via payment_intent, deep links, streamed export); 8 acceptance tests added |
 | TASK-007 | 09 | 09.6 Payouts, tax liability & application fee | todo | TASK-004, TASK-005 | |
 | TASK-008 | 09 | 09.7 Disconnect, hardening & release | todo | TASK-006, TASK-007 | |
 | TASK-009 | 10 | 10.0 Contract, schema & foundations | todo | phase 03, 05, 08, 09 | |
