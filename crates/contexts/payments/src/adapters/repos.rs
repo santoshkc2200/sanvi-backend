@@ -684,10 +684,10 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, PaymentRow>(
             "SELECT id, tenant_id, checkout_id, external_payment_id, status,
                     amount_minor, currency, fee_amount_minor, fee_currency,
-                    failure, captured_at
+                    failure, captured_at, created_at
              FROM payments.payments
-             WHERE tenant_id = $1 AND checkout_id = $2
-             ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1",
+              WHERE tenant_id = $1 AND checkout_id = $2
+              ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1",
         )
         .bind(tenant_id)
         .bind(checkout_id)
@@ -732,6 +732,7 @@ impl TryFrom<PaymentRow> for PaymentRecord {
             fee,
             failure,
             captured_at: row.captured_at,
+            created_at: row.created_at,
         })
     }
 }
@@ -749,6 +750,7 @@ struct PaymentRow {
     fee_currency: Option<String>,
     failure: Option<Value>,
     captured_at: Option<DateTime<Utc>>,
+    created_at: Option<DateTime<Utc>>,
 }
 
 /// The checkout lifecycle store: one struct, both doors. Tenant paths use
@@ -873,7 +875,177 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, PaymentRow>(
             "SELECT id, tenant_id, checkout_id, external_payment_id, status,
                     amount_minor, currency, fee_amount_minor, fee_currency,
-                    failure, captured_at
+                    failure, captured_at, created_at
+             FROM payments.payments
+              WHERE tenant_id = $1 AND external_payment_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(external_payment_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 09.5: payment / refund / dispute read models.
+// ---------------------------------------------------------------------------
+
+use crate::domain::dispute::{DisputeRecord, DisputeStatus};
+use crate::domain::money::Currency;
+use crate::domain::payment::RefundStatus;
+use crate::domain::ports::{
+    DisputeFilter, DisputePage, DisputeRepository, PaymentFilter, PaymentPage, PaymentRepository,
+    RefundRepository,
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+fn encode_cursor(at: DateTime<Utc>, id: Uuid) -> String {
+    let raw = format!("{}:{}", at.timestamp_millis(), id);
+    BASE64.encode(raw.as_bytes())
+}
+
+fn decode_cursor(raw: &str) -> Result<(DateTime<Utc>, Uuid), PaymentsError> {
+    let bytes = BASE64
+        .decode(raw)
+        .map_err(|_| PaymentsError::InvalidConnection("invalid cursor".to_string()))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| PaymentsError::InvalidConnection("invalid cursor".to_string()))?;
+    let (millis, id) = text
+        .split_once(':')
+        .ok_or_else(|| PaymentsError::InvalidConnection("invalid cursor".to_string()))?;
+    let millis: i64 = millis
+        .parse()
+        .map_err(|_| PaymentsError::InvalidConnection("invalid cursor".to_string()))?;
+    let at = DateTime::from_timestamp_millis(millis)
+        .ok_or_else(|| PaymentsError::InvalidConnection("invalid cursor".to_string()))?;
+    let id = Uuid::parse_str(id)
+        .map_err(|_| PaymentsError::InvalidConnection("invalid cursor".to_string()))?;
+    Ok((at, id))
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxPaymentRepository;
+
+impl SqlxPaymentRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct DisputeRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    payment_id: Uuid,
+    external_dispute_id: String,
+    status: String,
+    amount_minor: i64,
+    currency: String,
+    reason: Option<String>,
+    due_by: Option<DateTime<Utc>>,
+    charge_id: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl TryFrom<DisputeRow> for DisputeRecord {
+    type Error = PaymentsError;
+    fn try_from(row: DisputeRow) -> Result<Self, Self::Error> {
+        let amount = Money::new(row.amount_minor, &row.currency)?;
+        Ok(Self {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            payment_id: row.payment_id,
+            external_dispute_id: row.external_dispute_id,
+            status: DisputeStatus::parse(&row.status),
+            amount,
+            reason: row.reason,
+            due_by: row.due_by,
+            charge_id: row.charge_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct RefundRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    payment_id: Uuid,
+    external_refund_id: Option<String>,
+    amount_minor: i64,
+    currency: String,
+    reason: Option<String>,
+    status: String,
+    created_by: Option<Uuid>,
+    idempotency_key: Option<Uuid>,
+    created_at: DateTime<Utc>,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+impl TryFrom<RefundRow> for crate::domain::payment::RefundRecord {
+    type Error = PaymentsError;
+    fn try_from(row: RefundRow) -> Result<Self, Self::Error> {
+        let status = RefundStatus::parse(&row.status).ok_or_else(|| {
+            PaymentsError::Storage(format!("unknown refund status {:?}", row.status))
+        })?;
+        let amount = Money::new(row.amount_minor, &row.currency)?;
+        Ok(Self {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            payment_id: row.payment_id,
+            external_refund_id: row.external_refund_id,
+            amount,
+            reason: row.reason,
+            status,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            idempotency_key: row.idempotency_key,
+        })
+    }
+}
+
+fn payment_filter_limit(filter: &PaymentFilter) -> i64 {
+    let requested = filter.limit.unwrap_or(20) as i64;
+    requested.clamp(1, 100)
+}
+
+#[async_trait]
+impl PaymentRepository for SqlxPaymentRepository {
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<PaymentRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, PaymentRow>(
+            "SELECT id, tenant_id, checkout_id, external_payment_id, status,
+                    amount_minor, currency, fee_amount_minor, fee_currency,
+                    failure, captured_at, created_at
+             FROM payments.payments
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn find_by_external_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        external_payment_id: &str,
+    ) -> Result<Option<PaymentRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, PaymentRow>(
+            "SELECT id, tenant_id, checkout_id, external_payment_id, status,
+                    amount_minor, currency, fee_amount_minor, fee_currency,
+                    failure, captured_at, created_at
              FROM payments.payments
              WHERE tenant_id = $1 AND external_payment_id = $2",
         )
@@ -883,5 +1055,535 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
         .await
         .map_err(storage)?;
         row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_payment_id: &str,
+    ) -> Result<Option<PaymentRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, PaymentRow>(
+            "SELECT id, tenant_id, checkout_id, external_payment_id, status,
+                    amount_minor, currency, fee_amount_minor, fee_currency,
+                    failure, captured_at, created_at
+             FROM payments.payments
+             WHERE tenant_id = $1 AND external_payment_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(external_payment_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        filter: &PaymentFilter,
+    ) -> Result<PaymentPage, PaymentsError> {
+        let limit = payment_filter_limit(filter);
+        let fetch = limit + 1;
+        let mut where_clauses = vec!["p.tenant_id = $1".to_string()];
+        let mut binds: Vec<String> = Vec::new();
+        // We build via QueryBuilder for dynamic filters plus cursor.
+        use sqlx::QueryBuilder;
+        let mut builder = QueryBuilder::new(
+            "SELECT p.id, p.tenant_id, p.checkout_id, p.external_payment_id, p.status,
+                    p.amount_minor, p.currency, p.fee_amount_minor, p.fee_currency,
+                    p.failure, p.captured_at, p.created_at
+             FROM payments.payments p ",
+        );
+        // Customer filter requires a join to checkouts.
+        let need_customer = filter.customer.as_ref().is_some_and(|c| !c.is_empty());
+        if need_customer {
+            builder.push(" LEFT JOIN payments.checkouts c ON c.id = p.checkout_id ");
+        }
+        builder.push(" WHERE p.tenant_id = ");
+        builder.push_bind(tenant_id);
+        if let Some(status) = &filter.status {
+            builder.push(" AND p.status = ");
+            builder.push_bind(status.as_str());
+        }
+        if let Some(currency) = &filter.currency {
+            builder.push(" AND p.currency = ");
+            builder.push_bind(currency.as_str());
+        }
+        if let Some(customer) = &filter.customer {
+            builder.push(" AND c.customer_ref::text ILIKE ");
+            builder.push_bind(format!("%{customer}%"));
+        }
+        if let Some(from) = filter.date_from {
+            builder.push(" AND p.created_at >= ");
+            builder.push_bind(from);
+        }
+        if let Some(to) = filter.date_to {
+            builder.push(" AND p.created_at <= ");
+            builder.push_bind(to);
+        }
+        if let Some(cursor) = &filter.cursor {
+            let (at, id) = decode_cursor(cursor)?;
+            builder.push(" AND (p.created_at, p.id) < (");
+            builder.push_bind(at);
+            builder.push(", ");
+            builder.push_bind(id);
+            builder.push(")");
+        }
+        builder.push(" ORDER BY p.created_at DESC, p.id DESC LIMIT ");
+        builder.push_bind(fetch);
+        let query = builder.build_query_as::<PaymentRow>();
+        let mut rows = query
+            .fetch_all(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        let next_cursor = if rows.len() as i64 > limit {
+            rows.pop();
+            rows.last()
+                .and_then(|row| row.created_at)
+                .zip(rows.last().map(|r| r.id))
+                .map(|(at, id)| encode_cursor(at, id))
+        } else {
+            None
+        };
+        let items = rows
+            .into_iter()
+            .map(TryFrom::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(PaymentPage { items, next_cursor })
+    }
+
+    async fn list_for_export(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        filter: &PaymentFilter,
+    ) -> Result<Vec<PaymentRecord>, PaymentsError> {
+        // Same predicates as `list` but without cursor/limit (fetch all).
+        use sqlx::QueryBuilder;
+        let mut builder = QueryBuilder::new(
+            "SELECT p.id, p.tenant_id, p.checkout_id, p.external_payment_id, p.status,
+                    p.amount_minor, p.currency, p.fee_amount_minor, p.fee_currency,
+                    p.failure, p.captured_at, p.created_at
+             FROM payments.payments p ",
+        );
+        let need_customer = filter.customer.as_ref().is_some_and(|c| !c.is_empty());
+        if need_customer {
+            builder.push(" LEFT JOIN payments.checkouts c ON c.id = p.checkout_id ");
+        }
+        builder.push(" WHERE p.tenant_id = ");
+        builder.push_bind(tenant_id);
+        if let Some(status) = &filter.status {
+            builder.push(" AND p.status = ");
+            builder.push_bind(status.as_str());
+        }
+        if let Some(currency) = &filter.currency {
+            builder.push(" AND p.currency = ");
+            builder.push_bind(currency.as_str());
+        }
+        if let Some(customer) = &filter.customer {
+            builder.push(" AND c.customer_ref::text ILIKE ");
+            builder.push_bind(format!("%{customer}%"));
+        }
+        if let Some(from) = filter.date_from {
+            builder.push(" AND p.created_at >= ");
+            builder.push_bind(from);
+        }
+        if let Some(to) = filter.date_to {
+            builder.push(" AND p.created_at <= ");
+            builder.push_bind(to);
+        }
+        builder.push(" ORDER BY p.created_at DESC, p.id DESC");
+        let rows = builder
+            .build_query_as::<PaymentRow>()
+            .fetch_all(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        rows.into_iter().map(TryFrom::try_from).collect()
+    }
+
+    async fn created_at_for(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>, PaymentsError> {
+        let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
+            "SELECT created_at FROM payments.payments WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(row.and_then(|(at,)| at))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxRefundRepository;
+
+impl SqlxRefundRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl RefundRepository for SqlxRefundRepository {
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<crate::domain::payment::RefundRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, RefundRow>(
+            "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                    reason, status, created_by, idempotency_key, created_at, updated_at
+             FROM payments.refunds WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn find_by_idempotency_key(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        key: Uuid,
+    ) -> Result<Option<crate::domain::payment::RefundRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, RefundRow>(
+            "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                    reason, status, created_by, idempotency_key, created_at, updated_at
+             FROM payments.refunds WHERE tenant_id = $1 AND idempotency_key = $2",
+        )
+        .bind(tenant_id)
+        .bind(key)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_refund_id: &str,
+    ) -> Result<Option<crate::domain::payment::RefundRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, RefundRow>(
+            "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                    reason, status, created_by, idempotency_key, created_at, updated_at
+             FROM payments.refunds WHERE tenant_id = $1 AND external_refund_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(external_refund_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn list_for_payment(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<Vec<crate::domain::payment::RefundRecord>, PaymentsError> {
+        let rows = sqlx::query_as::<_, RefundRow>(
+            "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                    reason, status, created_by, idempotency_key, created_at, updated_at
+             FROM payments.refunds WHERE tenant_id = $1 AND payment_id = $2 ORDER BY created_at, id",
+        )
+        .bind(tenant_id)
+        .bind(payment_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryFrom::try_from).collect()
+    }
+
+    async fn sum_succeeded_for_payment(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<i64, PaymentsError> {
+        let sum: Option<i64> = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount_minor), 0) FROM payments.refunds
+             WHERE tenant_id = $1 AND payment_id = $2 AND status = 'succeeded'",
+        )
+        .bind(tenant_id)
+        .bind(payment_id)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(sum.unwrap_or(0))
+    }
+
+    async fn insert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        refund: &crate::domain::payment::RefundRecord,
+    ) -> Result<(), PaymentsError> {
+        let result = sqlx::query(
+            "INSERT INTO payments.refunds
+                (id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                 reason, status, created_by, idempotency_key, created_at, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+              ON CONFLICT DO NOTHING",
+        )
+        .bind(refund.id)
+        .bind(refund.tenant_id)
+        .bind(refund.payment_id)
+        .bind(&refund.external_refund_id)
+        .bind(refund.amount.amount_minor)
+        .bind(refund.amount.currency.as_str())
+        .bind(&refund.reason)
+        .bind(refund.status.as_str())
+        .bind(refund.created_by)
+        .bind(refund.idempotency_key)
+        .bind(refund.created_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| {
+            if let sqlx::Error::Database(db) = &err {
+                if db.constraint() == Some("refunds_idempotency_idx")
+                    || db.constraint() == Some("refunds_pkey")
+                {
+                    return PaymentsError::IdempotencyConflict(
+                        "refund idempotency conflict".to_string(),
+                    );
+                }
+            }
+            storage(err)
+        })?;
+        if result.rows_affected() == 0 {
+            // Check if it's an idempotency conflict (existing row with same key or PK)
+            return Err(PaymentsError::IdempotencyConflict(
+                "refund already exists for this Idempotency-Key".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        refund: &crate::domain::payment::RefundRecord,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "UPDATE payments.refunds SET external_refund_id = $3, status = $4, amount_minor = $5,
+                    currency = $6, reason = $7, updated_at = now()
+             WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(refund.id)
+        .bind(refund.tenant_id)
+        .bind(&refund.external_refund_id)
+        .bind(refund.status.as_str())
+        .bind(refund.amount.amount_minor)
+        .bind(refund.amount.currency.as_str())
+        .bind(&refund.reason)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn upsert_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        refund: &crate::domain::payment::RefundRecord,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "INSERT INTO payments.refunds
+                (id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                 reason, status, created_by, idempotency_key, created_at, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+              ON CONFLICT (tenant_id, external_refund_id) WHERE external_refund_id IS NOT NULL
+              DO UPDATE SET status = EXCLUDED.status, amount_minor = EXCLUDED.amount_minor,
+                            currency = EXCLUDED.currency, updated_at = now()",
+        )
+        .bind(refund.id)
+        .bind(refund.tenant_id)
+        .bind(refund.payment_id)
+        .bind(&refund.external_refund_id)
+        .bind(refund.amount.amount_minor)
+        .bind(refund.amount.currency.as_str())
+        .bind(&refund.reason)
+        .bind(refund.status.as_str())
+        .bind(refund.created_by)
+        .bind(refund.idempotency_key)
+        .bind(refund.created_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxDisputeRepository;
+
+impl SqlxDisputeRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl DisputeRepository for SqlxDisputeRepository {
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<DisputeRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, DisputeRow>(
+            "SELECT id, tenant_id, payment_id, external_dispute_id, status, amount_minor, currency,
+                    reason, due_by, charge_id, created_at, updated_at
+             FROM payments.disputes WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_dispute_id: &str,
+    ) -> Result<Option<DisputeRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, DisputeRow>(
+            "SELECT id, tenant_id, payment_id, external_dispute_id, status, amount_minor, currency,
+                    reason, due_by, charge_id, created_at, updated_at
+             FROM payments.disputes WHERE tenant_id = $1 AND external_dispute_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(external_dispute_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        filter: &DisputeFilter,
+    ) -> Result<DisputePage, PaymentsError> {
+        let limit = filter.limit.unwrap_or(20) as i64;
+        let limit = limit.clamp(1, 100);
+        let fetch = limit + 1;
+        use sqlx::QueryBuilder;
+        let mut builder = QueryBuilder::new(
+            "SELECT id, tenant_id, payment_id, external_dispute_id, status, amount_minor, currency,
+                    reason, due_by, charge_id, created_at, updated_at
+             FROM payments.disputes WHERE tenant_id = ",
+        );
+        builder.push_bind(tenant_id);
+        if let Some(status) = &filter.status {
+            builder.push(" AND status = ");
+            builder.push_bind(status.as_str());
+        }
+        if let Some(currency) = &filter.currency {
+            builder.push(" AND currency = ");
+            builder.push_bind(currency.as_str());
+        }
+        if let Some(from) = filter.date_from {
+            builder.push(" AND created_at >= ");
+            builder.push_bind(from);
+        }
+        if let Some(to) = filter.date_to {
+            builder.push(" AND created_at <= ");
+            builder.push_bind(to);
+        }
+        if let Some(cursor) = &filter.cursor {
+            let (at, id) = decode_cursor(cursor)?;
+            builder.push(" AND (created_at, id) < (");
+            builder.push_bind(at);
+            builder.push(", ");
+            builder.push_bind(id);
+            builder.push(")");
+        }
+        builder.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+        builder.push_bind(fetch);
+        let mut rows = builder
+            .build_query_as::<DisputeRow>()
+            .fetch_all(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        let next_cursor = if rows.len() as i64 > limit {
+            rows.pop();
+            rows.last().map(|row| encode_cursor(row.created_at, row.id))
+        } else {
+            None
+        };
+        let items = rows
+            .into_iter()
+            .map(TryFrom::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(DisputePage { items, next_cursor })
+    }
+
+    async fn list_for_payment(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<Vec<DisputeRecord>, PaymentsError> {
+        let rows = sqlx::query_as::<_, DisputeRow>(
+            "SELECT id, tenant_id, payment_id, external_dispute_id, status, amount_minor, currency,
+                    reason, due_by, charge_id, created_at, updated_at
+             FROM payments.disputes WHERE tenant_id = $1 AND payment_id = $2 ORDER BY created_at, id",
+        )
+        .bind(tenant_id)
+        .bind(payment_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryFrom::try_from).collect()
+    }
+
+    async fn upsert(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        dispute: &DisputeRecord,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "INSERT INTO payments.disputes
+                (id, tenant_id, payment_id, external_dispute_id, status, amount_minor, currency,
+                 reason, due_by, charge_id, created_at, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+              ON CONFLICT (tenant_id, external_dispute_id) DO UPDATE SET
+                status = EXCLUDED.status, amount_minor = EXCLUDED.amount_minor,
+                currency = EXCLUDED.currency, reason = EXCLUDED.reason,
+                due_by = EXCLUDED.due_by, updated_at = now()",
+        )
+        .bind(dispute.id)
+        .bind(dispute.tenant_id)
+        .bind(dispute.payment_id)
+        .bind(&dispute.external_dispute_id)
+        .bind(dispute.status.as_str())
+        .bind(dispute.amount.amount_minor)
+        .bind(dispute.amount.currency.as_str())
+        .bind(&dispute.reason)
+        .bind(dispute.due_by)
+        .bind(&dispute.charge_id)
+        .bind(dispute.created_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
     }
 }

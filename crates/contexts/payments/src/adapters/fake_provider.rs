@@ -370,6 +370,18 @@ impl PaymentProviderPort for FakeProvider {
         &self,
         command: &ProviderRefundCommand,
     ) -> Result<ProviderRefund, PaymentsError> {
+        {
+            let state = self.state.lock().expect("fake provider state lock");
+            if !state.accounts.contains_key(&command.external_account_id) {
+                return Err(PaymentsError::ProviderUnavailable(format!(
+                    "fake provider knows no account {:?}",
+                    command.external_account_id
+                )));
+            }
+            if state.script.fail_next_refund.is_some() {
+                // Fall through to scripted failure handling below (needs mutable lock).
+            }
+        }
         let mut state = self.state.lock().expect("fake provider state lock");
         if let Some(reason) = state.script.fail_next_refund.take() {
             return Err(PaymentsError::ProviderUnavailable(format!(
@@ -543,6 +555,7 @@ mod tests {
         .unwrap();
         let refund = provider
             .refund(&ProviderRefundCommand {
+                external_account_id: account.external_account_id.clone(),
                 external_payment_id: payment.external_payment_id.clone(),
                 refund: refund_record,
                 idempotency_key: Uuid::now_v7(),
@@ -633,6 +646,7 @@ mod tests {
         .unwrap();
         let err = provider
             .refund(&ProviderRefundCommand {
+                external_account_id: account.external_account_id.clone(),
                 external_payment_id: payment.external_payment_id.clone(),
                 refund: refund_record,
                 idempotency_key: Uuid::now_v7(),
@@ -653,6 +667,7 @@ mod tests {
         assert!(
             provider
                 .refund(&ProviderRefundCommand {
+                    external_account_id: account.external_account_id.clone(),
                     external_payment_id: payment.external_payment_id,
                     refund: refund_record,
                     idempotency_key: Uuid::now_v7(),

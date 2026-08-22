@@ -207,6 +207,9 @@ pub struct WebhookDispatcher {
     /// (unwired composition root) payment events are still stored and
     /// acknowledged — never retried into the DLQ by a wiring gap.
     checkouts: Option<Arc<dyn CheckoutLifecycleStore>>,
+    /// 09.5 refund and dispute persistence.
+    refunds: Option<Arc<dyn crate::domain::ports::RefundRepository>>,
+    disputes: Option<Arc<dyn crate::domain::ports::DisputeRepository>>,
     metrics: Option<PaymentsMetrics>,
 }
 
@@ -227,6 +230,8 @@ impl WebhookDispatcher {
             events,
             notifier,
             checkouts: None,
+            refunds: None,
+            disputes: None,
             metrics: None,
         }
     }
@@ -236,6 +241,22 @@ impl WebhookDispatcher {
     /// acknowledge-and-skip instead of dead-lettering money events.
     pub fn with_checkout_store(mut self, checkouts: Arc<dyn CheckoutLifecycleStore>) -> Self {
         self.checkouts = Some(checkouts);
+        self
+    }
+
+    pub fn with_refund_store(
+        mut self,
+        refunds: Arc<dyn crate::domain::ports::RefundRepository>,
+    ) -> Self {
+        self.refunds = Some(refunds);
+        self
+    }
+
+    pub fn with_dispute_store(
+        mut self,
+        disputes: Arc<dyn crate::domain::ports::DisputeRepository>,
+    ) -> Self {
+        self.disputes = Some(disputes);
         self
     }
 
@@ -327,9 +348,15 @@ impl WebhookDispatcher {
         if is_payment_event(&record.event_type) {
             return self.apply_payment_event(record).await;
         }
+        if is_refund_event(&record.event_type) {
+            return self.apply_refund_event(record).await;
+        }
+        if is_dispute_event(&record.event_type) {
+            return self.apply_dispute_event(record).await;
+        }
 
-        // Account/capability handlers; everything else (refund, dispute,
-        // payout) lands with its own slice and is acknowledged meanwhile.
+        // Account/capability handlers; everything else (payout) lands with
+        // its own slice and is acknowledged meanwhile.
         if !is_account_event(&record.event_type) {
             self.acknowledge(record).await?;
             return Ok(ApplyOutcome::Skipped);
@@ -552,6 +579,156 @@ impl WebhookDispatcher {
         Ok(outcome)
     }
 
+    async fn apply_refund_event(
+        &self,
+        record: &WebhookEventRecord,
+    ) -> Result<ApplyOutcome, PaymentsError> {
+        let Some(refunds_repo) = self.refunds.clone() else {
+            warn!(
+                event = %record.stripe_event_id,
+                "refund event arrived with no refund store wired; acknowledged"
+            );
+            self.acknowledge(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let Some(checkouts) = self.checkouts.clone() else {
+            warn!(
+                event = %record.stripe_event_id,
+                "refund event arrived with no checkout store wired; acknowledged"
+            );
+            self.acknowledge(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let Some(account_id) = record.account_id.as_deref() else {
+            warn!(
+                event = %record.stripe_event_id,
+                event_type = %record.event_type,
+                "refund webhook names no connected account; recorded and acknowledged"
+            );
+            self.note_unknown_account(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("process_refund_webhook", ACTOR)
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        let Some(connection) = self
+            .connections
+            .find_live_by_external_account(&mut scope, account_id)
+            .await?
+        else {
+            error!(
+                event = %record.stripe_event_id,
+                account = %account_id,
+                "refund webhook for UNKNOWN account; recorded and alerted, no rows created",
+            );
+            if let Some(metrics) = &self.metrics {
+                metrics.webhook_unknown_account.inc();
+            }
+            self.events_repo
+                .mark_processed(&mut scope, &record.stripe_event_id)
+                .await?;
+            scope
+                .commit()
+                .await
+                .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let outcome = handle_refund_event(
+            &mut scope,
+            checkouts.as_ref(),
+            refunds_repo.as_ref(),
+            self.events.as_ref(),
+            &connection,
+            record,
+        )
+        .await?;
+        self.events_repo
+            .mark_processed(&mut scope, &record.stripe_event_id)
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        Ok(outcome)
+    }
+
+    async fn apply_dispute_event(
+        &self,
+        record: &WebhookEventRecord,
+    ) -> Result<ApplyOutcome, PaymentsError> {
+        let Some(disputes_repo) = self.disputes.clone() else {
+            warn!(
+                event = %record.stripe_event_id,
+                "dispute event arrived with no dispute store wired; acknowledged"
+            );
+            self.acknowledge(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let Some(checkouts) = self.checkouts.clone() else {
+            warn!(
+                event = %record.stripe_event_id,
+                "dispute event arrived with no checkout store wired; acknowledged"
+            );
+            self.acknowledge(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let Some(account_id) = record.account_id.as_deref() else {
+            warn!(
+                event = %record.stripe_event_id,
+                event_type = %record.event_type,
+                "dispute webhook names no connected account; recorded and acknowledged"
+            );
+            self.note_unknown_account(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("process_dispute_webhook", ACTOR)
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        let Some(connection) = self
+            .connections
+            .find_live_by_external_account(&mut scope, account_id)
+            .await?
+        else {
+            error!(
+                event = %record.stripe_event_id,
+                account = %account_id,
+                "dispute webhook for UNKNOWN account; recorded and alerted, no rows created",
+            );
+            if let Some(metrics) = &self.metrics {
+                metrics.webhook_unknown_account.inc();
+            }
+            self.events_repo
+                .mark_processed(&mut scope, &record.stripe_event_id)
+                .await?;
+            scope
+                .commit()
+                .await
+                .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let outcome = handle_dispute_event(
+            &mut scope,
+            checkouts.as_ref(),
+            disputes_repo.as_ref(),
+            self.events.as_ref(),
+            &connection,
+            record,
+        )
+        .await?;
+        self.events_repo
+            .mark_processed(&mut scope, &record.stripe_event_id)
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        Ok(outcome)
+    }
+
     /// Store-and-ack for event types whose handlers ship later — the row
     /// is marked processed so it neither retries nor blocks the queue.
     async fn acknowledge(&self, record: &WebhookEventRecord) -> Result<(), PaymentsError> {
@@ -624,6 +801,24 @@ fn is_payment_event(event_type: &str) -> bool {
             | "payment_intent.succeeded"
             | "payment_intent.payment_failed"
             | "payment_intent.canceled"
+    )
+}
+
+fn is_refund_event(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "charge.refunded" | "refund.created" | "refund.updated"
+    )
+}
+
+fn is_dispute_event(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "charge.dispute.created"
+            | "charge.dispute.closed"
+            | "charge.dispute.updated"
+            | "charge.dispute.funds_reinstated"
+            | "charge.dispute.funds_withdrawn"
     )
 }
 
@@ -908,6 +1103,348 @@ fn failure_of(object: &Value) -> Option<PaymentFailure> {
             .unwrap_or_default()
             .to_string(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// 09.5 refund and dispute handlers.
+// ---------------------------------------------------------------------------
+
+use crate::domain::dispute::{DisputeRecord, DisputeStatus};
+use crate::domain::payment::{RefundRecord, RefundStatus};
+
+async fn handle_refund_event(
+    scope: &mut PlatformScope<'_>,
+    checkouts: &dyn CheckoutLifecycleStore,
+    refunds: &dyn crate::domain::ports::RefundRepository,
+    events: &dyn EventPublisher,
+    connection: &crate::domain::connection::ProviderConnection,
+    record: &WebhookEventRecord,
+) -> Result<ApplyOutcome, PaymentsError> {
+    let object = record
+        .payload
+        .pointer("/data/object")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let tenant_id = connection.tenant_id;
+    let provider = connection.provider.as_str().to_string();
+    // Stripe sends `charge.refunded` with the charge object whose `refunds`
+    // array contains every refund for that charge. A direct `refund.*`
+    // event carries the refund object itself.
+    let refunds_data: Vec<Value> = if record.event_type == "charge.refunded" {
+        object
+            .get("refunds")
+            .and_then(|r| r.get("data"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        vec![object.clone()]
+    };
+    if refunds_data.is_empty() {
+        return Ok(ApplyOutcome::Skipped);
+    }
+    let mut any = false;
+    for refund_obj in refunds_data {
+        let external_refund_id = refund_obj
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| id.starts_with("re_"))
+            .ok_or_else(|| {
+                PaymentsError::Storage(format!(
+                    "refund webhook {} carries no refund id",
+                    record.stripe_event_id
+                ))
+            })?
+            .to_string();
+        let amount = refund_obj
+            .get("amount")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                PaymentsError::Storage(format!("refund {} has no amount", external_refund_id))
+            })?;
+        let currency = refund_obj
+            .get("currency")
+            .and_then(Value::as_str)
+            .unwrap_or("usd");
+        let money = Money::new(amount, currency)?;
+        let status_raw = refund_obj
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("succeeded");
+        let status = match status_raw {
+            "succeeded" => RefundStatus::Succeeded,
+            "pending" => RefundStatus::Pending,
+            _ => RefundStatus::Failed,
+        };
+        let reason = refund_obj
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                object
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        // Find the payment this refund belongs to: prefer the refund's
+        // `payment_intent` field, then the charge's `payment_intent`, then
+        // the charge id itself.
+        let external_payment_id = refund_obj
+            .get("payment_intent")
+            .and_then(Value::as_str)
+            .or_else(|| object.get("payment_intent").and_then(Value::as_str))
+            .or_else(|| refund_obj.get("charge").and_then(Value::as_str))
+            .or_else(|| object.get("id").and_then(Value::as_str))
+            .map(str::to_string);
+        let Some(external_payment_id) = external_payment_id else {
+            warn!(
+                event = %record.stripe_event_id,
+                "refund {} has no routable payment id; skipped", external_refund_id
+            );
+            continue;
+        };
+        let payment = match checkouts
+            .find_payment_by_external_id(scope, tenant_id, &external_payment_id)
+            .await?
+        {
+            Some(p) => p,
+            None => {
+                // Fallback: try charge id if we tried payment_intent.
+                if let Some(charge_id) = object.get("id").and_then(Value::as_str)
+                    && charge_id != external_payment_id
+                {
+                    match checkouts
+                        .find_payment_by_external_id(scope, tenant_id, charge_id)
+                        .await?
+                    {
+                        Some(p) => p,
+                        None => {
+                            warn!(
+                                event = %record.stripe_event_id,
+                                refund = %external_refund_id,
+                                payment = %external_payment_id,
+                                "refund for unknown payment; skipped"
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    warn!(
+                        event = %record.stripe_event_id,
+                        refund = %external_refund_id,
+                        payment = %external_payment_id,
+                        "refund for unknown payment; skipped"
+                    );
+                    continue;
+                }
+            }
+        };
+        let created = refund_obj
+            .get("created")
+            .and_then(Value::as_i64)
+            .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+            .unwrap_or_else(Utc::now);
+        // Dedupe on external_refund_id: if we already have a row for this
+        // provider id, update it; otherwise create a new succeeded row.
+        let existing = refunds
+            .find_by_external_id_platform(scope, tenant_id, &external_refund_id)
+            .await?;
+        let id = existing.as_ref().map(|r| r.id).unwrap_or_else(Uuid::now_v7);
+        let mut refund_record = RefundRecord {
+            id,
+            tenant_id,
+            payment_id: payment.id,
+            external_refund_id: Some(external_refund_id.clone()),
+            amount: money.clone(),
+            reason: reason.clone(),
+            status,
+            created_by: None,
+            created_at: created,
+            idempotency_key: None,
+        };
+        // If we had an existing row, preserve its original created_at so
+        // the timeline stays stable.
+        if let Some(existing) = &existing {
+            refund_record.created_at = existing.created_at;
+        }
+        refunds.upsert_platform(scope, &refund_record).await?;
+        // Emit RefundIssued on first time we see a succeeded refund; the
+        // idempotency is on the outbox's aggregate id (refund_id) but we
+        // only publish when we created the row (existing is None and
+        // status is succeeded) to avoid duplicate events on redelivery.
+        if existing.is_none() && status == RefundStatus::Succeeded {
+            events
+                .publish(
+                    scope,
+                    tenant_id,
+                    &[PaymentsEvent::RefundIssued {
+                        refund_id: refund_record.id,
+                        payment_id: payment.id,
+                        provider: provider.clone(),
+                        amount: EventAmount::new(&money),
+                        reason: reason.clone(),
+                    }],
+                )
+                .await?;
+        }
+        any = true;
+    }
+    Ok(if any {
+        ApplyOutcome::Applied
+    } else {
+        ApplyOutcome::Skipped
+    })
+}
+
+async fn handle_dispute_event(
+    scope: &mut PlatformScope<'_>,
+    checkouts: &dyn CheckoutLifecycleStore,
+    disputes: &dyn crate::domain::ports::DisputeRepository,
+    events: &dyn EventPublisher,
+    connection: &crate::domain::connection::ProviderConnection,
+    record: &WebhookEventRecord,
+) -> Result<ApplyOutcome, PaymentsError> {
+    let object = record
+        .payload
+        .pointer("/data/object")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let tenant_id = connection.tenant_id;
+    let provider = connection.provider.as_str().to_string();
+
+    let external_dispute_id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| id.starts_with("dp_") || id.starts_with("du_"))
+        .ok_or_else(|| {
+            PaymentsError::Storage(format!(
+                "dispute webhook {} carries no dispute id",
+                record.stripe_event_id
+            ))
+        })?
+        .to_string();
+    let status_raw = object
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("needs_response");
+    let status = DisputeStatus::parse(status_raw);
+    let amount = object
+        .get("amount")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            PaymentsError::Storage(format!("dispute {} has no amount", external_dispute_id))
+        })?;
+    let currency = object
+        .get("currency")
+        .and_then(Value::as_str)
+        .unwrap_or("usd");
+    let money = Money::new(amount, currency)?;
+    let reason = object
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let due_by = object
+        .get("evidence_details")
+        .and_then(|d| d.get("due_by"))
+        .and_then(Value::as_i64)
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        .or_else(|| {
+            object
+                .get("due_by")
+                .and_then(Value::as_i64)
+                .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        });
+    let charge_id = object
+        .get("charge")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            object
+                .get("charge_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    // Route to payment: dispute's charge → payment's external id.
+    let external_payment_id = charge_id.clone().or_else(|| {
+        object
+            .get("payment_intent")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    let Some(external_payment_id) = external_payment_id else {
+        warn!(
+            event = %record.stripe_event_id,
+            dispute = %external_dispute_id,
+            "dispute has no routable charge/payment id; skipped"
+        );
+        return Ok(ApplyOutcome::Skipped);
+    };
+    let payment = match checkouts
+        .find_payment_by_external_id(scope, tenant_id, &external_payment_id)
+        .await?
+    {
+        Some(p) => p,
+        None => {
+            warn!(
+                event = %record.stripe_event_id,
+                dispute = %external_dispute_id,
+                payment = %external_payment_id,
+                "dispute for unknown payment; skipped"
+            );
+            return Ok(ApplyOutcome::Skipped);
+        }
+    };
+    let created = object
+        .get("created")
+        .and_then(Value::as_i64)
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        .unwrap_or_else(Utc::now);
+    let existing = disputes
+        .find_by_external_id_platform(scope, tenant_id, &external_dispute_id)
+        .await?;
+    let is_new = existing.is_none();
+    let existing_created = existing.as_ref().map(|d| d.created_at);
+    let id = existing.map(|d| d.id).unwrap_or_else(Uuid::now_v7);
+    let mut dispute = DisputeRecord::new(
+        id,
+        tenant_id,
+        payment.id,
+        external_dispute_id.clone(),
+        status.clone(),
+        money.clone(),
+        reason.clone(),
+        due_by,
+        created,
+    )?;
+    dispute.charge_id = charge_id.clone();
+    if let Some(at) = existing_created {
+        dispute.created_at = at;
+    }
+    disputes.upsert(scope, &dispute).await?;
+    if is_new {
+        events
+            .publish(
+                scope,
+                tenant_id,
+                &[PaymentsEvent::DisputeOpened {
+                    dispute_id: dispute.id,
+                    payment_id: payment.id,
+                    provider: provider.clone(),
+                    amount: EventAmount::new(&money),
+                }],
+            )
+            .await?;
+        // Tenant notification: dispute opened. Failures are logged by the
+        // caller, not retried — a lost notification must not fail the
+        // committed dispute row.
+        tracing::info!(
+            tenant_id = %tenant_id,
+            dispute_id = %dispute.id,
+            status = %status.as_str(),
+            "dispute opened for payment {}", payment.id
+        );
+    }
+    Ok(ApplyOutcome::Applied)
 }
 
 #[cfg(test)]

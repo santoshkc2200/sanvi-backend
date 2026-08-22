@@ -20,7 +20,10 @@ use uuid::Uuid;
 
 use sanvi_http::{FeatureGate, PermissionGate, ResourceRef, Subject, tenancy::TenantContext};
 use sanvi_payments::adapters::http::PaymentsState;
-use sanvi_payments::adapters::repos::{SqlxCheckoutRepository, SqlxProviderConnectionRepository};
+use sanvi_payments::adapters::repos::{
+    SqlxCheckoutRepository, SqlxDisputeRepository, SqlxPaymentRepository,
+    SqlxProviderConnectionRepository, SqlxRefundRepository,
+};
 use sanvi_payments::adapters::{
     FakeProvider, FixedWindowThrottle, OutboxEventPublisher, PaymentsMetrics,
 };
@@ -462,6 +465,12 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
         Arc::new(SqlxProviderConnectionRepository::new());
     let checkouts: Arc<dyn sanvi_payments::domain::CheckoutRepository> =
         Arc::new(SqlxCheckoutRepository::new());
+    let payments: Arc<dyn sanvi_payments::domain::PaymentRepository> =
+        Arc::new(SqlxPaymentRepository::new());
+    let refunds: Arc<dyn sanvi_payments::domain::RefundRepository> =
+        Arc::new(SqlxRefundRepository::new());
+    let disputes: Arc<dyn sanvi_payments::domain::DisputeRepository> =
+        Arc::new(SqlxDisputeRepository::new());
     let audit: Arc<dyn sanvi_audit::domain::AuditWriter> =
         Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new());
 
@@ -473,11 +482,11 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
         tx: tx.clone(),
         connections: connections.clone(),
         create_connection: Arc::new(StartProviderConnection::new(
-            tx,
+            tx.clone(),
             providers.clone(),
             connections.clone(),
             Arc::new(OutboxEventPublisher::new()),
-            audit,
+            audit.clone(),
         )),
         account_session: Arc::new(sanvi_payments::application::CreateAccountSession::new(
             TxManager::new(
@@ -497,13 +506,13 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             Arc::new(FakeProvider::new()),
             vec!["127.0.0.1".to_string(), "::1".to_string()],
         )),
-        checkouts,
+        checkouts: checkouts.clone(),
         create_checkout: Arc::new(CreateCheckout::new(
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
             ),
-            providers,
+            providers.clone(),
             Arc::new(SqlxProviderConnectionRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
             Arc::new(AllowShopTest),
@@ -511,6 +520,57 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             Arc::new(TestFeePolicy(false)),
         )),
         checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
+        payments: payments.clone(),
+        refunds: refunds.clone(),
+        disputes: disputes.clone(),
+        list_payments: Arc::new(sanvi_payments::application::ListPayments::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            payments.clone(),
+        )),
+        get_payment: Arc::new(sanvi_payments::application::GetPaymentDetail::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            payments.clone(),
+            refunds.clone(),
+            disputes.clone(),
+            checkouts.clone(),
+        )),
+        issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            providers.clone(),
+            payments.clone(),
+            refunds.clone(),
+            Arc::new(SqlxProviderConnectionRepository::new()),
+            checkouts.clone(),
+            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
+        list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            disputes.clone(),
+        )),
+        export_payments: Arc::new(sanvi_payments::application::ExportPayments::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            payments.clone(),
+            refunds.clone(),
+            disputes.clone(),
+            checkouts.clone(),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
     }
 }
 
@@ -1874,6 +1934,44 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             Arc::new(TestFeePolicy(false)),
                         )),
                         checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
+                        payments: Arc::new(SqlxPaymentRepository::new()),
+                        refunds: Arc::new(SqlxRefundRepository::new()),
+                        disputes: Arc::new(SqlxDisputeRepository::new()),
+                        list_payments: Arc::new(sanvi_payments::application::ListPayments::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(SqlxPaymentRepository::new()),
+                        )),
+                        get_payment: Arc::new(sanvi_payments::application::GetPaymentDetail::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(SqlxPaymentRepository::new()),
+                            Arc::new(SqlxRefundRepository::new()),
+                            Arc::new(SqlxDisputeRepository::new()),
+                            Arc::new(SqlxCheckoutRepository::new()),
+                        )),
+                        issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(ProviderRegistry::new()),
+                            Arc::new(SqlxPaymentRepository::new()),
+                            Arc::new(SqlxRefundRepository::new()),
+                            Arc::new(SqlxProviderConnectionRepository::new()),
+                            Arc::new(SqlxCheckoutRepository::new()),
+                            Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new()),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                        )),
+                        list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
+                            TxManager::new(pool.clone()),
+                            Arc::new(SqlxDisputeRepository::new()),
+                        )),
+                        export_payments: Arc::new(
+                            sanvi_payments::application::ExportPayments::new(
+                                TxManager::new(pool.clone()),
+                                Arc::new(SqlxPaymentRepository::new()),
+                                Arc::new(SqlxRefundRepository::new()),
+                                Arc::new(SqlxDisputeRepository::new()),
+                                Arc::new(SqlxCheckoutRepository::new()),
+                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                            ),
+                        ),
                     }
                 };
                 state.config.requirement_keys.insert(
@@ -1991,6 +2089,42 @@ fn checkout_fixture(
             Arc::new(TestFeePolicy(fee_enabled)),
         )),
         checkout_throttle: Arc::new(FixedWindowThrottle::new(throttle_limit)),
+        payments: Arc::new(SqlxPaymentRepository::new()),
+        refunds: Arc::new(SqlxRefundRepository::new()),
+        disputes: Arc::new(SqlxDisputeRepository::new()),
+        list_payments: Arc::new(sanvi_payments::application::ListPayments::new(
+            TxManager::new(pool.clone()),
+            Arc::new(SqlxPaymentRepository::new()),
+        )),
+        get_payment: Arc::new(sanvi_payments::application::GetPaymentDetail::new(
+            TxManager::new(pool.clone()),
+            Arc::new(SqlxPaymentRepository::new()),
+            Arc::new(SqlxRefundRepository::new()),
+            Arc::new(SqlxDisputeRepository::new()),
+            Arc::new(SqlxCheckoutRepository::new()),
+        )),
+        issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
+            TxManager::new(pool.clone()),
+            Arc::new(ProviderRegistry::new()),
+            Arc::new(SqlxPaymentRepository::new()),
+            Arc::new(SqlxRefundRepository::new()),
+            Arc::new(SqlxProviderConnectionRepository::new()),
+            Arc::new(SqlxCheckoutRepository::new()),
+            Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
+        list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
+            TxManager::new(pool.clone()),
+            Arc::new(SqlxDisputeRepository::new()),
+        )),
+        export_payments: Arc::new(sanvi_payments::application::ExportPayments::new(
+            TxManager::new(pool.clone()),
+            Arc::new(SqlxPaymentRepository::new()),
+            Arc::new(SqlxRefundRepository::new()),
+            Arc::new(SqlxDisputeRepository::new()),
+            Arc::new(SqlxCheckoutRepository::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
     }
 }
 

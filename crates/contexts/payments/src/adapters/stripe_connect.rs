@@ -431,6 +431,45 @@ impl StripeConnectProvider {
             expires_at,
         })
     }
+
+    /// Map a Refund response onto the provider-agnostic shape.
+    fn map_refund(body: &Value) -> Result<ProviderRefund, PaymentsError> {
+        let external_refund_id = body
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| id.starts_with("re_"))
+            .ok_or_else(|| {
+                PaymentsError::ProviderUnavailable(
+                    "stripe connect returned no refund id".to_string(),
+                )
+            })?
+            .to_string();
+        let amount = body.get("amount").and_then(Value::as_i64).ok_or_else(|| {
+            PaymentsError::ProviderUnavailable(
+                "stripe connect returned no refund amount".to_string(),
+            )
+        })?;
+        let currency = body
+            .get("currency")
+            .and_then(Value::as_str)
+            .unwrap_or("usd");
+        let status_raw = body
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("pending");
+        let status = match status_raw {
+            "succeeded" => crate::domain::payment::RefundStatus::Succeeded,
+            "pending" => crate::domain::payment::RefundStatus::Pending,
+            "failed" | "canceled" => crate::domain::payment::RefundStatus::Failed,
+            _ => crate::domain::payment::RefundStatus::Pending,
+        };
+        let money = crate::domain::money::Money::new(amount, currency)?;
+        Ok(ProviderRefund {
+            external_refund_id,
+            status,
+            amount: money,
+        })
+    }
 }
 
 /// Not-yet-shipped port surface (09.5–09.7): honest refusals, never fake
@@ -693,9 +732,67 @@ impl PaymentProviderPort for StripeConnectProvider {
 
     async fn refund(
         &self,
-        _command: &ProviderRefundCommand,
+        command: &ProviderRefundCommand,
     ) -> Result<ProviderRefund, PaymentsError> {
-        Err(not_yet("refunds ship in 09.5 (TASK-006)"))
+        if !command.external_account_id.starts_with("acct_") {
+            return Err(PaymentsError::InvalidConnection(
+                "external_account_id must be a connected-account id".to_string(),
+            ));
+        }
+        if !command.external_payment_id.starts_with("pi_")
+            && !command.external_payment_id.starts_with("ch_")
+        {
+            // Stripe refunds accept either, but we require a provider payment id shape.
+            // A blank or malformed id is a programming error, not a provider retry.
+            return Err(PaymentsError::InvalidConnection(
+                "external_payment_id must be a provider payment id".to_string(),
+            ));
+        }
+        // Amount handling: Stripe expects the amount in the charge's currency.
+        // The domain already validated it is a portion of the payment total
+        // in the same currency, so we forward it verbatim. A full refund is
+        // the same path — the amount equals the remaining refundable amount,
+        // not an omitted field, so the provider and our arithmetic agree on
+        // what "full" means even under concurrent partials.
+        let mut form: Vec<(&str, String)> = Vec::new();
+        if command.external_payment_id.starts_with("pi_") {
+            form.push(("payment_intent", command.external_payment_id.clone()));
+        } else {
+            form.push(("charge", command.external_payment_id.clone()));
+        }
+        form.push(("amount", command.refund.amount.amount_minor.to_string()));
+        // Map the tenant-supplied reason to Stripe's vocabulary where possible.
+        let reason = command
+            .refund
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let stripe_reason = match reason.as_str() {
+            "duplicate" => Some("duplicate"),
+            "fraudulent" => Some("fraudulent"),
+            "requested_by_customer" | "requested" | "customer_request" => {
+                Some("requested_by_customer")
+            }
+            _ => None,
+        };
+        if let Some(r) = stripe_reason {
+            form.push(("reason", r.to_string()));
+        }
+
+        let (body, _) = self
+            .send_on_account(
+                "refund_create",
+                reqwest::Method::POST,
+                "/v1/refunds",
+                Some(command.idempotency_key),
+                None,
+                Some(&form),
+                Some(&command.external_account_id),
+            )
+            .await?;
+        Self::map_refund(&body)
     }
 
     async fn list_payouts(

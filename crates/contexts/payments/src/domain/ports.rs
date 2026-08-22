@@ -15,7 +15,7 @@ use super::checkout::Checkout;
 use super::connection::ProviderConnection;
 use super::error::PaymentsError;
 use super::money::{Currency, Money};
-use super::payment::{RefundRecord, RefundStatus};
+use super::payment::{PaymentRecord, PaymentStatus, RefundRecord, RefundStatus};
 use super::provider::{ConnectionStatus, CountryCode, ProviderKind};
 
 /// Persistence for the provider-connection aggregate. All access is
@@ -165,6 +165,7 @@ pub struct ProviderCheckoutSession {
 /// passed the domain portion guard (≤ total, same currency).
 #[derive(Debug, Clone)]
 pub struct ProviderRefundCommand {
+    pub external_account_id: String,
     pub external_payment_id: String,
     pub refund: RefundRecord,
     pub idempotency_key: Uuid,
@@ -559,4 +560,261 @@ pub trait CheckoutThrottle: Send + Sync {
     /// Consume one token from the named bucket. `Err(RateLimited)`
     /// denies; any other error fails closed.
     async fn acquire(&self, bucket: &str) -> Result<(), PaymentsError>;
+}
+
+// ---------------------------------------------------------------------------
+// 09.5: payments, refunds & disputes read models.
+// ---------------------------------------------------------------------------
+
+/// How payments are sorted for list queries. Currently only created-at
+/// ordering exists — the spec's cursor is (created_at, id) and the UI's
+/// table defaults to newest-first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaymentSort {
+    #[default]
+    CreatedAtDesc,
+}
+
+/// Filter set for `GET /api/v1/tenant/payments` — every documented
+/// filter combinable, cursor-paginated.
+#[derive(Debug, Clone, Default)]
+pub struct PaymentFilter {
+    /// Exact status match (`succeeded`, `failed`, …) — absent = any.
+    pub status: Option<super::payment::PaymentStatus>,
+    /// Exact currency match (ISO-4217) — absent = any.
+    pub currency: Option<Currency>,
+    /// Customer reference substring — the tenant's own order/customer
+    /// identifier as stored in the checkout's `customer_ref` JSON. Absent
+    /// = any. Implementation may treat this as a substring search over
+    /// the JSON text, never as an exact structured match (free-form).
+    pub customer: Option<String>,
+    /// Inclusive date range over the payment's creation time (UTC) —
+    /// absent bounds are unbounded. The range remains the tenant's
+    /// timezone-preferred view's naive UTC translation; the stored column
+    /// is UTC.
+    pub date_from: Option<DateTime<Utc>>,
+    pub date_to: Option<DateTime<Utc>>,
+    /// Cursor for pagination: opaque string encoding the last row's
+    /// `(created_at, id)` tuple, as returned by the previous page's
+    /// `next_cursor`. The first page passes `None`.
+    pub cursor: Option<String>,
+    /// Requested page size. Capped server-side (max 100).
+    pub limit: Option<u32>,
+    /// Sort order — only `CreatedAtDesc` in this release.
+    pub sort: PaymentSort,
+}
+
+/// One page of payments plus the cursor for the next one, when more
+/// rows exist.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaymentPage {
+    pub items: Vec<super::payment::PaymentRecord>,
+    pub next_cursor: Option<String>,
+}
+
+/// Tenant-scoped read of the payment projection. The projection is kept
+/// by 09.4/09.5 webhooks (never fetched from Stripe per request); this
+/// port reads the tenant's own rows via RLS-scoped transactions.
+#[async_trait]
+pub trait PaymentRepository: Send + Sync {
+    /// One payment by its Sanvi id, tenant-scoped (404 outside the tenant).
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
+
+    /// Locate by the provider's external id (`pi_…` / `pay_…`), tenant-
+    /// scoped — the webhook payment handlers need this, but the read
+    /// path also uses it for dispute routing.
+    async fn find_by_external_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        external_payment_id: &str,
+    ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
+
+    /// Platform-scope lookup for webhook routing (charge objects name
+    /// charges, not payment intents — the webhook dispatcher needs a
+    /// payment row for that charge id).
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_payment_id: &str,
+    ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
+
+    /// The list view — every documented filter combinable, cursor-
+    /// paginated, newest-first.
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        filter: &PaymentFilter,
+    ) -> Result<PaymentPage, PaymentsError>;
+
+    /// All payments for CSV export that match `filter` (same predicates
+    /// as `list` but streamed). The caller owns auditing and the
+    /// streaming response.
+    async fn list_for_export(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        filter: &PaymentFilter,
+    ) -> Result<Vec<super::payment::PaymentRecord>, PaymentsError>;
+
+    /// The payments table's `created_at` for a payment — needed for
+    /// cursor encoding and timeline ordering.
+    async fn created_at_for(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>, PaymentsError>;
+}
+
+/// Filter for `GET /api/v1/tenant/payments/disputes`.
+#[derive(Debug, Clone, Default)]
+pub struct DisputeFilter {
+    pub status: Option<super::dispute::DisputeStatus>,
+    pub currency: Option<Currency>,
+    pub date_from: Option<DateTime<Utc>>,
+    pub date_to: Option<DateTime<Utc>>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// One page of disputes plus the cursor for the next.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisputePage {
+    pub items: Vec<super::dispute::DisputeRecord>,
+    pub next_cursor: Option<String>,
+}
+
+/// Tenant-scoped read of the dispute projection.
+#[async_trait]
+pub trait DisputeRepository: Send + Sync {
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<super::dispute::DisputeRecord>, PaymentsError>;
+
+    /// Locate by the provider's external dispute id (`dp_…`), platform
+    /// scope — disputes arrive via `charge.dispute.*` webhooks before the
+    /// tenant is known beyond the account routing.
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_dispute_id: &str,
+    ) -> Result<Option<super::dispute::DisputeRecord>, PaymentsError>;
+
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        filter: &DisputeFilter,
+    ) -> Result<DisputePage, PaymentsError>;
+
+    async fn list_for_payment(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<Vec<super::dispute::DisputeRecord>, PaymentsError>;
+
+    /// Insert-or-update by `(tenant_id, external_dispute_id)` — the
+    /// unique index is the dedupe that makes every handler idempotent.
+    async fn upsert(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        dispute: &super::dispute::DisputeRecord,
+    ) -> Result<(), PaymentsError>;
+}
+
+/// Tenant-scoped read/write of refunds.
+#[async_trait]
+pub trait RefundRepository: Send + Sync {
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
+
+    async fn find_by_idempotency_key(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        key: Uuid,
+    ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
+
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_refund_id: &str,
+    ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
+
+    async fn list_for_payment(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<Vec<super::payment::RefundRecord>, PaymentsError>;
+
+    /// The sum of `succeeded` refunds for a payment (minor units, same
+    /// currency as the payment). Returns zero when no succeeded refund
+    /// exists. Used for the over-refund guard.
+    async fn sum_succeeded_for_payment(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<i64, PaymentsError>;
+
+    async fn insert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        refund: &super::payment::RefundRecord,
+    ) -> Result<(), PaymentsError>;
+
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        refund: &super::payment::RefundRecord,
+    ) -> Result<(), PaymentsError>;
+
+    /// Insert-or-update by `(tenant_id, external_refund_id)` for webhook
+    /// reconciliation (Dashboard refunds). Platform scope, same idempotency
+    /// role as the checkout payment upsert.
+    async fn upsert_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        refund: &super::payment::RefundRecord,
+    ) -> Result<(), PaymentsError>;
+}
+
+/// The payment with its refunds — the `GET /payments/{id}` detail
+/// response's primary entity (disputes and timeline are sibling queries).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaymentWithRefunds {
+    pub payment: super::payment::PaymentRecord,
+    pub refunds: Vec<super::payment::RefundRecord>,
+}
+
+/// The payment detail the timeline is derived from — payment plus its
+/// refunds, disputes and checkout (when it has one). The application
+/// assembles the timeline from these; the UI never does.
+#[async_trait]
+pub trait PaymentTimelineStore: Send + Sync {
+    async fn payment_with_refunds(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        payment_id: Uuid,
+    ) -> Result<Option<PaymentWithRefunds>, PaymentsError>;
 }

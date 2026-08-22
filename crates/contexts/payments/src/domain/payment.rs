@@ -71,6 +71,7 @@ pub struct PaymentRecord {
     pub fee: Option<Money>,
     pub failure: Option<PaymentFailure>,
     pub captured_at: Option<DateTime<Utc>>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 impl PaymentRecord {
@@ -102,6 +103,7 @@ impl PaymentRecord {
             fee: None,
             failure: None,
             captured_at: None,
+            created_at: None,
         })
     }
 
@@ -155,6 +157,7 @@ pub struct RefundRecord {
     pub status: RefundStatus,
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub idempotency_key: Option<Uuid>,
 }
 
 impl RefundRecord {
@@ -184,6 +187,7 @@ impl RefundRecord {
             status: RefundStatus::Pending,
             created_by,
             created_at: now,
+            idempotency_key: None,
         })
     }
 }

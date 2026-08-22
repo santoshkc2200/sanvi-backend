@@ -1,0 +1,9 @@
+DROP INDEX IF EXISTS payments.checkouts_customer_ref_idx;
+DROP INDEX IF EXISTS payments.payments_tenant_currency_idx;
+DROP INDEX IF EXISTS payments.payments_tenant_created_id_idx;
+DROP INDEX IF EXISTS payments.disputes_created_idx;
+DROP INDEX IF EXISTS payments.disputes_status_idx;
+DROP INDEX IF EXISTS payments.disputes_tenant_idx;
+DROP INDEX IF EXISTS payments.disputes_payment_idx;
+DROP INDEX IF EXISTS payments.disputes_external_idx;
+DROP TABLE IF EXISTS payments.disputes;

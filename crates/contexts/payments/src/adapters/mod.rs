@@ -20,7 +20,8 @@ pub use metrics::PaymentsMetrics;
 pub use notify::{DenyAllVerifier, LoggingConnectionNotifier};
 pub use privacy_provider::PaymentsPrivacyProvider;
 pub use repos::{
-    SqlxCheckoutRepository, SqlxProviderConnectionRepository, SqlxWebhookEventRepository,
+    SqlxCheckoutRepository, SqlxDisputeRepository, SqlxPaymentRepository,
+    SqlxProviderConnectionRepository, SqlxRefundRepository, SqlxWebhookEventRepository,
 };
 pub use stripe_connect::StripeConnectProvider;
 pub use stubs::EmptyProviderCatalog;

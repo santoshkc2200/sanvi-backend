@@ -7,11 +7,15 @@ use sanvi_persistence::TxManager;
 
 use crate::adapters::PaymentsMetrics;
 use crate::application::{
-    CreateAccountSession, CreateCheckout, ListProviders, ProviderRegistry, StartProviderConnection,
+    CreateAccountSession, CreateCheckout, ExportPayments, GetPaymentDetail, IssueRefund,
+    ListDisputes, ListPayments, ListProviders, ProviderRegistry, StartProviderConnection,
     WebhookReceiver,
 };
 use crate::config::PaymentsConfig;
-use crate::domain::{CheckoutRepository, CheckoutThrottle, ProviderConnectionRepository};
+use crate::domain::{
+    CheckoutRepository, CheckoutThrottle, DisputeRepository, PaymentRepository,
+    ProviderConnectionRepository, RefundRepository,
+};
 
 #[derive(Clone)]
 pub struct PaymentsState {
@@ -40,4 +44,13 @@ pub struct PaymentsState {
     /// The checkout throttle (09.4): per tenant / IP / customer-ref
     /// buckets, checked before any database or provider work.
     pub checkout_throttle: Arc<dyn CheckoutThrottle>,
+    /// 09.5: payments, refunds & disputes read models.
+    pub payments: Arc<dyn PaymentRepository>,
+    pub refunds: Arc<dyn RefundRepository>,
+    pub disputes: Arc<dyn DisputeRepository>,
+    pub list_payments: Arc<ListPayments>,
+    pub get_payment: Arc<GetPaymentDetail>,
+    pub issue_refund: Arc<IssueRefund>,
+    pub list_disputes: Arc<ListDisputes>,
+    pub export_payments: Arc<ExportPayments>,
 }

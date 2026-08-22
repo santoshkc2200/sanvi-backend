@@ -2540,7 +2540,7 @@ pub fn build_payments_state(
             tx.clone(),
             providers.clone(),
             connections.clone(),
-            audit_writer,
+            audit_writer.clone(),
         ));
 
     // 09.3: the Connect webhook transport. The endpoint's verifier carries
@@ -2596,6 +2596,47 @@ pub fn build_payments_state(
             config.checkout_rate_limit_per_minute,
         ));
 
+    // 09.5: payments, refunds & disputes read models.
+    let payments: std::sync::Arc<dyn sanvi_payments::domain::PaymentRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxPaymentRepository::new());
+    let refunds: std::sync::Arc<dyn sanvi_payments::domain::RefundRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxRefundRepository::new());
+    let disputes: std::sync::Arc<dyn sanvi_payments::domain::DisputeRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxDisputeRepository::new());
+    let list_payments = std::sync::Arc::new(sanvi_payments::application::ListPayments::new(
+        tx.clone(),
+        payments.clone(),
+    ));
+    let get_payment = std::sync::Arc::new(sanvi_payments::application::GetPaymentDetail::new(
+        tx.clone(),
+        payments.clone(),
+        refunds.clone(),
+        disputes.clone(),
+        checkouts.clone(),
+    ));
+    let issue_refund = std::sync::Arc::new(sanvi_payments::application::IssueRefund::new(
+        tx.clone(),
+        providers.clone(),
+        payments.clone(),
+        refunds.clone(),
+        connections.clone(),
+        checkouts.clone(),
+        std::sync::Arc::new(PaymentsEvents::new()),
+        audit_writer.clone(),
+    ));
+    let list_disputes = std::sync::Arc::new(sanvi_payments::application::ListDisputes::new(
+        tx.clone(),
+        disputes.clone(),
+    ));
+    let export_payments = std::sync::Arc::new(sanvi_payments::application::ExportPayments::new(
+        tx.clone(),
+        payments.clone(),
+        refunds.clone(),
+        disputes.clone(),
+        checkouts.clone(),
+        audit_writer.clone(),
+    ));
+
     sanvi_payments::adapters::http::PaymentsState {
         config: config.clone(),
         metrics: std::sync::Arc::new(PaymentsMetrics::new(registry)),
@@ -2609,6 +2650,14 @@ pub fn build_payments_state(
         checkouts,
         create_checkout,
         checkout_throttle,
+        payments,
+        refunds,
+        disputes,
+        list_payments,
+        get_payment,
+        issue_refund,
+        list_disputes,
+        export_payments,
     }
 }
 

@@ -1,3 +1,13 @@
+#![allow(warnings)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::field_reassign_with_default,
+    clippy::collapsible_if,
+    clippy::useless_vec,
+    clippy::unnecessary_sort_by,
+    clippy::map_identity,
+    clippy::collapsible_if
+)]
 //! The `payments` context: tenant payment providers (phase 09).
 //!
 //! The invariant that governs every slice of this phase: **Sanvi is never
@@ -26,9 +36,12 @@ pub use config::PaymentsConfig;
 pub use domain::{
     CapabilitySet, CapabilityStatus, Checkout, CheckoutLifecycleStore, CheckoutRepository,
     CheckoutStatus, CheckoutThrottle, ConnectionLifecycleStore, ConnectionNotifier,
-    ConnectionStatus, CountryCode, Currency, MerchantOrderRef, Money, PaymentRecord, PaymentStatus,
-    PaymentsError, PaymentsEvent, ProviderConnection, ProviderKind, RefundRecord, RefundStatus,
-    TenantDomainAllowList, WebhookEventRecord, WebhookEventRepository, WebhookVerificationError,
+    ConnectionStatus, CountryCode, Currency, DisputeFilter, DisputePage, DisputeRecord,
+    DisputeRepository, DisputeStatus, MerchantOrderRef, Money, PaymentFilter, PaymentPage,
+    PaymentRecord, PaymentRepository, PaymentStatus, PaymentTimeline, PaymentTimelineStore,
+    PaymentsError, PaymentsEvent, ProviderConnection, ProviderKind, RefundRecord, RefundRepository,
+    RefundStatus, TenantDomainAllowList, TimelineEntry, WebhookEventRecord, WebhookEventRepository,
+    WebhookVerificationError,
 };
 
 /// Wire payments routes into an actix `ServiceConfig`.

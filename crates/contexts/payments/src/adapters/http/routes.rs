@@ -9,7 +9,8 @@ use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
 use super::handlers::{
     create_payment_connection, create_payment_connection_session, create_tenant_checkout,
-    get_payment_connection, get_tenant_checkout, list_payment_providers,
+    export_payments, get_payment, get_payment_connection, get_tenant_checkout, list_disputes,
+    list_payment_providers, list_payments, refund_payment,
 };
 
 /// The entitlement every payments route is gated on (403, not 404 — the
@@ -25,6 +26,7 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     let read = require_permission!("payments.read", tenant);
     let manage = require_permission!("payments.manage", tenant);
     let checkout = require_permission!("payments.checkout", tenant);
+    let refund = require_permission!("payments.refund", tenant);
 
     cfg.service(
         web::resource("/payments/providers")
@@ -49,6 +51,37 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(PermissionMap::new(vec![(Method::POST, manage)]))
             .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
             .route(web::post().to(create_payment_connection_session)),
+    )
+    // 09.5: payment read model, refunds & disputes.
+    .service(
+        web::resource("/payments")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(list_payments)),
+    )
+    .service(
+        web::resource("/payments/export")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(export_payments)),
+    )
+    .service(
+        web::resource("/payments/disputes")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(list_disputes)),
+    )
+    .service(
+        web::resource("/payments/{id}")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(get_payment)),
+    )
+    .service(
+        web::resource("/payments/{id}/refund")
+            .app_data(PermissionMap::new(vec![(Method::POST, refund)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::post().to(refund_payment)),
     )
     // 09.4: the buy path. Same scope as every payments route; the public
     // storefront-scoped variant arrives with the storefront integration
@@ -93,6 +126,36 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         "/api/v1/tenant/payments/connections/{id}/session",
         Method::POST,
         "payments.manage",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments",
+        Method::GET,
+        "payments.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/export",
+        Method::GET,
+        "payments.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/disputes",
+        Method::GET,
+        "payments.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/{id}",
+        Method::GET,
+        "payments.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/{id}/refund",
+        Method::POST,
+        "payments.refund",
         ResourceSpec::Tenant,
     ),
     (

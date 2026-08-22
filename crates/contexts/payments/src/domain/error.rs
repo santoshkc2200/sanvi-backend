@@ -90,6 +90,20 @@ pub enum PaymentsError {
     #[error("rate limited: {0}")]
     RateLimited(String),
 
+    /// A refund would exceed the remaining refundable amount (the
+    /// payment's total minus already-refunded succeeded rows). Contains the
+    /// remaining minor-unit amount and its currency so the response can name
+    /// it, not a generic 422. `payments/over-refund`.
+    #[error(
+        "refund of {requested_minor} {requested_currency} exceeds remaining refundable {remaining_minor} {remaining_currency}"
+    )]
+    RefundExceedsRemaining {
+        requested_minor: i64,
+        requested_currency: String,
+        remaining_minor: i64,
+        remaining_currency: String,
+    },
+
     /// Persistence failure (logged, never leaked to the client).
     #[error("storage failure: {0}")]
     Storage(String),
@@ -113,6 +127,7 @@ impl PaymentsError {
             Self::ConnectionExists(_) => "payments/connection-exists",
             Self::DomainNotAllowed(_) => "payments/domain-not-allowed",
             Self::RateLimited(_) => "payments/rate-limited",
+            Self::RefundExceedsRemaining { .. } => "payments/over-refund",
             Self::InvalidMoney(_) | Self::InvalidConnection(_) => "bad-request",
             Self::NotEntitled(_) => "entitlement-required",
             Self::WebhookRejected(_) => "unauthorized",
@@ -200,6 +215,17 @@ mod tests {
         assert_eq!(
             PaymentsError::RateLimited("tenant bucket".into()).type_slug(),
             "payments/rate-limited"
+        );
+        // 09.5: over-refund carries the remaining amount, not a generic 422.
+        assert_eq!(
+            PaymentsError::RefundExceedsRemaining {
+                requested_minor: 3000,
+                requested_currency: "JPY".into(),
+                remaining_minor: 2000,
+                remaining_currency: "JPY".into()
+            }
+            .type_slug(),
+            "payments/over-refund"
         );
     }
 }

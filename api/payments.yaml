@@ -123,6 +123,78 @@ paths:
         yields nothing.
       tags:
       - payments
+  /api/v1/tenant/payments:
+    get:
+      operationId: list_tenant_payments
+      parameters:
+      - description: Filter by payment status
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+      - description: Filter by currency (ISO-4217)
+        in: query
+        name: currency
+        required: false
+        schema:
+          type: string
+      - description: Filter by customer reference substring
+        in: query
+        name: customer
+        required: false
+        schema:
+          type: string
+      - description: Filter by created_at >= (RFC3339)
+        in: query
+        name: date_from
+        required: false
+        schema:
+          type: string
+      - description: Filter by created_at <= (RFC3339)
+        in: query
+        name: date_to
+        required: false
+        schema:
+          type: string
+      - description: Pagination cursor (opaque)
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+      - description: Page size (1-100, default 20)
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentListView'
+          description: One page of payments
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed filter (unknown status, bad currency)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+      summary: |-
+        `GET /api/v1/tenant/payments` — every documented filter combinable,
+        cursor-paginated, tenant-scoped by RLS and indexed for the filter set.
+      tags:
+      - payments
   /api/v1/tenant/payments/connections:
     post:
       operationId: create_payment_connection
@@ -285,6 +357,120 @@ paths:
         refused outright for a disconnected connection.
       tags:
       - payments
+  /api/v1/tenant/payments/disputes:
+    get:
+      operationId: list_tenant_disputes
+      parameters:
+      - description: Filter by dispute status
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+      - description: Filter by currency
+        in: query
+        name: currency
+        required: false
+        schema:
+          type: string
+      - description: Filter by created_at >= (RFC3339)
+        in: query
+        name: date_from
+        required: false
+        schema:
+          type: string
+      - description: Filter by created_at <= (RFC3339)
+        in: query
+        name: date_to
+        required: false
+        schema:
+          type: string
+      - description: Pagination cursor
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+      - description: Page size
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisputeListView'
+          description: One page of disputes
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+      summary: |-
+        `GET /api/v1/tenant/payments/disputes` — disputes for this tenant,
+        cursor-paginated.
+      tags:
+      - payments
+  /api/v1/tenant/payments/export:
+    get:
+      description: |-
+        The column set is fixed and documented: `payment_id,external_payment_id,
+        checkout_reference,amount_minor,currency,status,fee_minor,fee_currency,
+        captured_at,created_at,refunded_minor,dispute_status`.
+      operationId: export_tenant_payments
+      parameters:
+      - description: Filter by payment status
+        in: query
+        name: status
+        required: false
+        schema:
+          type: string
+      - description: Filter by currency
+        in: query
+        name: currency
+        required: false
+        schema:
+          type: string
+      - description: Filter by customer reference substring
+        in: query
+        name: customer
+        required: false
+        schema:
+          type: string
+      - description: Filter by created_at >= (RFC3339)
+        in: query
+        name: date_from
+        required: false
+        schema:
+          type: string
+      - description: Filter by created_at <= (RFC3339)
+        in: query
+        name: date_to
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            text/csv: {}
+          description: CSV bytes (text/csv)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+      summary: |-
+        `GET /api/v1/tenant/payments/export` — server-side CSV export,
+        tenant-scoped, audited.
+      tags:
+      - payments
   /api/v1/tenant/payments/providers:
     get:
       description: |-
@@ -314,5 +500,111 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the payments.stripe_connect entitlement
       summary: '`GET /api/v1/tenant/payments/providers`.'
+      tags:
+      - payments
+  /api/v1/tenant/payments/{id}:
+    get:
+      operationId: get_tenant_payment
+      parameters:
+      - description: The payment id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentDetailView'
+          description: Payment detail with timeline, refunds and disputes
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such payment for this tenant
+      summary: |-
+        `GET /api/v1/tenant/payments/{id}` — payment detail with timeline,
+        refunds and dispute state.
+      tags:
+      - payments
+  /api/v1/tenant/payments/{id}/refund:
+    post:
+      description: |-
+        `Idempotency-Key` is required; the response is the refund record,
+        never a bare 204 — a partial refund of an unexpected amount is a
+        support incident, so the UI must be able to show what actually
+        happened. Arithmetic is in minor units against the already-refunded
+        total; an over-refund is rejected with the remaining refundable
+        amount in the error, not a generic 422. Executed on the connected
+        account — the refund is the tenant's money moving, not ours.
+      operationId: refund_tenant_payment
+      parameters:
+      - description: The payment id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required. The same key with the same amount/reason replays the same refund; a different payload conflicts
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundView'
+          description: Refund issued (or the same refund replayed)
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing reason, malformed amount, over-refund (payments/over-refund reports remaining), currency mismatch
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.refund permission or the entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such payment for this tenant
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Idempotency-Key reuse with a different amount/reason (payments/idempotency-conflict) or already fully refunded
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Provider unavailable (payments/provider-unavailable)
+      summary: '`POST /api/v1/tenant/payments/{id}/refund` — refund a payment.'
       tags:
       - payments

@@ -919,6 +919,10 @@ async fn main() -> ExitCode {
     // never land without a local record.
     let payments_checkouts: std::sync::Arc<dyn sanvi_payments::domain::CheckoutLifecycleStore> =
         std::sync::Arc::new(sanvi_payments::adapters::SqlxCheckoutRepository::new());
+    let payments_refunds: std::sync::Arc<dyn sanvi_payments::domain::RefundRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxRefundRepository::new());
+    let payments_disputes: std::sync::Arc<dyn sanvi_payments::domain::DisputeRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxDisputeRepository::new());
     let connect_dispatcher = std::sync::Arc::new(
         ConnectWebhookDispatcher::new(
             payments_tx.clone(),
@@ -929,6 +933,8 @@ async fn main() -> ExitCode {
             payments_notifier.clone(),
         )
         .with_checkout_store(payments_checkouts.clone())
+        .with_refund_store(payments_refunds.clone())
+        .with_dispute_store(payments_disputes.clone())
         .with_metrics(payments_metrics.clone()),
     );
     let connection_sync = std::sync::Arc::new(

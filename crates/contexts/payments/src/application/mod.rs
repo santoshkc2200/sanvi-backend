@@ -9,7 +9,11 @@ pub mod account_session;
 pub mod catalog;
 pub mod create_checkout;
 pub mod create_connection;
+pub mod disputes;
+pub mod export;
 pub mod lifecycle;
+pub mod list_payments;
+pub mod refund;
 pub mod registry;
 pub mod sync_connection;
 pub mod webhooks;
@@ -24,7 +28,11 @@ pub use create_checkout::{
     conversion_event_id,
 };
 pub use create_connection::{StartConnectionCommand, StartProviderConnection};
+pub use disputes::{ListDisputes, ListDisputesCommand};
+pub use export::{CSV_COLUMNS, ExportCommand, ExportPayments};
 pub use lifecycle::{DEADLINE_REMINDER_WINDOW_DAYS, apply_account_snapshot, target_steps};
+pub use list_payments::{GetPaymentDetail, ListPayments, ListPaymentsCommand, PaymentDetail};
+pub use refund::{IssueRefund, RefundCommand};
 pub use registry::{ProviderRegistry, RuntimeEnvironment};
 pub use sync_connection::{SyncConnections, SyncReport};
 pub use webhooks::{DISPATCH_BATCH, MAX_WEBHOOK_ATTEMPTS, WebhookDispatcher, WebhookReceiver};
