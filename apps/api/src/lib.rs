@@ -2493,7 +2493,7 @@ impl sanvi_payments::TenantDomainAllowList for DomainsLiveAllowList {
 /// exists so checkout can consult the policy without the contexts
 /// depending on each other. An absent row is "no fee configured".
 struct PlatformApplicationFeeStore {
-    pool: sanvi_persistence::PgPool,
+    tx_manager: sanvi_persistence::TxManager,
 }
 
 #[async_trait::async_trait]
@@ -2503,15 +2503,24 @@ impl sanvi_payments::domain::ports::ApplicationFeeStore for PlatformApplicationF
         tenant_id: uuid::Uuid,
     ) -> Result<Option<sanvi_payments::domain::fees::FeeConfiguration>, sanvi_payments::PaymentsError>
     {
+        let mut scope = self
+            .tx_manager
+            .begin_for(tenant_id)
+            .await
+            .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
         let row: Option<(Option<i32>, Option<i64>, Option<String>, i64, bool)> = sqlx::query_as(
             "SELECT basis_points, fixed_amount_minor, fixed_currency, minimum_minor, enabled
              FROM platform_admin.application_fees
              WHERE tenant_id = $1 AND enabled",
         )
         .bind(tenant_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
+        scope
+            .rollback()
+            .await
+            .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
         Ok(row.map(
             |(bps, fixed_minor, fixed_currency, minimum_minor, _enabled)| {
                 sanvi_payments::domain::fees::FeeConfiguration {
@@ -2639,7 +2648,9 @@ pub fn build_payments_state(
         std::sync::Arc::new(DomainsLiveAllowList { pool: pool.clone() }),
         std::sync::Arc::new(PaymentsEvents::new()),
         std::sync::Arc::new(ConfiguredApplicationFeePolicy::new(std::sync::Arc::new(
-            PlatformApplicationFeeStore { pool: pool.clone() },
+            PlatformApplicationFeeStore {
+                tx_manager: tx.clone(),
+            },
         ))),
         tax_settings.clone(),
     ));
@@ -2708,7 +2719,9 @@ pub fn build_payments_state(
         tax_settings.clone(),
     ));
     let fee_store: std::sync::Arc<dyn sanvi_payments::domain::ports::ApplicationFeeStore> =
-        std::sync::Arc::new(PlatformApplicationFeeStore { pool: pool.clone() });
+        std::sync::Arc::new(PlatformApplicationFeeStore {
+            tx_manager: tx.clone(),
+        });
 
     sanvi_payments::adapters::http::PaymentsState {
         config: config.clone(),

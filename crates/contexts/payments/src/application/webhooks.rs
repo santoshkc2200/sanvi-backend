@@ -1616,10 +1616,9 @@ impl WebhookDispatcher {
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             return Ok(ApplyOutcome::Skipped);
         };
-        let (outcome, alert) = handle_payout_event(
+        let (outcome, alert, payment_status) = handle_payout_event(
             &mut scope,
             payouts_repo.as_ref(),
-            self.checkouts.as_deref(),
             self.events.as_ref(),
             &connection,
             record,
@@ -1632,6 +1631,17 @@ impl WebhookDispatcher {
             .commit()
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        if let Err(err) = self
+            .reflect_payout_on_payments(&connection, &payment_status)
+            .await
+        {
+            warn!(
+                event = %record.stripe_event_id,
+                payout = %payment_status.external_payout_id,
+                error = %err,
+                "payout could not reflect onto its included payments"
+            );
+        }
         // Post-commit: the tenant's money is stuck. A lost notification is
         // logged, never a failed projection.
         if let Some(alert) = alert
@@ -1651,6 +1661,61 @@ impl WebhookDispatcher {
             );
         }
         Ok(outcome)
+    }
+
+    /// Payout webhooks identify only the payout. Stripe names its included
+    /// payments through the Balance Transactions API, so resolve that
+    /// linkage after the durable payout projection commits.
+    async fn reflect_payout_on_payments(
+        &self,
+        connection: &crate::domain::connection::ProviderConnection,
+        signal: &PayoutPaymentStatusSignal,
+    ) -> Result<(), PaymentsError> {
+        let Some(checkouts) = self.checkouts.as_deref() else {
+            return Ok(());
+        };
+        let provider = self.registry.get(connection.provider).ok_or_else(|| {
+            PaymentsError::ProviderUnavailable(format!(
+                "provider {:?} is not registered for payout reconciliation",
+                connection.provider
+            ))
+        })?;
+        let payment_ids = provider
+            .list_payout_payment_ids(&connection.external_account_id, &signal.external_payout_id)
+            .await?;
+        if payment_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("reflect_payout_on_payments", ACTOR)
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        for external_payment_id in payment_ids {
+            match checkouts
+                .find_payment_by_external_id(&mut scope, connection.tenant_id, &external_payment_id)
+                .await
+            {
+                Ok(Some(mut payment)) => {
+                    payment.payout_status = Some(signal.status);
+                    checkouts.upsert_payment(&mut scope, &payment).await?;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    warn!(
+                        payout = %signal.external_payout_id,
+                        payment = %external_payment_id,
+                        error = %err,
+                        "payout balance transaction could not map onto a payment"
+                    );
+                }
+            }
+        }
+        scope
+            .commit()
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))
     }
 
     async fn apply_tax_event(
@@ -1704,14 +1769,27 @@ struct PayoutFailedSignal {
     amount: Money,
 }
 
+/// Per-payment status reflection resolved post-commit from the provider's
+/// payout reconciliation endpoint.
+struct PayoutPaymentStatusSignal {
+    external_payout_id: String,
+    status: crate::domain::ports::PayoutStatus,
+}
+
 async fn handle_payout_event(
     scope: &mut PlatformScope<'_>,
     payouts: &dyn crate::domain::ports::PayoutRepository,
-    checkouts: Option<&dyn CheckoutLifecycleStore>,
     events: &dyn EventPublisher,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
-) -> Result<(ApplyOutcome, Option<PayoutFailedSignal>), PaymentsError> {
+) -> Result<
+    (
+        ApplyOutcome,
+        Option<PayoutFailedSignal>,
+        PayoutPaymentStatusSignal,
+    ),
+    PaymentsError,
+> {
     let object = record
         .payload
         .pointer("/data/object")
@@ -1771,33 +1849,10 @@ async fn handle_payout_event(
     )?;
     payout.arrival_at = arrival_at.or(existing.as_ref().and_then(|p| p.arrival_at));
     payouts.upsert(scope, &payout).await?;
-
-    // Best-effort per-payment reflection: only payouts that name a source
-    // transaction can map back to one payment row (automatic payouts
-    // aggregate many payments and correctly map to none).
-    if let (Some(checkouts), Some(source_txn)) = (
-        checkouts,
-        object.get("source_transaction").and_then(Value::as_str),
-    ) {
-        match checkouts
-            .find_payment_by_external_id(scope, tenant_id, source_txn)
-            .await
-        {
-            Ok(Some(mut payment)) => {
-                payment.payout_status = Some(status);
-                checkouts.upsert_payment(scope, &payment).await?;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                tracing::warn!(
-                    event = %record.stripe_event_id,
-                    payout = %external_payout_id,
-                    error = %err,
-                    "payout could not reflect onto its source payment"
-                );
-            }
-        }
-    }
+    let payment_status = PayoutPaymentStatusSignal {
+        external_payout_id: external_payout_id.clone(),
+        status,
+    };
 
     // Emit PayoutPaid exactly when this row first lands Paid (redelivery
     // and sibling events converge); failure raises the post-commit alert.
@@ -1817,7 +1872,7 @@ async fn handle_payout_event(
                     )
                     .await?;
             }
-            Ok((ApplyOutcome::Applied, None))
+            Ok((ApplyOutcome::Applied, None, payment_status))
         }
         crate::domain::ports::PayoutStatus::Failed => Ok((
             ApplyOutcome::Applied,
@@ -1825,8 +1880,11 @@ async fn handle_payout_event(
                 external_payout_id,
                 amount,
             }),
+            payment_status,
         )),
-        crate::domain::ports::PayoutStatus::Pending => Ok((ApplyOutcome::Skipped, None)),
+        crate::domain::ports::PayoutStatus::Pending => {
+            Ok((ApplyOutcome::Skipped, None, payment_status))
+        }
     }
 }
 

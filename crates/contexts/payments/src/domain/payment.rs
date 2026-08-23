@@ -72,9 +72,9 @@ pub struct PaymentRecord {
     /// where the tenant sees it — a platform fee the merchant cannot see
     /// is not acceptable, whatever the contract says.
     pub fee: Option<Money>,
-    /// The payout status once a payout event names this payment's
-    /// transaction (`None` until then — most payouts aggregate many
-    /// payments and map to none individually).
+    /// The payout status once payout reconciliation includes this payment's
+    /// balance transaction (`None` until then — manual payouts can map to
+    /// none individually).
     pub payout_status: Option<super::ports::PayoutStatus>,
     pub failure: Option<PaymentFailure>,
     pub captured_at: Option<DateTime<Utc>>,

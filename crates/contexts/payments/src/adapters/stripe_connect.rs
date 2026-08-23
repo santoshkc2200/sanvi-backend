@@ -29,7 +29,10 @@
 //! honestly. Webhook verification is live from here — 09.3's transport
 //! calls it.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -178,6 +181,7 @@ impl StripeConnectProvider {
             }
             request = match (&json, form) {
                 (Some(body), _) => request.json(body),
+                (None, Some(params)) if method == reqwest::Method::GET => request.query(params),
                 (None, Some(form)) => request.form(form),
                 _ => request,
             };
@@ -491,6 +495,19 @@ impl StripeConnectProvider {
             status,
             arrival_at,
         })
+    }
+
+    /// The balance-transaction list can expand a charge source. Prefer its
+    /// PaymentIntent id because that is the payments read model's canonical
+    /// provider id; retain a Charge id as a compatibility fallback.
+    fn payout_payment_id(transaction: &Value) -> Option<String> {
+        let source = transaction.get("source")?;
+        let id = source
+            .get("payment_intent")
+            .and_then(Value::as_str)
+            .or_else(|| source.get("id").and_then(Value::as_str))
+            .or_else(|| source.as_str())?;
+        (id.starts_with("pi_") || id.starts_with("ch_")).then(|| id.to_string())
     }
 
     /// Map a Refund response onto the provider-agnostic shape.
@@ -935,6 +952,71 @@ impl PaymentProviderPort for StripeConnectProvider {
             .collect::<Result<Vec<_>, _>>()
     }
 
+    /// Automatic payouts expose their included charge transactions through
+    /// `GET /v1/balance_transactions?payout=po_…`; a Payout object itself
+    /// has no per-payment source field. Expand each transaction's source to
+    /// obtain its PaymentIntent, then page until every included transaction
+    /// has been examined.
+    async fn list_payout_payment_ids(
+        &self,
+        external_account_id: &str,
+        external_payout_id: &str,
+    ) -> Result<Vec<String>, PaymentsError> {
+        if !external_payout_id.starts_with("po_") {
+            return Err(PaymentsError::InvalidConnection(
+                "external_payout_id must be a provider payout id".to_string(),
+            ));
+        }
+
+        let mut payment_ids = BTreeSet::new();
+        let mut starting_after: Option<String> = None;
+        loop {
+            let mut params = vec![
+                ("payout", external_payout_id.to_string()),
+                ("limit", "100".to_string()),
+                ("expand[]", "data.source".to_string()),
+            ];
+            if let Some(cursor) = &starting_after {
+                params.push(("starting_after", cursor.clone()));
+            }
+            let (body, _) = self
+                .send_on_account(
+                    "payout_balance_transactions_list",
+                    reqwest::Method::GET,
+                    "/v1/balance_transactions",
+                    None,
+                    None,
+                    Some(&params),
+                    Some(external_account_id),
+                )
+                .await?;
+            let data = body
+                .get("data")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for transaction in &data {
+                if let Some(id) = Self::payout_payment_id(transaction) {
+                    payment_ids.insert(id);
+                }
+            }
+            let has_more = body
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let next = data
+                .last()
+                .and_then(|transaction| transaction.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if !has_more || next.is_none() {
+                break;
+            }
+            starting_after = next;
+        }
+        Ok(payment_ids.into_iter().collect())
+    }
+
     /// The connected account's tax compliance, read **on the account**:
     /// `GET /v1/tax/settings` (its `status`) plus `GET
     /// /v1/tax/registrations` (count of active registrations). Both calls
@@ -1058,6 +1140,13 @@ mod tests {
 
         fn form(&self) -> Vec<(String, String)> {
             serde_urlencoded::from_bytes(&self.body).unwrap_or_default()
+        }
+
+        fn query(&self) -> Vec<(String, String)> {
+            self.path
+                .split_once('?')
+                .map(|(_, query)| serde_urlencoded::from_str(query).unwrap_or_default())
+                .unwrap_or_default()
         }
     }
 
@@ -1738,7 +1827,18 @@ mod tests {
 
         let call = &mock.recorded()[0];
         assert_eq!(call.method, "GET");
-        assert_eq!(call.path, "/v1/payouts");
+        assert_eq!(
+            call.path.split_once('?').map(|(path, _)| path),
+            Some("/v1/payouts")
+        );
+        assert!(
+            call.query()
+                .contains(&("limit".to_string(), "100".to_string()))
+        );
+        assert!(
+            call.body.is_empty(),
+            "GET filters belong in the URL, not a body"
+        );
         assert_eq!(
             call.stripe_account.as_deref(),
             Some("acct_test_123"),
@@ -1758,6 +1858,74 @@ mod tests {
         assert_eq!(payouts[1].status, PayoutStatus::Pending);
         // …and failed stays failed (its webhook alerts separately).
         assert_eq!(payouts[2].status, PayoutStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn payout_payment_ids_reconcile_through_balance_transactions() {
+        let mock = MockStripe::start(vec![
+            (
+                200,
+                serde_json::json!({
+                    "object": "list",
+                    "has_more": true,
+                    "data": [{
+                        "id": "txn_page_1",
+                        "object": "balance_transaction",
+                        "source": {
+                            "id": "ch_paid_1",
+                            "object": "charge",
+                            "payment_intent": "pi_paid_1"
+                        }
+                    }]
+                }),
+            ),
+            (
+                200,
+                serde_json::json!({
+                    "object": "list",
+                    "has_more": false,
+                    "data": [{
+                        "id": "txn_page_2",
+                        "object": "balance_transaction",
+                        "source": "ch_legacy_1"
+                    }]
+                }),
+            ),
+        ])
+        .await;
+        let provider = provider(mock.addr);
+
+        let ids =
+            PaymentProviderPort::list_payout_payment_ids(&provider, "acct_test_123", "po_test_123")
+                .await
+                .expect("payout payment ids");
+        assert_eq!(ids, vec!["ch_legacy_1", "pi_paid_1"]);
+
+        let calls = mock.recorded();
+        assert_eq!(calls.len(), 2);
+        for call in &calls {
+            assert_eq!(
+                call.path.split_once('?').map(|(path, _)| path),
+                Some("/v1/balance_transactions")
+            );
+            assert_eq!(call.stripe_account.as_deref(), Some("acct_test_123"));
+            assert!(call.body.is_empty(), "GET filters belong in the URL");
+        }
+        assert!(
+            calls[0]
+                .query()
+                .contains(&("payout".to_string(), "po_test_123".to_string()))
+        );
+        assert!(
+            calls[0]
+                .query()
+                .contains(&("expand[]".to_string(), "data.source".to_string()))
+        );
+        assert!(
+            calls[1]
+                .query()
+                .contains(&("starting_after".to_string(), "txn_page_1".to_string()))
+        );
     }
 
     #[tokio::test]
@@ -1789,12 +1957,19 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].path, "/v1/tax/settings");
         assert_eq!(calls[0].stripe_account.as_deref(), Some("acct_test_123"));
-        assert_eq!(calls[1].path, "/v1/tax/registrations");
+        assert_eq!(
+            calls[1].path.split_once('?').map(|(path, _)| path),
+            Some("/v1/tax/registrations")
+        );
         assert_eq!(calls[1].stripe_account.as_deref(), Some("acct_test_123"));
-        let form = calls[1].form();
+        let query = calls[1].query();
         assert!(
-            form.contains(&("status".to_string(), "active".to_string())),
+            query.contains(&("status".to_string(), "active".to_string())),
             "only active registrations count toward the preflight"
+        );
+        assert!(
+            calls[1].body.is_empty(),
+            "GET filters must not become a request body"
         );
     }
 

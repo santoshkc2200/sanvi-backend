@@ -4021,26 +4021,21 @@ fn payout_event(
     payout_id: &str,
     amount: i64,
     currency: &str,
-    source_transaction: Option<&str>,
     created: i64,
 ) -> serde_json::Value {
-    let mut object = serde_json::json!({
-        "id": payout_id,
-        "object": "payout",
-        "amount": amount,
-        "currency": currency,
-        "status": if event_type == "payout.paid" { "paid" } else { "failed" },
-        "arrival_date": epoch(60),
-    });
-    if let Some(source) = source_transaction {
-        object["source_transaction"] = serde_json::json!(source);
-    }
     serde_json::json!({
         "id": event_id,
         "type": event_type,
         "created": created,
         "account": account,
-        "data": {"object": object}
+        "data": {"object": {
+            "id": payout_id,
+            "object": "payout",
+            "amount": amount,
+            "currency": currency,
+            "status": if event_type == "payout.paid" { "paid" } else { "failed" },
+            "arrival_date": epoch(60),
+        }}
     })
 }
 
@@ -4065,7 +4060,6 @@ async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_al
                 "po_paid_9",
                 150_000,
                 "jpy",
-                None,
                 epoch(10),
             ))
             .await
@@ -4085,7 +4079,6 @@ async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_al
                 "po_failed_9",
                 90_000,
                 "jpy",
-                None,
                 epoch(20),
             ))
             .await
@@ -4117,66 +4110,6 @@ async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_al
     fixture.dispatcher.dispatch(10).await.unwrap();
     assert_eq!(fixture.outbox_events("payments.payout_paid").await, 1);
     assert_eq!(fixture.notifier.payout_failure_count(), 1);
-}
-
-#[tokio::test]
-async fn a_payout_that_names_its_source_payment_updates_the_payout_status_column() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
-    let tenant_id = seed_tenant(&pool, "payout-map").await;
-    let fixture = webhook_fixture(&pool).await;
-
-    activate_connection(&pool, tenant_id, &fixture.provider).await;
-    let account = live_account_id(&fixture, tenant_id).await;
-
-    // One stored payment the payout will name via source_transaction.
-    let checkouts = SqlxCheckoutRepository::new();
-    {
-        let payment = sanvi_payments::PaymentRecord::new(
-            Uuid::now_v7(),
-            tenant_id,
-            None,
-            "pi_src_1".to_string(),
-            Money::new(2000, "JPY").unwrap(),
-        )
-        .unwrap();
-        let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
-        checkouts
-            .upsert_payment(&mut scope, &payment)
-            .await
-            .unwrap();
-        scope.commit().await.unwrap();
-    }
-
-    assert!(
-        fixture
-            .deliver(&payout_event(
-                "evt_po_map",
-                "payout.failed",
-                &account,
-                "po_src_1",
-                2000,
-                "jpy",
-                Some("pi_src_1"),
-                epoch(30),
-            ))
-            .await
-            .unwrap()
-    );
-    fixture.dispatcher.dispatch(10).await.unwrap();
-
-    // The payment read model's payout-status column now says failed.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
-    let status: Option<String> = sqlx::query_scalar(
-        "SELECT payout_status FROM payments.payments WHERE external_payment_id = 'pi_src_1'",
-    )
-    .fetch_one(&mut **scope.tx_mut().as_inner())
-    .await
-    .unwrap();
-    scope.rollback().await.unwrap();
-    assert_eq!(status.as_deref(), Some("failed"));
 }
 
 /// Enable automatic tax through the use case against the fixture's fake.

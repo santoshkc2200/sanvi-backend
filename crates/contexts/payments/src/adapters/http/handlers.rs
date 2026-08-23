@@ -967,7 +967,7 @@ pub struct PaymentView {
     /// acceptable, whatever the contract says.
     pub fee_minor: Option<i64>,
     pub fee_currency: Option<String>,
-    /// Payout status once a payout event names this payment's transaction
+    /// Payout status once payout reconciliation includes this payment
     /// (`pending` | `paid` | `failed`; null until then).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payout_status: Option<String>,

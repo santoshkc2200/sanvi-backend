@@ -48,7 +48,8 @@ SELECT platform.enable_tenant_rls('payments', 'payouts');
 
 -- ---------------------------------------------------------------------------
 -- The payout status column on the payment read model (the TASK-006 list's
--- "payout status"): NULL until a payout event maps to this payment.
+-- "payout status"): NULL until payout reconciliation includes this
+-- payment's balance transaction.
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE payments.payments ADD COLUMN payout_status text;

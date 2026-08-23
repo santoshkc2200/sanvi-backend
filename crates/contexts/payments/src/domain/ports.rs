@@ -259,6 +259,17 @@ pub trait PaymentProviderPort: Send + Sync {
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<ProviderPayout>, PaymentsError>;
 
+    /// Payment ids whose balance transactions settled in one automatic
+    /// payout. Providers without this reconciliation surface return no
+    /// links; their payout projection remains available on its own.
+    async fn list_payout_payment_ids(
+        &self,
+        _external_account_id: &str,
+        _external_payout_id: &str,
+    ) -> Result<Vec<String>, PaymentsError> {
+        Ok(Vec::new())
+    }
+
     /// The connected account's tax compliance: its tax-settings `status`
     /// plus its count of *active* registrations. Read **on the account**
     /// — registrations belong to the liable entity. Default: not shipped
