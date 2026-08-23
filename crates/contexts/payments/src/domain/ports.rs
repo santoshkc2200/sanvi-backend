@@ -832,6 +832,11 @@ pub trait DisputeRepository: Send + Sync {
         connection_id: Uuid,
     ) -> Result<i64, PaymentsError>;
 
+    /// Authoritative platform-wide count of disputes that still need
+    /// action. The worker resets the process-local Prometheus gauge from
+    /// this projection after a restart.
+    async fn count_open(&self, scope: &mut PlatformScope<'_>) -> Result<i64, PaymentsError>;
+
     /// Insert-or-update by `(tenant_id, external_dispute_id)` — the
     /// unique index is the dedupe that makes every handler idempotent.
     async fn upsert(

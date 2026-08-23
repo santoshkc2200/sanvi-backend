@@ -1111,10 +1111,12 @@ impl PaymentRepository for SqlxPaymentRepository {
         connection_id: Uuid,
     ) -> Result<i64, PaymentsError> {
         let (count,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM payments.payments p
-             JOIN payments.checkouts c ON c.id = p.checkout_id
+            "SELECT count(*) FROM payments.checkouts c
+             LEFT JOIN payments.payments p ON p.checkout_id = c.id
              WHERE c.tenant_id = $1 AND c.connection_id = $2
-               AND p.status IN ('requires_action', 'processing')",
+               AND ((c.status = 'open'
+                     AND (p.id IS NULL OR p.status NOT IN ('succeeded', 'canceled')))
+                    OR p.status IN ('requires_action', 'processing'))",
         )
         .bind(tenant_id)
         .bind(connection_id)
@@ -1676,6 +1678,18 @@ impl DisputeRepository for SqlxDisputeRepository {
         )
         .bind(tenant_id)
         .bind(connection_id)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(count)
+    }
+
+    async fn count_open(&self, scope: &mut PlatformScope<'_>) -> Result<i64, PaymentsError> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM payments.disputes
+             WHERE status IN ('needs_response', 'under_review',
+                              'warning_needs_response', 'warning_under_review')",
+        )
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;

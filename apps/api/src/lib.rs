@@ -2965,9 +2965,13 @@ pub fn build_app(
         Some(_) => tenant_scope.configure(domains_routes::domains_tenant_scope_routes),
         None => tenant_scope,
     };
-    let tenant_scope = match &payments {
-        Some(_) => tenant_scope.configure(payments_routes::payments_tenant_scope_routes),
-        None => tenant_scope,
+    let tenant_scope = if config.features.payments {
+        match &payments {
+            Some(_) => tenant_scope.configure(payments_routes::payments_tenant_scope_routes),
+            None => tenant_scope,
+        }
+    } else {
+        tenant_scope
     };
 
     let app = App::new()
@@ -3060,11 +3064,9 @@ pub fn build_app(
         None => app,
     };
 
-    // Phase-09 gate: the payments context's tenant routes mounted above;
-    // all that remains is the state and the internal Connect webhook
-    // receiver (signature-authenticated, `/internal` sits outside the
-    // authn middleware by design). With the flag off (the default) no
-    // payments route exists at all.
+    // Phase-09: tenant routes remain behind `features.payments`, while the
+    // signature-authenticated internal webhook receiver is always wired.
+    // `/internal` sits outside the authentication middleware by design.
     let app = match payments {
         Some(state) => app
             .app_data(web::Data::new(state))

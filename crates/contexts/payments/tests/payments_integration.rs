@@ -39,6 +39,7 @@ use sanvi_payments::domain::provider::{ConnectionStatus, ProviderKind};
 use sanvi_payments::domain::{Money, ProviderConnection, ProviderConnectionRepository};
 use sanvi_payments::routes::payments_tenant_scope_routes;
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
+use sanvi_privacy::domain::{DataClass, EraseMode, PersonalDataProvider, SubjectRef};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
@@ -232,6 +233,38 @@ async fn migration_round_trips_on_a_seeded_database() {
     .await
     .unwrap();
     assert!(exists);
+}
+
+#[tokio::test]
+async fn retention_override_rollback_preserves_an_operator_owned_rule() {
+    let (port, _node) = start_postgres().await;
+    let pool = migrate(port).await;
+
+    // Simulate an operator's pre-existing rule winning the forward
+    // migration's ON CONFLICT. The reverse must not delete that rule.
+    sqlx::query(
+        "UPDATE privacy.retention_rules
+         SET updated_by = NULL
+         WHERE data_class = 'transaction_record'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    Migrator::new(migrations_dir())
+        .undo(&pool, 20_260_824_000_000)
+        .await
+        .unwrap();
+    let retained: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM privacy.retention_rules
+             WHERE data_class = 'transaction_record'
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(retained, "rollback must preserve an operator-owned rule");
 }
 
 // ---------------------------------------------------------------------------
@@ -4045,7 +4078,8 @@ async fn the_payments_list_serves_every_filter_and_walks_pages_without_loss_or_d
 // 09.6: payouts, tax liability and the application fee.
 // ---------------------------------------------------------------------------
 
-/// A payout event envelope (`payout.paid` / `payout.failed`).
+/// A payout event envelope (`payout.created` / `payout.updated` /
+/// `payout.paid` / `payout.failed`).
 fn payout_event(
     event_id: &str,
     event_type: &str,
@@ -4065,10 +4099,56 @@ fn payout_event(
             "object": "payout",
             "amount": amount,
             "currency": currency,
-            "status": if event_type == "payout.paid" { "paid" } else { "failed" },
+            "status": match event_type {
+                "payout.created" | "payout.updated" => "pending",
+                "payout.paid" => "paid",
+                _ => "failed",
+            },
             "arrival_date": epoch(60),
         }}
     })
+}
+
+#[tokio::test]
+async fn a_pending_payout_webhook_blocks_disconnect() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "pending-payout-disconnect").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = activate_connection(&pool, tenant_id, &fixture.provider).await;
+    let account = live_account_id(&fixture, tenant_id).await;
+
+    fixture
+        .deliver(&payout_event(
+            "evt_po_pending",
+            "payout.created",
+            &account,
+            "po_pending_9",
+            90_000,
+            "jpy",
+            epoch(10),
+        ))
+        .await
+        .unwrap();
+    fixture.dispatcher.dispatch(10).await.unwrap();
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::delete()
+            .uri(&format!(
+                "/api/v1/tenant/payments/connections/{}",
+                connection.id
+            ))
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(body["blockers"][0]["code"], "pending_payouts");
 }
 
 #[tokio::test]
@@ -4439,6 +4519,24 @@ async fn seed_payment(
     (checkout_id, payment_id)
 }
 
+/// Seed the state produced after checkout creation but before any payment
+/// webhook has arrived.
+async fn seed_open_checkout(pool: &sqlx::PgPool, tenant_id: Uuid, connection_id: Uuid) {
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    sqlx::query(
+        "INSERT INTO payments.checkouts (id, tenant_id, connection_id, reference, amount_minor, currency, status)
+         VALUES ($1, $2, $3, 'order-open', 2000, 'JPY', 'open')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(tenant_id)
+    .bind(connection_id)
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+}
+
 #[tokio::test]
 async fn disconnect_refuses_each_blocker_and_names_it_in_the_response() {
     /// Which money guard to exercise.
@@ -4461,7 +4559,7 @@ async fn disconnect_refuses_each_blocker_and_names_it_in_the_response() {
 
         match seed {
             Seed::InFlight => {
-                seed_payment(&pool, tenant_id, connection.id, "pi_flight", "processing").await;
+                seed_open_checkout(&pool, tenant_id, connection.id).await;
             }
             Seed::Dispute => {
                 let (_, payment_id) =
@@ -4533,6 +4631,62 @@ async fn disconnect_refuses_each_blocker_and_names_it_in_the_response() {
     run_case("in-flight payment", Seed::InFlight, "in_flight_payments").await;
     run_case("open dispute", Seed::Dispute, "open_disputes").await;
     run_case("pending payout", Seed::Payout, "pending_payouts").await;
+}
+
+#[tokio::test]
+async fn privacy_erasure_scrubs_customer_ref_but_retains_transaction_record() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "payments-privacy").await;
+    let provider = FakeProvider::new();
+    let connection = activate_connection(&pool, tenant_id, &provider).await;
+    let (checkout_id, _) =
+        seed_payment(&pool, tenant_id, connection.id, "pi_privacy", "succeeded").await;
+
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    sqlx::query(
+        "UPDATE payments.checkouts
+         SET customer_ref = '{\"buyer\": {\"id\": \"payer-123\"}}'::jsonb
+         WHERE id = $1",
+    )
+    .bind(checkout_id)
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+
+    let privacy =
+        sanvi_payments::adapters::PaymentsPrivacyProvider::new(TxManager::new(pool.clone()));
+    let subject = SubjectRef::end_user(tenant_id, "payer-123");
+    let bundle = privacy.collect(&subject).await.unwrap();
+    assert_eq!(bundle.entries.len(), 1);
+    assert_eq!(bundle.entries[0].data_class, DataClass::TransactionRecord);
+    assert_eq!(
+        bundle.entries[0].value["checkout_id"],
+        checkout_id.to_string()
+    );
+
+    let report = privacy.erase(&subject, EraseMode::Full).await.unwrap();
+    assert_eq!(report.anonymised, 1);
+    assert!(
+        report
+            .retained
+            .iter()
+            .any(|item| item.data_class == DataClass::TransactionRecord)
+    );
+
+    let verify_tx = TxManager::new(pool.clone());
+    let mut scope = verify_tx.begin_for(tenant_id).await.unwrap();
+    let customer_ref: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT customer_ref FROM payments.checkouts WHERE id = $1")
+            .bind(checkout_id)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    assert!(customer_ref.is_none(), "customer reference must be erased");
 }
 
 #[tokio::test]

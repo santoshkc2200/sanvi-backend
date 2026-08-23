@@ -1367,7 +1367,9 @@ async fn main() -> ExitCode {
             privacy_signals.clone(),
             privacy_directives.clone(),
         )),
-        std::sync::Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new()),
+        std::sync::Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
+            privacy_tx.clone(),
+        )),
     ];
 
     let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(
@@ -1758,11 +1760,13 @@ async fn main() -> ExitCode {
                 let tx = payments_tx.clone();
                 let webhooks = payments_webhooks.clone();
                 let lifecycle = payments_lifecycle.clone();
+                let disputes = payments_disputes.clone();
                 let metrics = payments_metrics.clone();
                 move || {
                     let tx = tx.clone();
                     let webhooks = webhooks.clone();
                     let lifecycle = lifecycle.clone();
+                    let disputes = disputes.clone();
                     let metrics = metrics.clone();
                     Box::pin(async move {
                         let mut scope = tx
@@ -1775,6 +1779,9 @@ async fn main() -> ExitCode {
                         metrics
                             .webhook_dead_letter
                             .set(webhooks.dead_letter_count(&mut scope).await? as i64);
+                        metrics
+                            .dispute_open
+                            .set(disputes.count_open(&mut scope).await?);
                         metrics.connection_status.reset();
                         for (status, count) in lifecycle.count_by_status(&mut scope).await? {
                             metrics

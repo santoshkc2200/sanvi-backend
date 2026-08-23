@@ -600,11 +600,10 @@ impl WebhookDispatcher {
             return Ok(ApplyOutcome::Skipped);
         };
 
-        let outcome = handle_payment_event(
+        let (outcome, committed_metrics) = handle_payment_event(
             &mut scope,
             checkouts,
             self.events.as_ref(),
-            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -616,6 +615,7 @@ impl WebhookDispatcher {
             .commit()
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        record_committed_metrics(self.metrics.as_ref(), committed_metrics);
         Ok(outcome)
     }
 
@@ -676,12 +676,11 @@ impl WebhookDispatcher {
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             return Ok(ApplyOutcome::Skipped);
         };
-        let outcome = handle_refund_event(
+        let (outcome, committed_metrics) = handle_refund_event(
             &mut scope,
             checkouts.as_ref(),
             refunds_repo.as_ref(),
             self.events.as_ref(),
-            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -693,6 +692,7 @@ impl WebhookDispatcher {
             .commit()
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        record_committed_metrics(self.metrics.as_ref(), committed_metrics);
         Ok(outcome)
     }
 
@@ -754,12 +754,11 @@ impl WebhookDispatcher {
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             return Ok(ApplyOutcome::Skipped);
         };
-        let (outcome, opened) = handle_dispute_event(
+        let (outcome, opened, committed_metrics) = handle_dispute_event(
             &mut scope,
             checkouts.as_ref(),
             disputes_repo.as_ref(),
             self.events.as_ref(),
-            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -771,6 +770,7 @@ impl WebhookDispatcher {
             .commit()
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        record_committed_metrics(self.metrics.as_ref(), committed_metrics);
         if let Some(signal) = opened {
             // Best-effort, post-commit: a notification failure is logged,
             // never a failed (or retried) dispute projection.
@@ -833,6 +833,74 @@ enum ApplyOutcome {
     Skipped,
 }
 
+/// Metrics are emitted only after their projection transaction commits.
+/// Prometheus counters cannot be rolled back, so incrementing inside the
+/// handler would over-count a webhook retried after a later write failed.
+#[derive(Debug)]
+enum CommittedMetric {
+    PaymentSucceeded,
+    PaymentFailed(String),
+    RefundIssued,
+    PayoutPaid,
+    DisputeOpenDelta(i64),
+    PlatformBalanceMovement {
+        event_id: String,
+        account_id: String,
+    },
+}
+
+fn record_committed_metrics(
+    metrics: Option<&PaymentsMetrics>,
+    metrics_to_record: Vec<CommittedMetric>,
+) {
+    for metric in metrics_to_record {
+        match metric {
+            CommittedMetric::PaymentSucceeded => {
+                if let Some(metrics) = metrics {
+                    metrics.payment_succeeded.inc();
+                }
+            }
+            CommittedMetric::PaymentFailed(code) => {
+                if let Some(metrics) = metrics {
+                    metrics.payment_failures.with_label_values(&[&code]).inc();
+                }
+            }
+            CommittedMetric::RefundIssued => {
+                if let Some(metrics) = metrics {
+                    metrics.refunds_issued.inc();
+                }
+            }
+            CommittedMetric::PayoutPaid => {
+                if let Some(metrics) = metrics {
+                    metrics.payouts_paid.inc();
+                }
+            }
+            CommittedMetric::DisputeOpenDelta(delta) => {
+                if let Some(metrics) = metrics {
+                    if delta > 0 {
+                        metrics.dispute_open.inc();
+                    } else if delta < 0 {
+                        metrics.dispute_open.dec();
+                    }
+                }
+            }
+            CommittedMetric::PlatformBalanceMovement {
+                event_id,
+                account_id,
+            } => {
+                if let Some(metrics) = metrics {
+                    metrics.platform_balance_movements.inc();
+                }
+                error!(
+                    event = %event_id,
+                    account = %account_id,
+                    "PLATFORM BALANCE MOVEMENT on a tenant transaction — the never-merchant-of-record invariant is violated"
+                );
+            }
+        }
+    }
+}
+
 impl ApplyOutcome {
     fn label(self) -> &'static str {
         match self {
@@ -882,10 +950,14 @@ fn is_dispute_event(event_type: &str) -> bool {
     )
 }
 
-/// 09.6 payout events. `payout.paid` confirms the tenant's money arrived;
-/// `payout.failed` means it is stuck — an alert, not just a row.
+/// Payout creation/updates populate the pending projection used by the
+/// disconnect guard. `payout.paid` confirms arrival; `payout.failed` means
+/// the tenant's money is stuck and raises an alert.
 fn is_payout_event(event_type: &str) -> bool {
-    matches!(event_type, "payout.paid" | "payout.failed")
+    matches!(
+        event_type,
+        "payout.created" | "payout.updated" | "payout.paid" | "payout.failed"
+    )
 }
 
 /// Tax-related account events: the connected account's tax configuration
@@ -922,10 +994,9 @@ async fn handle_payment_event(
     scope: &mut PlatformScope<'_>,
     checkouts: Arc<dyn CheckoutLifecycleStore>,
     events: &dyn EventPublisher,
-    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
-) -> Result<ApplyOutcome, PaymentsError> {
+) -> Result<(ApplyOutcome, Vec<CommittedMetric>), PaymentsError> {
     let object = record
         .payload
         .pointer("/data/object")
@@ -939,16 +1010,13 @@ async fn handle_payment_event(
     // money, so a fee/transfer shape on a tenant transaction means Sanvi
     // has become a party to the flow. Count it and page loudly — the
     // event is still recorded either way.
-    if let Some(metrics) = metrics
-        && platform_balance_movement(&object)
-    {
-        metrics.platform_balance_movements.inc();
-        error!(
-            event = %record.stripe_event_id,
-            account = %connection.external_account_id,
-            "PLATFORM BALANCE MOVEMENT on a tenant transaction — the never-merchant-of-record invariant is violated"
-        );
-    }
+    let mut committed_metrics = platform_balance_movement(&object)
+        .then_some(CommittedMetric::PlatformBalanceMovement {
+            event_id: record.stripe_event_id.clone(),
+            account_id: connection.external_account_id.clone(),
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
 
     match record.event_type.as_str() {
         "checkout.session.completed" => {
@@ -958,7 +1026,7 @@ async fn handle_payment_event(
                     event = %record.stripe_event_id,
                     "checkout.session.completed for an unknown checkout; acknowledged"
                 );
-                return Ok(ApplyOutcome::Skipped);
+                return Ok((ApplyOutcome::Skipped, committed_metrics));
             };
             let amount = money_from(&object, "amount_total")?;
             checkout.complete(now)?;
@@ -985,9 +1053,7 @@ async fn handle_payment_event(
                 // Sibling events converge here: the outbox event fires on
                 // the *transition*, not on every delivery.
                 if changed {
-                    if let Some(metrics) = metrics {
-                        metrics.payment_succeeded.inc();
-                    }
+                    committed_metrics.push(CommittedMetric::PaymentSucceeded);
                     events
                         .publish(
                             scope,
@@ -1002,7 +1068,7 @@ async fn handle_payment_event(
                         .await?;
                 }
             }
-            Ok(ApplyOutcome::Applied)
+            Ok((ApplyOutcome::Applied, committed_metrics))
         }
         "checkout.session.expired" => {
             let Some(mut checkout) = locate_checkout(scope, checkouts.as_ref(), &object).await?
@@ -1011,11 +1077,11 @@ async fn handle_payment_event(
                     event = %record.stripe_event_id,
                     "checkout.session.expired for an unknown checkout; acknowledged"
                 );
-                return Ok(ApplyOutcome::Skipped);
+                return Ok((ApplyOutcome::Skipped, committed_metrics));
             };
             checkout.expire()?;
             checkouts.save(scope, &checkout).await?;
-            Ok(ApplyOutcome::Applied)
+            Ok((ApplyOutcome::Applied, committed_metrics))
         }
         "payment_intent.succeeded"
         | "payment_intent.payment_failed"
@@ -1084,12 +1150,7 @@ async fn handle_payment_event(
                         .failure
                         .map(|f| f.code)
                         .unwrap_or_else(|| "unknown".to_string());
-                    if let Some(metrics) = metrics {
-                        metrics
-                            .payment_failures
-                            .with_label_values(&[&failure_code])
-                            .inc();
-                    }
+                    committed_metrics.push(CommittedMetric::PaymentFailed(failure_code.clone()));
                     events
                         .publish(
                             scope,
@@ -1104,9 +1165,7 @@ async fn handle_payment_event(
                         .await?;
                 }
                 (PaymentStatus::Succeeded, true) => {
-                    if let Some(metrics) = metrics {
-                        metrics.payment_succeeded.inc();
-                    }
+                    committed_metrics.push(CommittedMetric::PaymentSucceeded);
                     events
                         .publish(
                             scope,
@@ -1122,9 +1181,9 @@ async fn handle_payment_event(
                 }
                 _ => {}
             }
-            Ok(ApplyOutcome::Applied)
+            Ok((ApplyOutcome::Applied, committed_metrics))
         }
-        _ => Ok(ApplyOutcome::Skipped),
+        _ => Ok((ApplyOutcome::Skipped, committed_metrics)),
     }
 }
 
@@ -1252,9 +1311,10 @@ fn platform_balance_movement(object: &Value) -> bool {
         .get("application_fee_amount")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    let transfer = object
-        .as_object()
-        .is_some_and(|map| map.keys().any(|key| key.starts_with("transfer_")));
+    let transfer = object.as_object().is_some_and(|map| {
+        map.iter()
+            .any(|(key, value)| key.starts_with("transfer_") && !value.is_null())
+    });
     fee > 0 || transfer
 }
 
@@ -1263,10 +1323,9 @@ async fn handle_refund_event(
     checkouts: &dyn CheckoutLifecycleStore,
     refunds: &dyn crate::domain::ports::RefundRepository,
     events: &dyn EventPublisher,
-    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
-) -> Result<ApplyOutcome, PaymentsError> {
+) -> Result<(ApplyOutcome, Vec<CommittedMetric>), PaymentsError> {
     let object = record
         .payload
         .pointer("/data/object")
@@ -1288,9 +1347,10 @@ async fn handle_refund_event(
         vec![object.clone()]
     };
     if refunds_data.is_empty() {
-        return Ok(ApplyOutcome::Skipped);
+        return Ok((ApplyOutcome::Skipped, Vec::new()));
     }
     let mut any = false;
+    let mut committed_metrics = Vec::new();
     for refund_obj in refunds_data {
         let external_refund_id = refund_obj
             .get("id")
@@ -1427,9 +1487,7 @@ async fn handle_refund_event(
                 .as_ref()
                 .is_none_or(|r| r.status != RefundStatus::Succeeded);
         if transitioned {
-            if let Some(metrics) = metrics {
-                metrics.refunds_issued.inc();
-            }
+            committed_metrics.push(CommittedMetric::RefundIssued);
             events
                 .publish(
                     scope,
@@ -1446,11 +1504,14 @@ async fn handle_refund_event(
         }
         any = true;
     }
-    Ok(if any {
-        ApplyOutcome::Applied
-    } else {
-        ApplyOutcome::Skipped
-    })
+    Ok((
+        if any {
+            ApplyOutcome::Applied
+        } else {
+            ApplyOutcome::Skipped
+        },
+        committed_metrics,
+    ))
 }
 
 async fn handle_dispute_event(
@@ -1458,10 +1519,16 @@ async fn handle_dispute_event(
     checkouts: &dyn CheckoutLifecycleStore,
     disputes: &dyn crate::domain::ports::DisputeRepository,
     events: &dyn EventPublisher,
-    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
-) -> Result<(ApplyOutcome, Option<DisputeOpenedSignal>), PaymentsError> {
+) -> Result<
+    (
+        ApplyOutcome,
+        Option<DisputeOpenedSignal>,
+        Vec<CommittedMetric>,
+    ),
+    PaymentsError,
+> {
     let object = record
         .payload
         .pointer("/data/object")
@@ -1546,7 +1613,7 @@ async fn handle_dispute_event(
             dispute = %external_dispute_id,
             "dispute has no routable charge/payment id; skipped"
         );
-        return Ok((ApplyOutcome::Skipped, None));
+        return Ok((ApplyOutcome::Skipped, None, Vec::new()));
     }
     let mut payment = None;
     for candidate in &candidates {
@@ -1564,7 +1631,7 @@ async fn handle_dispute_event(
             candidates = %candidates.join(","),
             "dispute for unknown payment; skipped"
         );
-        return Ok((ApplyOutcome::Skipped, None));
+        return Ok((ApplyOutcome::Skipped, None, Vec::new()));
     };
     let created = object
         .get("created")
@@ -1596,13 +1663,11 @@ async fn handle_dispute_event(
     disputes.upsert(scope, &dispute).await?;
     // The open gauge tracks transitions, not rows: +1 when a dispute
     // enters an open state it was not in before, −1 when it leaves one.
-    if let Some(metrics) = metrics {
-        match (was_open, dispute.status.is_open()) {
-            (false, true) => metrics.dispute_open.inc(),
-            (true, false) => metrics.dispute_open.dec(),
-            _ => {}
-        }
-    }
+    let committed_metrics = match (was_open, dispute.status.is_open()) {
+        (false, true) => vec![CommittedMetric::DisputeOpenDelta(1)],
+        (true, false) => vec![CommittedMetric::DisputeOpenDelta(-1)],
+        _ => Vec::new(),
+    };
     let mut signal = None;
     if is_new {
         events
@@ -1624,7 +1689,7 @@ async fn handle_dispute_event(
             due_by,
         });
     }
-    Ok((ApplyOutcome::Applied, signal))
+    Ok((ApplyOutcome::Applied, signal, committed_metrics))
 }
 
 /// What `apply_dispute_event` needs to notify about once the transaction
@@ -1696,11 +1761,10 @@ impl WebhookDispatcher {
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             return Ok(ApplyOutcome::Skipped);
         };
-        let (outcome, alert, payment_status) = handle_payout_event(
+        let (outcome, alert, payment_status, committed_metrics) = handle_payout_event(
             &mut scope,
             payouts_repo.as_ref(),
             self.events.as_ref(),
-            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -1712,6 +1776,7 @@ impl WebhookDispatcher {
             .commit()
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        record_committed_metrics(self.metrics.as_ref(), committed_metrics);
         if let Err(err) = self
             .reflect_payout_on_payments(&connection, &payment_status)
             .await
@@ -1865,7 +1930,6 @@ async fn handle_payout_event(
     scope: &mut PlatformScope<'_>,
     payouts: &dyn crate::domain::ports::PayoutRepository,
     events: &dyn EventPublisher,
-    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<
@@ -1873,6 +1937,7 @@ async fn handle_payout_event(
         ApplyOutcome,
         Option<PayoutFailedSignal>,
         PayoutPaymentStatusSignal,
+        Vec<CommittedMetric>,
     ),
     PaymentsError,
 > {
@@ -1908,10 +1973,15 @@ async fn handle_payout_event(
             PaymentsError::Storage(format!("payout {} carries no currency", external_payout_id))
         })?;
     let amount = Money::new(amount_minor, currency)?;
-    let status = match record.event_type.as_str() {
-        "payout.paid" => crate::domain::ports::PayoutStatus::Paid,
-        _ => crate::domain::ports::PayoutStatus::Failed,
-    };
+    let status = object
+        .get("status")
+        .and_then(Value::as_str)
+        .and_then(crate::domain::ports::PayoutStatus::parse)
+        .unwrap_or(match record.event_type.as_str() {
+            "payout.paid" => crate::domain::ports::PayoutStatus::Paid,
+            "payout.failed" => crate::domain::ports::PayoutStatus::Failed,
+            _ => crate::domain::ports::PayoutStatus::Pending,
+        });
     let arrival_at = object
         .get("arrival_date")
         .and_then(Value::as_i64)
@@ -1945,9 +2015,6 @@ async fn handle_payout_event(
     match status {
         crate::domain::ports::PayoutStatus::Paid => {
             if transitioned {
-                if let Some(metrics) = metrics {
-                    metrics.payouts_paid.inc();
-                }
                 events
                     .publish(
                         scope,
@@ -1961,7 +2028,15 @@ async fn handle_payout_event(
                     )
                     .await?;
             }
-            Ok((ApplyOutcome::Applied, None, payment_status))
+            Ok((
+                ApplyOutcome::Applied,
+                None,
+                payment_status,
+                transitioned
+                    .then_some(CommittedMetric::PayoutPaid)
+                    .into_iter()
+                    .collect(),
+            ))
         }
         crate::domain::ports::PayoutStatus::Failed => Ok((
             ApplyOutcome::Applied,
@@ -1970,9 +2045,10 @@ async fn handle_payout_event(
                 amount,
             }),
             payment_status,
+            Vec::new(),
         )),
         crate::domain::ports::PayoutStatus::Pending => {
-            Ok((ApplyOutcome::Skipped, None, payment_status))
+            Ok((ApplyOutcome::Skipped, None, payment_status, Vec::new()))
         }
     }
 }
@@ -1993,6 +2069,29 @@ mod tests {
         assert!(!is_account_event("charge.refunded"));
         assert!(!is_account_event("payout.paid"));
         assert!(!is_account_event("charge.dispute.created"));
+    }
+
+    #[test]
+    fn nullable_transfer_fields_do_not_signal_platform_balance_movement() {
+        let direct_charge = serde_json::json!({
+            "application_fee_amount": null,
+            "transfer_data": null,
+            "transfer_group": null,
+        });
+        assert!(!platform_balance_movement(&direct_charge));
+
+        let transfer = serde_json::json!({
+            "transfer_data": { "destination": "acct_destination" },
+        });
+        assert!(platform_balance_movement(&transfer));
+    }
+
+    #[test]
+    fn payout_created_events_are_dispatched_for_pending_projection() {
+        assert!(is_payout_event("payout.created"));
+        assert!(is_payout_event("payout.updated"));
+        assert!(is_payout_event("payout.paid"));
+        assert!(is_payout_event("payout.failed"));
     }
 
     #[test]

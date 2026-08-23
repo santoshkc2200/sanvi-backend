@@ -15,8 +15,9 @@
 -- No schema change: `privacy.retention_rules.data_class` is free text.
 
 INSERT INTO privacy.retention_rules
-  (data_class, sensitivity, basis, period, action, disclosed_in_notice)
+  (data_class, sensitivity, basis, period, action, disclosed_in_notice, updated_by)
 VALUES
   ('transaction_record', 'sensitive', 'statutory_retention',
-   make_interval(days => 3650), 'archive', true)
+   make_interval(days => 3650), 'archive', true,
+   '00000000-0000-0000-0000-000000000097')
 ON CONFLICT (data_class) DO NOTHING;
