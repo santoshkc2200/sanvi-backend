@@ -442,6 +442,20 @@ pub trait ConnectionLifecycleStore: Send + Sync {
         external_account_id: &str,
     ) -> Result<Option<ProviderConnection>, PaymentsError>;
 
+    /// The connection owning this provider account **whatever its
+    /// lifecycle state**, disconnected rows included (an account id maps
+    /// to exactly one row ever — the account index is unique). The money
+    /// handlers route through this one: a customer may still complete a
+    /// checkout session minted before the tenant disconnected, and that
+    /// payment must be recorded even though the connection has no
+    /// lifecycle left. Lifecycle/account events keep using the live
+    /// lookup.
+    async fn find_by_external_account(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        external_account_id: &str,
+    ) -> Result<Option<ProviderConnection>, PaymentsError>;
+
     /// Live connections not synced since `stale_before`, oldest first —
     /// the reconciliation job's candidates ("not seen recently").
     async fn list_due_for_sync(
@@ -725,6 +739,17 @@ pub trait PaymentRepository: Send + Sync {
         external_payment_id: &str,
     ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
 
+    /// How many payments on this connection are still **in flight**
+    /// (`requires_action` / `processing`) — money the provider may still
+    /// move whose webhook truth must land on a live connection. The
+    /// disconnect guard's first blocker; zero means clear.
+    async fn count_in_flight_for_connection(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<i64, PaymentsError>;
+
     /// The list view — every documented filter combinable, cursor-
     /// paginated, newest-first.
     async fn list(
@@ -796,6 +821,16 @@ pub trait DisputeRepository: Send + Sync {
         tenant_id: Uuid,
         payment_id: Uuid,
     ) -> Result<Vec<super::dispute::DisputeRecord>, PaymentsError>;
+
+    /// How many disputes on this connection are still **open** (need a
+    /// response or are under review) — the disconnect guard's second
+    /// blocker; zero means clear.
+    async fn count_open_for_connection(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<i64, PaymentsError>;
 
     /// Insert-or-update by `(tenant_id, external_dispute_id)` — the
     /// unique index is the dedupe that makes every handler idempotent.
@@ -944,6 +979,16 @@ pub trait PayoutRepository: Send + Sync {
         tenant_id: Uuid,
         limit: u32,
     ) -> Result<Vec<super::payout::PayoutRecord>, PaymentsError>;
+
+    /// How many payouts on this connection are still **pending** — the
+    /// tenant's money mid-flight to their bank. The disconnect guard's
+    /// third blocker; zero means clear.
+    async fn count_pending_for_connection(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<i64, PaymentsError>;
 }
 
 /// Persistence for per-tenant automatic-tax settings

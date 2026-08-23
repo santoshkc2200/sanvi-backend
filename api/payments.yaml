@@ -4,7 +4,7 @@ info:
     identifier: MIT
     name: MIT
   title: Sanvi API
-  version: 0.9.0
+  version: 0.10.0
 openapi: 3.1.0
 paths:
   /api/v1/tenant/checkout:
@@ -258,6 +258,68 @@ paths:
       tags:
       - payments
   /api/v1/tenant/payments/connections/{id}:
+    delete:
+      description: |-
+        Refused with `409` and a structured blocker list (`in_flight_payments`,
+        `open_disputes`, `pending_payouts` as problem-extension members) while
+        money could still move. Idempotent: a retried DELETE of an already-
+        disconnected connection answers 200 from the record. Reconnecting
+        later creates a *new* connection; history stays attached to this one.
+      operationId: delete_payment_connection
+      parameters:
+      - description: The connection id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required on every mutating payments endpoint
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionView'
+          description: 'Disconnected (or already disconnected: idempotent replay)'
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed Idempotency-Key
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.manage permission or the payments.stripe_connect entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such connection for this tenant
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: 'Money is still moving on this connection; the problem body names the blockers as extension members: blockers: [{code, summary_key}] with code in {in_flight_payments, open_disputes, pending_payouts} (payments/disconnect-blocked)'
+      summary: |-
+        `DELETE /api/v1/tenant/payments/connections/{id}` — disconnect the
+        tenant's payment provider (09.7). Local semantics only: the row is
+        marked `Disconnected`, new checkouts stop, every historical record
+        stays. The provider account itself is never closed — it is the
+        tenant's account to close in their own Dashboard.
+      tags:
+      - payments
     get:
       operationId: get_payment_connection
       parameters:

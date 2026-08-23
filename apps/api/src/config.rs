@@ -39,6 +39,11 @@ impl Default for OryConfig {
 }
 
 /// Feature flags and phase gates (phase 01+ fill this in).
+///
+/// Serde defaults are the *release* statement (a missing key means the
+/// phase is GA): every shipped gate defaults on, including
+/// `payments` since v0.10.0. The derived-Default path (all off) exists
+/// only so [`AppConfig::default`] gives tests an inert app.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FeaturesConfig {
@@ -75,9 +80,12 @@ pub struct FeaturesConfig {
     #[serde(default = "default_true")]
     pub domains: bool,
     /// Phase-09 gate: mounts the payments context's routes and state.
-    /// **Ships off** — every 09.x slice flips its own surface on behind
-    /// this flag; 09.7 turns the default on for GA.
-    #[serde(default)]
+    /// GA from v0.10.0 (09.7 flipped the default on). The rollback switch
+    /// of last resort — per-surface control lives in the
+    /// `payments.stripe_connect` entitlement and `payments.checkout`
+    /// config, and webhook ingestion must never be disabled (in-flight
+    /// payments must keep being recorded).
+    #[serde(default = "default_true")]
     pub payments: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
@@ -240,9 +248,18 @@ mod tests {
     }
 
     #[test]
-    fn payments_ships_disabled_by_default() {
-        // 09.0's rollback story: the flag is off until 09.7 flips it.
-        assert!(!AppConfig::default().features.payments);
+    fn payments_ships_enabled_by_default() {
+        // 09.7 flipped the phase flag for GA (v0.10.0): a config that
+        // omits `features.payments` deserializes it to **on**. (The
+        // derived-Default path stays all-off for tests; the release flip
+        // lives in the serde defaults and configs/base.toml.)
+        #[derive(Deserialize)]
+        struct Minimal {
+            features: FeaturesConfig,
+        }
+        let minimal: Minimal = serde_json::from_value(serde_json::json!({ "features": {} }))
+            .expect("empty features object is a valid config");
+        assert!(minimal.features.payments);
     }
 
     #[test]

@@ -89,3 +89,41 @@ Threats introduced by the privacy context, with their mitigations:
   from rotting.
 - Jurisdiction-profile seeds are operating defaults pending counsel review;
   the `source_note` column records this until the review happens.
+
+## Phase 09: tenant payment providers
+
+Threats introduced by the payments context (Stripe Connect, direct charges),
+with their mitigations. Governing invariant: **Sanvi is never the merchant of
+record** — Accounts v2, direct charges on the connected account, funds never
+touch the platform balance; CI-gated by `scripts/check-connect-invariants.sh`
+and runtime-alarmed by `payments_platform_balance_movements_total`.
+
+| # | Threat | STRIDE | Likelihood | Impact | Mitigation (phase 09) |
+|---|--------|--------|-----------|--------|-----------------------|
+| T38 | Cross-tenant money routing (tenant A charging on tenant B's connected account) | Elevation of privilege / Spoofing | Low | Critical | Checkout loads the connection through RLS-scoped reads and asserts the outbound command carries exactly that tenant's account id; webhook events route by provider account id to exactly one row (`provider_connections_account_idx`); cross-tenant ids resolve to 404/None by RLS and tests pin it |
+| T39 | Forged Connect webhooks creating false money state | Spoofing | Medium | Critical | Signature verification on the **raw** body before any parse; endpoint-specific secret distinct from the platform endpoint's (cross-secret test); timestamp tolerance; client-IP allow-list fail-closed; store-first dedupe on the provider event id |
+| T40 | Webhook replay or reordering corrupting state | Tampering | Medium | High | Event-id primary key is the redelivery dedupe; per-connection out-of-order anchor drops strictly older events; all handlers idempotent (upserts keyed by provider ids, forward-only transitions) — verified in the version-upgrade drill's replay corpus |
+| T41 | Poison event blocking the money pipeline | DoS | Medium | High | One transaction per event; 5-attempt budget then dead-letter so a poison row never blocks the queue; DLQ depth pages; CLI triage + audited replay |
+| T42 | Card data / onboarding PII landing in Sanvi storage | Information disclosure | Low | Critical | Architecture stores identifiers, statuses and amounts only: hosted-page checkout means card data never transits us; embedded onboarding keeps KYC PII at Stripe; schema has no columns for either; threat-model review at release confirmed no exceptions |
+| T43 | Platform becoming a party to tenant money flows (fee misconfig, transfer shapes) | Repudiation / Fraud | Low | High | Application fees ship disabled everywhere; fee config lives in `platform_admin` (never tenant-settable), changes audited; the invariant alarm increments on any observed application_fee/transfer field and pages; rollback runbook for accidental enablement |
+| T44 | Tenant disconnect stranding money with no local record | Tampering | Low | High | Disconnect guarded (in-flight payments, open disputes, pending payouts each refuse with a named blocker); money handlers route by account regardless of lifecycle state, so sessions minted pre-disconnect still record; rollback order forbids ever disabling webhook ingestion first |
+| T45 | Provider credentials over-scoped or leaked | Information disclosure | Low | High | Connect uses a restricted API key (`rk_`, Connect permissions only) distinct from the platform Billing key; boot validation rejects wrong shapes; secrets env-only, gitleaks-guarded; webhook secret rotation covered in the orphaned-account runbook |
+
+### PCI DSS scope confirmation (v0.10.0)
+
+Scope remains **SAQ-A** (card-not-present, fully outsourced): card data is
+captured only on Stripe-hosted surfaces (Checkout hosted page, embedded
+Account Sessions); Sanvi stores no PAN, no CVV, no sensitive authentication
+data anywhere (T42's architectural controls); no Sanvi system is in the card
+holder data flow. The phase-09 review (TASK-008) found no deviation.
+Re-confirm at every phase that touches the payment path.
+
+### Residual risks accepted in phase 09
+
+- Sandbox-mode Stripe accounts are indistinguishable from live ones in our
+  projection (the provider reports neither); environment separation relies on
+  per-environment keys and the registry refusing the fake provider in
+  production.
+- The reconciliation job's staleness window is configuration, not contract:
+  a badly tuned window delays (never loses) truth, since webhooks remain the
+  fast path.

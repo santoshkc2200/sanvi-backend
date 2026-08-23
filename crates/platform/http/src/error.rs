@@ -27,6 +27,14 @@ pub struct ProblemDetail {
     /// suspension); absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// RFC 9457 extension members for problem classes that carry
+    /// structured extras (the disconnect conflict names its blockers,
+    /// for example). Flattened onto the JSON object exactly as the RFC
+    /// prescribes; carrying them here keeps the error-enrichment layer
+    /// from stripping them. Absent otherwise.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub extensions: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 /// Application-level API error.
@@ -136,6 +144,7 @@ impl ApiError {
             instance: None,
             trace_id: None,
             reason: None,
+            extensions: None,
         }
     }
 
@@ -346,6 +355,7 @@ fn fallback_problem(
         instance: Some(instance.to_string()),
         trace_id,
         reason: None,
+        extensions: None,
     }
 }
 

@@ -522,6 +522,18 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             connections,
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
         )),
+        disconnect_connection: Arc::new(sanvi_payments::application::DisconnectConnection::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            Arc::new(SqlxProviderConnectionRepository::new()),
+            payments.clone(),
+            disputes.clone(),
+            Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
+            Arc::new(OutboxEventPublisher::new()),
+            audit.clone(),
+        )),
         webhook_receiver: Arc::new(sanvi_payments::application::WebhookReceiver::new(
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
@@ -2083,6 +2095,17 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             connections,
                             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
                         )),
+                        disconnect_connection: Arc::new(
+                            sanvi_payments::application::DisconnectConnection::new(
+                                TxManager::new(pool.clone()),
+                                Arc::new(SqlxProviderConnectionRepository::new()),
+                                Arc::new(SqlxPaymentRepository::new()),
+                                Arc::new(SqlxDisputeRepository::new()),
+                                Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
+                                Arc::new(OutboxEventPublisher::new()),
+                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                            ),
+                        ),
                         webhook_receiver: Arc::new(WebhookReceiver::new(
                             TxManager::new(pool.clone()),
                             Arc::new(SqlxWebhookEventRepository::new()),
@@ -2263,6 +2286,15 @@ fn checkout_fixture(
             TxManager::new(pool.clone()),
             providers.clone(),
             connections.clone(),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        )),
+        disconnect_connection: Arc::new(sanvi_payments::application::DisconnectConnection::new(
+            TxManager::new(pool.clone()),
+            connections.clone(),
+            Arc::new(SqlxPaymentRepository::new()),
+            Arc::new(SqlxDisputeRepository::new()),
+            Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
+            Arc::new(OutboxEventPublisher::new()),
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
         )),
         webhook_receiver: Arc::new(WebhookReceiver::new(
@@ -4361,5 +4393,361 @@ async fn the_platform_fee_is_disclosed_on_the_payment_when_charged() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(events, 1);
+}
+
+// ---------------------------------------------------------------------------
+// 09.7: disconnect — guards, local semantics, reconnect, and the promise
+// that money truth never stops being recorded.
+// ---------------------------------------------------------------------------
+
+/// Seed one payment row against `connection_id` through its checkout.
+async fn seed_payment(
+    pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    connection_id: Uuid,
+    external_payment_id: &str,
+    status: &str,
+) -> (Uuid, Uuid) {
+    let checkout_id = Uuid::now_v7();
+    let payment_id = Uuid::now_v7();
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    sqlx::query(
+        "INSERT INTO payments.checkouts (id, tenant_id, connection_id, reference, amount_minor, currency, status)
+         VALUES ($1, $2, $3, 'order-seed', 2000, 'JPY', 'open')",
+    )
+    .bind(checkout_id)
+    .bind(tenant_id)
+    .bind(connection_id)
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO payments.payments (id, tenant_id, checkout_id, external_payment_id, status, amount_minor, currency)
+         VALUES ($1, $2, $3, $4, $5, 2000, 'JPY')",
+    )
+    .bind(payment_id)
+    .bind(tenant_id)
+    .bind(checkout_id)
+    .bind(external_payment_id)
+    .bind(status)
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+    (checkout_id, payment_id)
+}
+
+#[tokio::test]
+async fn disconnect_refuses_each_blocker_and_names_it_in_the_response() {
+    /// Which money guard to exercise.
+    enum Seed {
+        InFlight,
+        Dispute,
+        Payout,
+    }
+
+    // Each guard is exercised in its own database: in-flight payments,
+    // open disputes and pending payouts each refuse with their own
+    // stable code.
+    async fn run_case(label: &'static str, seed: Seed, code: &str) {
+        let (port, _node) = start_postgres().await;
+        migrate(port).await;
+        let pool = app_pool(port).await;
+        let tenant_id = seed_tenant(&pool, "blocker").await;
+        let provider = FakeProvider::new();
+        let connection = activate_connection(&pool, tenant_id, &provider).await;
+
+        match seed {
+            Seed::InFlight => {
+                seed_payment(&pool, tenant_id, connection.id, "pi_flight", "processing").await;
+            }
+            Seed::Dispute => {
+                let (_, payment_id) =
+                    seed_payment(&pool, tenant_id, connection.id, "pi_disputed", "succeeded").await;
+                let tx = TxManager::new(pool.clone());
+                let mut scope = tx.begin_for(tenant_id).await.unwrap();
+                sqlx::query(
+                    "INSERT INTO payments.disputes
+                       (id, tenant_id, payment_id, external_dispute_id, status,
+                        amount_minor, currency, created_at, updated_at)
+                     VALUES ($1, $2, $3, 'dp_test_1', 'needs_response', 2000, 'JPY', now(), now())",
+                )
+                .bind(Uuid::now_v7())
+                .bind(tenant_id)
+                .bind(payment_id)
+                .execute(&mut **scope.tx_mut().as_inner())
+                .await
+                .unwrap();
+                scope.commit().await.unwrap();
+            }
+            Seed::Payout => {
+                let tx = TxManager::new(pool.clone());
+                let mut scope = tx.begin_for(tenant_id).await.unwrap();
+                sqlx::query(
+                    "INSERT INTO payments.payouts
+                       (id, tenant_id, connection_id, external_payout_id, amount_minor, currency, status)
+                     VALUES ($1, $2, $3, 'po_test_1', 1500, 'JPY', 'pending')",
+                )
+                .bind(Uuid::now_v7())
+                .bind(tenant_id)
+                .bind(connection.id)
+                .execute(&mut **scope.tx_mut().as_inner())
+                .await
+                .unwrap();
+                scope.commit().await.unwrap();
+            }
+        }
+
+        let state = checkout_fixture(&pool, provider.clone(), 1000, false);
+        let app = checkout_app(state.clone(), tenant_id).await;
+        let response = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::delete()
+                .uri(&format!(
+                    "/api/v1/tenant/payments/connections/{}",
+                    connection.id
+                ))
+                .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{label}");
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert!(
+            body["type"]
+                .as_str()
+                .unwrap()
+                .ends_with("payments/disconnect-blocked"),
+            "{label}: {body}"
+        );
+        assert_eq!(body["blockers"][0]["code"], code, "{label}: {body}");
+        assert_eq!(
+            body["blockers"][0]["summary_key"],
+            format!("payments.blocker.{code}"),
+            "{label}"
+        );
+    }
+
+    run_case("in-flight payment", Seed::InFlight, "in_flight_payments").await;
+    run_case("open dispute", Seed::Dispute, "open_disputes").await;
+    run_case("pending payout", Seed::Payout, "pending_payouts").await;
+}
+
+#[tokio::test]
+async fn disconnect_when_clean_stops_checkout_keeps_history_and_allows_reconnect() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "clean-disconnect").await;
+    let provider = FakeProvider::new();
+    let connection = activate_connection(&pool, tenant_id, &provider).await;
+
+    // History: one settled payment on the soon-to-be-old connection.
+    let (_, payment_id) =
+        seed_payment(&pool, tenant_id, connection.id, "pi_hist", "succeeded").await;
+
+    let state = checkout_fixture(&pool, provider.clone(), 1000, false);
+    let app = checkout_app(state.clone(), tenant_id).await;
+
+    // Clean disconnect succeeds and reports the new status.
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::delete()
+            .uri(&format!(
+                "/api/v1/tenant/payments/connections/{}",
+                connection.id
+            ))
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(body["status"], "disconnected");
+
+    // Checkout immediately refuses afterwards.
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(checkout_body("order-after", 500, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let err_body: serde_json::Value = actix_test::read_body_json(response).await;
+    assert!(
+        err_body["type"]
+            .as_str()
+            .unwrap()
+            .ends_with("payments/connection-not-active"),
+        "{err_body}"
+    );
+
+    // Historical records stay queryable (GET /payments).
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/payments")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let list: serde_json::Value = actix_test::read_body_json(response).await;
+    let ids: Vec<&str> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&payment_id.to_string().as_str()),
+        "old payments stay queryable after disconnect"
+    );
+
+    // Reconnect creates a NEW connection row; the old id stays history.
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/payments/connections")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(serde_json::json!({ "provider": "fake" }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let reconnected: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_ne!(
+        reconnected["id"].as_str().unwrap(),
+        connection.id.to_string()
+    );
+    assert_eq!(reconnected["status"], "pending");
+
+    // The disconnect was audited (audit entries are tenant-RLS'd: read
+    // through a scoped transaction, exactly like the shared policy's own
+    // tenant admission).
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit.entries WHERE action = 'payments.connection_disconnected'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(audited, 1);
+}
+
+#[tokio::test]
+async fn deleting_an_already_disconnected_connection_is_an_idempotent_ok() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "idem-delete").await;
+    let provider = FakeProvider::new();
+    let connection = activate_connection(&pool, tenant_id, &provider).await;
+
+    let state = checkout_fixture(&pool, provider.clone(), 1000, false);
+    let app = checkout_app(state.clone(), tenant_id).await;
+    let uri = format!("/api/v1/tenant/payments/connections/{}", connection.id);
+    for _ in 0..2 {
+        let response = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::delete()
+                .uri(&uri)
+                .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    // Exactly one disconnect event despite two DELETEs.
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM platform.outbox WHERE event_type = 'payments.provider_disconnected'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 1);
+}
+
+#[tokio::test]
+async fn a_payment_completing_after_disconnect_is_still_recorded() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let fixture = webhook_fixture(&pool).await;
+    let tenant_id = seed_tenant(&pool, "post-disconnect-money").await;
+
+    // A connection that existed and then was disconnected.
+    let provider = FakeProvider::new();
+    let mut providers = ProviderRegistry::new();
+    providers.register(Arc::new(provider.clone())).unwrap();
+    let repo = SqlxProviderConnectionRepository::new();
+    let account = provider
+        .create_account(&CreateAccountRequest {
+            tenant_id,
+            country: None,
+            default_currency: None,
+            display_name: None,
+            idempotency_key: Uuid::now_v7(),
+        })
+        .await
+        .unwrap();
+    let mut connection = ProviderConnection::pending(
+        Uuid::now_v7(),
+        tenant_id,
+        ProviderKind::Fake,
+        account.external_account_id.clone(),
+        Utc::now(),
+    )
+    .unwrap();
+    connection.disconnect(Utc::now()).unwrap();
+    {
+        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        repo.insert(&mut scope, &connection).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    // The customer pays a session minted before the disconnect.
+    let event = payment_intent_event(
+        "evt_after_disconnect",
+        "payment_intent.succeeded",
+        &account.external_account_id,
+        Uuid::now_v7(),
+        tenant_id,
+        "pi_after_disconnect",
+        None,
+        epoch(0),
+    );
+    fixture.deliver(&event).await.unwrap();
+    fixture.dispatcher.dispatch(10).await.unwrap();
+
+    // If the handler refused the event, say so before the money asserts.
+    let error: Option<String> = sqlx::query_scalar(
+        "SELECT COALESCE(error, '') FROM payments.webhook_events
+         WHERE stripe_event_id = 'evt_after_disconnect'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(error.as_deref(), Some(""), "handler error: {error:?}");
+
+    // The money has a local record even though the connection is gone.
+    // (Reads go through a tenant-scoped transaction: RLS hides rows from
+    // a bare pooled connection.)
+    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let recorded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM payments.payments WHERE external_payment_id = 'pi_after_disconnect'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(recorded, 1, "money never moves without a local record");
+    let events: i64 = fixture.outbox_events("payments.payment_succeeded").await;
     assert_eq!(events, 1);
 }

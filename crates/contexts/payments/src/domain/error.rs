@@ -6,6 +6,8 @@
 
 use thiserror::Error;
 
+use super::disconnect::DisconnectBlocker;
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PaymentsError {
     /// The provider API is unreachable or answered unusably — the caller
@@ -79,6 +81,13 @@ pub enum PaymentsError {
     #[error("connection already exists: {0}")]
     ConnectionExists(String),
 
+    /// Disconnect refused because the connection still has work it must
+    /// be able to finish (in-flight payment, open dispute, pending
+    /// payout). Carries the structured blocker list the 409 body names so
+    /// the UI can say what to wait for. `payments/disconnect-blocked`.
+    #[error("disconnect is blocked while: {}", blockers.iter().map(|b| b.as_str().replace('_', " ")).collect::<Vec<_>>().join("; "))]
+    DisconnectBlocked { blockers: Vec<DisconnectBlocker> },
+
     /// A success/cancel URL is not on one of the tenant's *verified*
     /// domains (phase 08). An open redirect here is a phishing
     /// primitive: allow-list, never sanitize. `payments/domain-not-allowed`.
@@ -133,6 +142,7 @@ impl PaymentsError {
             Self::InvalidCountry(_) => "payments/invalid-country",
             Self::CountryUnsupported(_) => "payments/country-unsupported",
             Self::ConnectionExists(_) => "payments/connection-exists",
+            Self::DisconnectBlocked { .. } => "payments/disconnect-blocked",
             Self::DomainNotAllowed(_) => "payments/domain-not-allowed",
             Self::RateLimited(_) => "payments/rate-limited",
             Self::RefundExceedsRemaining { .. } => "payments/over-refund",
@@ -235,6 +245,14 @@ mod tests {
             }
             .type_slug(),
             "payments/over-refund"
+        );
+        // 09.7: the disconnect refusal names its blockers.
+        assert_eq!(
+            PaymentsError::DisconnectBlocked {
+                blockers: vec![crate::domain::DisconnectBlocker::OpenDisputes]
+            }
+            .type_slug(),
+            "payments/disconnect-blocked"
         );
     }
 }

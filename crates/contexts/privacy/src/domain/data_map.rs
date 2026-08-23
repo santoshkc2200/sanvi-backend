@@ -72,6 +72,20 @@ pub const DATA_CLASSES: &[DataClassDef] = &[
         period_days: 3650, // statutory: invoices survive erasure requests
         action: RetentionAction::Archive,
     },
+    // Phase-09 statutory override (09.7): payment transactions on a
+    // tenant's connected account outlive an erasure request — tax and
+    // accounting law requires the transaction record even when the payer
+    // is erased around it. The record itself carries no card data and no
+    // required PII; the payments provider anonymises what it can and
+    // reports the retained remainder explicitly.
+    DataClassDef {
+        class: DataClass::TransactionRecord,
+        category: "Financial",
+        sensitivity: SensitivityClass::Sensitive,
+        basis: LegalBasis::StatutoryRetention,
+        period_days: 3650,
+        action: RetentionAction::Archive,
+    },
     DataClassDef {
         class: DataClass::AuditLog,
         category: "Security",

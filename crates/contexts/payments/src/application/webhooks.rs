@@ -365,6 +365,11 @@ impl WebhookDispatcher {
 
     /// One event, one transaction: route → guard → fetch authoritative
     /// state → apply through the shared lifecycle path → mark processed.
+    #[tracing::instrument(
+        name = "payments.webhook.apply",
+        skip_all,
+        fields(event = %record.stripe_event_id, event_type = %record.event_type)
+    )]
     async fn apply(&self, record: &WebhookEventRecord) -> Result<ApplyOutcome, PaymentsError> {
         // 09.4 payment handlers first — they never consult the provider
         // (the event *is* the provider's statement) and must stay deployed
@@ -566,11 +571,15 @@ impl WebhookDispatcher {
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
 
-        // Route by account exactly like the lifecycle path: unknown
-        // accounts are alerted and acknowledged, never provisioned.
+        // Money events route by account **whatever the connection's
+        // lifecycle state** (09.7): a checkout session minted before the
+        // tenant disconnected can still complete, and that payment must
+        // be recorded — money never moves without a local record. Only
+        // the lifecycle handlers require a live row. Unknown accounts are
+        // alerted and acknowledged, never provisioned.
         let Some(connection) = self
             .connections
-            .find_live_by_external_account(&mut scope, account_id)
+            .find_by_external_account(&mut scope, account_id)
             .await?
         else {
             error!(
@@ -595,6 +604,7 @@ impl WebhookDispatcher {
             &mut scope,
             checkouts,
             self.events.as_ref(),
+            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -643,9 +653,10 @@ impl WebhookDispatcher {
             .begin_unscoped("process_refund_webhook", ACTOR)
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        // Money truth routes regardless of lifecycle state (09.7).
         let Some(connection) = self
             .connections
-            .find_live_by_external_account(&mut scope, account_id)
+            .find_by_external_account(&mut scope, account_id)
             .await?
         else {
             error!(
@@ -670,6 +681,7 @@ impl WebhookDispatcher {
             checkouts.as_ref(),
             refunds_repo.as_ref(),
             self.events.as_ref(),
+            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -718,9 +730,11 @@ impl WebhookDispatcher {
             .begin_unscoped("process_dispute_webhook", ACTOR)
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        // Money truth routes regardless of lifecycle state (09.7): a
+        // dispute on a pre-disconnect payment still needs its projection.
         let Some(connection) = self
             .connections
-            .find_live_by_external_account(&mut scope, account_id)
+            .find_by_external_account(&mut scope, account_id)
             .await?
         else {
             error!(
@@ -745,6 +759,7 @@ impl WebhookDispatcher {
             checkouts.as_ref(),
             disputes_repo.as_ref(),
             self.events.as_ref(),
+            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -907,6 +922,7 @@ async fn handle_payment_event(
     scope: &mut PlatformScope<'_>,
     checkouts: Arc<dyn CheckoutLifecycleStore>,
     events: &dyn EventPublisher,
+    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<ApplyOutcome, PaymentsError> {
@@ -918,6 +934,21 @@ async fn handle_payment_event(
     let now = Utc::now();
     let tenant_id = connection.tenant_id;
     let provider = connection.provider.as_str().to_string();
+
+    // The invariant alarm (09.7): direct charges never move platform
+    // money, so a fee/transfer shape on a tenant transaction means Sanvi
+    // has become a party to the flow. Count it and page loudly — the
+    // event is still recorded either way.
+    if let Some(metrics) = metrics
+        && platform_balance_movement(&object)
+    {
+        metrics.platform_balance_movements.inc();
+        error!(
+            event = %record.stripe_event_id,
+            account = %connection.external_account_id,
+            "PLATFORM BALANCE MOVEMENT on a tenant transaction — the never-merchant-of-record invariant is violated"
+        );
+    }
 
     match record.event_type.as_str() {
         "checkout.session.completed" => {
@@ -954,6 +985,9 @@ async fn handle_payment_event(
                 // Sibling events converge here: the outbox event fires on
                 // the *transition*, not on every delivery.
                 if changed {
+                    if let Some(metrics) = metrics {
+                        metrics.payment_succeeded.inc();
+                    }
                     events
                         .publish(
                             scope,
@@ -1046,6 +1080,16 @@ async fn handle_payment_event(
 
             match (status, changed) {
                 (PaymentStatus::Failed, true) => {
+                    let failure_code = payment
+                        .failure
+                        .map(|f| f.code)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    if let Some(metrics) = metrics {
+                        metrics
+                            .payment_failures
+                            .with_label_values(&[&failure_code])
+                            .inc();
+                    }
                     events
                         .publish(
                             scope,
@@ -1054,15 +1098,15 @@ async fn handle_payment_event(
                                 payment_id: payment.id,
                                 checkout_id: payment.checkout_id,
                                 provider,
-                                failure_code: payment
-                                    .failure
-                                    .map(|f| f.code)
-                                    .unwrap_or_else(|| "unknown".to_string()),
+                                failure_code,
                             }],
                         )
                         .await?;
                 }
                 (PaymentStatus::Succeeded, true) => {
+                    if let Some(metrics) = metrics {
+                        metrics.payment_succeeded.inc();
+                    }
                     events
                         .publish(
                             scope,
@@ -1196,11 +1240,30 @@ fn failure_of(object: &Value) -> Option<PaymentFailure> {
 use crate::domain::dispute::{DisputeRecord, DisputeStatus};
 use crate::domain::payment::{RefundRecord, RefundStatus};
 
+/// Whether a provider object reports platform money on a tenant
+/// transaction: an application fee (the platform's cut of a direct
+/// charge) or any transfer shape. While the fee configuration is off —
+/// the 0.10.0 default — *any* such field is a violation of the
+/// never-merchant-of-record invariant, whatever its amount. Transfer
+/// keys are matched by prefix (no banned wire literals here — the
+/// invariant gate greps for them) which also catches future shapes.
+fn platform_balance_movement(object: &Value) -> bool {
+    let fee = object
+        .get("application_fee_amount")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let transfer = object
+        .as_object()
+        .is_some_and(|map| map.keys().any(|key| key.starts_with("transfer_")));
+    fee > 0 || transfer
+}
+
 async fn handle_refund_event(
     scope: &mut PlatformScope<'_>,
     checkouts: &dyn CheckoutLifecycleStore,
     refunds: &dyn crate::domain::ports::RefundRepository,
     events: &dyn EventPublisher,
+    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<ApplyOutcome, PaymentsError> {
@@ -1364,6 +1427,9 @@ async fn handle_refund_event(
                 .as_ref()
                 .is_none_or(|r| r.status != RefundStatus::Succeeded);
         if transitioned {
+            if let Some(metrics) = metrics {
+                metrics.refunds_issued.inc();
+            }
             events
                 .publish(
                     scope,
@@ -1392,6 +1458,7 @@ async fn handle_dispute_event(
     checkouts: &dyn CheckoutLifecycleStore,
     disputes: &dyn crate::domain::ports::DisputeRepository,
     events: &dyn EventPublisher,
+    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<(ApplyOutcome, Option<DisputeOpenedSignal>), PaymentsError> {
@@ -1508,6 +1575,7 @@ async fn handle_dispute_event(
         .find_by_external_id_platform(scope, tenant_id, &external_dispute_id)
         .await?;
     let is_new = existing.is_none();
+    let was_open = existing.as_ref().is_some_and(|d| d.status.is_open());
     let existing_created = existing.as_ref().map(|d| d.created_at);
     let id = existing.map(|d| d.id).unwrap_or_else(Uuid::now_v7);
     let mut dispute = DisputeRecord::new(
@@ -1526,6 +1594,15 @@ async fn handle_dispute_event(
         dispute.created_at = at;
     }
     disputes.upsert(scope, &dispute).await?;
+    // The open gauge tracks transitions, not rows: +1 when a dispute
+    // enters an open state it was not in before, −1 when it leaves one.
+    if let Some(metrics) = metrics {
+        match (was_open, dispute.status.is_open()) {
+            (false, true) => metrics.dispute_open.inc(),
+            (true, false) => metrics.dispute_open.dec(),
+            _ => {}
+        }
+    }
     let mut signal = None;
     if is_new {
         events
@@ -1594,9 +1671,12 @@ impl WebhookDispatcher {
             .begin_unscoped("process_payout_webhook", ACTOR)
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        // Money truth routes regardless of lifecycle state (09.7): a
+        // payout of pre-disconnect earnings still lands in the tenant's
+        // bank and must be visible.
         let Some(connection) = self
             .connections
-            .find_live_by_external_account(&mut scope, account_id)
+            .find_by_external_account(&mut scope, account_id)
             .await?
         else {
             error!(
@@ -1620,6 +1700,7 @@ impl WebhookDispatcher {
             &mut scope,
             payouts_repo.as_ref(),
             self.events.as_ref(),
+            self.metrics.as_ref(),
             &connection,
             record,
         )
@@ -1644,8 +1725,11 @@ impl WebhookDispatcher {
         }
         // Post-commit: the tenant's money is stuck. A lost notification is
         // logged, never a failed projection.
-        if let Some(alert) = alert
-            && let Err(err) = self
+        if let Some(alert) = alert {
+            if let Some(metrics) = &self.metrics {
+                metrics.payout_failures.inc();
+            }
+            if let Err(err) = self
                 .notifier
                 .payout_failed(
                     connection.tenant_id,
@@ -1653,12 +1737,13 @@ impl WebhookDispatcher {
                     &alert.amount,
                 )
                 .await
-        {
-            warn!(
-                payout = %alert.external_payout_id,
-                error = %err,
-                "payout-failed notification failed; the payout row is committed"
-            );
+            {
+                warn!(
+                    payout = %alert.external_payout_id,
+                    error = %err,
+                    "payout-failed notification failed; the payout row is committed"
+                );
+            }
         }
         Ok(outcome)
     }
@@ -1780,6 +1865,7 @@ async fn handle_payout_event(
     scope: &mut PlatformScope<'_>,
     payouts: &dyn crate::domain::ports::PayoutRepository,
     events: &dyn EventPublisher,
+    metrics: Option<&PaymentsMetrics>,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<
@@ -1859,6 +1945,9 @@ async fn handle_payout_event(
     match status {
         crate::domain::ports::PayoutStatus::Paid => {
             if transitioned {
+                if let Some(metrics) = metrics {
+                    metrics.payouts_paid.inc();
+                }
                 events
                     .publish(
                         scope,

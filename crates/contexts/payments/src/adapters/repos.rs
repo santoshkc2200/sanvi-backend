@@ -240,6 +240,25 @@ impl ConnectionLifecycleStore for SqlxProviderConnectionRepository {
         row.map(TryFrom::try_from).transpose()
     }
 
+    async fn find_by_external_account(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        external_account_id: &str,
+    ) -> Result<Option<ProviderConnection>, PaymentsError> {
+        let row = sqlx::query_as::<_, ProviderConnectionRow>(
+            "SELECT id, tenant_id, provider, external_account_id, status,
+                    capabilities, requirements, country, default_currency,
+                    connected_at, last_synced_at, disconnected_at
+             FROM payments.provider_connections
+             WHERE external_account_id = $1",
+        )
+        .bind(external_account_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
     async fn list_due_for_sync(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -1085,6 +1104,26 @@ impl PaymentRepository for SqlxPaymentRepository {
         row.map(TryFrom::try_from).transpose()
     }
 
+    async fn count_in_flight_for_connection(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<i64, PaymentsError> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM payments.payments p
+             JOIN payments.checkouts c ON c.id = p.checkout_id
+             WHERE c.tenant_id = $1 AND c.connection_id = $2
+               AND p.status IN ('requires_action', 'processing')",
+        )
+        .bind(tenant_id)
+        .bind(connection_id)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(count)
+    }
+
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -1621,6 +1660,28 @@ impl DisputeRepository for SqlxDisputeRepository {
         rows.into_iter().map(TryFrom::try_from).collect()
     }
 
+    async fn count_open_for_connection(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<i64, PaymentsError> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM payments.disputes d
+             JOIN payments.payments p ON p.id = d.payment_id
+             JOIN payments.checkouts c ON c.id = p.checkout_id
+             WHERE c.tenant_id = $1 AND c.connection_id = $2
+               AND d.status IN ('needs_response', 'under_review',
+                                'warning_needs_response', 'warning_under_review')",
+        )
+        .bind(tenant_id)
+        .bind(connection_id)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(count)
+    }
+
     async fn upsert(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -1771,6 +1832,24 @@ impl crate::domain::ports::PayoutRepository for SqlxPayoutRepository {
         .await
         .map_err(storage)?;
         rows.into_iter().map(row_to_payout).collect()
+    }
+
+    async fn count_pending_for_connection(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<i64, PaymentsError> {
+        let (count,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM payments.payouts
+             WHERE tenant_id = $1 AND connection_id = $2 AND status = 'pending'",
+        )
+        .bind(tenant_id)
+        .bind(connection_id)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(count)
     }
 }
 

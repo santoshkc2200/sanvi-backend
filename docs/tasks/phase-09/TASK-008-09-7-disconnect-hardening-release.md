@@ -1,7 +1,7 @@
 # TASK-008: 09.7 Disconnect, hardening & release
 
 **Phase:** 09
-**Status:** todo
+**Status:** done
 **Requirement(s):** FR-910, NFR-901, NFR-902, NFR-908
 **Depends on:** TASK-006, TASK-007
 **Created:** 2026-08-20

@@ -97,3 +97,9 @@ ordering moves into the tasks' `Depends on` / `Blocked by` lines and the shared 
 
 Both `design-tokens` and `csp` depend on `@hitox/ts-config` and `@hitox/test-config` workspace
 packages that do not exist yet — creating them is phase 00 work.
+
+## Delivery log
+
+| Version | Phase | Tagged | Notes |
+|---------|-------|--------|-------|
+| 0.10.0 | 09 — Tenant Payment Providers | backend track complete; tag `v0.10.0` lands when both tracks' 09.7 are done (cross-repo gate) | Stripe Connect (Accounts v2), direct-charge checkout, refunds/disputes/payouts, guarded disconnect, statutory retention override for transaction records, payments observability + runbooks |

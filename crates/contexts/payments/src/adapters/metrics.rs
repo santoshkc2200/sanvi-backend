@@ -56,6 +56,32 @@ pub struct PaymentsMetrics {
     /// Tax-compliance lapses detected on tenants with automatic tax
     /// enabled (09.6) — silent under-collection risk.
     pub tax_compliance_lapsed: IntCounter,
+    /// Payments recorded `succeeded` (the plan's
+    /// `payment_succeeded_total`) — the top of the money funnel phase 10
+    /// consumes (09.7).
+    pub payment_succeeded: IntCounter,
+    /// Payments that ended `failed`, by the provider's failure code
+    /// (`payment_failure_total{code}`) (09.7).
+    pub payment_failures: IntCounterVec,
+    /// Refunds that landed `succeeded` (`refunds_issued_total`) (09.7).
+    pub refunds_issued: IntCounter,
+    /// Payouts confirmed arrived in the tenant's bank
+    /// (`payouts_paid_total`) — the happy-side twin of
+    /// [`PaymentsMetrics::payout_failures`] (09.7).
+    pub payouts_paid: IntCounter,
+    /// Disputes currently open (needs response / under review). The
+    /// dispute runbook and the disconnect guard both care about this
+    /// number staying visible (09.7).
+    pub dispute_open: IntGauge,
+    /// **The invariant alarm** (09.7): any platform-balance movement from
+    /// a tenant transaction. Direct charges never touch the platform
+    /// balance, so this should be impossible forever; a non-zero value
+    /// means Sanvi has become a party to the money flow and pages an
+    /// operator immediately.
+    pub platform_balance_movements: IntCounter,
+    /// Tenant-initiated disconnects by outcome (`ok` / the blocker code)
+    /// — the settings page's exit funnel (09.7).
+    pub connection_disconnects: IntCounterVec,
 }
 
 impl PaymentsMetrics {
@@ -175,6 +201,54 @@ impl PaymentsMetrics {
         )
         .expect("counter construction is infallible");
         let _ = registry.register(Box::new(tax_compliance_lapsed.clone()));
+        let payment_succeeded = IntCounter::new(
+            "payments_payment_succeeded_total",
+            "Payments recorded succeeded (webhook truth, transition-guarded)",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(payment_succeeded.clone()));
+        let payment_failures = IntCounterVec::new(
+            Opts::new(
+                "payments_payment_failure_total",
+                "Payments recorded failed, by the provider's failure code",
+            ),
+            &["code"],
+        )
+        .expect("counter vec construction is infallible");
+        let _ = registry.register(Box::new(payment_failures.clone()));
+        let refunds_issued = IntCounter::new(
+            "payments_refunds_issued_total",
+            "Refunds that landed succeeded (transition-guarded)",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(refunds_issued.clone()));
+        let payouts_paid = IntCounter::new(
+            "payments_payouts_paid_total",
+            "Payouts confirmed arrived in the tenant's bank (payout.paid transitions)",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(payouts_paid.clone()));
+        let dispute_open = IntGauge::new(
+            "payments_dispute_open_gauge",
+            "Disputes currently open (need response or under review)",
+        )
+        .expect("gauge construction is infallible");
+        let _ = registry.register(Box::new(dispute_open.clone()));
+        let platform_balance_movements = IntCounter::new(
+            "payments_platform_balance_movements_total",
+            "Platform-balance movements observed on tenant transactions — the invariant alarm; any value pages an operator",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(platform_balance_movements.clone()));
+        let connection_disconnects = IntCounterVec::new(
+            Opts::new(
+                "payments_connection_disconnects_total",
+                "Tenant disconnect attempts by outcome (`ok`, or the blocker that refused)",
+            ),
+            &["result"],
+        )
+        .expect("counter vec construction is infallible");
+        let _ = registry.register(Box::new(connection_disconnects.clone()));
 
         Self {
             catalog_requests,
@@ -193,6 +267,13 @@ impl PaymentsMetrics {
             checkout_creates,
             payout_failures,
             tax_compliance_lapsed,
+            payment_succeeded,
+            payment_failures,
+            refunds_issued,
+            payouts_paid,
+            dispute_open,
+            platform_balance_movements,
+            connection_disconnects,
         }
     }
 

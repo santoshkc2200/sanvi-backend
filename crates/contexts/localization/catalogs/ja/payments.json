@@ -12,5 +12,8 @@
   "payments.req.unmapped": "Stripeから追加の要件があります: {code}（Stripeのヘルプをご確認ください）",
   "payments.blocker.onboarding_not_started": "オンボーディングがまだ開始されていません",
   "payments.blocker.card_payments_inactive": "このアカウントではまだカード決済が有効になっていません",
-  "payments.blocker.requirements_past_due": "必要な情報の提出期限が過ぎています"
+  "payments.blocker.requirements_past_due": "必要な情報の提出期限が過ぎています",
+  "payments.blocker.in_flight_payments": "処理中の支払いがあります。完了してから接続を解除してください",
+  "payments.blocker.open_disputes": "対応が必要なチャージバックがあります。解決してから接続を解除してください",
+  "payments.blocker.pending_payouts": "銀行口座への送金が保留中です。着信または失敗を確認してから接続を解除してください"
 }

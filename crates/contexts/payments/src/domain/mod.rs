@@ -4,6 +4,7 @@
 pub mod capability;
 pub mod checkout;
 pub mod connection;
+pub mod disconnect;
 pub mod dispute;
 pub mod error;
 pub mod events;
@@ -20,6 +21,7 @@ pub mod webhook;
 pub use capability::{CapabilitySet, CapabilityStatus, RequirementSummary};
 pub use checkout::{Checkout, CheckoutStatus, MerchantOrderRef};
 pub use connection::ProviderConnection;
+pub use disconnect::DisconnectBlocker;
 pub use dispute::{DisputeRecord, DisputeStatus};
 pub use error::PaymentsError;
 pub use events::{EventPublisher, PaymentsEvent, PaymentsEventName};

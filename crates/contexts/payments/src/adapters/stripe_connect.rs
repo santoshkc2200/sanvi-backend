@@ -148,6 +148,14 @@ impl StripeConnectProvider {
     /// from the caller's command (the use case asserts it against the
     /// requesting tenant's loaded connection); it is never read from
     /// request data anywhere else.
+    ///
+    /// Each call is a tracing span, so a distributed trace spans the
+    /// outbound provider call end to end (09.7 observability bar).
+    #[tracing::instrument(
+        name = "payments.stripe.request",
+        skip_all,
+        fields(op, stripe.account = on_account.unwrap_or("-"))
+    )]
     async fn send_on_account(
         &self,
         op: &str,

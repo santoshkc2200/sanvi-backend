@@ -505,6 +505,10 @@ pub enum DataClass {
     Contact,
     Billing,
     Invoice,
+    /// A payment transaction record on a tenant's connected account
+    /// (phase 09): identifiers, statuses and amounts. Statutorily
+    /// retained — an erasure request must never delete a transaction.
+    TransactionRecord,
     AuditLog,
     ConsentRecord,
     Preference,
@@ -522,6 +526,7 @@ impl DataClass {
             "contact" => Ok(Self::Contact),
             "billing" => Ok(Self::Billing),
             "invoice" => Ok(Self::Invoice),
+            "transaction_record" => Ok(Self::TransactionRecord),
             "audit_log" => Ok(Self::AuditLog),
             "consent_record" => Ok(Self::ConsentRecord),
             "preference" => Ok(Self::Preference),
@@ -540,6 +545,7 @@ impl DataClass {
             Self::Contact => "contact",
             Self::Billing => "billing",
             Self::Invoice => "invoice",
+            Self::TransactionRecord => "transaction_record",
             Self::AuditLog => "audit_log",
             Self::ConsentRecord => "consent_record",
             Self::Preference => "preference",

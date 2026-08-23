@@ -167,6 +167,16 @@ impl CreateCheckout {
         }
     }
 
+    /// Create a checkout session for the storefront: validate → gate on
+    /// the tenant's live connection → persist → call the provider. The
+    /// span name is the trace's root for the buy path (09.7); the
+    /// adapter's own spans nest under it, so a trace covers the outbound
+    /// Stripe call end to end.
+    #[tracing::instrument(
+        name = "payments.checkout.create",
+        skip_all,
+        fields(tenant_id = %command.tenant_id, reference = %command.reference)
+    )]
     pub async fn execute(
         &self,
         command: NewCheckoutCommand,

@@ -296,10 +296,11 @@ privacy = true
 localization = true
 theming = true
 domains = true
-# Phase 09 ships OFF: each 09.x slice turns its own surface on behind this
-# flag; 09.7 flips the default for GA. Staging opt-in:
-# SANVI__FEATURES__PAYMENTS=true.
-payments = false
+# Phase 09 GA from 0.10.0 (09.7): the payments routes are on by default.
+# Rollback order if ever needed: payments.checkout off first (stop new
+# money), then this flag (stop new connections). NEVER disable the webhook
+# endpoint or its handlers — in-flight payments must keep being recorded.
+payments = true
 
 [outbox]
 poll_interval_ms = 1000

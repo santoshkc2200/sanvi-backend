@@ -12,5 +12,8 @@
   "payments.req.unmapped": "Additional requirement from Stripe: {code} (see Stripe's requirements help)",
   "payments.blocker.onboarding_not_started": "Onboarding has not started yet",
   "payments.blocker.card_payments_inactive": "Card payments are not active on this account yet",
-  "payments.blocker.requirements_past_due": "Required information is past due"
+  "payments.blocker.requirements_past_due": "Required information is past due",
+  "payments.blocker.in_flight_payments": "A payment is still being processed — wait for it to complete before disconnecting",
+  "payments.blocker.open_disputes": "A dispute needs your response — resolve it before disconnecting",
+  "payments.blocker.pending_payouts": "A payout to your bank is still pending — let it arrive or fail first"
 }

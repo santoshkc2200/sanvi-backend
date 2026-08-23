@@ -97,6 +97,18 @@ pub fn api_error(err: PaymentsError) -> ApiError {
             tracing::error!(error = %detail, "payments storage failure");
             ApiError::internal("storage failure")
         }
+        // Normally intercepted in `payments_problem` with its structured
+        // blocker body; the bare mapping keeps this match exhaustive.
+        PaymentsError::DisconnectBlocked { blockers } => ApiError::Conflict {
+            detail: format!(
+                "disconnect is blocked while: {}",
+                blockers
+                    .iter()
+                    .map(|b| b.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
     }
 }
 
@@ -104,6 +116,39 @@ pub fn api_error(err: PaymentsError) -> ApiError {
 /// `payments/*` type slug. The shared RFC 9457 layer preserves an
 /// already-well-formed problem body, so the slug reaches the client.
 pub fn payments_problem(err: PaymentsError) -> actix_web::Error {
+    // The disconnect refusal is richer than a bare conflict: its body
+    // names the blockers (`in_flight_payments`, `open_disputes`,
+    // `pending_payouts`) as RFC 9457 extension members, so the settings
+    // page can tell the tenant exactly what to wait for.
+    if let PaymentsError::DisconnectBlocked { blockers } = &err {
+        let api = ApiError::Conflict {
+            detail: err.to_string(),
+        };
+        let mut problem = api.problem();
+        problem.r#type = format!("{PROBLEM_TYPE_BASE}/{}", err.type_slug());
+        problem.extensions = Some(
+            [(
+                "blockers".to_string(),
+                serde_json::to_value(
+                    blockers
+                        .iter()
+                        .map(|b| DisconnectBlockerView {
+                            code: b.as_str().to_string(),
+                            summary_key: b.summary_key().to_string(),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or(serde_json::Value::Array(vec![])),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        return actix_web::error::InternalError::from_response(
+            err,
+            HttpResponse::build(api.status()).json(problem),
+        )
+        .into();
+    }
     let api = api_error(err.clone());
     let mut problem = api.problem();
     problem.r#type = format!("{PROBLEM_TYPE_BASE}/{}", err.type_slug());
@@ -497,6 +542,16 @@ pub async fn create_payment_connection_session(
         }))
 }
 
+/// One reason a disconnect is refused: the stable code the API contract
+/// fixes plus the i18n key the settings page renders it from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct DisconnectBlockerView {
+    #[schema(example = "in_flight_payments")]
+    pub code: String,
+    #[schema(example = "payments.blocker.in_flight_payments")]
+    pub summary_key: String,
+}
+
 /// `GET /api/v1/tenant/payments/connections/{id}` — the connection's
 /// status, capabilities, outstanding requirements (with i18n render keys
 /// and deadline), blockers, and the server-computed `can_accept_payments`
@@ -526,6 +581,85 @@ pub async fn get_payment_connection(
 ) -> Result<HttpResponse, actix_web::Error> {
     let connection = load_connection(&state, tenant.0.tenant_id, path.into_inner()).await?;
     Ok(HttpResponse::Ok().json(ConnectionView::of(&connection, &state.config)))
+}
+
+/// `DELETE /api/v1/tenant/payments/connections/{id}` — disconnect the
+/// tenant's payment provider (09.7). Local semantics only: the row is
+/// marked `Disconnected`, new checkouts stop, every historical record
+/// stays. The provider account itself is never closed — it is the
+/// tenant's account to close in their own Dashboard.
+///
+/// Refused with `409` and a structured blocker list (`in_flight_payments`,
+/// `open_disputes`, `pending_payouts` as problem-extension members) while
+/// money could still move. Idempotent: a retried DELETE of an already-
+/// disconnected connection answers 200 from the record. Reconnecting
+/// later creates a *new* connection; history stays attached to this one.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/tenant/payments/connections/{id}",
+    tag = "payments",
+    operation_id = "delete_payment_connection",
+    params(
+        ("id" = Uuid, Path, description = "The connection id"),
+        ("Idempotency-Key" = uuid::Uuid, Header, description = "Required on every mutating payments endpoint")
+    ),
+    responses(
+        (status = 200, description = "Disconnected (or already disconnected: idempotent replay)", body = ConnectionView),
+        (status = 400, description = "Missing/malformed Idempotency-Key", body = ProblemDetail),
+        (status = 403, description = "Missing payments.manage permission or the payments.stripe_connect entitlement", body = ProblemDetail),
+        (status = 404, description = "No such connection for this tenant", body = ProblemDetail),
+        (status = 409, description = "Money is still moving on this connection; the problem body names the blockers as extension members: blockers: [{code, summary_key}] with code in {in_flight_payments, open_disputes, pending_payouts} (payments/disconnect-blocked)", body = ProblemDetail)
+    )
+)]
+pub async fn delete_payment_connection(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    subject: CurrentSubject,
+    req: HttpRequest,
+    path: web::Path<Uuid>,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    idempotency_key(&req)?;
+    let connection_id = path.into_inner();
+
+    // 404 semantics live here (the use case re-checks inside its
+    // transaction); everything else belongs to the use case.
+    load_connection(&state, tenant_id, connection_id).await?;
+
+    let connection = state
+        .disconnect_connection
+        .execute(crate::application::DisconnectCommand {
+            tenant_id,
+            connection_id,
+            actor: subject.0.user_id,
+            ip: client_ip(&req),
+        })
+        .await;
+
+    match connection {
+        Ok(connection) => {
+            state
+                .metrics
+                .connection_disconnects
+                .with_label_values(&["ok"])
+                .inc();
+            Ok(HttpResponse::Ok().json(ConnectionView::of(&connection, &state.config)))
+        }
+        Err(err) => {
+            if let PaymentsError::DisconnectBlocked { blockers } = &err {
+                for blocker in blockers {
+                    state
+                        .metrics
+                        .connection_disconnects
+                        .with_label_values(&[blocker.as_str()])
+                        .inc();
+                }
+            }
+            Err(payments_problem(err))
+        }
+    }
 }
 
 /// `POST /api/v1/tenant/checkout` — create a checkout session on the

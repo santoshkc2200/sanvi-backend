@@ -392,11 +392,13 @@ async fn main() -> ExitCode {
         None
     };
 
-    // Phase 09: tenant payment providers. Flag ships off — with it off no
-    // payments route is mounted; with it on, the catalog route is
-    // permission- and entitlement-gated (sub-phase 09.0). The environment
-    // string decides whether the fake provider joins the registry
-    // (sub-phase 09.1).
+    // Phase 09: tenant payment providers. GA from v0.10.0 — the flag is on
+    // by default; with it off no payments route is mounted (the rollback
+    // switch of last resort), and with it on, every route is permission-
+    // and entitlement-gated (sub-phase 09.0). The environment string
+    // decides whether the fake provider joins the registry (sub-phase
+    // 09.1). Webhook ingestion is mounted regardless — money taken at
+    // Stripe must never lack a local record.
     let payments = if config.features.payments {
         Some(build_payments_state(
             pool.clone(),

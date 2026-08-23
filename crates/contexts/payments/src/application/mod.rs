@@ -9,6 +9,7 @@ pub mod account_session;
 pub mod catalog;
 pub mod create_checkout;
 pub mod create_connection;
+pub mod disconnect;
 pub mod disputes;
 pub mod export;
 pub mod fees;
@@ -31,6 +32,7 @@ pub use create_checkout::{
     conversion_event_id,
 };
 pub use create_connection::{StartConnectionCommand, StartProviderConnection};
+pub use disconnect::{DisconnectCommand, DisconnectConnection, TENANT_REQUEST_REASON};
 pub use disputes::{DisputeListItem, DisputePageView, ListDisputes, ListDisputesCommand};
 pub use export::{CSV_COLUMNS, ExportCommand, ExportPayments};
 pub use fees::{ConfiguredApplicationFeePolicy, TenantFeeDisclosure, disclose_fee_for};

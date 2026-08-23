@@ -2596,6 +2596,19 @@ pub fn build_payments_state(
             connections.clone(),
             audit_writer.clone(),
         ));
+    // 09.7: the guarded disconnect use case. Shares the read-model repos
+    // with the tenant API so the money guards see exactly what the
+    // dashboard sees.
+    let disconnect_connection =
+        std::sync::Arc::new(sanvi_payments::application::DisconnectConnection::new(
+            tx.clone(),
+            connections.clone(),
+            std::sync::Arc::new(sanvi_payments::adapters::SqlxPaymentRepository::new()),
+            std::sync::Arc::new(sanvi_payments::adapters::SqlxDisputeRepository::new()),
+            std::sync::Arc::new(SqlxPayoutRepository::new()),
+            std::sync::Arc::new(PaymentsEvents::new()),
+            audit_writer.clone(),
+        ));
 
     // 09.3: the Connect webhook transport. The endpoint's verifier carries
     // THIS endpoint's signing secret — Stripe's when the Connect adapter
@@ -2732,6 +2745,7 @@ pub fn build_payments_state(
         connections,
         create_connection,
         account_session,
+        disconnect_connection,
         webhook_receiver,
         checkouts,
         create_checkout,
@@ -3145,6 +3159,7 @@ async fn metrics(state: web::Data<AppState>) -> HttpResponse {
                 instance: Some("/metrics".to_string()),
                 trace_id: None,
                 reason: None,
+                extensions: None,
             })
         }
     }

@@ -324,11 +324,15 @@ pub const FEATURE_SEEDS: &[FeatureSeed] = &[
         visibility: Visibility::Public,
     },
     // --- tenant payments (09) -------------------------------------------------
+    // GA from 0.10.0 (09.7): on by default for new tenants. The
+    // entitlement still gates every route, so a tenant that must not take
+    // payments can have it revoked individually; the default is the
+    // release's statement that payments are part of the product.
     FeatureSeed {
         key: "payments.stripe_connect",
         name: "Stripe Connect",
         kind: FeatureKind::Boolean,
-        default_enabled: false,
+        default_enabled: true,
         default_limit: None,
         visibility: Visibility::Public,
     },
