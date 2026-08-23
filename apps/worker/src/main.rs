@@ -345,6 +345,57 @@ impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
         }
         Ok(())
     }
+
+    async fn payout_failed(
+        &self,
+        tenant_id: uuid::Uuid,
+        external_payout_id: &str,
+        amount: &sanvi_payments::Money,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        // A failed payout means the tenant's money is stuck at the
+        // provider — an alert, not a row.
+        self.render(
+            tenant_id,
+            "emails.payments_payout_failed.subject",
+            "emails.payments_payout_failed.body",
+            &[
+                (
+                    "payout",
+                    LocalizationArg::from(external_payout_id.to_string()),
+                ),
+                (
+                    "amount",
+                    LocalizationArg::from(format!(
+                        "{} {}",
+                        amount.amount_minor,
+                        amount.currency.as_str()
+                    )),
+                ),
+            ],
+        )
+        .await;
+        tracing::error!(
+            tenant_id = %tenant_id,
+            payout = %external_payout_id,
+            "tenant notified of a FAILED payout"
+        );
+        Ok(())
+    }
+
+    async fn tax_compliance_lapsed(
+        &self,
+        tenant_id: uuid::Uuid,
+        detail: &str,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        self.render(
+            tenant_id,
+            "emails.payments_tax_lapsed.subject",
+            "emails.payments_tax_lapsed.body",
+            &[("detail", LocalizationArg::from(detail.to_string()))],
+        )
+        .await;
+        Ok(())
+    }
 }
 
 struct WorkerPrivacyNotifications {
@@ -494,6 +545,10 @@ pub struct SchedulerConfig {
     pub payments_connection_sync_interval_secs: u64,
     /// Payments gauges refresh (phase 09).
     pub payments_metrics_interval_secs: u64,
+    /// Tax-compliance re-check for tenants with automatic tax enabled
+    /// (phase 09.6) — lapsed registrations warn instead of silently
+    /// under-collecting.
+    pub payments_tax_check_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -523,6 +578,7 @@ impl Default for SchedulerConfig {
             payments_webhook_dispatch_interval_secs: 10,
             payments_connection_sync_interval_secs: 3600,
             payments_metrics_interval_secs: 60,
+            payments_tax_check_interval_secs: 86_400,
         }
     }
 }
@@ -955,6 +1011,19 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(sanvi_payments::adapters::SqlxRefundRepository::new());
     let payments_disputes: std::sync::Arc<dyn sanvi_payments::domain::DisputeRepository> =
         std::sync::Arc::new(sanvi_payments::adapters::SqlxDisputeRepository::new());
+    // 09.6: the scheduled (and webhook-triggered) tax-compliance re-check.
+    let payments_tax_settings: std::sync::Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new());
+    let tax_recheck = std::sync::Arc::new(
+        sanvi_payments::application::CheckTenantTaxCompliance::new(
+            payments_tx.clone(),
+            payments_connections_repo.clone(),
+            payments_registry.clone(),
+            payments_tax_settings.clone(),
+            payments_notifier.clone(),
+        )
+        .with_metrics(payments_metrics.clone()),
+    );
     let connect_dispatcher = std::sync::Arc::new(
         ConnectWebhookDispatcher::new(
             payments_tx.clone(),
@@ -967,6 +1036,10 @@ async fn main() -> ExitCode {
         .with_checkout_store(payments_checkouts.clone())
         .with_refund_store(payments_refunds.clone())
         .with_dispute_store(payments_disputes.clone())
+        .with_payout_store(std::sync::Arc::new(
+            sanvi_payments::adapters::SqlxPayoutRepository::new(),
+        ))
+        .with_tax_checker(tax_recheck.clone())
         .with_metrics(payments_metrics.clone()),
     );
     let connection_sync = std::sync::Arc::new(
@@ -1710,6 +1783,31 @@ async fn main() -> ExitCode {
                                 .set(count);
                         }
                         scope.commit().await.map_err(|err| anyhow::anyhow!(err))?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "payments.tax_check",
+            Duration::from_secs(config.scheduler.payments_tax_check_interval_secs),
+            {
+                let recheck = tax_recheck.clone();
+                move || {
+                    let recheck = recheck.clone();
+                    Box::pin(async move {
+                        let report = recheck
+                            .execute(500)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 || report.warned > 0 || report.errors > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                warned = report.warned,
+                                errors = report.errors,
+                                "tax compliance re-check pass",
+                            );
+                        }
                         Ok(())
                     })
                 }

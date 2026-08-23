@@ -14,6 +14,7 @@ use super::capability::{CapabilitySet, RequirementSummary};
 use super::checkout::Checkout;
 use super::connection::ProviderConnection;
 use super::error::PaymentsError;
+use super::fees::FeeConfiguration;
 use super::money::{Currency, Money};
 use super::payment::{PaymentRecord, PaymentStatus, RefundRecord, RefundStatus};
 use super::provider::{ConnectionStatus, CountryCode, ProviderKind};
@@ -151,6 +152,19 @@ pub struct CreateCheckoutCommand {
     /// — the only correct mechanism for direct charges, and never sent
     /// alongside transfers (there are none in this charge pattern).
     pub application_fee: Option<Money>,
+    /// Automatic tax with the liability routed to the connected account
+    /// (`{ type: 'account', account }`) — set only when the tenant has
+    /// passed the compliance preflight (09.6). Absent = no automatic tax.
+    pub automatic_tax: Option<AutomaticTaxLiability>,
+}
+
+/// The tax liability for a session: always the connected account under
+/// direct charges (it is the merchant of record). Sanvi is never liable
+/// for tenant transactions, so `{ type: 'self' | 'application' }` has no
+/// constructor here by design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomaticTaxLiability {
+    pub account: String,
 }
 
 /// The provider-side checkout session.
@@ -245,6 +259,20 @@ pub trait PaymentProviderPort: Send + Sync {
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<ProviderPayout>, PaymentsError>;
 
+    /// The connected account's tax compliance: its tax-settings `status`
+    /// plus its count of *active* registrations. Read **on the account**
+    /// — registrations belong to the liable entity. Default: not shipped
+    /// by this adapter (an honest refusal; the preflight then fails
+    /// closed, never open).
+    async fn fetch_tax_compliance(
+        &self,
+        _external_account_id: &str,
+    ) -> Result<super::tax::TaxComplianceSnapshot, PaymentsError> {
+        Err(PaymentsError::ProviderUnavailable(
+            "tax compliance is not supported by this adapter".to_string(),
+        ))
+    }
+
     /// Verify a provider webhook signature against this adapter's
     /// configured secret (wrong-endpoint secrets must fail here — see
     /// [`crate::domain::webhook`]).
@@ -297,6 +325,19 @@ pub trait PayoutReadPort: Send + Sync {
         external_account_id: &str,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<ProviderPayout>, PaymentsError>;
+}
+
+/// The platform's per-tenant application-fee configuration, read at
+/// checkout time. Implemented over the `platform_admin` table by the
+/// composition root — the payments context never learns where the config
+/// lives (and a tenant can never set it: it is not in the tenant API).
+/// An absent row means "no fee configured" exactly like a disabled one.
+#[async_trait]
+pub trait ApplicationFeeStore: Send + Sync {
+    async fn configuration_for(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Option<FeeConfiguration>, PaymentsError>;
 }
 
 /// Webhook verification as a port: the transport (09.3) hands over raw
@@ -447,6 +488,26 @@ pub trait ConnectionNotifier: Send + Sync {
         tenant_id: Uuid,
         connection_id: Uuid,
         deadline: DateTime<Utc>,
+    ) -> Result<(), PaymentsError>;
+
+    /// A payout to the tenant's bank **failed** — their money is stuck at
+    /// the provider. An alert, not a row: the notification is the
+    /// deliverable, and a lost one must never fail the committed
+    /// projection.
+    async fn payout_failed(
+        &self,
+        tenant_id: Uuid,
+        external_payout_id: &str,
+        amount: &Money,
+    ) -> Result<(), PaymentsError>;
+
+    /// A tenant with automatic tax enabled has lapsed compliance (status
+    /// left `active`, or the last registration went away) — they are now
+    /// silently under-collecting on new sales.
+    async fn tax_compliance_lapsed(
+        &self,
+        tenant_id: Uuid,
+        detail: &str,
     ) -> Result<(), PaymentsError>;
 }
 
@@ -838,4 +899,65 @@ pub trait RefundRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         refund: &super::payment::RefundRecord,
     ) -> Result<(), PaymentsError>;
+}
+
+// ---------------------------------------------------------------------------
+// 09.6: the payout projection and per-tenant tax settings.
+// ---------------------------------------------------------------------------
+
+/// Persistence for the payout projection
+/// (`payments.payouts`). Written by the payout webhook handlers under
+/// platform scope (events arrive cross-tenant and route by account id,
+/// exactly like payments); read by tenant paths through RLS.
+#[async_trait]
+pub trait PayoutRepository: Send + Sync {
+    /// Insert-or-update by `(tenant_id, external_payout_id)` — the unique
+    /// index is the dedupe that makes every payout handler idempotent.
+    async fn upsert(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        payout: &super::payout::PayoutRecord,
+    ) -> Result<(), PaymentsError>;
+
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_payout_id: &str,
+    ) -> Result<Option<super::payout::PayoutRecord>, PaymentsError>;
+
+    /// The tenant's payouts, newest first.
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<super::payout::PayoutRecord>, PaymentsError>;
+}
+
+/// Persistence for per-tenant automatic-tax settings
+/// (`payments.tax_settings`). One row per tenant; written under platform
+/// scope by the webhook-triggered re-check and the scheduled job, read
+/// and written by the tenant API through RLS-scoped transactions.
+#[async_trait]
+pub trait TaxSettingsRepository: Send + Sync {
+    async fn find_by_tenant(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Option<super::tax::TaxSettingsRecord>, PaymentsError>;
+
+    async fn upsert(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        record: &super::tax::TaxSettingsRecord,
+    ) -> Result<(), PaymentsError>;
+
+    /// Tenants with automatic tax enabled — the scheduled re-check's work
+    /// queue, oldest check first.
+    async fn list_enabled(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<super::tax::TaxSettingsRecord>, PaymentsError>;
 }

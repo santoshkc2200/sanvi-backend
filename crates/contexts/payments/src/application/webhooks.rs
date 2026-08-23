@@ -210,6 +210,10 @@ pub struct WebhookDispatcher {
     /// 09.5 refund and dispute persistence.
     refunds: Option<Arc<dyn crate::domain::ports::RefundRepository>>,
     disputes: Option<Arc<dyn crate::domain::ports::DisputeRepository>>,
+    /// 09.6 payout projection persistence.
+    payouts: Option<Arc<dyn crate::domain::ports::PayoutRepository>>,
+    /// 09.6 tax-compliance re-checks triggered by tax.* account events.
+    tax_checker: Option<Arc<crate::application::tax_settings::CheckTenantTaxCompliance>>,
     metrics: Option<PaymentsMetrics>,
 }
 
@@ -232,6 +236,8 @@ impl WebhookDispatcher {
             checkouts: None,
             refunds: None,
             disputes: None,
+            payouts: None,
+            tax_checker: None,
             metrics: None,
         }
     }
@@ -257,6 +263,24 @@ impl WebhookDispatcher {
         disputes: Arc<dyn crate::domain::ports::DisputeRepository>,
     ) -> Self {
         self.disputes = Some(disputes);
+        self
+    }
+
+    /// Wire the 09.6 payout projection.
+    pub fn with_payout_store(
+        mut self,
+        payouts: Arc<dyn crate::domain::ports::PayoutRepository>,
+    ) -> Self {
+        self.payouts = Some(payouts);
+        self
+    }
+
+    /// Wire the 09.6 tax-compliance re-checker (driven by `tax.*` events).
+    pub fn with_tax_checker(
+        mut self,
+        checker: Arc<crate::application::tax_settings::CheckTenantTaxCompliance>,
+    ) -> Self {
+        self.tax_checker = Some(checker);
         self
     }
 
@@ -354,8 +378,14 @@ impl WebhookDispatcher {
         if is_dispute_event(&record.event_type) {
             return self.apply_dispute_event(record).await;
         }
+        if is_payout_event(&record.event_type) {
+            return self.apply_payout_event(record).await;
+        }
+        if is_tax_event(&record.event_type) {
+            return self.apply_tax_event(record).await;
+        }
 
-        // Account/capability handlers; everything else (payout) lands with
+        // Account/capability handlers; everything else lands with
         // its own slice and is acknowledged meanwhile.
         if !is_account_event(&record.event_type) {
             self.acknowledge(record).await?;
@@ -837,6 +867,20 @@ fn is_dispute_event(event_type: &str) -> bool {
     )
 }
 
+/// 09.6 payout events. `payout.paid` confirms the tenant's money arrived;
+/// `payout.failed` means it is stuck — an alert, not just a row.
+fn is_payout_event(event_type: &str) -> bool {
+    matches!(event_type, "payout.paid" | "payout.failed")
+}
+
+/// Tax-related account events: the connected account's tax configuration
+/// changed, so a stored enabled toggle may now be stale (registrations
+/// expired on the provider side). Triggers the same re-check as the
+/// scheduled job.
+fn is_tax_event(event_type: &str) -> bool {
+    event_type == "tax.settings.updated" || event_type.starts_with("tax.registration")
+}
+
 // ---------------------------------------------------------------------------
 // 09.4 payment handlers.
 //
@@ -903,6 +947,7 @@ async fn handle_payment_event(
                     PaymentStatus::Succeeded,
                     amount.clone(),
                     None,
+                    None,
                     Some(now),
                 )
                 .await?;
@@ -958,6 +1003,19 @@ async fn handle_payment_event(
                 _ => PaymentStatus::Canceled,
             };
             let amount = money_from(&object, "amount")?;
+            // The platform's application fee, when one was charged,
+            // reported by the provider — recorded because disclosure is
+            // the contract (a platform fee the merchant cannot see is not
+            // acceptable). Absent when fees are off (the release default);
+            // the upsert preserves a previously recorded fee then.
+            let application_fee = match object.get("application_fee_amount") {
+                Some(Value::Number(minor)) => Money::new(
+                    minor.as_i64().unwrap_or_default(),
+                    object.get("currency").and_then(Value::as_str).unwrap_or(""),
+                )
+                .ok(),
+                _ => None,
+            };
             let mut checkout = locate_checkout(scope, checkouts.as_ref(), &object).await?;
 
             let (payment, changed) = upsert_payment(
@@ -968,6 +1026,7 @@ async fn handle_payment_event(
                 &external_payment_id,
                 status,
                 amount,
+                application_fee,
                 failure_of(&object),
                 (status == PaymentStatus::Succeeded).then_some(now),
             )
@@ -1069,6 +1128,7 @@ async fn upsert_payment(
     external_payment_id: &str,
     status: PaymentStatus,
     amount: Money,
+    fee: Option<Money>,
     failure: Option<PaymentFailure>,
     captured_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<(PaymentRecord, bool), PaymentsError> {
@@ -1076,7 +1136,9 @@ async fn upsert_payment(
         .find_payment_by_external_id(scope, tenant_id, external_payment_id)
         .await?;
     let changed = !existing.as_ref().is_some_and(|p| p.status == status);
-    let id = existing.map_or_else(Uuid::now_v7, |p| p.id);
+    // Preserve an existing id and any previously recorded provider fee
+    // (the disclosure survives sibling events that don't carry the fee).
+    let id = existing.as_ref().map_or_else(Uuid::now_v7, |p| p.id);
     let mut record = PaymentRecord::new(
         id,
         tenant_id,
@@ -1085,8 +1147,15 @@ async fn upsert_payment(
         amount,
     )?;
     record.status = status;
+    if fee.is_some() {
+        record.fee = fee;
+    } else {
+        record.fee = existing.as_ref().and_then(|p| p.fee.clone());
+    }
+    record.payout_status = existing.as_ref().and_then(|p| p.payout_status);
     record.failure = failure;
     record.captured_at = captured_at;
+    record.created_at = existing.as_ref().and_then(|p| p.created_at);
     checkouts.upsert_payment(scope, &record).await?;
     Ok((record, changed))
 }
@@ -1486,6 +1555,279 @@ async fn handle_dispute_event(
 struct DisputeOpenedSignal {
     dispute_id: Uuid,
     due_by: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+// ---------------------------------------------------------------------------
+// 09.6 payout handlers.
+//
+// A payout event is the provider's statement about the tenant's money
+// moving to their bank. The projection row is the durable reflection
+// ("both paid and failed are reflected"); `payout.paid` additionally
+// emits PayoutPaid on its transition, and a failed payout raises the
+// tenant alert post-commit — an alert, not just a row.
+// ---------------------------------------------------------------------------
+
+impl WebhookDispatcher {
+    async fn apply_payout_event(
+        &self,
+        record: &WebhookEventRecord,
+    ) -> Result<ApplyOutcome, PaymentsError> {
+        let Some(payouts_repo) = self.payouts.clone() else {
+            warn!(
+                event = %record.stripe_event_id,
+                "payout event arrived with no payout store wired; acknowledged"
+            );
+            self.acknowledge(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let Some(account_id) = record.account_id.as_deref() else {
+            warn!(
+                event = %record.stripe_event_id,
+                event_type = %record.event_type,
+                "payout webhook names no connected account; recorded and acknowledged"
+            );
+            self.note_unknown_account(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("process_payout_webhook", ACTOR)
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        let Some(connection) = self
+            .connections
+            .find_live_by_external_account(&mut scope, account_id)
+            .await?
+        else {
+            error!(
+                event = %record.stripe_event_id,
+                account = %account_id,
+                "payout webhook for UNKNOWN account; recorded and alerted, no rows created",
+            );
+            if let Some(metrics) = &self.metrics {
+                metrics.webhook_unknown_account.inc();
+            }
+            self.events_repo
+                .mark_processed(&mut scope, &record.stripe_event_id)
+                .await?;
+            scope
+                .commit()
+                .await
+                .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let (outcome, alert) = handle_payout_event(
+            &mut scope,
+            payouts_repo.as_ref(),
+            self.checkouts.as_deref(),
+            self.events.as_ref(),
+            &connection,
+            record,
+        )
+        .await?;
+        self.events_repo
+            .mark_processed(&mut scope, &record.stripe_event_id)
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        // Post-commit: the tenant's money is stuck. A lost notification is
+        // logged, never a failed projection.
+        if let Some(alert) = alert
+            && let Err(err) = self
+                .notifier
+                .payout_failed(
+                    connection.tenant_id,
+                    &alert.external_payout_id,
+                    &alert.amount,
+                )
+                .await
+        {
+            warn!(
+                payout = %alert.external_payout_id,
+                error = %err,
+                "payout-failed notification failed; the payout row is committed"
+            );
+        }
+        Ok(outcome)
+    }
+
+    async fn apply_tax_event(
+        &self,
+        record: &WebhookEventRecord,
+    ) -> Result<ApplyOutcome, PaymentsError> {
+        let Some(checker) = self.tax_checker.clone() else {
+            // Unwired composition root: acknowledge-and-skip.
+            self.acknowledge(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let Some(account_id) = record.account_id.as_deref() else {
+            self.note_unknown_account(record).await?;
+            return Ok(ApplyOutcome::Skipped);
+        };
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("route_tax_webhook", ACTOR)
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        let connection = self
+            .connections
+            .find_live_by_external_account(&mut scope, account_id)
+            .await?;
+        self.events_repo
+            .mark_processed(&mut scope, &record.stripe_event_id)
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+
+        if let Some(connection) = connection {
+            // Re-verify this tenant's stored compliance against the
+            // provider; lapsed registrations warn from inside.
+            if let Err(err) = checker.recheck_tenant(connection.tenant_id).await {
+                tracing::warn!(
+                    tenant_id = %connection.tenant_id,
+                    error = %err,
+                    "tax-event-triggered compliance re-check failed"
+                );
+            }
+        }
+        Ok(ApplyOutcome::Applied)
+    }
+}
+
+/// What `apply_payout_event` needs to alert about once committed.
+struct PayoutFailedSignal {
+    external_payout_id: String,
+    amount: Money,
+}
+
+async fn handle_payout_event(
+    scope: &mut PlatformScope<'_>,
+    payouts: &dyn crate::domain::ports::PayoutRepository,
+    checkouts: Option<&dyn CheckoutLifecycleStore>,
+    events: &dyn EventPublisher,
+    connection: &crate::domain::connection::ProviderConnection,
+    record: &WebhookEventRecord,
+) -> Result<(ApplyOutcome, Option<PayoutFailedSignal>), PaymentsError> {
+    let object = record
+        .payload
+        .pointer("/data/object")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let tenant_id = connection.tenant_id;
+    let provider = connection.provider.as_str().to_string();
+
+    let external_payout_id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| id.starts_with("po_"))
+        .ok_or_else(|| {
+            PaymentsError::Storage(format!(
+                "payout webhook {} carries no payout id",
+                record.stripe_event_id
+            ))
+        })?
+        .to_string();
+    let amount_minor = object
+        .get("amount")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            PaymentsError::Storage(format!("payout {} has no amount", external_payout_id))
+        })?;
+    let currency = object
+        .get("currency")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            PaymentsError::Storage(format!("payout {} carries no currency", external_payout_id))
+        })?;
+    let amount = Money::new(amount_minor, currency)?;
+    let status = match record.event_type.as_str() {
+        "payout.paid" => crate::domain::ports::PayoutStatus::Paid,
+        _ => crate::domain::ports::PayoutStatus::Failed,
+    };
+    let arrival_at = object
+        .get("arrival_date")
+        .and_then(Value::as_i64)
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0));
+
+    // Upsert by external id — the dedupe that makes redelivery a no-op.
+    let existing = payouts
+        .find_by_external_id_platform(scope, tenant_id, &external_payout_id)
+        .await?;
+    let transitioned = !existing
+        .as_ref()
+        .is_some_and(|p| p.status == crate::domain::ports::PayoutStatus::Paid);
+    let id = existing.as_ref().map(|p| p.id).unwrap_or_else(Uuid::now_v7);
+    let mut payout = crate::domain::payout::PayoutRecord::new(
+        id,
+        tenant_id,
+        Some(connection.id),
+        external_payout_id.clone(),
+        amount.clone(),
+        status,
+    )?;
+    payout.arrival_at = arrival_at.or(existing.as_ref().and_then(|p| p.arrival_at));
+    payouts.upsert(scope, &payout).await?;
+
+    // Best-effort per-payment reflection: only payouts that name a source
+    // transaction can map back to one payment row (automatic payouts
+    // aggregate many payments and correctly map to none).
+    if let (Some(checkouts), Some(source_txn)) = (
+        checkouts,
+        object.get("source_transaction").and_then(Value::as_str),
+    ) {
+        match checkouts
+            .find_payment_by_external_id(scope, tenant_id, source_txn)
+            .await
+        {
+            Ok(Some(mut payment)) => {
+                payment.payout_status = Some(status);
+                checkouts.upsert_payment(scope, &payment).await?;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(
+                    event = %record.stripe_event_id,
+                    payout = %external_payout_id,
+                    error = %err,
+                    "payout could not reflect onto its source payment"
+                );
+            }
+        }
+    }
+
+    // Emit PayoutPaid exactly when this row first lands Paid (redelivery
+    // and sibling events converge); failure raises the post-commit alert.
+    match status {
+        crate::domain::ports::PayoutStatus::Paid => {
+            if transitioned {
+                events
+                    .publish(
+                        scope,
+                        tenant_id,
+                        &[PaymentsEvent::PayoutPaid {
+                            payout_id: payout.id,
+                            connection_id: connection.id,
+                            provider,
+                            amount: EventAmount::new(&amount),
+                        }],
+                    )
+                    .await?;
+            }
+            Ok((ApplyOutcome::Applied, None))
+        }
+        crate::domain::ports::PayoutStatus::Failed => Ok((
+            ApplyOutcome::Applied,
+            Some(PayoutFailedSignal {
+                external_payout_id,
+                amount,
+            }),
+        )),
+        crate::domain::ports::PayoutStatus::Pending => Ok((ApplyOutcome::Skipped, None)),
+    }
 }
 
 #[cfg(test)]

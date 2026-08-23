@@ -11,7 +11,8 @@ pub mod verifier;
 pub use events::OutboxEventPublisher;
 pub use gates::{ApprovalGateAdapter, NoopApprovalGate, NoopPrivacyLock};
 pub use repo::{
-    SqlxImpersonationGrantRepository, SqlxPendingApprovalRepository, SqlxTenantAdminViewRepository,
+    SqlxFeeRepository, SqlxImpersonationGrantRepository, SqlxPendingApprovalRepository,
+    SqlxTenantAdminViewRepository,
 };
 pub use system::{SystemClock, SystemIdGenerator};
 pub use verifier::SqlxImpersonationVerifier;

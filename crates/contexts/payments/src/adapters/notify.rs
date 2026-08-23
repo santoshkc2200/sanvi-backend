@@ -84,6 +84,35 @@ impl ConnectionNotifier for LoggingConnectionNotifier {
         );
         Ok(())
     }
+
+    async fn payout_failed(
+        &self,
+        tenant_id: Uuid,
+        external_payout_id: &str,
+        amount: &crate::domain::Money,
+    ) -> Result<(), PaymentsError> {
+        tracing::error!(
+            tenant_id = %tenant_id,
+            payout = %external_payout_id,
+            amount_minor = amount.amount_minor,
+            currency = amount.currency.as_str(),
+            "payments notification: PAYOUT FAILED — the tenant's money is stuck at the provider"
+        );
+        Ok(())
+    }
+
+    async fn tax_compliance_lapsed(
+        &self,
+        tenant_id: Uuid,
+        detail: &str,
+    ) -> Result<(), PaymentsError> {
+        tracing::warn!(
+            tenant_id = %tenant_id,
+            detail = %detail,
+            "payments notification: tax compliance lapsed while automatic tax is enabled"
+        );
+        Ok(())
+    }
 }
 
 /// The fail-closed verifier for an endpoint with no configured provider:

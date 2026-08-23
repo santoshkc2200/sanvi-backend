@@ -471,6 +471,34 @@ paths:
         tenant-scoped, audited.
       tags:
       - payments
+  /api/v1/tenant/payments/payouts:
+    get:
+      operationId: list_tenant_payouts
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutsListView'
+          description: The connected account's payout history, newest first
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Provider unavailable (payments/provider-unavailable)
+      summary: |-
+        `GET /api/v1/tenant/payments/payouts` — the connected account's payout
+        history (schedule, next payout, recent history), read live over the
+        connected account.
+      tags:
+      - payments
   /api/v1/tenant/payments/providers:
     get:
       description: |-
@@ -500,6 +528,73 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the payments.stripe_connect entitlement
       summary: '`GET /api/v1/tenant/payments/providers`.'
+      tags:
+      - payments
+  /api/v1/tenant/payments/tax-settings:
+    get:
+      operationId: get_tenant_tax_settings
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxSettingsView'
+          description: The tenant's automatic-tax state with the legal statement
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+      summary: '`GET /api/v1/tenant/payments/tax-settings`.'
+      tags:
+      - payments
+    put:
+      operationId: update_tenant_tax_settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTaxSettingsRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxSettingsView'
+          description: The updated tax settings
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed request
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.manage permission or the entitlement
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Preflight failed — the response names the exact missing step (payments/tax-preflight-failed)
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Provider unavailable (payments/provider-unavailable)
+      summary: |-
+        `PUT /api/v1/tenant/payments/tax-settings` — enable/disable automatic
+        tax. Enabling runs the preflight first: an account whose tax settings
+        are not `active`, or which holds no active registration, cannot enable
+        (409 naming the missing step) — without registrations Stripe collects
+        nothing and returns no error, and that silence must never look like a
+        working toggle.
       tags:
       - payments
   /api/v1/tenant/payments/{id}:

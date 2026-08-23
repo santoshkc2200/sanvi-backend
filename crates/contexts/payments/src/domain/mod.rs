@@ -7,10 +7,13 @@ pub mod connection;
 pub mod dispute;
 pub mod error;
 pub mod events;
+pub mod fees;
 pub mod money;
 pub mod payment;
+pub mod payout;
 pub mod ports;
 pub mod provider;
+pub mod tax;
 pub mod timeline;
 pub mod webhook;
 
@@ -20,18 +23,22 @@ pub use connection::ProviderConnection;
 pub use dispute::{DisputeRecord, DisputeStatus};
 pub use error::PaymentsError;
 pub use events::{EventPublisher, PaymentsEvent, PaymentsEventName};
+pub use fees::{FeeConfiguration, disabled_configuration};
 pub use money::{Currency, Money};
 pub use payment::{PaymentFailure, PaymentRecord, PaymentStatus, RefundRecord, RefundStatus};
+pub use payout::PayoutRecord;
 pub use ports::{
-    CheckoutLifecycleStore, CheckoutRepository, CheckoutThrottle, ConnectionLifecycleStore,
-    ConnectionNotifier, CreateAccountRequest, CreateCheckoutCommand, DisputeFilter, DisputePage,
-    DisputeRepository, PaymentFilter, PaymentPage, PaymentProviderPort, PaymentRepository,
-    PaymentSort, PayoutReadPort, PayoutStatus, ProviderAccount, ProviderAccountSession,
-    ProviderAccountStatus, ProviderCheckoutSession, ProviderConnectionRepository,
-    ProviderDescriptor, ProviderPayout, ProviderRefund, ProviderRefundCommand, RefundRepository,
+    ApplicationFeeStore, AutomaticTaxLiability, CheckoutLifecycleStore, CheckoutRepository,
+    CheckoutThrottle, ConnectionLifecycleStore, ConnectionNotifier, CreateAccountRequest,
+    CreateCheckoutCommand, DisputeFilter, DisputePage, DisputeRepository, PaymentFilter,
+    PaymentPage, PaymentProviderPort, PaymentRepository, PaymentSort, PayoutReadPort,
+    PayoutRepository, PayoutStatus, ProviderAccount, ProviderAccountSession, ProviderAccountStatus,
+    ProviderCheckoutSession, ProviderConnectionRepository, ProviderDescriptor, ProviderPayout,
+    ProviderRefund, ProviderRefundCommand, RefundRepository, TaxSettingsRepository,
     TenantDomainAllowList, WebhookEventRepository, WebhookVerifierPort,
 };
 pub use provider::{ConnectionStatus, CountryCode, ProviderKind};
+pub use tax::{TaxComplianceSnapshot, TaxPreflightRejection, TaxSettingsRecord, TaxWarning};
 pub use timeline::{PaymentTimeline, TimelineEntry};
 pub use webhook::{
     WebhookEventRecord, WebhookVerificationError, event_account_id, event_created,

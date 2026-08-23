@@ -71,18 +71,25 @@ pub fn conversion_event_id(tenant_id: Uuid, payment_id: Uuid) -> Uuid {
 
 /// The platform's fee policy for direct charges. Off in 0.10.0 — the
 /// platform monetises via subscription — and TASK-007 owns the real
-/// per-tenant configuration. While [`NoApplicationFee`] is wired, no fee
-/// parameter ever leaves this process on any tenant transaction.
+/// per-tenant configuration (platform-admin data, read through
+/// [`crate::domain::ports::ApplicationFeeStore`]). While [`NoApplicationFee`]
+/// is wired, no fee parameter ever leaves this process on any tenant
+/// transaction — the release-default regression guard TASK-005 asserts.
+#[async_trait::async_trait]
 pub trait ApplicationFeePolicy: Send + Sync {
-    fn application_fee(&self, amount: &Money) -> Option<i64>;
+    /// The fee for one charge of this tenant, or `None`. Implementations
+    /// compute minor units via [`crate::domain::fees`] — round half up on
+    /// the fee, never on the total.
+    async fn application_fee(&self, tenant_id: Uuid, amount: &Money) -> Option<Money>;
 }
 
 /// The shipped policy: fees are off.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoApplicationFee;
 
+#[async_trait::async_trait]
 impl ApplicationFeePolicy for NoApplicationFee {
-    fn application_fee(&self, _amount: &Money) -> Option<i64> {
+    async fn application_fee(&self, _tenant_id: Uuid, _amount: &Money) -> Option<Money> {
         None
     }
 }
@@ -133,6 +140,7 @@ pub struct CreateCheckout {
     domains: Arc<dyn TenantDomainAllowList>,
     events: Arc<dyn EventPublisher>,
     fee_policy: Arc<dyn ApplicationFeePolicy>,
+    tax_settings: Arc<dyn crate::domain::ports::TaxSettingsRepository>,
 }
 
 impl CreateCheckout {
@@ -145,6 +153,7 @@ impl CreateCheckout {
         domains: Arc<dyn TenantDomainAllowList>,
         events: Arc<dyn EventPublisher>,
         fee_policy: Arc<dyn ApplicationFeePolicy>,
+        tax_settings: Arc<dyn crate::domain::ports::TaxSettingsRepository>,
     ) -> Self {
         Self {
             tx_manager,
@@ -154,6 +163,7 @@ impl CreateCheckout {
             domains,
             events,
             fee_policy,
+            tax_settings,
         }
     }
 
@@ -322,10 +332,17 @@ impl CreateCheckout {
         command: &NewCheckoutCommand,
     ) -> Result<ProviderCheckoutSession, PaymentsError> {
         let adapter = self.adapter(&connection.provider)?;
-        let application_fee = match self.fee_policy.application_fee(&checkout.amount) {
-            None => None,
-            Some(minor) => Some(Money::new(minor, checkout.amount.currency.as_str())?),
-        };
+        let application_fee = self
+            .fee_policy
+            .application_fee(checkout.tenant_id, &checkout.amount)
+            .await;
+        // Automatic tax rides only when the tenant's stored settings say
+        // so — and those settings can be enabled only through a passed
+        // compliance preflight, so a session created here carries the
+        // liability of the connected account, the merchant of record.
+        let automatic_tax = self
+            .load_tax_liability(checkout.tenant_id, &connection.external_account_id)
+            .await?;
         let addressed = CreateCheckoutCommand {
             external_account_id: connection.external_account_id.clone(),
             checkout: checkout.clone(),
@@ -333,6 +350,7 @@ impl CreateCheckout {
             cancel_url: command.cancel_url.clone(),
             locale: checkout.locale.clone().unwrap_or_default(),
             application_fee,
+            automatic_tax,
         };
 
         // The outbound isolation guard (the task's explicit assertion):
@@ -350,6 +368,32 @@ impl CreateCheckout {
         checkout.session_created(session.external_session_id.clone(), session.expires_at)?;
         self.persist_update(checkout).await?;
         Ok(session)
+    }
+
+    /// The tax liability for this tenant's sessions, when their settings
+    /// are enabled. The stored liability account must equal the live
+    /// connection's account id — after a reconnection (new account) the
+    /// stale liability is not sent; the next preflight refreshes it.
+    async fn load_tax_liability(
+        &self,
+        tenant_id: Uuid,
+        live_account_id: &str,
+    ) -> Result<Option<crate::domain::ports::AutomaticTaxLiability>, PaymentsError> {
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("load_tax_settings_for_checkout", "payments-checkout")
+            .await
+            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
+        let record = self
+            .tax_settings
+            .find_by_tenant(&mut scope, tenant_id)
+            .await;
+        let _ = scope.rollback().await;
+        Ok(record?
+            .filter(|settings| settings.enabled && settings.liability_account == live_account_id)
+            .map(|settings| crate::domain::ports::AutomaticTaxLiability {
+                account: settings.liability_account,
+            }))
     }
 
     async fn persist_new(
@@ -639,11 +683,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_shipped_fee_policy_is_off() {
+    #[tokio::test]
+    async fn the_shipped_fee_policy_is_off() {
         // While fees are off no amount shape can conjure a fee.
         assert_eq!(
-            NoApplicationFee.application_fee(&Money::new(2000, "JPY").unwrap()),
+            NoApplicationFee
+                .application_fee(Uuid::now_v7(), &Money::new(2000, "JPY").unwrap())
+                .await,
             None
         );
     }

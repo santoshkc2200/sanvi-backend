@@ -105,6 +105,31 @@ impl PaymentsConnectionNotifier for CliNotifier {
         tracing::warn!(tenant_id = %tenant_id, dispute_id = %dispute_id, due_by = ?due_by, "dispute opened");
         Ok(())
     }
+
+    async fn payout_failed(
+        &self,
+        tenant_id: uuid::Uuid,
+        external_payout_id: &str,
+        amount: &sanvi_payments::Money,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        tracing::error!(
+            tenant_id = %tenant_id,
+            payout = %external_payout_id,
+            amount_minor = amount.amount_minor,
+            currency = amount.currency.as_str(),
+            "payout failed — the tenant's money is stuck at the provider"
+        );
+        Ok(())
+    }
+
+    async fn tax_compliance_lapsed(
+        &self,
+        tenant_id: uuid::Uuid,
+        detail: &str,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        tracing::warn!(tenant_id = %tenant_id, detail = %detail, "tax compliance lapsed");
+        Ok(())
+    }
 }
 
 /// `payments webhooks` — the store-first queue's backlog plus its

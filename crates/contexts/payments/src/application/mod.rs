@@ -11,11 +11,14 @@ pub mod create_checkout;
 pub mod create_connection;
 pub mod disputes;
 pub mod export;
+pub mod fees;
 pub mod lifecycle;
 pub mod list_payments;
+pub mod list_payouts;
 pub mod refund;
 pub mod registry;
 pub mod sync_connection;
+pub mod tax_settings;
 pub mod webhooks;
 
 use serde::{Deserialize, Serialize};
@@ -30,11 +33,16 @@ pub use create_checkout::{
 pub use create_connection::{StartConnectionCommand, StartProviderConnection};
 pub use disputes::{DisputeListItem, DisputePageView, ListDisputes, ListDisputesCommand};
 pub use export::{CSV_COLUMNS, ExportCommand, ExportPayments};
+pub use fees::{ConfiguredApplicationFeePolicy, TenantFeeDisclosure, disclose_fee_for};
 pub use lifecycle::{DEADLINE_REMINDER_WINDOW_DAYS, apply_account_snapshot, target_steps};
 pub use list_payments::{GetPaymentDetail, ListPayments, ListPaymentsCommand, PaymentDetail};
+pub use list_payouts::{ListPayouts, PayoutView as PayoutItemView, PayoutsView};
 pub use refund::{IssueRefund, RefundCommand};
 pub use registry::{ProviderRegistry, RuntimeEnvironment};
 pub use sync_connection::{SyncConnections, SyncReport};
+pub use tax_settings::{
+    CheckTenantTaxCompliance, ComplianceReport, ManageTaxSettings, TaxSettingsView, TaxWarningView,
+};
 pub use webhooks::{DISPATCH_BATCH, MAX_WEBHOOK_ATTEMPTS, WebhookDispatcher, WebhookReceiver};
 
 /// One connectable provider as the settings page renders it. Derived

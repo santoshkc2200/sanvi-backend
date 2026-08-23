@@ -104,6 +104,14 @@ pub enum PaymentsError {
         remaining_currency: String,
     },
 
+    /// Automatic tax could not be enabled: the compliance preflight
+    /// failed, and `reason` names exactly which step is missing
+    /// (`tax_status_not_active` / `no_active_registration`). A generic
+    /// refusal here would hide the silent-under-collection trap the
+    /// preflight exists to prevent. `payments/tax-preflight-failed`.
+    #[error("automatic tax preflight failed: {reason}")]
+    TaxPreflightFailed { reason: String },
+
     /// Persistence failure (logged, never leaked to the client).
     #[error("storage failure: {0}")]
     Storage(String),
@@ -128,6 +136,7 @@ impl PaymentsError {
             Self::DomainNotAllowed(_) => "payments/domain-not-allowed",
             Self::RateLimited(_) => "payments/rate-limited",
             Self::RefundExceedsRemaining { .. } => "payments/over-refund",
+            Self::TaxPreflightFailed { .. } => "payments/tax-preflight-failed",
             Self::InvalidMoney(_) | Self::InvalidConnection(_) => "bad-request",
             Self::NotEntitled(_) => "entitlement-required",
             Self::WebhookRejected(_) => "unauthorized",

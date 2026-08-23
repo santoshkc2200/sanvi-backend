@@ -60,6 +60,13 @@ pub struct FakeScript {
     /// The next minted account session is already expired — the
     /// use case must refuse it instead of handing on a dead credential.
     pub next_session_expired: bool,
+    /// The tax-settings status the next compliance fetch reports
+    /// (09.6 preflight). Default `active`.
+    pub tax_status: Option<String>,
+    /// The number of active registrations the next compliance fetch
+    /// reports (09.6 preflight). Default 0 — an unregistered account is
+    /// exactly what the preflight must refuse.
+    pub tax_registrations: Option<u32>,
 }
 
 struct FakeAccount {
@@ -98,6 +105,19 @@ struct FakeState {
     /// How many refunds the provider actually executed (tests assert
     /// "a retried key issues exactly one refund" against this).
     refund_executions: u64,
+    /// The last checkout command the provider saw (fee + tax routing),
+    /// for end-to-end wiring assertions.
+    last_checkout: Option<LastCheckoutObservation>,
+}
+
+/// What the fake records about the most recent checkout creation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LastCheckoutObservation {
+    pub external_account_id: String,
+    pub application_fee_minor: Option<i64>,
+    pub currency: String,
+    /// The liability account when automatic tax was requested.
+    pub automatic_tax_liability_account: Option<String>,
 }
 
 impl FakeProvider {
@@ -146,6 +166,16 @@ impl FakeProvider {
             .lock()
             .expect("fake provider state lock")
             .refund_executions
+    }
+
+    /// What the last checkout creation looked like from the provider's
+    /// side (fee + tax routing) — the end-to-end wiring assertions.
+    pub fn last_checkout_observation(&self) -> Option<LastCheckoutObservation> {
+        self.state
+            .lock()
+            .expect("fake provider state lock")
+            .last_checkout
+            .clone()
     }
 
     fn snapshot(
@@ -342,13 +372,23 @@ impl PaymentProviderPort for FakeProvider {
             checkout_locale(command),
             command.checkout.id.simple()
         );
-        // The application fee rides only when a policy supplies one; the
-        // fake records the fact so tests can assert the wiring end to end.
+        // The application fee and tax liability ride only when the use
+        // case supplies them; the fake records what it saw so tests can
+        // assert the wiring end to end.
         tracing::debug!(
             checkout_id = %command.checkout.id,
             application_fee = ?command.application_fee.as_ref().map(|fee| fee.amount_minor),
             "fake provider checkout session created"
         );
+        state.last_checkout = Some(LastCheckoutObservation {
+            external_account_id: command.external_account_id.clone(),
+            application_fee_minor: command.application_fee.as_ref().map(|fee| fee.amount_minor),
+            currency: command.checkout.amount.currency.as_str().to_string(),
+            automatic_tax_liability_account: command
+                .automatic_tax
+                .as_ref()
+                .map(|liability| liability.account.clone()),
+        });
         let session = ProviderCheckoutSession {
             external_session_id: external_session_id.clone(),
             url,
@@ -444,6 +484,30 @@ impl PaymentProviderPort for FakeProvider {
         }])
     }
 
+    /// Scriptable compliance snapshot: tests drive the preflight through
+    /// `FakeScript.tax_status` / `.tax_registrations` — an account with
+    /// no registrations is the default, because refusing it is the
+    /// behavior under test.
+    async fn fetch_tax_compliance(
+        &self,
+        external_account_id: &str,
+    ) -> Result<crate::domain::tax::TaxComplianceSnapshot, PaymentsError> {
+        let state = self.state.lock().expect("fake provider state lock");
+        if !state.accounts.contains_key(external_account_id) {
+            return Err(PaymentsError::ProviderUnavailable(format!(
+                "fake provider knows no account {external_account_id:?}"
+            )));
+        }
+        Ok(crate::domain::tax::TaxComplianceSnapshot {
+            status: state
+                .script
+                .tax_status
+                .clone()
+                .unwrap_or_else(|| "active".to_string()),
+            active_registrations: state.script.tax_registrations.unwrap_or(0),
+        })
+    }
+
     fn verify_webhook(&self, payload: &[u8], signature_header: &str) -> Result<(), PaymentsError> {
         crate::domain::webhook::verify_webhook_signature(
             FAKE_WEBHOOK_SECRET.as_bytes(),
@@ -510,6 +574,7 @@ mod tests {
             cancel_url: "https://shop.example.test/cart".to_string(),
             locale: "ja".to_string(),
             application_fee: None,
+            automatic_tax: None,
         }
     }
 

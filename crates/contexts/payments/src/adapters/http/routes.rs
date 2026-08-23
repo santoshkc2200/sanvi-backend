@@ -9,8 +9,9 @@ use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
 use super::handlers::{
     create_payment_connection, create_payment_connection_session, create_tenant_checkout,
-    export_payments, get_payment, get_payment_connection, get_tenant_checkout, list_disputes,
-    list_payment_providers, list_payments, refund_payment,
+    export_payments, get_payment, get_payment_connection, get_tax_settings, get_tenant_checkout,
+    list_disputes, list_payment_providers, list_payments, list_payouts, put_tax_settings,
+    refund_payment,
 };
 
 /// The entitlement every payments route is gated on (403, not 404 — the
@@ -58,6 +59,25 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
             .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
             .route(web::get().to(list_payments)),
+    )
+    // 09.6: payout visibility + tax settings. Registered before the
+    // `/payments/{id}` catch-all so "payouts" / "tax-settings" are never
+    // parsed as a payment id.
+    .service(
+        web::resource("/payments/payouts")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(list_payouts)),
+    )
+    .service(
+        web::resource("/payments/tax-settings")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, read.clone()),
+                (Method::PUT, manage),
+            ]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(get_tax_settings))
+            .route(web::put().to(put_tax_settings)),
     )
     .service(
         web::resource("/payments/export")
@@ -144,6 +164,24 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         "/api/v1/tenant/payments/disputes",
         Method::GET,
         "payments.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/payouts",
+        Method::GET,
+        "payments.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/tax-settings",
+        Method::GET,
+        "payments.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/tax-settings",
+        Method::PUT,
+        "payments.manage",
         ResourceSpec::Tenant,
     ),
     (

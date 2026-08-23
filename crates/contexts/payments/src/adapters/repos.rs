@@ -684,7 +684,7 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, PaymentRow>(
             "SELECT id, tenant_id, checkout_id, external_payment_id, status,
                     amount_minor, currency, fee_amount_minor, fee_currency,
-                    failure, captured_at, created_at
+                    payout_status, failure, captured_at, created_at
              FROM payments.payments
               WHERE tenant_id = $1 AND checkout_id = $2
               ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1",
@@ -730,6 +730,10 @@ impl TryFrom<PaymentRow> for PaymentRecord {
             status,
             amount,
             fee,
+            payout_status: row
+                .payout_status
+                .as_deref()
+                .and_then(crate::domain::ports::PayoutStatus::parse),
             failure,
             captured_at: row.captured_at,
             created_at: row.created_at,
@@ -748,6 +752,7 @@ struct PaymentRow {
     currency: String,
     fee_amount_minor: Option<i64>,
     fee_currency: Option<String>,
+    payout_status: Option<String>,
     failure: Option<Value>,
     captured_at: Option<DateTime<Utc>>,
     created_at: Option<DateTime<Utc>>,
@@ -833,13 +838,14 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
             "INSERT INTO payments.payments
                (id, tenant_id, checkout_id, external_payment_id, status,
                 amount_minor, currency, fee_amount_minor, fee_currency,
-                failure, captured_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                payout_status, failure, captured_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (tenant_id, external_payment_id) DO UPDATE SET
                checkout_id = COALESCE(payments.payments.checkout_id, EXCLUDED.checkout_id),
                status = EXCLUDED.status,
-               fee_amount_minor = EXCLUDED.fee_amount_minor,
-               fee_currency = EXCLUDED.fee_currency,
+               fee_amount_minor = COALESCE(EXCLUDED.fee_amount_minor, payments.payments.fee_amount_minor),
+               fee_currency = COALESCE(EXCLUDED.fee_currency, payments.payments.fee_currency),
+               payout_status = COALESCE(EXCLUDED.payout_status, payments.payments.payout_status),
                failure = EXCLUDED.failure,
                captured_at = COALESCE(EXCLUDED.captured_at, payments.payments.captured_at),
                updated_at = now()",
@@ -858,6 +864,7 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
                 .as_ref()
                 .map(|fee| fee.currency.as_str().to_string()),
         )
+        .bind(payment.payout_status.map(|s| s.as_str().to_string()))
         .bind(failure)
         .bind(payment.captured_at)
         .execute(&mut **scope.tx_mut().as_inner())
@@ -875,7 +882,7 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, PaymentRow>(
             "SELECT id, tenant_id, checkout_id, external_payment_id, status,
                     amount_minor, currency, fee_amount_minor, fee_currency,
-                    failure, captured_at, created_at
+                    payout_status, failure, captured_at, created_at
              FROM payments.payments
               WHERE tenant_id = $1 AND external_payment_id = $2",
         )
@@ -1024,7 +1031,7 @@ impl PaymentRepository for SqlxPaymentRepository {
         let row = sqlx::query_as::<_, PaymentRow>(
             "SELECT id, tenant_id, checkout_id, external_payment_id, status,
                     amount_minor, currency, fee_amount_minor, fee_currency,
-                    failure, captured_at, created_at
+                    payout_status, failure, captured_at, created_at
              FROM payments.payments
              WHERE tenant_id = $1 AND id = $2",
         )
@@ -1045,7 +1052,7 @@ impl PaymentRepository for SqlxPaymentRepository {
         let row = sqlx::query_as::<_, PaymentRow>(
             "SELECT id, tenant_id, checkout_id, external_payment_id, status,
                     amount_minor, currency, fee_amount_minor, fee_currency,
-                    failure, captured_at, created_at
+                    payout_status, failure, captured_at, created_at
              FROM payments.payments
              WHERE tenant_id = $1 AND external_payment_id = $2",
         )
@@ -1066,7 +1073,7 @@ impl PaymentRepository for SqlxPaymentRepository {
         let row = sqlx::query_as::<_, PaymentRow>(
             "SELECT id, tenant_id, checkout_id, external_payment_id, status,
                     amount_minor, currency, fee_amount_minor, fee_currency,
-                    failure, captured_at, created_at
+                    payout_status, failure, captured_at, created_at
              FROM payments.payments
              WHERE tenant_id = $1 AND external_payment_id = $2",
         )
@@ -1093,7 +1100,7 @@ impl PaymentRepository for SqlxPaymentRepository {
         let mut builder = QueryBuilder::new(
             "SELECT p.id, p.tenant_id, p.checkout_id, p.external_payment_id, p.status,
                     p.amount_minor, p.currency, p.fee_amount_minor, p.fee_currency,
-                    p.failure, p.captured_at, p.created_at
+                    p.payout_status, p.failure, p.captured_at, p.created_at
              FROM payments.payments p ",
         );
         // Customer filter requires a join to checkouts.
@@ -1165,7 +1172,7 @@ impl PaymentRepository for SqlxPaymentRepository {
         let mut builder = QueryBuilder::new(
             "SELECT p.id, p.tenant_id, p.checkout_id, p.external_payment_id, p.status,
                     p.amount_minor, p.currency, p.fee_amount_minor, p.fee_currency,
-                    p.failure, p.captured_at, p.created_at
+                    p.payout_status, p.failure, p.captured_at, p.created_at
              FROM payments.payments p ",
         );
         let need_customer = filter.customer.as_ref().is_some_and(|c| !c.is_empty());
@@ -1644,5 +1651,259 @@ impl DisputeRepository for SqlxDisputeRepository {
         .await
         .map_err(storage)?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 09.6: payout projection + per-tenant tax settings.
+// ---------------------------------------------------------------------------
+
+#[derive(sqlx::FromRow)]
+struct PayoutRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    connection_id: Option<Uuid>,
+    external_payout_id: String,
+    amount_minor: i64,
+    currency: String,
+    status: String,
+    arrival_at: Option<DateTime<Utc>>,
+    created_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+fn row_to_payout(row: PayoutRow) -> Result<crate::domain::payout::PayoutRecord, PaymentsError> {
+    let status = crate::domain::ports::PayoutStatus::parse(&row.status)
+        .ok_or_else(|| PaymentsError::Storage(format!("unknown payout status {:?}", row.status)))?;
+    Ok(crate::domain::payout::PayoutRecord {
+        id: row.id,
+        tenant_id: row.tenant_id,
+        connection_id: row.connection_id,
+        external_payout_id: row.external_payout_id,
+        amount: Money::new(row.amount_minor, &row.currency)?,
+        status,
+        arrival_at: row.arrival_at,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+/// The payout projection (`payments.payouts`). Webhook handlers write
+/// under platform scope; tenant reads go through RLS-scoped transactions.
+pub struct SqlxPayoutRepository;
+
+impl SqlxPayoutRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl crate::domain::ports::PayoutRepository for SqlxPayoutRepository {
+    async fn upsert(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        payout: &crate::domain::payout::PayoutRecord,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "INSERT INTO payments.payouts
+               (id, tenant_id, connection_id, external_payout_id,
+                amount_minor, currency, status, arrival_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (tenant_id, external_payout_id) DO UPDATE SET
+               status = EXCLUDED.status,
+               amount_minor = EXCLUDED.amount_minor,
+               currency = EXCLUDED.currency,
+               arrival_at = COALESCE(EXCLUDED.arrival_at, payments.payouts.arrival_at),
+               updated_at = now()",
+        )
+        .bind(payout.id)
+        .bind(payout.tenant_id)
+        .bind(payout.connection_id)
+        .bind(&payout.external_payout_id)
+        .bind(payout.amount.amount_minor)
+        .bind(payout.amount.currency.as_str())
+        .bind(payout.status.as_str())
+        .bind(payout.arrival_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn find_by_external_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+        external_payout_id: &str,
+    ) -> Result<Option<crate::domain::payout::PayoutRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, PayoutRow>(
+            "SELECT id, tenant_id, connection_id, external_payout_id,
+                    amount_minor, currency, status, arrival_at, created_at, updated_at
+             FROM payments.payouts
+             WHERE tenant_id = $1 AND external_payout_id = $2",
+        )
+        .bind(tenant_id)
+        .bind(external_payout_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(row_to_payout).transpose()
+    }
+
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::payout::PayoutRecord>, PaymentsError> {
+        let rows = sqlx::query_as::<_, PayoutRow>(
+            "SELECT id, tenant_id, connection_id, external_payout_id,
+                    amount_minor, currency, status, arrival_at, created_at, updated_at
+             FROM payments.payouts
+             WHERE tenant_id = $1
+             ORDER BY created_at DESC, id DESC
+             LIMIT $2",
+        )
+        .bind(tenant_id)
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(row_to_payout).collect()
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct TaxSettingsRow {
+    tenant_id: Uuid,
+    enabled: bool,
+    liability_account: String,
+    provider_status: String,
+    registration_count: i32,
+    warning: Option<Value>,
+    last_checked_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+fn row_to_tax_settings(
+    row: TaxSettingsRow,
+) -> Result<crate::domain::tax::TaxSettingsRecord, PaymentsError> {
+    let warning = row.warning.and_then(|raw| {
+        Some(crate::domain::tax::TaxWarning {
+            code: raw.get("code")?.as_str()?.to_string(),
+            detail: raw
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            detected_at: raw
+                .get("detected_at")
+                .and_then(Value::as_str)
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())?
+                .with_timezone(&Utc),
+        })
+    });
+    Ok(crate::domain::tax::TaxSettingsRecord {
+        tenant_id: row.tenant_id,
+        enabled: row.enabled,
+        liability_account: row.liability_account,
+        provider_status: row.provider_status,
+        active_registrations: u32::try_from(row.registration_count).unwrap_or(0),
+        warning,
+        last_checked_at: row.last_checked_at,
+        updated_at: row.updated_at,
+    })
+}
+
+fn tax_warning_json(warning: &Option<crate::domain::tax::TaxWarning>) -> Option<Value> {
+    warning.as_ref().map(|w| {
+        serde_json::json!({
+            "code": w.code,
+            "detail": w.detail,
+            "detected_at": w.detected_at.to_rfc3339(),
+        })
+    })
+}
+
+/// Per-tenant automatic-tax settings (`payments.tax_settings`).
+pub struct SqlxTaxSettingsRepository;
+
+impl SqlxTaxSettingsRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl crate::domain::ports::TaxSettingsRepository for SqlxTaxSettingsRepository {
+    async fn find_by_tenant(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Option<crate::domain::tax::TaxSettingsRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, TaxSettingsRow>(
+            "SELECT tenant_id, enabled, liability_account, provider_status,
+                    registration_count, warning, last_checked_at, updated_at
+             FROM payments.tax_settings
+             WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(row_to_tax_settings).transpose()
+    }
+
+    async fn upsert(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        record: &crate::domain::tax::TaxSettingsRecord,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "INSERT INTO payments.tax_settings
+               (tenant_id, enabled, liability_account, provider_status,
+                registration_count, warning, last_checked_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (tenant_id) DO UPDATE SET
+               enabled = EXCLUDED.enabled,
+               liability_account = EXCLUDED.liability_account,
+               provider_status = EXCLUDED.provider_status,
+               registration_count = EXCLUDED.registration_count,
+               warning = EXCLUDED.warning,
+               last_checked_at = EXCLUDED.last_checked_at,
+               updated_at = now()",
+        )
+        .bind(record.tenant_id)
+        .bind(record.enabled)
+        .bind(&record.liability_account)
+        .bind(&record.provider_status)
+        .bind(i32::try_from(record.active_registrations).unwrap_or(i32::MAX))
+        .bind(tax_warning_json(&record.warning))
+        .bind(record.last_checked_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn list_enabled(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<crate::domain::tax::TaxSettingsRecord>, PaymentsError> {
+        let rows = sqlx::query_as::<_, TaxSettingsRow>(
+            "SELECT tenant_id, enabled, liability_account, provider_status,
+                    registration_count, warning, last_checked_at, updated_at
+             FROM payments.tax_settings
+             WHERE enabled
+             ORDER BY last_checked_at ASC NULLS FIRST
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(row_to_tax_settings).collect()
     }
 }

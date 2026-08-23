@@ -304,6 +304,102 @@ paths:
       summary: '`DELETE /api/v1/platform/impersonations/{id}` — revoke (immediate).'
       tags:
       - platform_admin
+  /api/v1/platform/tenants/{id}/application-fee:
+    delete:
+      operationId: disable_application_fee
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '204':
+          description: Disabled
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied or fresh MFA missing
+      summary: |-
+        `DELETE /api/v1/platform/tenants/{id}/application-fee` — disable (the
+        rollback path: data, no deploy; the numbers are retained for review).
+      tags:
+      - platform_admin
+    get:
+      operationId: get_application_fee
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationFeeView'
+          description: The configuration (disabled when never configured)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+      summary: |-
+        `GET /api/v1/platform/tenants/{id}/application-fee` — the stored
+        configuration. A never-configured tenant renders the disabled default
+        so the console has one shape to bind.
+      tags:
+      - platform_admin
+    put:
+      operationId: set_application_fee
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetApplicationFeeRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationFeeView'
+          description: Configuration stored
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid configuration
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied or fresh MFA missing
+      summary: |-
+        `PUT /api/v1/platform/tenants/{id}/application-fee` — create or update
+        the per-tenant fee configuration. Audited with actor + reason; takes
+        effect on the next checkout creation with no deploy (rollback is a
+        `DELETE` away).
+      tags:
+      - platform_admin
   /api/v1/platform/tenants/{id}/entitlements:
     get:
       operationId: list_entitlement_overrides

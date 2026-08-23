@@ -5,9 +5,10 @@ use actix_web::web;
 
 use super::catalog::ROUTES;
 use super::handlers::{
-    approve_request, create_impersonation, get_tenant_admin_view, grant_entitlement_override,
-    list_entitlement_overrides, list_impersonations, list_pending_approvals, reject_request,
-    revoke_entitlement_override, revoke_impersonation, search_tenant_admin_views,
+    approve_request, create_impersonation, disable_application_fee, get_application_fee,
+    get_tenant_admin_view, grant_entitlement_override, list_entitlement_overrides,
+    list_impersonations, list_pending_approvals, reject_request, revoke_entitlement_override,
+    revoke_impersonation, search_tenant_admin_views, set_application_fee,
 };
 
 pub fn platform_admin_routes(cfg: &mut web::ServiceConfig) {
@@ -35,6 +36,18 @@ pub fn platform_admin_routes(cfg: &mut web::ServiceConfig) {
             }
             ("GET", "/api/v1/platform/tenants/{id}/entitlements") => {
                 cfg.service(resource.route(web::get().to(list_entitlement_overrides)));
+            }
+            // 09.6: the platform's per-tenant application fee. Read uses
+            // the tenant-read permission; changes are entitlement-write
+            // gated + fresh-MFA in the handler.
+            ("GET", "/api/v1/platform/tenants/{id}/application-fee") => {
+                cfg.service(resource.route(web::get().to(get_application_fee)));
+            }
+            ("PUT", "/api/v1/platform/tenants/{id}/application-fee") => {
+                cfg.service(resource.route(web::put().to(set_application_fee)));
+            }
+            ("DELETE", "/api/v1/platform/tenants/{id}/application-fee") => {
+                cfg.service(resource.route(web::delete().to(disable_application_fee)));
             }
             ("DELETE", "/api/v1/platform/tenants/{id}/entitlements/{feature}") => {
                 cfg.service(resource.route(web::delete().to(revoke_entitlement_override)));

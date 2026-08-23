@@ -8,13 +8,13 @@ use sanvi_persistence::TxManager;
 use crate::adapters::PaymentsMetrics;
 use crate::application::{
     CreateAccountSession, CreateCheckout, ExportPayments, GetPaymentDetail, IssueRefund,
-    ListDisputes, ListPayments, ListProviders, ProviderRegistry, StartProviderConnection,
-    WebhookReceiver,
+    ListDisputes, ListPayments, ListPayouts, ListProviders, ManageTaxSettings, ProviderRegistry,
+    StartProviderConnection, WebhookReceiver,
 };
 use crate::config::PaymentsConfig;
 use crate::domain::{
-    CheckoutRepository, CheckoutThrottle, DisputeRepository, PaymentRepository,
-    ProviderConnectionRepository, RefundRepository,
+    CheckoutRepository, CheckoutThrottle, DisputeRepository, PaymentRepository, PayoutRepository,
+    ProviderConnectionRepository, RefundRepository, TaxSettingsRepository,
 };
 
 #[derive(Clone)]
@@ -53,4 +53,12 @@ pub struct PaymentsState {
     pub issue_refund: Arc<IssueRefund>,
     pub list_disputes: Arc<ListDisputes>,
     pub export_payments: Arc<ExportPayments>,
+    /// 09.6: payout visibility (read-only) and tax settings.
+    pub payouts: Arc<dyn PayoutRepository>,
+    pub list_payouts: Arc<ListPayouts>,
+    pub tax_settings: Arc<dyn TaxSettingsRepository>,
+    pub manage_tax_settings: Arc<ManageTaxSettings>,
+    /// The read-only view of the platform's fee configuration — the
+    /// disclosure source for the tenant's payment settings.
+    pub fee_store: Arc<dyn crate::domain::ApplicationFeeStore>,
 }

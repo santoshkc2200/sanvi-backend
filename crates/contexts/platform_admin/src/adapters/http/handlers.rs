@@ -32,6 +32,10 @@ pub struct PlatformAdminState {
     pub list_approvals: Arc<ListPendingApprovals>,
     pub approve: Arc<ApproveRequest>,
     pub reject: Arc<RejectRequest>,
+    /// 09.6: the platform's per-tenant application-fee administration.
+    /// Lives here, never in the tenant API — a tenant cannot set the
+    /// platform's own fee.
+    pub fees: Option<Arc<dyn crate::domain::ports::ApplicationFeeAdmin>>,
 }
 
 /// The platform_admin context's domain-error → HTTP mapping (single place,
@@ -43,7 +47,8 @@ pub fn api_error(err: PlatformAdminError) -> ApiError {
         | PlatformAdminError::DurationTooLong { .. }
         | PlatformAdminError::InvalidActionType(_)
         | PlatformAdminError::InvalidSearch(_)
-        | PlatformAdminError::InvalidEntitlement(_) => ApiError::BadRequest {
+        | PlatformAdminError::InvalidEntitlement(_)
+        | PlatformAdminError::InvalidFeeConfig(_) => ApiError::BadRequest {
             detail: err.to_string(),
         },
         PlatformAdminError::FeatureNotFound(name) => ApiError::NotFound {
@@ -565,4 +570,164 @@ pub async fn reject_request(
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(approval))
+}
+
+// ---------------------------------------------------------------------------
+// Application-fee configuration (09.6). The platform's own fee lives in
+// the platform-admin context and its API — never the tenant API: a tenant
+// cannot set the platform's fee. Every change is audited (actor+reason)
+// and fresh-MFA gated like the other operator mutations.
+// ---------------------------------------------------------------------------
+
+/// One tenant's application-fee configuration (operator console).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ApplicationFeeView {
+    pub tenant_id: Uuid,
+    /// Off everywhere by default in 0.10.0.
+    pub enabled: bool,
+    pub basis_points: Option<u32>,
+    pub fixed_amount_minor: Option<i64>,
+    pub fixed_currency: Option<String>,
+    pub minimum_minor: i64,
+}
+
+fn fee_view(config: &crate::domain::fees::ApplicationFeeConfig) -> ApplicationFeeView {
+    ApplicationFeeView {
+        tenant_id: config.tenant_id,
+        enabled: config.enabled,
+        basis_points: config.basis_points,
+        fixed_amount_minor: config.fixed_amount_minor,
+        fixed_currency: config.fixed_currency.clone(),
+        minimum_minor: config.minimum_minor,
+    }
+}
+
+/// `GET /api/v1/platform/tenants/{id}/application-fee` — the stored
+/// configuration. A never-configured tenant renders the disabled default
+/// so the console has one shape to bind.
+#[utoipa::path(
+    get,
+    path = "/api/v1/platform/tenants/{id}/application-fee",
+    tag = "platform_admin",
+    operation_id = "get_application_fee",
+    params(("id" = Uuid, Path, description = "Tenant id")),
+    responses(
+        (status = 200, description = "The configuration (disabled when never configured)", body = ApplicationFeeView),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+    )
+)]
+pub async fn get_application_fee(
+    state: web::Data<PlatformAdminState>,
+    path: web::Path<Uuid>,
+    _subject: CurrentSubject,
+    _guard: RequiredPermission,
+) -> Result<impl Responder, ApiError> {
+    let fees = state
+        .fees
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("fee administration is not wired"))?;
+    let tenant_id = path.into_inner();
+    match fees.get(tenant_id).await.map_err(api_error)? {
+        Some(config) => Ok(HttpResponse::Ok().json(fee_view(&config))),
+        None => Ok(HttpResponse::Ok().json(ApplicationFeeView {
+            tenant_id,
+            enabled: false,
+            basis_points: None,
+            fixed_amount_minor: None,
+            fixed_currency: None,
+            minimum_minor: 0,
+        })),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SetApplicationFeeRequest {
+    /// Master switch. Enabling without a component is a validation error.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Basis points of the charge total (1..=10000).
+    pub basis_points: Option<u32>,
+    /// Flat component in minor units, applied to charges in its currency.
+    pub fixed_amount_minor: Option<i64>,
+    pub fixed_currency: Option<String>,
+    /// Floor on the computed fee, minor units of the charge currency
+    /// (currency-aware by interpretation: JPY minor units are whole yen;
+    /// USD minor units are cents).
+    #[serde(default)]
+    pub minimum_minor: i64,
+    /// Why the change is being made — audited with the actor.
+    pub reason: Option<String>,
+}
+
+/// `PUT /api/v1/platform/tenants/{id}/application-fee` — create or update
+/// the per-tenant fee configuration. Audited with actor + reason; takes
+/// effect on the next checkout creation with no deploy (rollback is a
+/// `DELETE` away).
+#[utoipa::path(
+    put,
+    path = "/api/v1/platform/tenants/{id}/application-fee",
+    tag = "platform_admin",
+    operation_id = "set_application_fee",
+    params(("id" = Uuid, Path, description = "Tenant id")),
+    request_body = SetApplicationFeeRequest,
+    responses(
+        (status = 201, description = "Configuration stored", body = ApplicationFeeView),
+        (status = 400, description = "Invalid configuration", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied or fresh MFA missing", body = sanvi_http::ProblemDetail)
+    )
+)]
+pub async fn set_application_fee(
+    state: web::Data<PlatformAdminState>,
+    subject: CurrentSubject,
+    path: web::Path<Uuid>,
+    body: web::Json<SetApplicationFeeRequest>,
+    _guard: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
+) -> Result<impl Responder, ApiError> {
+    let fees = state
+        .fees
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("fee administration is not wired"))?;
+    let config = crate::domain::fees::ApplicationFeeConfig {
+        tenant_id: path.into_inner(),
+        basis_points: body.basis_points,
+        fixed_amount_minor: body.fixed_amount_minor,
+        fixed_currency: body.fixed_currency.clone(),
+        minimum_minor: body.minimum_minor,
+        enabled: body.enabled,
+    };
+    fees.set(config.clone(), Some(subject.0.user_id), body.reason.clone())
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Created().json(fee_view(&config)))
+}
+
+/// `DELETE /api/v1/platform/tenants/{id}/application-fee` — disable (the
+/// rollback path: data, no deploy; the numbers are retained for review).
+#[utoipa::path(
+    delete,
+    path = "/api/v1/platform/tenants/{id}/application-fee",
+    tag = "platform_admin",
+    operation_id = "disable_application_fee",
+    params(("id" = Uuid, Path, description = "Tenant id")),
+    responses(
+        (status = 204, description = "Disabled"),
+        (status = 403, description = "Permission denied or fresh MFA missing", body = sanvi_http::ProblemDetail)
+    )
+)]
+pub async fn disable_application_fee(
+    state: web::Data<PlatformAdminState>,
+    subject: CurrentSubject,
+    path: web::Path<Uuid>,
+    _guard: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
+) -> Result<impl Responder, ApiError> {
+    let fees = state
+        .fees
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("fee administration is not wired"))?;
+    fees.disable(path.into_inner(), Some(subject.0.user_id), None)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::NoContent())
 }

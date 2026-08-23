@@ -50,6 +50,12 @@ pub struct PaymentsMetrics {
     /// Checkout creations by outcome (`created` / `replay`) — the top of
     /// the conversion funnel phase 10 measures downstream (09.4).
     pub checkout_creates: IntCounterVec,
+    /// Payout failures observed from `payout.failed` (09.6) — each one is
+    /// the tenant's money stuck at the provider; any increment pages.
+    pub payout_failures: IntCounter,
+    /// Tax-compliance lapses detected on tenants with automatic tax
+    /// enabled (09.6) — silent under-collection risk.
+    pub tax_compliance_lapsed: IntCounter,
 }
 
 impl PaymentsMetrics {
@@ -157,6 +163,18 @@ impl PaymentsMetrics {
         )
         .expect("counter vec construction is infallible");
         let _ = registry.register(Box::new(checkout_creates.clone()));
+        let payout_failures = IntCounter::new(
+            "payments_payout_failures_total",
+            "Failed payouts observed from payout.failed events (tenant money stuck)",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(payout_failures.clone()));
+        let tax_compliance_lapsed = IntCounter::new(
+            "payments_tax_compliance_lapsed_total",
+            "Tax-compliance lapses detected while automatic tax is enabled",
+        )
+        .expect("counter construction is infallible");
+        let _ = registry.register(Box::new(tax_compliance_lapsed.clone()));
 
         Self {
             catalog_requests,
@@ -173,6 +191,8 @@ impl PaymentsMetrics {
             reconciliation_checked,
             reconciliation_updated,
             checkout_creates,
+            payout_failures,
+            tax_compliance_lapsed,
         }
     }
 

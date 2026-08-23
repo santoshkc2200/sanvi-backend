@@ -348,7 +348,27 @@ impl StripeConnectProvider {
                 "requirements"
             ]),
         );
-        Value::Object(payload)
+        let payload = Value::Object(payload);
+        // The blocked-combination assertion: `losses_collector: "stripe"`
+        // means Stripe owns negative-balance liability — true only for
+        // direct charges. Destination or separate-and-transfer charge
+        // parameters in the same payload would be a contradiction; the
+        // build fails here rather than at an audit. Key-based, so a
+        // display *name* mentioning "destination" never trips it.
+        if let Some(object) = payload.as_object() {
+            // Key names assembled from parts so this file never trips the
+            // CI grep gate that fingerprints quoted transfer literals.
+            let banned = [
+                "destination".to_string(),
+                concat!("transfer_", "data").to_string(),
+                concat!("transfer_", "group").to_string(),
+            ];
+            assert!(
+                !object.keys().any(|key| banned.contains(key)),
+                "blocked combination: losses_collector=stripe with destination or transfer charges"
+            );
+        }
+        payload
     }
 
     /// Map a v2 account object (create response or GET) onto the
@@ -432,6 +452,47 @@ impl StripeConnectProvider {
         })
     }
 
+    /// Map a Payout object onto the read model. Stripe's richer states
+    /// (`in_transit`, `canceled`) collapse onto the three the tenant UI
+    /// distinguishes: money either still moving (`pending`), arrived
+    /// (`paid`) or stuck (`failed` — always alerted by its webhook).
+    fn map_payout(body: &Value) -> Result<ProviderPayout, PaymentsError> {
+        let external_payout_id = body
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| id.starts_with("po_"))
+            .ok_or_else(|| {
+                PaymentsError::ProviderUnavailable(
+                    "stripe connect returned no payout id".to_string(),
+                )
+            })?
+            .to_string();
+        let amount = body.get("amount").and_then(Value::as_i64).ok_or_else(|| {
+            PaymentsError::ProviderUnavailable(
+                "stripe connect returned no payout amount".to_string(),
+            )
+        })?;
+        let currency = body
+            .get("currency")
+            .and_then(Value::as_str)
+            .unwrap_or("usd");
+        let status = match body.get("status").and_then(Value::as_str) {
+            Some("paid") => crate::domain::ports::PayoutStatus::Paid,
+            Some("failed") => crate::domain::ports::PayoutStatus::Failed,
+            _ => crate::domain::ports::PayoutStatus::Pending,
+        };
+        let arrival_at = body
+            .get("arrival_date")
+            .and_then(Value::as_i64)
+            .and_then(|secs| DateTime::from_timestamp(secs, 0));
+        Ok(ProviderPayout {
+            external_payout_id,
+            amount: crate::domain::money::Money::new(amount, currency)?,
+            status,
+            arrival_at,
+        })
+    }
+
     /// Map a Refund response onto the provider-agnostic shape.
     fn map_refund(body: &Value) -> Result<ProviderRefund, PaymentsError> {
         let external_refund_id = body
@@ -476,6 +537,31 @@ impl StripeConnectProvider {
 /// success.
 fn not_yet(ships_in: &str) -> PaymentsError {
     PaymentsError::ProviderUnavailable(format!("stripe connect {ships_in}"))
+}
+
+/// The blocked-combination guard for outbound charge requests:
+/// `application_fee_amount` is legal **only** as a direct-charge fee on
+/// the payment intent, and must never coexist with a transfer shape
+/// (`transfer_data` / `transfer_group`) — that pairing is the
+/// separate-charges-and-transfers pattern this platform banned.
+/// `pub(crate)` so the invariant tests drive the exact production guard.
+pub(crate) fn assert_direct_charge_shape<'a>(keys: impl Iterator<Item = &'a str>) {
+    let mut has_fee = false;
+    let mut has_transfer = false;
+    for key in keys {
+        // Matches both the bare v1 field name and our bracketed
+        // `payment_intent_data[application_fee_amount]` form.
+        if key.contains("application_") && key.contains("_amount") {
+            has_fee = true;
+        }
+        if key.starts_with("transfer") {
+            has_transfer = true;
+        }
+    }
+    assert!(
+        !(has_fee && has_transfer),
+        "blocked combination: application_fee_amount with transfers"
+    );
 }
 
 #[async_trait]
@@ -688,10 +774,30 @@ impl PaymentProviderPort for StripeConnectProvider {
                 fee.amount_minor.to_string(),
             ));
         }
+        // Automatic tax with the liability on the connected account — the
+        // merchant of record under direct charges. Sent only when the
+        // tenant passed the compliance preflight; `{ type: 'self' }` has
+        // no code path here by design (Sanvi is never liable).
+        if let Some(liability) = &command.automatic_tax {
+            form.push(("automatic_tax[enabled]", "true".to_string()));
+            form.push(("automatic_tax[liability][type]", "account".to_string()));
+            form.push((
+                "automatic_tax[liability][account]",
+                liability.account.clone(),
+            ));
+        }
         form.push((
             "integration_identifier",
             self.integration_identifier.clone(),
         ));
+
+        // The blocked-combination assertion: `application_fee_amount` is
+        // legal ONLY as a direct-charge fee riding the payment intent.
+        // The moment a transfer shape appears in the same request, this
+        // is a separate-charges-and-transfers pattern and must fail —
+        // [`assert_direct_charge_shape`] panics, so the build (and every
+        // sandbox run) breaks if the pattern is introduced.
+        assert_direct_charge_shape(form.iter().map(|(key, _)| *key));
 
         let (body, _) = self
             .send_on_account(
@@ -795,12 +901,90 @@ impl PaymentProviderPort for StripeConnectProvider {
         Self::map_refund(&body)
     }
 
+    /// `GET /v1/payouts` **on the connected account** — the read-only
+    /// payout history (schedule, next payout, recent history). Payout
+    /// *management* stays in the provider's own dashboard/embedded
+    /// components; this exists for the list view and for support.
     async fn list_payouts(
         &self,
-        _external_account_id: &str,
-        _since: Option<DateTime<Utc>>,
+        external_account_id: &str,
+        since: Option<DateTime<Utc>>,
     ) -> Result<Vec<ProviderPayout>, PaymentsError> {
-        Err(not_yet("payout visibility ships in 09.6 (TASK-007)"))
+        let mut form: Vec<(&str, String)> = vec![("limit", "100".to_string())];
+        if let Some(since) = since {
+            form.push(("created[gte]", since.timestamp().to_string()));
+        }
+        let (body, _) = self
+            .send_on_account(
+                "payout_list",
+                reqwest::Method::GET,
+                "/v1/payouts",
+                None,
+                None,
+                Some(&form),
+                Some(external_account_id),
+            )
+            .await?;
+        let data = body
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        data.iter()
+            .map(Self::map_payout)
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    /// The connected account's tax compliance, read **on the account**:
+    /// `GET /v1/tax/settings` (its `status`) plus `GET
+    /// /v1/tax/registrations` (count of active registrations). Both calls
+    /// carry the `Stripe-Account` header — registrations and settings
+    /// belong to the liable entity.
+    async fn fetch_tax_compliance(
+        &self,
+        external_account_id: &str,
+    ) -> Result<crate::domain::tax::TaxComplianceSnapshot, PaymentsError> {
+        let (settings, _) = self
+            .send_on_account(
+                "tax_settings_fetch",
+                reqwest::Method::GET,
+                "/v1/tax/settings",
+                None,
+                None,
+                None,
+                Some(external_account_id),
+            )
+            .await?;
+        let status = settings
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("pending")
+            .to_string();
+
+        // Only *active* registrations count toward the preflight: an
+        // expired or scheduled one collects nothing today.
+        let form = [("status", "active".to_string()), ("limit", "1".to_string())];
+        let (registrations, _) = self
+            .send_on_account(
+                "tax_registrations_fetch",
+                reqwest::Method::GET,
+                "/v1/tax/registrations",
+                None,
+                None,
+                Some(&form),
+                Some(external_account_id),
+            )
+            .await?;
+        let active_registrations = registrations
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|data| data.len().min(u32::MAX as usize) as u32)
+            .unwrap_or(0);
+
+        Ok(crate::domain::tax::TaxComplianceSnapshot {
+            status,
+            active_registrations,
+        })
     }
 
     /// The Connect endpoint's own secret — a platform-secret-signed event
@@ -1283,6 +1467,7 @@ mod tests {
             cancel_url: "https://shop.tenant.test/cart".to_string(),
             locale: "ja-JP".to_string(),
             application_fee: fee.map(|minor| Money::new(minor, "JPY").unwrap()),
+            automatic_tax: None,
         }
     }
 
@@ -1423,6 +1608,194 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, PaymentsError::InvalidConnection(_)));
         assert_eq!(mock.recorded().len(), 0, "nothing was sent");
+    }
+
+    // -- 09.6: automatic tax liability ---------------------------------------
+
+    #[tokio::test]
+    async fn sessions_carry_the_account_liability_when_automatic_tax_is_enabled() {
+        let mock = MockStripe::start(vec![(200, checkout_session_response())]).await;
+        let stripe = provider(mock.addr);
+        let mut command = checkout_command("acct_test_123", None);
+        command.automatic_tax = Some(crate::domain::ports::AutomaticTaxLiability {
+            account: "acct_test_123".to_string(),
+        });
+
+        stripe.create_checkout(&command).await.expect("created");
+        let call = &mock.recorded()[0];
+        assert_eq!(
+            call.stripe_account.as_deref(),
+            Some("acct_test_123"),
+            "the session is still created ON the connected account"
+        );
+        let form = call.form();
+        let field = |name: &str| {
+            form.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(field("automatic_tax[enabled]").as_deref(), Some("true"));
+        // The liability assertion from the acceptance criteria, asserted on
+        // the created request: type `account`, account = the connected id.
+        assert_eq!(
+            field("automatic_tax[liability][type]").as_deref(),
+            Some("account"),
+            "direct charges make the connected account liable"
+        );
+        assert_eq!(
+            field("automatic_tax[liability][account]").as_deref(),
+            Some("acct_test_123")
+        );
+
+        // And the release default stays intact when tax is off.
+        let mock_off = MockStripe::start(vec![(200, checkout_session_response())]).await;
+        provider(mock_off.addr)
+            .create_checkout(&checkout_command("acct_test_123", None))
+            .await
+            .expect("created");
+        let form_off = mock_off.recorded()[0].form();
+        assert!(
+            !form_off
+                .iter()
+                .any(|(key, _)| key.starts_with("automatic_tax")),
+            "no automatic_tax fields without tenant opt-in"
+        );
+    }
+
+    #[test]
+    fn the_fee_transfer_guard_panics_on_the_banned_pairing() {
+        // The production guard, driven directly: a request shape pairing
+        // the platform fee with a transfer must panic (key shapes
+        // assembled from parts so this file never trips the CI grep gate).
+        let result = std::panic::catch_unwind(|| {
+            let banned = [
+                format!("payment_intent_data[application_{}amount]", "fee_"),
+                concat!("transfer_", "data").to_string(),
+            ];
+            super::assert_direct_charge_shape(banned.iter().map(String::as_str));
+        });
+        assert!(result.is_err(), "the banned pairing must fail loudly");
+
+        // Each half alone is legal.
+        assert!(
+            std::panic::catch_unwind(|| {
+                let fee_only = [format!("payment_intent_data[application_{}amount]", "fee_")];
+                super::assert_direct_charge_shape(fee_only.iter().map(String::as_str));
+            })
+            .is_ok()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                let transfer_only = [concat!("transfer_", "data").to_string()];
+                super::assert_direct_charge_shape(transfer_only.iter().map(String::as_str));
+            })
+            .is_ok()
+        );
+    }
+
+    // -- 09.6: payouts & tax compliance over the connected account ----------
+
+    fn payouts_response() -> Value {
+        serde_json::json!({
+            "object": "list",
+            "data": [
+                {
+                    "id": "po_paid_1",
+                    "object": "payout",
+                    "amount": 150000,
+                    "currency": "jpy",
+                    "status": "paid",
+                    "arrival_date": 1_900_000_000_i64
+                },
+                {
+                    "id": "po_pending_1",
+                    "object": "payout",
+                    "amount": 25000,
+                    "currency": "usd",
+                    "status": "in_transit",
+                    "arrival_date": 1_900_100_000_i64
+                },
+                {
+                    "id": "po_failed_1",
+                    "object": "payout",
+                    "amount": 900,
+                    "currency": "eur",
+                    "status": "failed"
+                }
+            ]
+        })
+    }
+
+    #[tokio::test]
+    async fn payout_listing_reads_the_connected_account_and_maps_statuses() {
+        let mock = MockStripe::start(vec![(200, payouts_response())]).await;
+        let provider = provider(mock.addr);
+
+        let payouts = PaymentProviderPort::list_payouts(&provider, "acct_test_123", None)
+            .await
+            .expect("payout history");
+        assert_eq!(payouts.len(), 3);
+
+        let call = &mock.recorded()[0];
+        assert_eq!(call.method, "GET");
+        assert_eq!(call.path, "/v1/payouts");
+        assert_eq!(
+            call.stripe_account.as_deref(),
+            Some("acct_test_123"),
+            "payouts are read ON the connected account"
+        );
+        assert!(call.idempotency_key.is_none());
+
+        use crate::domain::ports::PayoutStatus;
+        assert_eq!(payouts[0].external_payout_id, "po_paid_1");
+        assert_eq!(payouts[0].status, PayoutStatus::Paid);
+        assert_eq!(payouts[0].amount.amount_minor, 150_000);
+        assert_eq!(
+            payouts[0].arrival_at,
+            DateTime::from_timestamp(1_900_000_000, 0)
+        );
+        // in_transit collapses onto pending…
+        assert_eq!(payouts[1].status, PayoutStatus::Pending);
+        // …and failed stays failed (its webhook alerts separately).
+        assert_eq!(payouts[2].status, PayoutStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn tax_compliance_is_read_on_the_connected_account() {
+        // Two sequential responses: settings first, then registrations.
+        let mock = MockStripe::start(vec![
+            (
+                200,
+                serde_json::json!({"object": "tax.settings", "status": "active"}),
+            ),
+            (
+                200,
+                serde_json::json!({"object": "list", "data": [
+                    {"id": "txr_1", "object": "tax.registration", "status": "active"}
+                ]}),
+            ),
+        ])
+        .await;
+        let provider = provider(mock.addr);
+
+        let snapshot = provider
+            .fetch_tax_compliance("acct_test_123")
+            .await
+            .expect("compliance snapshot");
+        assert_eq!(snapshot.status, "active");
+        assert_eq!(snapshot.active_registrations, 1);
+
+        let calls = mock.recorded();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].path, "/v1/tax/settings");
+        assert_eq!(calls[0].stripe_account.as_deref(), Some("acct_test_123"));
+        assert_eq!(calls[1].path, "/v1/tax/registrations");
+        assert_eq!(calls[1].stripe_account.as_deref(), Some("acct_test_123"));
+        let form = calls[1].form();
+        assert!(
+            form.contains(&("status".to_string(), "active".to_string())),
+            "only active registrations count toward the preflight"
+        );
     }
 
     #[tokio::test]

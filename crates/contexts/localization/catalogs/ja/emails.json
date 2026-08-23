@@ -27,5 +27,9 @@
   "emails.payments_requirement_deadline.body": "Stripe から、決済アカウント（接続 {connection}）について {date, date} までに追加情報の提出を求められています。提出されない場合、アカウントは制限されます。",
   "emails.payments_dispute_opened.subject": "アカウントにチャージバック（異議申し立て）が発生しました",
   "emails.payments_dispute_opened.body": "ストアでの支払いについて顧客から異議申し立てがありました。Stripe ダッシュボードで dispute {dispute} の対応を行ってください。",
-  "emails.payments_dispute_opened.body_due": "ストアでの支払いについて顧客から異議申し立てがありました。dispute {dispute} は {due, date} までに Stripe ダッシュボードでご対応ください。"
+  "emails.payments_dispute_opened.body_due": "ストアでの支払いについて顧客から異議申し立てがありました。dispute {dispute} は {due, date} までに Stripe ダッシュボードでご対応ください。",
+  "emails.payments_payout_failed.subject": "対応が必要です: {tenant} の入金に失敗しました",
+  "emails.payments_payout_failed.body": "{amount} の銀行への入金が失敗しました。資金は Stripe 側に保留されています。Stripe ダッシュボードで入金先情報をご確認ください。",
+  "emails.payments_tax_lapsed.subject": "対応が必要です: {tenant} の自動税計算が収集できなくなっている可能性があります",
+  "emails.payments_tax_lapsed.body": "自動税計算が有効ですが、接続された決済アカウントの税務コンプライアンスが失効しています（{detail}）。税務登録と納付は事業者ご自身の責任です。税理士にご相談のうえ、Stripe で登録状況を更新してください。"
 }

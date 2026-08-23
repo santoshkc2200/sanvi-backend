@@ -504,3 +504,241 @@ impl SqlxTenantAdminViewRepository {
         Ok(views)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Application-fee configuration (09.6). The platform's own fee is data:
+// disable per tenant with no deploy. Every change writes an audit entry
+// (actor + reason) in the SAME transaction as the change — a fee change
+// without its record never commits.
+// ---------------------------------------------------------------------------
+
+use crate::domain::fees::ApplicationFeeConfig;
+use crate::domain::ports::ApplicationFeeAdmin;
+
+#[derive(Debug, FromRow)]
+struct FeeRow {
+    tenant_id: Uuid,
+    basis_points: Option<i32>,
+    fixed_amount_minor: Option<i64>,
+    fixed_currency: Option<String>,
+    minimum_minor: i64,
+    enabled: bool,
+}
+
+impl TryFrom<FeeRow> for ApplicationFeeConfig {
+    type Error = PlatformAdminError;
+
+    fn try_from(row: FeeRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            tenant_id: row.tenant_id,
+            basis_points: row
+                .basis_points
+                .map(|v| u32::try_from(v.max(0) as i64).unwrap_or(0)),
+            fixed_amount_minor: row.fixed_amount_minor,
+            fixed_currency: row.fixed_currency,
+            minimum_minor: row.minimum_minor,
+            enabled: row.enabled,
+        })
+    }
+}
+
+fn fee_json(config: &ApplicationFeeConfig) -> serde_json::Value {
+    serde_json::json!({
+        "basis_points": config.basis_points,
+        "fixed_amount_minor": config.fixed_amount_minor,
+        "fixed_currency": config.fixed_currency,
+        "minimum_minor": config.minimum_minor,
+        "enabled": config.enabled,
+    })
+}
+
+/// The `platform_admin.application_fees` repository. Owns its
+/// transactions (the operator handlers have no scope of their own, the
+/// same way the entitlement-admin adapter runs its own use cases).
+pub struct SqlxFeeRepository {
+    tx_manager: sanvi_persistence::TxManager,
+    audit: std::sync::Arc<dyn sanvi_audit::domain::AuditWriter>,
+}
+
+impl SqlxFeeRepository {
+    pub fn new(
+        tx_manager: sanvi_persistence::TxManager,
+        audit: std::sync::Arc<dyn sanvi_audit::domain::AuditWriter>,
+    ) -> Self {
+        Self { tx_manager, audit }
+    }
+
+    async fn read(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Option<ApplicationFeeConfig>, PlatformAdminError> {
+        let row = sqlx::query_as::<_, FeeRow>(
+            "SELECT tenant_id, basis_points, fixed_amount_minor, fixed_currency,
+                    minimum_minor, enabled
+             FROM platform_admin.application_fees
+             WHERE tenant_id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn write(
+        &self,
+        config: ApplicationFeeConfig,
+        actor_id: Option<Uuid>,
+        reason: Option<String>,
+        action: &str,
+        before: Option<ApplicationFeeConfig>,
+        after_enabled_only: bool,
+    ) -> Result<(), PlatformAdminError> {
+        config.validate()?;
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("application_fee_write", "platform_admin")
+            .await
+            .map_err(storage)?;
+        match action {
+            "platform_admin.application_fee.set" => {
+                sqlx::query(
+                    "INSERT INTO platform_admin.application_fees
+                       (tenant_id, basis_points, fixed_amount_minor, fixed_currency,
+                        minimum_minor, enabled, set_by, reason)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     ON CONFLICT (tenant_id) DO UPDATE SET
+                       basis_points = EXCLUDED.basis_points,
+                       fixed_amount_minor = EXCLUDED.fixed_amount_minor,
+                       fixed_currency = EXCLUDED.fixed_currency,
+                       minimum_minor = EXCLUDED.minimum_minor,
+                       enabled = EXCLUDED.enabled,
+                       set_by = EXCLUDED.set_by,
+                       reason = EXCLUDED.reason,
+                       updated_at = now()",
+                )
+                .bind(config.tenant_id)
+                .bind(config.basis_points.map(|v| v as i32))
+                .bind(config.fixed_amount_minor)
+                .bind(&config.fixed_currency)
+                .bind(config.minimum_minor)
+                .bind(config.enabled)
+                .bind(actor_id)
+                .bind(&reason)
+                .execute(&mut **scope.tx_mut().as_inner())
+                .await
+                .map_err(storage)?;
+            }
+            _ => {
+                sqlx::query(
+                    "UPDATE platform_admin.application_fees
+                     SET enabled = false, set_by = $2, reason = $3, updated_at = now()
+                     WHERE tenant_id = $1",
+                )
+                .bind(config.tenant_id)
+                .bind(actor_id)
+                .bind(&reason)
+                .execute(&mut **scope.tx_mut().as_inner())
+                .await
+                .map_err(storage)?;
+            }
+        }
+        let after = if after_enabled_only {
+            serde_json::json!({ "enabled": false })
+        } else {
+            fee_json(&config)
+        };
+        self.audit
+            .append(
+                &mut scope,
+                &sanvi_audit::domain::AuditEntryData {
+                    occurred_at: chrono::Utc::now(),
+                    actor_type: sanvi_audit::domain::ActorType::PlatformAdmin,
+                    actor_id,
+                    on_behalf_of: None,
+                    tenant_id: Some(config.tenant_id),
+                    action: action.to_string(),
+                    resource_type: Some("application_fee".to_string()),
+                    resource_id: Some(config.tenant_id.to_string()),
+                    before: before.as_ref().map(fee_json),
+                    after: Some(after),
+                    request_id: None,
+                    ip: None,
+                    user_agent: None,
+                },
+            )
+            .await
+            .map_err(storage)?;
+        scope.commit().await.map_err(storage)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ApplicationFeeAdmin for SqlxFeeRepository {
+    async fn get(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Option<ApplicationFeeConfig>, PlatformAdminError> {
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("application_fee_read", "platform_admin")
+            .await
+            .map_err(storage)?;
+        let config = self.read(&mut scope, tenant_id).await;
+        let _ = scope.rollback().await;
+        config
+    }
+
+    async fn set(
+        &self,
+        config: ApplicationFeeConfig,
+        actor_id: Option<Uuid>,
+        reason: Option<String>,
+    ) -> Result<(), PlatformAdminError> {
+        // Read the previous value first (best-effort: an unreadable
+        // `before` must not block a corrective change).
+        let before = self.get(config.tenant_id).await.ok().flatten();
+        self.write(
+            config,
+            actor_id,
+            reason,
+            "platform_admin.application_fee.set",
+            before,
+            false,
+        )
+        .await
+    }
+
+    async fn disable(
+        &self,
+        tenant_id: Uuid,
+        actor_id: Option<Uuid>,
+        reason: Option<String>,
+    ) -> Result<(), PlatformAdminError> {
+        let before = self.get(tenant_id).await.ok().flatten();
+        let placeholder = ApplicationFeeConfig {
+            tenant_id,
+            ..before
+                .clone()
+                .unwrap_or(crate::domain::fees::ApplicationFeeConfig {
+                    tenant_id,
+                    basis_points: None,
+                    fixed_amount_minor: None,
+                    fixed_currency: None,
+                    minimum_minor: 0,
+                    enabled: false,
+                })
+        };
+        self.write(
+            placeholder,
+            actor_id,
+            reason,
+            "platform_admin.application_fee.disable",
+            before,
+            true,
+        )
+        .await
+    }
+}

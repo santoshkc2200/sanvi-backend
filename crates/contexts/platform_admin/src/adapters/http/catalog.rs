@@ -56,6 +56,24 @@ pub const ROUTES: &[RouteDef] = &[
         resource: ResourceSpec::Platform,
     },
     RouteDef {
+        method: Method::GET,
+        path: "/api/v1/platform/tenants/{id}/application-fee",
+        permission: "platform.tenant.read",
+        resource: ResourceSpec::Platform,
+    },
+    RouteDef {
+        method: Method::PUT,
+        path: "/api/v1/platform/tenants/{id}/application-fee",
+        permission: "platform.entitlement.write",
+        resource: ResourceSpec::Platform,
+    },
+    RouteDef {
+        method: Method::DELETE,
+        path: "/api/v1/platform/tenants/{id}/application-fee",
+        permission: "platform.entitlement.write",
+        resource: ResourceSpec::Platform,
+    },
+    RouteDef {
         method: Method::DELETE,
         path: "/api/v1/platform/tenants/{id}/entitlements/{feature}",
         permission: "platform.entitlement.write",

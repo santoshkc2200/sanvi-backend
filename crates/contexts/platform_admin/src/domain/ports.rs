@@ -215,3 +215,33 @@ pub enum GrantOverrideOutcome {
     Granted,
     ApprovalRequired { approval_id: Uuid },
 }
+
+/// The platform's per-tenant application-fee administration (09.6). The
+/// tenant cannot set the platform's own fee; every change is audited with
+/// the actor and the reason.
+#[async_trait]
+pub trait ApplicationFeeAdmin: Send + Sync {
+    /// The tenant's stored configuration (`None` = never configured =
+    /// fees off).
+    async fn get(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Option<crate::domain::fees::ApplicationFeeConfig>, PlatformAdminError>;
+
+    /// Create or update the configuration (audited). Validates before
+    /// persisting; the audit entry commits with the change or not at all.
+    async fn set(
+        &self,
+        config: crate::domain::fees::ApplicationFeeConfig,
+        actor_id: Option<Uuid>,
+        reason: Option<String>,
+    ) -> Result<(), PlatformAdminError>;
+
+    /// Disable (the rollback path: data, no deploy). Audited.
+    async fn disable(
+        &self,
+        tenant_id: Uuid,
+        actor_id: Option<Uuid>,
+        reason: Option<String>,
+    ) -> Result<(), PlatformAdminError>;
+}

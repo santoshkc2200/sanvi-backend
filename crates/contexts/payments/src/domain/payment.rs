@@ -67,8 +67,15 @@ pub struct PaymentRecord {
     pub external_payment_id: String,
     pub status: PaymentStatus,
     pub amount: Money,
-    /// Processor fee as the provider reported it (same currency).
+    /// Processor fee as the provider reported it (same currency). When
+    /// the platform's application fee is enabled (off in 0.10.0), this is
+    /// where the tenant sees it — a platform fee the merchant cannot see
+    /// is not acceptable, whatever the contract says.
     pub fee: Option<Money>,
+    /// The payout status once a payout event names this payment's
+    /// transaction (`None` until then — most payouts aggregate many
+    /// payments and map to none individually).
+    pub payout_status: Option<super::ports::PayoutStatus>,
     pub failure: Option<PaymentFailure>,
     pub captured_at: Option<DateTime<Utc>>,
     pub created_at: Option<DateTime<Utc>>,
@@ -101,6 +108,7 @@ impl PaymentRecord {
             status: PaymentStatus::Processing,
             amount,
             fee: None,
+            payout_status: None,
             failure: None,
             captured_at: None,
             created_at: None,

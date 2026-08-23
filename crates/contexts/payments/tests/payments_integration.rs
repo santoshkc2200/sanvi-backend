@@ -62,10 +62,34 @@ impl sanvi_payments::domain::ports::TenantDomainAllowList for AllowShopTest {
 /// wiring point exists by turning on only where a test opts in.
 struct TestFeePolicy(bool);
 
+/// The test twin of the platform-fee store: no tenant is ever configured
+/// (the release default). Fee-on paths drive [`TestFeePolicy`] instead.
+#[derive(Default)]
+struct NoFeeStore;
+
+#[async_trait::async_trait]
+impl sanvi_payments::domain::ports::ApplicationFeeStore for NoFeeStore {
+    async fn configuration_for(
+        &self,
+        _tenant_id: uuid::Uuid,
+    ) -> Result<Option<sanvi_payments::domain::fees::FeeConfiguration>, sanvi_payments::PaymentsError>
+    {
+        Ok(None)
+    }
+}
+
+#[async_trait::async_trait]
 impl ApplicationFeePolicy for TestFeePolicy {
-    fn application_fee(&self, amount: &sanvi_payments::Money) -> Option<i64> {
+    async fn application_fee(
+        &self,
+        _tenant_id: uuid::Uuid,
+        amount: &sanvi_payments::Money,
+    ) -> Option<sanvi_payments::Money> {
         if self.0 {
-            Some(amount.amount_minor / 10)
+            Some(
+                sanvi_payments::Money::new(amount.amount_minor / 10, amount.currency.as_str())
+                    .ok()?,
+            )
         } else {
             None
         }
@@ -519,6 +543,7 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             Arc::new(AllowShopTest),
             Arc::new(OutboxEventPublisher::new()),
             Arc::new(TestFeePolicy(false)),
+            Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
         )),
         checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
         payments: payments.clone(),
@@ -576,6 +601,30 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             checkouts.clone(),
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
         )),
+        payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
+        list_payouts: Arc::new(sanvi_payments::application::ListPayouts::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            Arc::new(SqlxProviderConnectionRepository::new()),
+            providers.clone(),
+        )),
+        tax_settings: {
+            let repo: Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
+                Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new());
+            repo
+        },
+        manage_tax_settings: Arc::new(sanvi_payments::application::ManageTaxSettings::new(
+            TxManager::new(
+                sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
+                    .expect("lazy pool construction is configuration only"),
+            ),
+            Arc::new(SqlxProviderConnectionRepository::new()),
+            providers.clone(),
+            Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
+        )),
+        fee_store: Arc::new(NoFeeStore),
     }
 }
 
@@ -1275,7 +1324,7 @@ async fn creating_a_connection_requires_the_entitlement() {
 // out-of-order guard, DLQ and the reconciliation safety net.
 // ---------------------------------------------------------------------------
 
-use sanvi_payments::adapters::{LoggingConnectionNotifier, SqlxWebhookEventRepository};
+use sanvi_payments::adapters::SqlxWebhookEventRepository;
 use sanvi_payments::application::{SyncConnections, WebhookDispatcher, WebhookReceiver};
 use sanvi_payments::domain::{
     ConnectionLifecycleStore, ConnectionNotifier, EventPublisher, WebhookEventRepository,
@@ -1313,15 +1362,103 @@ fn epoch(secs_from_now: i64) -> i64 {
 /// The full 09.3 stack on a real pool: receiver (fake-secret verifier,
 /// loopback allow-list), dispatcher and reconciler sharing one fake
 /// provider handle the test scripts. 09.4 wires the checkout store into
-/// the dispatcher so the payment handlers are live.
+/// the dispatcher so the payment handlers are live; 09.6 adds the payout
+/// projection, the payout/tax alerts (recorded), and the tax re-checker.
 struct WebhookFixture {
     receiver: Arc<WebhookReceiver>,
     dispatcher: Arc<WebhookDispatcher>,
     sync: Arc<SyncConnections>,
     webhooks: Arc<dyn WebhookEventRepository>,
     checkouts: Arc<dyn CheckoutLifecycleStore>,
+    tax_recheck: Arc<sanvi_payments::application::CheckTenantTaxCompliance>,
+    notifier: Arc<RecordingNotifier>,
     tx: TxManager,
     provider: FakeProvider,
+}
+
+/// A notifier that records alerts so tests can assert "the failure raised
+/// an alert" without parsing logs.
+#[derive(Default)]
+struct RecordingNotifier {
+    payout_failures: std::sync::Mutex<Vec<String>>,
+    tax_lapses: std::sync::Mutex<Vec<(uuid::Uuid, String)>>,
+}
+
+impl RecordingNotifier {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn payout_failure_count(&self) -> usize {
+        self.payout_failures.lock().unwrap().len()
+    }
+
+    fn tax_lapse_count(&self) -> usize {
+        self.tax_lapses.lock().unwrap().len()
+    }
+}
+
+#[async_trait::async_trait]
+impl ConnectionNotifier for RecordingNotifier {
+    async fn connection_activated(
+        &self,
+        _tenant_id: uuid::Uuid,
+        _connection_id: uuid::Uuid,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        Ok(())
+    }
+
+    async fn connection_restricted(
+        &self,
+        _tenant_id: uuid::Uuid,
+        _connection_id: uuid::Uuid,
+        _detail: &str,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        Ok(())
+    }
+
+    async fn requirement_deadline_approaching(
+        &self,
+        _tenant_id: uuid::Uuid,
+        _connection_id: uuid::Uuid,
+        _deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        Ok(())
+    }
+
+    async fn dispute_opened(
+        &self,
+        _tenant_id: uuid::Uuid,
+        _dispute_id: uuid::Uuid,
+        _due_by: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        Ok(())
+    }
+
+    async fn payout_failed(
+        &self,
+        _tenant_id: uuid::Uuid,
+        external_payout_id: &str,
+        _amount: &sanvi_payments::Money,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        self.payout_failures
+            .lock()
+            .unwrap()
+            .push(external_payout_id.to_string());
+        Ok(())
+    }
+
+    async fn tax_compliance_lapsed(
+        &self,
+        tenant_id: uuid::Uuid,
+        detail: &str,
+    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
+        self.tax_lapses
+            .lock()
+            .unwrap()
+            .push((tenant_id, detail.to_string()));
+        Ok(())
+    }
 }
 
 async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
@@ -1330,10 +1467,22 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
     providers.register(Arc::new(provider.clone())).unwrap();
     let registry = Arc::new(providers);
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
+    let connection_rows: Arc<dyn ProviderConnectionRepository> =
+        Arc::new(SqlxProviderConnectionRepository::new());
     let lifecycle: Arc<dyn ConnectionLifecycleStore> =
         Arc::new(SqlxProviderConnectionRepository::new());
     let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
-    let notifier: Arc<dyn ConnectionNotifier> = Arc::new(LoggingConnectionNotifier::new());
+    let notifier = Arc::new(RecordingNotifier::new());
+    let notifier_trait: Arc<dyn ConnectionNotifier> = notifier.clone();
+    let tax_settings: Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
+        Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new());
+    let tax_recheck = Arc::new(sanvi_payments::application::CheckTenantTaxCompliance::new(
+        tx_manager_for_pool(pool),
+        connection_rows.clone(),
+        registry.clone(),
+        tax_settings,
+        notifier_trait.clone(),
+    ));
     let tx = TxManager::new(pool.clone());
     let receiver = Arc::new(WebhookReceiver::new(
         tx.clone(),
@@ -1351,18 +1500,22 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
             lifecycle.clone(),
             registry.clone(),
             events.clone(),
-            notifier.clone(),
+            notifier_trait.clone(),
         )
         .with_checkout_store(checkouts.clone())
         .with_refund_store(Arc::new(SqlxRefundRepository::new()))
-        .with_dispute_store(Arc::new(SqlxDisputeRepository::new())),
+        .with_dispute_store(Arc::new(SqlxDisputeRepository::new()))
+        .with_payout_store(Arc::new(
+            sanvi_payments::adapters::SqlxPayoutRepository::new(),
+        ))
+        .with_tax_checker(tax_recheck.clone()),
     );
     let sync = Arc::new(SyncConnections::new(
         tx.clone(),
-        lifecycle.clone(),
+        lifecycle,
         registry,
         events,
-        notifier,
+        notifier_trait,
         chrono::Duration::zero(),
     ));
     WebhookFixture {
@@ -1371,9 +1524,15 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         sync,
         webhooks,
         checkouts,
+        tax_recheck,
+        notifier,
         tx,
         provider,
     }
+}
+
+fn tx_manager_for_pool(pool: &sanvi_persistence::PgPool) -> TxManager {
+    TxManager::new(pool.clone())
 }
 
 impl WebhookFixture {
@@ -1939,6 +2098,7 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             Arc::new(AllowShopTest),
                             Arc::new(OutboxEventPublisher::new()),
                             Arc::new(TestFeePolicy(false)),
+                            Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
                         )),
                         checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
                         payments: Arc::new(SqlxPaymentRepository::new()),
@@ -1983,6 +2143,26 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                                 Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
                             ),
                         ),
+                        payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
+                        list_payouts: Arc::new(
+                            sanvi_payments::application::ListPayouts::new(
+                                TxManager::new(pool.clone()),
+                                Arc::new(SqlxProviderConnectionRepository::new()),
+                                Arc::new(ProviderRegistry::new()),
+                            ),
+                        ),
+                        tax_settings: Arc::new(
+                            sanvi_payments::adapters::SqlxTaxSettingsRepository::new(),
+                        ),
+                        manage_tax_settings: Arc::new(
+                            sanvi_payments::application::ManageTaxSettings::new(
+                                TxManager::new(pool.clone()),
+                                Arc::new(SqlxProviderConnectionRepository::new()),
+                                Arc::new(ProviderRegistry::new()),
+                                Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
+                            ),
+                        ),
+                        fee_store: Arc::new(NoFeeStore),
                     }
                 };
                 state.config.requirement_keys.insert(
@@ -2060,6 +2240,8 @@ fn checkout_fixture(
     let connections: Arc<dyn ProviderConnectionRepository> =
         Arc::new(SqlxProviderConnectionRepository::new());
     let checkouts: Arc<dyn CheckoutRepository> = Arc::new(SqlxCheckoutRepository::new());
+    let tax_settings_repo: Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
+        Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new());
     PaymentsState {
         config: PaymentsConfig::default(),
         metrics: Arc::new(PaymentsMetrics::new(&prometheus_registry)),
@@ -2093,11 +2275,12 @@ fn checkout_fixture(
         create_checkout: Arc::new(CreateCheckout::new(
             TxManager::new(pool.clone()),
             providers.clone(),
-            connections,
+            connections.clone(),
             checkouts,
             Arc::new(AllowShopTest),
             Arc::new(OutboxEventPublisher::new()),
             Arc::new(TestFeePolicy(fee_enabled)),
+            Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
         )),
         checkout_throttle: Arc::new(FixedWindowThrottle::new(throttle_limit)),
         payments: Arc::new(SqlxPaymentRepository::new()),
@@ -2140,6 +2323,20 @@ fn checkout_fixture(
             Arc::new(SqlxCheckoutRepository::new()),
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
         )),
+        payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
+        list_payouts: Arc::new(sanvi_payments::application::ListPayouts::new(
+            TxManager::new(pool.clone()),
+            connections.clone(),
+            providers.clone(),
+        )),
+        tax_settings: tax_settings_repo.clone(),
+        manage_tax_settings: Arc::new(sanvi_payments::application::ManageTaxSettings::new(
+            TxManager::new(pool.clone()),
+            connections.clone(),
+            providers.clone(),
+            tax_settings_repo.clone(),
+        )),
+        fee_store: Arc::new(NoFeeStore),
     }
 }
 
@@ -3810,4 +4007,426 @@ async fn the_payments_list_serves_every_filter_and_walks_pages_without_loss_or_d
     .await;
     let view: serde_json::Value = actix_test::read_body_json(res).await;
     assert!(view["items"].as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 09.6: payouts, tax liability and the application fee.
+// ---------------------------------------------------------------------------
+
+/// A payout event envelope (`payout.paid` / `payout.failed`).
+fn payout_event(
+    event_id: &str,
+    event_type: &str,
+    account: &str,
+    payout_id: &str,
+    amount: i64,
+    currency: &str,
+    source_transaction: Option<&str>,
+    created: i64,
+) -> serde_json::Value {
+    let mut object = serde_json::json!({
+        "id": payout_id,
+        "object": "payout",
+        "amount": amount,
+        "currency": currency,
+        "status": if event_type == "payout.paid" { "paid" } else { "failed" },
+        "arrival_date": epoch(60),
+    });
+    if let Some(source) = source_transaction {
+        object["source_transaction"] = serde_json::json!(source);
+    }
+    serde_json::json!({
+        "id": event_id,
+        "type": event_type,
+        "created": created,
+        "account": account,
+        "data": {"object": object}
+    })
+}
+
+#[tokio::test]
+async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_alerts() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "payouts").await;
+    let fixture = webhook_fixture(&pool).await;
+
+    activate_connection(&pool, tenant_id, &fixture.provider).await;
+    let account = live_account_id(&fixture, tenant_id).await;
+
+    // The paid payout lands in the projection and fires PayoutPaid once.
+    assert!(
+        fixture
+            .deliver(&payout_event(
+                "evt_po_1",
+                "payout.paid",
+                &account,
+                "po_paid_9",
+                150_000,
+                "jpy",
+                None,
+                epoch(10),
+            ))
+            .await
+            .unwrap()
+    );
+    fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(fixture.outbox_events("payments.payout_paid").await, 1);
+
+    // The failed payout is reflected too — and it ALERTS. The tenant's
+    // money is stuck: an alert, not just a row.
+    assert!(
+        fixture
+            .deliver(&payout_event(
+                "evt_po_2",
+                "payout.failed",
+                &account,
+                "po_failed_9",
+                90_000,
+                "jpy",
+                None,
+                epoch(20),
+            ))
+            .await
+            .unwrap()
+    );
+    fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(
+        fixture.notifier.payout_failure_count(),
+        1,
+        "a failed payout raises exactly one tenant alert"
+    );
+
+    // Both rows are webhook-truthful in the projection.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT external_payout_id, status FROM payments.payouts ORDER BY external_payout_id",
+    )
+    .fetch_all(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.contains(&("po_paid_9".to_string(), "paid".to_string())));
+    assert!(rows.contains(&("po_failed_9".to_string(), "failed".to_string())));
+
+    // Redelivery of either event changes nothing (dedupe by event id AND
+    // by transition): still one paid event, still one alert.
+    fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(fixture.outbox_events("payments.payout_paid").await, 1);
+    assert_eq!(fixture.notifier.payout_failure_count(), 1);
+}
+
+#[tokio::test]
+async fn a_payout_that_names_its_source_payment_updates_the_payout_status_column() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "payout-map").await;
+    let fixture = webhook_fixture(&pool).await;
+
+    activate_connection(&pool, tenant_id, &fixture.provider).await;
+    let account = live_account_id(&fixture, tenant_id).await;
+
+    // One stored payment the payout will name via source_transaction.
+    let checkouts = SqlxCheckoutRepository::new();
+    {
+        let payment = sanvi_payments::PaymentRecord::new(
+            Uuid::now_v7(),
+            tenant_id,
+            None,
+            "pi_src_1".to_string(),
+            Money::new(2000, "JPY").unwrap(),
+        )
+        .unwrap();
+        let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
+        checkouts
+            .upsert_payment(&mut scope, &payment)
+            .await
+            .unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    assert!(
+        fixture
+            .deliver(&payout_event(
+                "evt_po_map",
+                "payout.failed",
+                &account,
+                "po_src_1",
+                2000,
+                "jpy",
+                Some("pi_src_1"),
+                epoch(30),
+            ))
+            .await
+            .unwrap()
+    );
+    fixture.dispatcher.dispatch(10).await.unwrap();
+
+    // The payment read model's payout-status column now says failed.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT payout_status FROM payments.payments WHERE external_payment_id = 'pi_src_1'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(status.as_deref(), Some("failed"));
+}
+
+/// Enable automatic tax through the use case against the fixture's fake.
+async fn enable_tax(
+    pool: &sqlx::PgPool,
+    provider: &FakeProvider,
+    tenant_id: Uuid,
+) -> Result<sanvi_payments::application::TaxSettingsView, sanvi_payments::domain::PaymentsError> {
+    let state = checkout_fixture(pool, provider.clone(), 1000, false);
+    state.manage_tax_settings.enable(tenant_id).await
+}
+
+#[tokio::test]
+async fn an_account_with_no_registrations_cannot_enable_automatic_tax_and_the_reason_is_specific() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "tax-preflight").await;
+    let provider = FakeProvider::new();
+
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    // Step 1 fails: settings active but ZERO registrations — the silent
+    // under-collection trap, refused with its own specific code.
+    let err = enable_tax(&pool, &provider, tenant_id).await.unwrap_err();
+    match err {
+        sanvi_payments::domain::PaymentsError::TaxPreflightFailed { reason } => {
+            assert_eq!(reason, "no_active_registration");
+        }
+        other => panic!("expected the preflight refusal, got {other:?}"),
+    }
+
+    // Step 2 would fail differently: settings not active even though a
+    // registration exists — each missing step names itself.
+    provider.script(FakeScript {
+        tax_status: Some("pending".to_string()),
+        tax_registrations: Some(3),
+        ..FakeScript::default()
+    });
+    let err = enable_tax(&pool, &provider, tenant_id).await.unwrap_err();
+    match err {
+        sanvi_payments::domain::PaymentsError::TaxPreflightFailed { reason } => {
+            assert_eq!(reason, "tax_status_not_active");
+        }
+        other => panic!("expected the preflight refusal, got {other:?}"),
+    }
+
+    // Both steps hold: the toggle turns on.
+    provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(2),
+        ..FakeScript::default()
+    });
+    let view = enable_tax(&pool, &provider, tenant_id).await.unwrap();
+    assert!(view.enabled);
+    assert_eq!(view.active_registrations, 2);
+    assert!(view.liability_account.is_some());
+}
+
+#[tokio::test]
+async fn a_session_created_with_automatic_tax_carries_the_account_liability() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "tax-liability").await;
+    let provider = FakeProvider::new();
+
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    // With tax off (the default), no session carries automatic tax.
+    let _ = create_checkout_via_use_case(&pool, &provider, tenant_id, "order-tax-off").await;
+    let observation = provider.last_checkout_observation().unwrap();
+    assert_eq!(
+        observation.automatic_tax_liability_account, None,
+        "release default: no liability fields leave the process"
+    );
+
+    // Pass the preflight, flip the toggle…
+    provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(1),
+        ..FakeScript::default()
+    });
+    enable_tax(&pool, &provider, tenant_id).await.unwrap();
+
+    // …and the next session routes the liability to the connected
+    // account — the merchant of record under direct charges — asserted
+    // on what the provider actually received.
+    let (_, _) = create_checkout_via_use_case(&pool, &provider, tenant_id, "order-tax-on").await;
+    let observation = provider.last_checkout_observation().unwrap();
+    assert_eq!(
+        observation.automatic_tax_liability_account.as_deref(),
+        Some(observation.external_account_id.as_str()),
+        "liability.type == 'account' with the connected account id"
+    );
+}
+
+#[tokio::test]
+async fn lapsed_registrations_warn_on_the_scheduled_re_check() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "tax-lapse").await;
+    let fixture = webhook_fixture(&pool).await;
+    activate_connection(&pool, tenant_id, &fixture.provider).await;
+
+    // Compliant at enable time…
+    fixture.provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(1),
+        ..FakeScript::default()
+    });
+    enable_tax(&pool, &fixture.provider, tenant_id)
+        .await
+        .unwrap();
+
+    // …then the registration lapses on the provider side.
+    fixture.provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(0),
+        ..FakeScript::default()
+    });
+
+    // The scheduled re-check catches it and warns.
+    let report = fixture.tax_recheck.execute(10).await.unwrap();
+    assert_eq!(report.checked, 1, "{report:?}");
+    assert_eq!(report.warned, 1, "{report:?}");
+    assert_eq!(fixture.notifier.tax_lapse_count(), 1);
+
+    // The warning is stored next to the (still enabled) toggle.
+    let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
+    let row: (bool, Option<serde_json::Value>) =
+        sqlx::query_as("SELECT enabled, warning FROM payments.tax_settings WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    assert!(row.0, "compliance drift never silently disables tax");
+    assert!(row.1.is_some());
+    assert_eq!(
+        row.1.unwrap()["code"],
+        "payments.tax.warning.no_active_registration"
+    );
+}
+
+#[tokio::test]
+async fn a_tax_event_on_the_account_triggers_the_recheck() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "tax-event").await;
+    let fixture = webhook_fixture(&pool).await;
+    activate_connection(&pool, tenant_id, &fixture.provider).await;
+
+    fixture.provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(1),
+        ..FakeScript::default()
+    });
+    enable_tax(&pool, &fixture.provider, tenant_id)
+        .await
+        .unwrap();
+    assert_eq!(fixture.notifier.tax_lapse_count(), 0);
+
+    // The registration lapses; Stripe tells us with tax.settings.updated.
+    fixture.provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(0),
+        ..FakeScript::default()
+    });
+    let event = serde_json::json!({
+        "id": "evt_tax_1",
+        "type": "tax.settings.updated",
+        "created": epoch(40),
+        "account": live_account_id(&fixture, tenant_id).await,
+        "data": {"object": {"object": "tax.settings"}}
+    });
+    assert!(fixture.deliver(&event).await.unwrap());
+    fixture.dispatcher.dispatch(10).await.unwrap();
+
+    assert_eq!(
+        fixture.notifier.tax_lapse_count(),
+        1,
+        "the webhook-triggered recheck warned about the lapse"
+    );
+}
+
+#[tokio::test]
+async fn the_platform_fee_is_disclosed_on_the_payment_when_charged() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "fee-disclosure").await;
+    let fixture = webhook_fixture(&pool).await;
+    activate_connection(&pool, tenant_id, &fixture.provider).await;
+    let account = live_account_id(&fixture, tenant_id).await;
+
+    // A checkout whose PaymentIntent carried a platform fee (fees are ON
+    // here only for this test — the release default stays off everywhere).
+    let (checkout_id, _session_id) =
+        create_checkout_via_use_case(&pool, &fixture.provider, tenant_id, "order-fee").await;
+
+    // The provider confirms the payment WITH the application fee it took:
+    // 5% of ¥2000 = ¥100 to the platform, ¥1900 remaining the tenant's.
+    let object = serde_json::json!({
+        "id": "pi_fee_1",
+        "object": "payment_intent",
+        "amount": 2000,
+        "currency": "jpy",
+        "application_fee_amount": 100,
+        "metadata": {
+            "checkout_id": checkout_id.to_string(),
+            "tenant_id": tenant_id.to_string()
+        }
+    });
+    let event = serde_json::json!({
+        "id": "evt_fee_1",
+        "type": "payment_intent.succeeded",
+        "created": epoch(50),
+        "account": account,
+        "data": {"object": object}
+    });
+    assert!(fixture.deliver(&event).await.unwrap());
+    fixture.dispatcher.dispatch(10).await.unwrap();
+
+    // The fee is disclosed on the payment read model the tenant sees.
+    let tx = TxManager::new(pool.clone());
+    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let row: (i64, String, i64, String) = sqlx::query_as(
+        "SELECT amount_minor, currency,
+                COALESCE(fee_amount_minor, -1), COALESCE(fee_currency, '')
+         FROM payments.payments WHERE external_payment_id = 'pi_fee_1'",
+    )
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(row.0, 2000, "the total was never altered by rounding");
+    assert_eq!(row.1, "JPY");
+    assert_eq!(row.2, 100, "the platform's fee appears on the charge");
+    assert_eq!(row.3, "JPY");
+    assert_eq!(2000 - row.2, 1900, "the remainder is the tenant's");
+
+    // And exactly one payment-succeeded event fired for this order.
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM platform.outbox WHERE event_type = 'payments.payment_succeeded'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 1);
 }

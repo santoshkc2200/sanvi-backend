@@ -27,5 +27,9 @@
   "emails.payments_requirement_deadline.body": "Stripe requires additional information for your payment account (connection {connection}) by {date, date}. If it is not provided, the account will be restricted.",
   "emails.payments_dispute_opened.subject": "A chargeback dispute was opened on your account",
   "emails.payments_dispute_opened.body": "A customer disputed a payment on your store. Handle dispute {dispute} in the Stripe Dashboard.",
-  "emails.payments_dispute_opened.body_due": "A customer disputed a payment on your store. Dispute {dispute} needs your response in the Stripe Dashboard by {due, date}."
+  "emails.payments_dispute_opened.body_due": "A customer disputed a payment on your store. Dispute {dispute} needs your response in the Stripe Dashboard by {due, date}.",
+  "emails.payments_payout_failed.subject": "Action needed: a payout from your {tenant} account failed",
+  "emails.payments_payout_failed.body": "A payout of {amount} to your bank failed. The money is still held at Stripe - sign in to your Stripe Dashboard to fix the payout details.",
+  "emails.payments_tax_lapsed.subject": "Action needed: automatic tax may no longer be collecting on your {tenant} store",
+  "emails.payments_tax_lapsed.body": "Automatic tax is enabled but the tax compliance of the connected payment account has lapsed ({detail}). Tax registration and remittance are your responsibility - consult your tax advisor, then update your registrations in Stripe."
 }

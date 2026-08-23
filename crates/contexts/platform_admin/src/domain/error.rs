@@ -55,6 +55,9 @@ pub enum PlatformAdminError {
     #[error("invalid search: {0}")]
     InvalidSearch(String),
 
+    #[error("invalid application-fee configuration: {0}")]
+    InvalidFeeConfig(String),
+
     #[error("storage failure")]
     Storage(String),
 }

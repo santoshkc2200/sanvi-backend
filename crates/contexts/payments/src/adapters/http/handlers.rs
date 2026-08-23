@@ -66,6 +66,14 @@ pub fn api_error(err: PaymentsError) -> ApiError {
         PaymentsError::CapabilityMissing { capability, detail } => ApiError::Conflict {
             detail: format!("capability {capability} is not active: {detail}"),
         },
+        // The tax preflight's specific refusal: `reason` is a stable code
+        // (`tax_status_not_active` / `no_active_registration`) the UI
+        // renders next to the disabled toggle.
+        PaymentsError::TaxPreflightFailed { reason } => ApiError::Conflict {
+            detail: format!(
+                "automatic tax cannot be enabled yet ({reason}); registration and remittance are your responsibility — consult your tax advisor"
+            ),
+        },
         PaymentsError::CurrencyUnsupported { currency, detail } => ApiError::BadRequest {
             detail: format!("currency {currency} is not supported by this connection: {detail}"),
         },
@@ -953,8 +961,16 @@ pub struct PaymentView {
     pub status: String,
     pub amount_minor: i64,
     pub currency: String,
+    /// The provider-reported fee on this payment. When the platform's
+    /// application fee is enabled for the tenant, this is where it is
+    /// disclosed — a platform fee the merchant cannot see is not
+    /// acceptable, whatever the contract says.
     pub fee_minor: Option<i64>,
     pub fee_currency: Option<String>,
+    /// Payout status once a payout event names this payment's transaction
+    /// (`pending` | `paid` | `failed`; null until then).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payout_status: Option<String>,
     pub failure_code: Option<String>,
     pub failure_message: Option<String>,
     #[schema(value_type = Option<String>)]
@@ -977,6 +993,7 @@ impl From<crate::domain::PaymentRecord> for PaymentView {
                 .fee
                 .as_ref()
                 .map(|f| f.currency.as_str().to_string()),
+            payout_status: payment.payout_status.map(|s| s.as_str().to_string()),
             failure_code: payment.failure.as_ref().map(|f| f.code.clone()),
             failure_message: payment.failure.as_ref().map(|f| f.message.clone()),
             captured_at: payment.captured_at,
@@ -1447,4 +1464,241 @@ pub async fn export_payments(
         ))
         .insert_header(("cache-control", "no-store"))
         .streaming(stream))
+}
+
+// ---------------------------------------------------------------------------
+// 09.6: payouts (read-only) and tax settings.
+// ---------------------------------------------------------------------------
+
+/// One payout as the tenant's list renders it. Read-only: payout
+/// management lives in the provider's own dashboard / embedded component.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PayoutView {
+    pub external_payout_id: String,
+    pub amount_minor: i64,
+    pub currency: String,
+    /// `pending` | `paid` | `failed`. A failed payout is alerted, not
+    /// just listed — the tenant's money is stuck at the provider.
+    #[schema(example = "paid")]
+    pub status: String,
+    #[schema(value_type = Option<String>)]
+    pub arrival_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PayoutsListView {
+    /// Newest first; empty before a connection exists.
+    pub payouts: Vec<PayoutView>,
+}
+
+/// `GET /api/v1/tenant/payments/payouts` — the connected account's payout
+/// history (schedule, next payout, recent history), read live over the
+/// connected account.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/payments/payouts",
+    tag = "payments",
+    operation_id = "list_tenant_payouts",
+    responses(
+        (status = 200, description = "The connected account's payout history, newest first", body = PayoutsListView),
+        (status = 403, description = "Missing payments.read permission or the entitlement", body = ProblemDetail),
+        (status = 502, description = "Provider unavailable (payments/provider-unavailable)", body = ProblemDetail)
+    )
+)]
+pub async fn list_payouts(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    let view = state
+        .list_payouts
+        .execute(tenant.0.tenant_id)
+        .await
+        .map_err(payments_problem)?;
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store"))
+        .json(PayoutsListView {
+            payouts: view
+                .payouts
+                .into_iter()
+                .map(|p| PayoutView {
+                    external_payout_id: p.external_payout_id,
+                    amount_minor: p.amount_minor,
+                    currency: p.currency,
+                    status: p.status,
+                    arrival_at: p.arrival_at,
+                })
+                .collect(),
+        }))
+}
+
+/// The tenant-facing automatic-tax state plus the standing legal
+/// statement: registration and remittance are the tenant's responsibility;
+/// Sanvi never advises on where or whether to register.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TaxSettingsView {
+    pub enabled: bool,
+    /// The liable connected-account id when enabled (`{ type: 'account' }`
+    /// routing) — with direct charges the connected account is the
+    /// merchant of record.
+    pub liability_account: Option<String>,
+    pub provider_status: String,
+    pub active_registrations: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<TaxWarningView>,
+    #[schema(value_type = Option<String>)]
+    pub last_checked_at: Option<DateTime<Utc>>,
+    /// Always present, always the same: we never advise.
+    pub disclaimer: &'static str,
+    /// The platform's fee on this tenant's payments, when one is enabled
+    /// (off by default in 0.10.0). Disclosed here and on every affected
+    /// payment — a platform fee the merchant cannot see is not acceptable,
+    /// whatever the contract says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform_fee: Option<PlatformFeeDisclosure>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TaxWarningView {
+    /// Stable i18n key (`payments.tax.warning.*`).
+    pub code: String,
+    pub detail: String,
+    #[schema(value_type = String)]
+    pub detected_at: DateTime<Utc>,
+}
+
+pub const TAX_DISCLAIMER: &str = "Tax registration and remittance are your responsibility as the merchant of record. \
+     Sanvi does not advise on where or whether to register — consult your tax advisor.";
+
+fn tax_view(
+    view: crate::application::tax_settings::TaxSettingsView,
+    platform_fee: Option<PlatformFeeDisclosure>,
+) -> TaxSettingsView {
+    TaxSettingsView {
+        enabled: view.enabled,
+        liability_account: view.liability_account,
+        provider_status: view.provider_status,
+        active_registrations: view.active_registrations,
+        warning: view.warning.map(|w| TaxWarningView {
+            code: w.code,
+            detail: w.detail,
+            detected_at: w.detected_at,
+        }),
+        last_checked_at: view.last_checked_at,
+        disclaimer: TAX_DISCLAIMER,
+        platform_fee,
+    }
+}
+
+/// The platform's fee disclosure for this tenant (their payment settings).
+/// A platform fee the merchant cannot see is not acceptable, whatever the
+/// contract says.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct PlatformFeeDisclosure {
+    /// Fees are off for this tenant unless stated here.
+    pub enabled: bool,
+    pub basis_points: Option<u32>,
+    pub fixed_minor: Option<i64>,
+    pub fixed_currency: Option<String>,
+    pub minimum_minor: i64,
+}
+
+impl PlatformFeeDisclosure {
+    fn of(disclosure: &crate::application::TenantFeeDisclosure) -> Self {
+        Self {
+            enabled: disclosure.enabled,
+            basis_points: disclosure.basis_points,
+            fixed_minor: disclosure.fixed_minor,
+            fixed_currency: disclosure.fixed_currency.clone(),
+            minimum_minor: disclosure.minimum_minor,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct UpdateTaxSettingsRequest {
+    /// Enable requires the compliance preflight to pass right now; disable
+    /// always succeeds (and is a tenant-facing change requiring notice:
+    /// mid-period it changes what customers are charged).
+    pub enabled: bool,
+}
+
+/// `GET /api/v1/tenant/payments/tax-settings`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/payments/tax-settings",
+    tag = "payments",
+    operation_id = "get_tenant_tax_settings",
+    responses(
+        (status = 200, description = "The tenant's automatic-tax state with the legal statement", body = TaxSettingsView),
+        (status = 403, description = "Missing payments.read permission or the entitlement", body = ProblemDetail)
+    )
+)]
+pub async fn get_tax_settings(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let view = state
+        .manage_tax_settings
+        .view(tenant_id)
+        .await
+        .map_err(payments_problem)?;
+    // The disclosure rides the settings response: one read for the whole
+    // payment-settings page.
+    let platform_fee = crate::application::disclose_fee_for(state.fee_store.as_ref(), tenant_id)
+        .await
+        .map_err(payments_problem)?
+        .as_ref()
+        .map(PlatformFeeDisclosure::of);
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store"))
+        .json(tax_view(view, platform_fee)))
+}
+
+/// `PUT /api/v1/tenant/payments/tax-settings` — enable/disable automatic
+/// tax. Enabling runs the preflight first: an account whose tax settings
+/// are not `active`, or which holds no active registration, cannot enable
+/// (409 naming the missing step) — without registrations Stripe collects
+/// nothing and returns no error, and that silence must never look like a
+/// working toggle.
+#[utoipa::path(
+    put,
+    path = "/api/v1/tenant/payments/tax-settings",
+    tag = "payments",
+    operation_id = "update_tenant_tax_settings",
+    request_body = UpdateTaxSettingsRequest,
+    responses(
+        (status = 200, description = "The updated tax settings", body = TaxSettingsView),
+        (status = 400, description = "Malformed request", body = ProblemDetail),
+        (status = 403, description = "Missing payments.manage permission or the entitlement", body = ProblemDetail),
+        (status = 409, description = "Preflight failed — the response names the exact missing step (payments/tax-preflight-failed)", body = ProblemDetail),
+        (status = 502, description = "Provider unavailable (payments/provider-unavailable)", body = ProblemDetail)
+    )
+)]
+pub async fn put_tax_settings(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    body: web::Json<UpdateTaxSettingsRequest>,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    let view = if body.enabled {
+        state.manage_tax_settings.enable(tenant.0.tenant_id).await
+    } else {
+        state.manage_tax_settings.disable(tenant.0.tenant_id).await
+    }
+    .map_err(payments_problem)?;
+    // The response repeats the disclosure so the toggle's page always
+    // renders the fee next to it.
+    let platform_fee =
+        crate::application::disclose_fee_for(state.fee_store.as_ref(), tenant.0.tenant_id)
+            .await
+            .map_err(payments_problem)?
+            .as_ref()
+            .map(PlatformFeeDisclosure::of);
+    Ok(HttpResponse::Ok().json(tax_view(view, platform_fee)))
 }

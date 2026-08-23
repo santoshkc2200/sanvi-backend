@@ -15,7 +15,13 @@
 #      is decided by configuration.merchant.capabilities.card_payments.status;
 #   3. payment_method_types            — hardcoding methods locks out the
 #      local methods (e.g. Japanese buyers) dynamic payment methods exist
-#      to surface.
+#      to surface;
+#   4. transfer_data / transfer_group  — the separate-charges-and-transfers
+#      pattern. The platform's fee (`application_fee_amount`) is legal only
+#      as a direct-charge fee on the payment intent, never paired with a
+#      transfer shape; `losses_collector: "stripe"` is equally incompatible
+#      with it (09.6's blocked-combination assertions enforce the pairing
+#      at runtime; this gate makes the introduction fail the build).
 #
 # The patterns are deliberately QUOTED-usage only: string literals in code
 # (JSON payloads, serde renames, API params). Prose that mentions the ban
@@ -34,6 +40,7 @@ PATTERNS=(
     "[\"']charges_enabled[\"']"
     "[\"']payouts_enabled[\"']"
     "[\"']payment_method_types[\"']"
+    "[\"']transfer_(data|group)"
 )
 
 # Source files the gate reads; build output, dependencies, the SQLx query
@@ -104,6 +111,14 @@ if [[ "${1:-}" == "--self-test" ]]; then
         exit 1
     fi
     echo "self-test OK: payment_method_types literal detected"
+
+    # The separate-charges-and-transfers shape.
+    printf 'let form = [("transfer_data[destination]", acct)];\n' > "$FIXTURE"
+    if check; then
+        echo "SELF-TEST FAILED: transfer_data literal was not detected" >&2
+        exit 1
+    fi
+    echo "self-test OK: transfer_data literal detected"
 
     # Prose mentions (unquoted, in comments) must NOT trip the gate.
     printf '// Never use charges_enabled or payment_method_types; see the plan.\n' > "$FIXTURE"

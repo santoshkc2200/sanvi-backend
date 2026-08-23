@@ -138,12 +138,13 @@ use sanvi_payments::{
     PaymentsConfig,
     adapters::{
         FakeProvider, FixedWindowThrottle, OutboxEventPublisher as PaymentsEvents, PaymentsMetrics,
-        SqlxCheckoutRepository, SqlxProviderConnectionRepository,
+        SqlxCheckoutRepository, SqlxPayoutRepository, SqlxProviderConnectionRepository,
+        SqlxTaxSettingsRepository,
     },
     application::{
-        CreateCheckout, ListProviders, NoApplicationFee,
-        ProviderRegistry as PaymentsProviderRegistry, RegistryProviderCatalog, RuntimeEnvironment,
-        StartProviderConnection,
+        ConfiguredApplicationFeePolicy, CreateCheckout, ListPayouts, ListProviders,
+        ManageTaxSettings, ProviderRegistry as PaymentsProviderRegistry, RegistryProviderCatalog,
+        RuntimeEnvironment, StartProviderConnection,
     },
     routes as payments_routes,
 };
@@ -1240,6 +1241,12 @@ pub fn build_platform_admin_state(
         )),
         approve: Arc::new(ApproveRequest::new(decide.clone())),
         reject: Arc::new(RejectRequest::new(decide)),
+        fees: Some(Arc::new(
+            sanvi_platform_admin::adapters::SqlxFeeRepository::new(
+                tx_manager.clone(),
+                audit_writer,
+            ),
+        )),
     };
 
     let approval_gate: Arc<dyn ApprovalGate> = Arc::new(ApprovalGateAdapter::new(record_approval));
@@ -2480,6 +2487,44 @@ impl sanvi_payments::TenantDomainAllowList for DomainsLiveAllowList {
     }
 }
 
+/// The payments context's read-only view of the platform's application-fee
+/// configuration (the `platform_admin.application_fees` table). The
+/// platform-admin context owns the write path and its API; this adapter
+/// exists so checkout can consult the policy without the contexts
+/// depending on each other. An absent row is "no fee configured".
+struct PlatformApplicationFeeStore {
+    pool: sanvi_persistence::PgPool,
+}
+
+#[async_trait::async_trait]
+impl sanvi_payments::domain::ports::ApplicationFeeStore for PlatformApplicationFeeStore {
+    async fn configuration_for(
+        &self,
+        tenant_id: uuid::Uuid,
+    ) -> Result<Option<sanvi_payments::domain::fees::FeeConfiguration>, sanvi_payments::PaymentsError>
+    {
+        let row: Option<(Option<i32>, Option<i64>, Option<String>, i64, bool)> = sqlx::query_as(
+            "SELECT basis_points, fixed_amount_minor, fixed_currency, minimum_minor, enabled
+             FROM platform_admin.application_fees
+             WHERE tenant_id = $1 AND enabled",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
+        Ok(row.map(
+            |(bps, fixed_minor, fixed_currency, minimum_minor, _enabled)| {
+                sanvi_payments::domain::fees::FeeConfiguration {
+                    basis_points: bps.map(|v| u32::try_from(v.max(0) as i64).unwrap_or(0)),
+                    fixed_minor,
+                    fixed_currency,
+                    minimum_minor,
+                }
+            },
+        ))
+    }
+}
+
 /// Build the payments context's application state.
 ///
 /// The registry decides what exists: the fake provider is registered
@@ -2576,12 +2621,16 @@ pub fn build_payments_state(
     ));
 
     // 09.4: checkout on the connected account. The verified-domain
-    // allow-list is the phase-08 projection; the fee policy ships off;
+    // allow-list is the phase-08 projection; the fee policy reads the
+    // platform-admin per-tenant configuration (which ships disabled —
+    // no fee parameter leaves the process until an operator enables one);
     // the throttle is the in-process fixed window over the configured
     // per-minute budget (the platform's Redis limiters already ran ahead
     // of this handler; cross-instance hardening lands with 09.7).
     let checkouts: std::sync::Arc<dyn sanvi_payments::domain::CheckoutRepository> =
         std::sync::Arc::new(SqlxCheckoutRepository::new());
+    let tax_settings: std::sync::Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
+        std::sync::Arc::new(SqlxTaxSettingsRepository::new());
     let create_checkout = std::sync::Arc::new(CreateCheckout::new(
         tx.clone(),
         providers.clone(),
@@ -2589,7 +2638,10 @@ pub fn build_payments_state(
         checkouts.clone(),
         std::sync::Arc::new(DomainsLiveAllowList { pool: pool.clone() }),
         std::sync::Arc::new(PaymentsEvents::new()),
-        std::sync::Arc::new(NoApplicationFee),
+        std::sync::Arc::new(ConfiguredApplicationFeePolicy::new(std::sync::Arc::new(
+            PlatformApplicationFeeStore { pool: pool.clone() },
+        ))),
+        tax_settings.clone(),
     ));
     let checkout_throttle: std::sync::Arc<dyn sanvi_payments::domain::CheckoutThrottle> =
         std::sync::Arc::new(FixedWindowThrottle::new(
@@ -2640,6 +2692,23 @@ pub fn build_payments_state(
         checkouts.clone(),
         audit_writer.clone(),
     ));
+    // 09.6: payout visibility (read-only) and the tax-settings toggle
+    // behind its compliance preflight.
+    let payouts: std::sync::Arc<dyn sanvi_payments::domain::PayoutRepository> =
+        std::sync::Arc::new(SqlxPayoutRepository::new());
+    let list_payouts = std::sync::Arc::new(ListPayouts::new(
+        tx.clone(),
+        connections.clone(),
+        providers.clone(),
+    ));
+    let manage_tax_settings = std::sync::Arc::new(ManageTaxSettings::new(
+        tx.clone(),
+        connections.clone(),
+        providers.clone(),
+        tax_settings.clone(),
+    ));
+    let fee_store: std::sync::Arc<dyn sanvi_payments::domain::ports::ApplicationFeeStore> =
+        std::sync::Arc::new(PlatformApplicationFeeStore { pool: pool.clone() });
 
     sanvi_payments::adapters::http::PaymentsState {
         config: config.clone(),
@@ -2662,6 +2731,11 @@ pub fn build_payments_state(
         issue_refund,
         list_disputes,
         export_payments,
+        payouts,
+        list_payouts,
+        tax_settings,
+        manage_tax_settings,
+        fee_store,
     }
 }
 
