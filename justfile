@@ -113,6 +113,12 @@ connect-invariants:
 connect-invariants-self-test:
     ./scripts/check-connect-invariants.sh --self-test
 
+ads-invariants:
+    ./scripts/check-ads-invariants.sh
+
+ads-invariants-self-test:
+    ./scripts/check-ads-invariants.sh --self-test
+
 test:
     cargo test --workspace
 
@@ -128,4 +134,4 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants test openapi i18n
+ci: fmt clippy layering connect-invariants ads-invariants test openapi i18n

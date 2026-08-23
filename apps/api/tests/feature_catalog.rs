@@ -26,6 +26,17 @@ fn every_feature_gated_route_references_a_declared_feature() {
             );
         }
     }
+    for (path, method, features) in sanvi_advertising::catalog::FEATURE_GATED_ROUTES {
+        for feature in *features {
+            gated_count += 1;
+            assert!(
+                declared.contains(feature),
+                "route {} {} is gated on feature {feature:?} which is not in the catalog",
+                method,
+                path
+            );
+        }
+    }
     assert!(
         gated_count >= 1,
         "expected at least one feature-gated route to exercise the gate"

@@ -117,6 +117,7 @@ fn test_app() -> actix_web::App<
         None, // theming
         None, // domains
         None, // payments
+        None, // advertising
         None, // redis
     )
 }

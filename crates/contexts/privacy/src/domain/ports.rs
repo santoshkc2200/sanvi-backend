@@ -904,7 +904,7 @@ pub trait IdGenerator: Send + Sync {
 /// The registry of every context that must register a provider. The CI test
 /// derives the workspace's context crates and asserts this list matches
 /// exactly; the DSR saga asserts every registered provider participated.
-pub const CONTEXT_NAMES: [&str; 12] = [
+pub const CONTEXT_NAMES: [&str; 13] = [
     "system",
     "tenancy",
     "identity",
@@ -917,6 +917,7 @@ pub const CONTEXT_NAMES: [&str; 12] = [
     "theming",
     "domains",
     "payments",
+    "advertising",
 ];
 
 #[cfg(test)]

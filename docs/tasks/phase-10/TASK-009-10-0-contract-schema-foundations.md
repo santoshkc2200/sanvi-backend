@@ -1,7 +1,7 @@
 # TASK-009: 10.0 Contract, schema & foundations
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress
 **Requirement(s):** FR-1001, NFR-1002, NFR-1003, NFR-1004, NFR-1005, NFR-1007
 **Depends on:** phase 03, 05, 08, 09
 **Created:** 2026-08-20
@@ -43,8 +43,9 @@ alongside the existing twelve contexts — then the code.
       layout: `src/{lib,config}.rs`, `src/domain/`, `src/application/`,
       `src/adapters/{http,repos,events,metrics,stubs}.rs`. Wired into the workspace `Cargo.toml`,
       `apps/api` and `apps/worker`.
-- [ ] **Migration** — `migrations/20260824000000_advertising_core.sql` (+ `.down.sql`), next in
-      sequence after `20260823000000_tenant_payments`. Creates the `advertising` schema and the tables
+- [ ] **Migration** — `migrations/20260826000000_advertising_core.sql` (+ `.down.sql`), next in
+      sequence after the currently committed Phase-09 migrations (the originally reserved
+      `20260824000000` timestamp is occupied). Creates the `advertising` schema and the tables
       from the implementation plan (`connections`, `campaigns`, `ad_groups`, `ads`, `creatives`,
       `conversion_events`, `metrics_daily`).
       - `conversion_events` is `PARTITION BY RANGE (occurred_at)`, `metrics_daily` by `(date)`, both
@@ -56,13 +57,18 @@ alongside the existing twelve contexts — then the code.
       place the phase-01 pattern does not apply unchanged.
 - [ ] **Retention** — register `conversion_events` and `metrics_daily` with the phase-05 retention
       framework now, with their windows, before either table has a row in it.
+      The mandatory phase-05 provider registry has an empty advertising provider in this slice;
+      TASK-018 owns its row-level export/erase and platform retraction behaviour because no
+      conversion identifier can exist before TASK-014.
 - [ ] **Permissions** — register `advertising.read`, `advertising.connect`,
       `advertising.campaign.read`, `advertising.campaign.write`, `advertising.metrics.read`,
       `advertising.budget.manage` in the `access` seed and add them to tenant-owner and tenant-admin
       roles. `advertising.connect` and `advertising.budget.manage` are deliberately **not** in the
       default staff role — both are money.
-- [ ] **Entitlements** — `advertising.google_ads` and `advertising.meta` in the `platform-admin`
-      catalog, granted per plan. The route returns `403 entitlement-required`, not 404, so the
+- [ ] **Entitlements** — `advertising.google_ads` and the pre-existing plan catalog key
+      `advertising.meta_ads` in the `platform-admin` catalog, granted per plan. (The original
+      task named `advertising.meta`; retaining the already-migrated `meta_ads` key preserves plan
+      grants.) The route returns `403 entitlement-required`, not 404, so the
       frontend can show an upgrade prompt rather than a dead end.
 - [ ] **Token envelope** — `token_ref` resolution through the phase-05 per-tenant DEK scheme, with a
       `SecretRef` newtype whose `Debug`/`Display`/`Serialize` impls redact. Access to the decrypt path
@@ -128,7 +134,9 @@ adapter (all TASK-010), every OAuth call (TASK-011), and anything that uploads (
 
 ## Notes / gotchas
 
-- The migration timestamp must stay after `20260823000000_tenant_payments`.
+- The migration timestamp must stay after the latest committed Phase-09 migration; task creation
+  reserved `20260824000000`, but that timestamp is now occupied, so this implementation uses
+  `20260826000000`.
 - RLS on a partitioned parent is not automatically what you think it is — assert against a named child
   partition, not just the parent.
 - Ship the partition-creation job in this change, not "later in the phase".

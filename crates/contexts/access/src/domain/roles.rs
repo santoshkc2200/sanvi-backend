@@ -244,6 +244,12 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "payments.manage",
             "payments.checkout",
             "payments.refund",
+            "advertising.read",
+            "advertising.connect",
+            "advertising.campaign.read",
+            "advertising.campaign.write",
+            "advertising.metrics.read",
+            "advertising.budget.manage",
         ],
     },
     RoleSeed {
@@ -268,6 +274,15 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "payments.read",
             "payments.manage",
             "payments.checkout",
+            // Phase 10: tenant admins operate the advertising workspace;
+            // regular members remain unable to connect platforms or manage
+            // budgets by default.
+            "advertising.read",
+            "advertising.connect",
+            "advertising.campaign.read",
+            "advertising.campaign.write",
+            "advertising.metrics.read",
+            "advertising.budget.manage",
         ],
     },
     RoleSeed {
@@ -356,6 +371,35 @@ mod tests {
                 .permissions
                 .contains(&"payments.refund")
         );
+    }
+
+    #[test]
+    fn advertising_permissions_are_reachable_from_admin_roles() {
+        let owner = seed_by_key("tenant_owner").unwrap().permissions;
+        let admin = seed_by_key("tenant_admin").unwrap().permissions;
+        for permission in [
+            "advertising.read",
+            "advertising.connect",
+            "advertising.campaign.read",
+            "advertising.campaign.write",
+            "advertising.metrics.read",
+            "advertising.budget.manage",
+        ] {
+            assert!(owner.contains(&permission), "owner needs {permission}");
+        }
+        for permission in [
+            "advertising.read",
+            "advertising.connect",
+            "advertising.campaign.read",
+            "advertising.campaign.write",
+            "advertising.metrics.read",
+            "advertising.budget.manage",
+        ] {
+            assert!(admin.contains(&permission), "admin needs {permission}");
+        }
+        let member = seed_by_key("tenant_member").unwrap().permissions;
+        assert!(!member.contains(&"advertising.connect"));
+        assert!(!member.contains(&"advertising.budget.manage"));
     }
 
     #[test]

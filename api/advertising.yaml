@@ -1,0 +1,27 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.10.0
+openapi: 3.1.0
+paths:
+  /api/v1/tenant/ads/platforms:
+    get:
+      operationId: list_ad_platforms
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformsView'
+          description: Advertising platform catalog; empty until TASK-010
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission or both advertising platform entitlements
+      tags:
+      - advertising

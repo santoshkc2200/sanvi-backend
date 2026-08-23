@@ -16,8 +16,8 @@ use figment::{
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsGuideTranslatorAdapter, DomainsTenantLookupAdapter,
-    FallbackGuideTranslator, TenantCatalogAdapter, build_access_state, build_app,
-    build_audit_state, build_billing_state, build_domains_lookup, build_domains_state,
+    FallbackGuideTranslator, TenantCatalogAdapter, build_access_state, build_advertising_state,
+    build_app, build_audit_state, build_billing_state, build_domains_lookup, build_domains_state,
     build_identity_state, build_localization_state, build_payments_state,
     build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
     build_theming_state,
@@ -340,6 +340,7 @@ async fn main() -> ExitCode {
             Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
                 privacy_tx.clone(),
             )),
+            Arc::new(sanvi_advertising::adapters::AdvertisingPrivacyProvider::new()),
         ];
         Some(build_privacy_state(
             pool.clone(),
@@ -404,6 +405,11 @@ async fn main() -> ExitCode {
         &config.telemetry.environment,
         audit.writer.clone(),
     ));
+    let advertising = if config.features.advertising {
+        Some(build_advertising_state(&config.advertising))
+    } else {
+        None
+    };
 
     let bind_config = config.clone();
     let factory_config = config.clone();
@@ -423,6 +429,7 @@ async fn main() -> ExitCode {
             theming.clone(),
             domains.clone(),
             payments.clone(),
+            advertising.clone(),
             redis.clone(),
         )
     }) {

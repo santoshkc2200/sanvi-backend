@@ -126,6 +126,13 @@ fn catalogs() -> Vec<(&'static str, Vec<(&'static str, String, &'static str)>)> 
             .map(|(path, method, permission, _)| (*path, method.as_str().to_string(), *permission))
             .collect(),
     ));
+    all.push((
+        "advertising",
+        sanvi_advertising::catalog::PERMISSIONED_ROUTES
+            .iter()
+            .map(|(path, method, permission, _)| (*path, method.as_str().to_string(), *permission))
+            .collect(),
+    ));
     all
 }
 

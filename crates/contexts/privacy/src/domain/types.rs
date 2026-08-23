@@ -515,6 +515,11 @@ pub enum DataClass {
     Communication,
     Jurisdiction,
     RequestRecord,
+    /// Directive-gated conversion evidence, retained separately from the
+    /// account record because it can contain hashed customer identifiers.
+    AdvertisingConversionEvent,
+    /// Daily tenant/platform/campaign advertising rollups.
+    AdvertisingMetric,
 }
 
 impl DataClass {
@@ -533,6 +538,8 @@ impl DataClass {
             "communication" => Ok(Self::Communication),
             "jurisdiction" => Ok(Self::Jurisdiction),
             "request_record" => Ok(Self::RequestRecord),
+            "advertising_conversion_event" => Ok(Self::AdvertisingConversionEvent),
+            "advertising_metric" => Ok(Self::AdvertisingMetric),
             other => Err(PrivacyError::InvalidDataClass(other.to_string())),
         }
     }
@@ -552,6 +559,8 @@ impl DataClass {
             Self::Communication => "communication",
             Self::Jurisdiction => "jurisdiction",
             Self::RequestRecord => "request_record",
+            Self::AdvertisingConversionEvent => "advertising_conversion_event",
+            Self::AdvertisingMetric => "advertising_metric",
         }
     }
 }

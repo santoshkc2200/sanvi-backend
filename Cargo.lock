@@ -3264,6 +3264,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sanvi-advertising"
+version = "0.10.0"
+dependencies = [
+ "actix-web",
+ "anyhow",
+ "async-trait",
+ "sanvi-http",
+ "sanvi-privacy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "utoipa",
+]
+
+[[package]]
 name = "sanvi-api"
 version = "0.10.0"
 dependencies = [
@@ -3277,6 +3292,7 @@ dependencies = [
  "prometheus",
  "redis",
  "sanvi-access",
+ "sanvi-advertising",
  "sanvi-audit",
  "sanvi-billing",
  "sanvi-domains",
@@ -3826,6 +3842,7 @@ dependencies = [
  "figment",
  "prometheus",
  "sanvi-access",
+ "sanvi-advertising",
  "sanvi-audit",
  "sanvi-billing",
  "sanvi-domains",
@@ -3842,6 +3859,7 @@ dependencies = [
  "sanvi-tenancy",
  "sanvi-theming",
  "serde",
+ "sqlx",
  "tokio",
  "tracing",
  "uuid",

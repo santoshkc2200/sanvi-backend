@@ -1,3 +1,6 @@
+use sanvi_advertising::adapters::http::handlers::{
+    AdvertisingProblemType, MetricPoint, MoneyView, RenderedMoneyView,
+};
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
 
@@ -163,8 +166,12 @@ use utoipa::OpenApi;
         sanvi_payments::adapters::http::handlers::list_payouts,
         sanvi_payments::adapters::http::handlers::get_tax_settings,
         sanvi_payments::adapters::http::handlers::put_tax_settings,
+        sanvi_advertising::adapters::http::handlers::list_ad_platforms,
     ),
-    components(schemas(ProblemDetail, ApiError)),
+    components(schemas(
+        ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
+        RenderedMoneyView
+    )),
     tags(
         (name = "system", description = "System, health and build information"),
         (name = "tenancy", description = "Tenants, lifecycle, settings and context resolution"),
@@ -177,7 +184,8 @@ use utoipa::OpenApi;
         (name = "localization", description = "Locales, message catalogs, tenant locale settings and copy overrides"),
         (name = "theming", description = "Theme registry, tenant theme drafts/publish/rollback, brand assets and resolved-theme delivery"),
         (name = "domains", description = "Custom domains: claims, verification, registrar search/purchase, TLS authorization and health"),
-        (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/provider-auth, payments/provider-rate-limited, payments/invalid-country, payments/country-unsupported, payments/connection-exists, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header; connection creation keys the provider-side idempotency chain, so retries adopt instead of duplicate. Account Session secrets are never persisted or logged.")
+        (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/provider-auth, payments/provider-rate-limited, payments/invalid-country, payments/country-unsupported, payments/connection-exists, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header; connection creation keys the provider-side idempotency chain, so retries adopt instead of duplicate. Account Session secrets are never persisted or logged."),
+        (name = "advertising", description = "Tenant advertising. Money is integer minor units paired with ISO-4217 account currency; rendered FX values carry their rate date. Problem types: advertising/platform-unavailable, advertising/connection-not-active, advertising/capability-unsupported, advertising/token-expired, advertising/directive-suppressed, advertising/budget-cap-reached. Every mutating endpoint requires Idempotency-Key.")
     ),
     info(
         title = "Sanvi API",
@@ -350,5 +358,61 @@ mod tests {
         assert!(json.contains("payments/currency-unsupported"));
         assert!(json.contains("payments/idempotency-conflict"));
         assert!(json.contains("Idempotency-Key"));
+    }
+
+    #[test]
+    fn doc_contains_the_advertising_contract() {
+        let document: serde_json::Value =
+            serde_json::from_str(&ApiDoc::openapi().to_json().unwrap()).unwrap();
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/platforms")
+                .is_some()
+        );
+        let schemas = &document["components"]["schemas"];
+        assert!(schemas.get("PlatformsView").is_some());
+        for schema in [
+            "AdvertisingProblemType",
+            "MetricPoint",
+            "MoneyView",
+            "RenderedMoneyView",
+        ] {
+            assert!(
+                schemas.get(schema).is_some(),
+                "missing advertising schema {schema}"
+            );
+        }
+        for field in [
+            "amount_minor",
+            "currency",
+            "fx_rate_date",
+            "campaign_id",
+            "rendered_spend",
+        ] {
+            assert!(
+                schemas["MetricPoint"]["properties"].get(field).is_some()
+                    || schemas["MoneyView"]["properties"].get(field).is_some()
+                    || schemas["RenderedMoneyView"]["properties"]
+                        .get(field)
+                        .is_some(),
+                "missing advertising field {field}"
+            );
+        }
+        let problem_types = schemas["AdvertisingProblemType"]["enum"]
+            .as_array()
+            .expect("advertising problem types are an enum");
+        for slug in [
+            "advertising/platform-unavailable",
+            "advertising/connection-not-active",
+            "advertising/capability-unsupported",
+            "advertising/token-expired",
+            "advertising/directive-suppressed",
+            "advertising/budget-cap-reached",
+        ] {
+            assert!(
+                problem_types.iter().any(|value| value == slug),
+                "missing {slug}"
+            );
+        }
     }
 }

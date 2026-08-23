@@ -549,6 +549,10 @@ pub struct SchedulerConfig {
     /// (phase 09.6) — lapsed registrations warn instead of silently
     /// under-collecting.
     pub payments_tax_check_interval_secs: u64,
+    /// Pre-create current and following advertising partitions. This starts
+    /// before any conversion endpoint exists: partition maintenance cannot be
+    /// an afterthought on the first day of a new month.
+    pub advertising_partition_maintenance_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -579,6 +583,7 @@ impl Default for SchedulerConfig {
             payments_connection_sync_interval_secs: 3600,
             payments_metrics_interval_secs: 60,
             payments_tax_check_interval_secs: 86_400,
+            advertising_partition_maintenance_interval_secs: 86_400,
         }
     }
 }
@@ -626,6 +631,8 @@ pub struct WorkerConfig {
     /// api and worker reading the same sections.
     #[serde(default)]
     pub payments: sanvi_payments::PaymentsConfig,
+    #[serde(default)]
+    pub advertising: sanvi_advertising::AdvertisingConfig,
 }
 
 impl WorkerConfig {
@@ -642,6 +649,7 @@ impl WorkerConfig {
         self.theming.validate()?;
         self.domains.validate()?;
         self.payments.validate()?;
+        self.advertising.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -1370,6 +1378,7 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
             privacy_tx.clone(),
         )),
+        std::sync::Arc::new(sanvi_advertising::adapters::AdvertisingPrivacyProvider::new()),
     ];
 
     let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(
@@ -1455,6 +1464,28 @@ async fn main() -> ExitCode {
     ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
+        Arc::new(FnJob::new(
+            "advertising.partition_maintenance",
+            Duration::from_secs(
+                config
+                    .scheduler
+                    .advertising_partition_maintenance_interval_secs,
+            ),
+            {
+                let pool = pool.clone();
+                move || {
+                    let pool = pool.clone();
+                    Box::pin(async move {
+                        sqlx::query(
+                            "SELECT advertising.ensure_monthly_partitions((current_date + interval '1 month')::date)",
+                        )
+                        .execute(&pool)
+                        .await?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
         Arc::new(FnJob::new(
             "tenancy.purge_sweep",
             Duration::from_secs(config.scheduler.purge_sweep_interval_secs),

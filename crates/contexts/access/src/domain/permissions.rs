@@ -471,6 +471,37 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Issue full and partial refunds on the tenant's payments (audited)",
     },
+    // --- advertising (phase 10) -------------------------------------------
+    PermissionDef {
+        key: "advertising.read",
+        scope: PermissionScope::Tenant,
+        description: "Read advertising platforms, connections, campaigns and budget status",
+    },
+    PermissionDef {
+        key: "advertising.connect",
+        scope: PermissionScope::Tenant,
+        description: "Connect and disconnect advertising accounts",
+    },
+    PermissionDef {
+        key: "advertising.campaign.read",
+        scope: PermissionScope::Tenant,
+        description: "Read advertising campaigns and delivery state",
+    },
+    PermissionDef {
+        key: "advertising.campaign.write",
+        scope: PermissionScope::Tenant,
+        description: "Create and change advertising campaigns (audited and idempotent)",
+    },
+    PermissionDef {
+        key: "advertising.metrics.read",
+        scope: PermissionScope::Tenant,
+        description: "Read advertising metrics, conversions and ROAS",
+    },
+    PermissionDef {
+        key: "advertising.budget.manage",
+        scope: PermissionScope::Tenant,
+        description: "Set advertising spend caps and auto-pause guardrails",
+    },
 ];
 
 /// Registry lookup.

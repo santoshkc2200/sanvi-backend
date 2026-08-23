@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use sanvi_access::AccessConfig;
+use sanvi_advertising::AdvertisingConfig;
 use sanvi_audit::AuditConfig;
 use sanvi_billing::BillingConfig;
 use sanvi_domains::DomainsConfig;
@@ -87,6 +88,9 @@ pub struct FeaturesConfig {
     /// payments must keep being recorded).
     #[serde(default = "default_true")]
     pub payments: bool,
+    /// Phase-10 gate: advertising stays off until its staged rollout.
+    #[serde(default)]
+    pub advertising: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -117,6 +121,7 @@ pub struct AppConfig {
     pub theming: ThemingConfig,
     pub domains: DomainsConfig,
     pub payments: PaymentsConfig,
+    pub advertising: AdvertisingConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -141,6 +146,7 @@ impl Default for AppConfig {
             theming: ThemingConfig::default(),
             domains: DomainsConfig::default(),
             payments: PaymentsConfig::default(),
+            advertising: AdvertisingConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -193,6 +199,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.payments.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.advertising.validate() {
             problems.push(err.to_string());
         }
         // Phase-09 invariant, enforced at boot: the Connect webhook
@@ -260,6 +269,7 @@ mod tests {
         let minimal: Minimal = serde_json::from_value(serde_json::json!({ "features": {} }))
             .expect("empty features object is a valid config");
         assert!(minimal.features.payments);
+        assert!(!minimal.features.advertising);
     }
 
     #[test]

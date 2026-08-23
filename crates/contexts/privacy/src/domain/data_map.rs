@@ -134,6 +134,22 @@ pub const DATA_CLASSES: &[DataClassDef] = &[
         period_days: 3650,
         action: RetentionAction::Anonymise,
     },
+    DataClassDef {
+        class: DataClass::AdvertisingConversionEvent,
+        category: "Advertising",
+        sensitivity: SensitivityClass::Sensitive,
+        basis: LegalBasis::Consent,
+        period_days: 730,
+        action: RetentionAction::Anonymise,
+    },
+    DataClassDef {
+        class: DataClass::AdvertisingMetric,
+        category: "Advertising",
+        sensitivity: SensitivityClass::Standard,
+        basis: LegalBasis::LegitimateInterest,
+        period_days: 1095,
+        action: RetentionAction::Delete,
+    },
 ];
 
 /// Look up a class definition (used to seed `privacy.retention_rules`).

@@ -39,6 +39,7 @@ use sanvi_access::{
         QuotaUsageStore, RoleRepository,
     },
 };
+use sanvi_advertising::{AdvertisingConfig, routes as advertising_routes};
 use sanvi_audit::{
     AuditConfig,
     adapters::{SqlxAuditReader, SqlxAuditWriter},
@@ -2766,6 +2767,17 @@ pub fn build_payments_state(
     }
 }
 
+/// Phase 10's intentionally small composition root. Until TASK-010 the
+/// catalog is an honest empty list; keeping state-free transport here makes
+/// the entitlement and permission contract deployable before adapters exist.
+pub fn build_advertising_state(
+    config: &AdvertisingConfig,
+) -> sanvi_advertising::adapters::http::AdvertisingState {
+    sanvi_advertising::adapters::http::AdvertisingState {
+        config: config.clone(),
+    }
+}
+
 /// Build the domains context's application state: repositories, the
 /// entitlement gate, the sandbox registrar/DNS/CA gateways and every use
 /// case. (The DoH verifier, prober and notification stub belong to the
@@ -2917,6 +2929,7 @@ pub fn build_app(
     theming: Option<ThemingWiring>,
     domains: Option<DomainsWiring>,
     payments: Option<sanvi_payments::adapters::http::PaymentsState>,
+    advertising: Option<sanvi_advertising::adapters::http::AdvertisingState>,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
@@ -2973,6 +2986,14 @@ pub fn build_app(
     } else {
         tenant_scope
     };
+    let tenant_scope = if config.features.advertising {
+        match &advertising {
+            Some(_) => tenant_scope.configure(advertising_routes::advertising_tenant_scope_routes),
+            None => tenant_scope,
+        }
+    } else {
+        tenant_scope
+    };
 
     let app = App::new()
         .app_data(web::Data::new(state))
@@ -3010,6 +3031,11 @@ pub fn build_app(
             .configure(billing_routes::public_routes)
             .configure(billing_routes::billing_platform_routes)
             .configure(billing_routes::billing_internal_routes),
+        None => app,
+    };
+
+    let app = match advertising {
+        Some(state) => app.app_data(web::Data::new(state)),
         None => app,
     };
 
