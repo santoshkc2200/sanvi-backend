@@ -1,7 +1,7 @@
 # TASK-007: 09.6 Payouts, tax liability & application fee
 
 **Phase:** 09
-**Status:** todo
+**Status:** done
 **Requirement(s):** FR-908, FR-909, NFR-901
 **Depends on:** TASK-004, TASK-005
 **Created:** 2026-08-20
