@@ -16,6 +16,10 @@ pub enum AdvertisingError {
     PlatformUnavailable(String),
     #[error("advertising storage failure: {0}")]
     Storage(String),
+    #[error("campaign revision is stale")]
+    StaleRevision,
+    #[error("campaign not found")]
+    CampaignNotFound,
 }
 
 #[async_trait]

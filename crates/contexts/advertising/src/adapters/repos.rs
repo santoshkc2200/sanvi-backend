@@ -6,8 +6,9 @@ use sanvi_persistence::ScopedTx;
 use uuid::Uuid;
 
 use crate::domain::{
-    AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, ConnectionStatus,
-    PlatformKey, SecretRef, SyncError,
+    AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, CampaignChange,
+    CampaignRepository, ChangeSource, ConnectionStatus, PlatformKey, SecretRef, StoredCampaign,
+    SyncError,
 };
 
 #[derive(sqlx::FromRow)]
@@ -81,6 +82,273 @@ impl SqlxAdvertisingConnectionRepository {
 
 fn storage(error: sqlx::Error) -> AdvertisingError {
     AdvertisingError::Storage(error.to_string())
+}
+
+#[derive(sqlx::FromRow)]
+struct CampaignRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    connection_id: Uuid,
+    platform: String,
+    external_id: Option<String>,
+    revision: i64,
+    intent: serde_json::Value,
+    remote_snapshot: serde_json::Value,
+}
+
+impl TryFrom<CampaignRow> for StoredCampaign {
+    type Error = AdvertisingError;
+
+    fn try_from(row: CampaignRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            connection_id: row.connection_id,
+            platform: PlatformKey::parse(&row.platform).map_err(|_| {
+                AdvertisingError::Storage(format!(
+                    "unknown advertising platform {:?}",
+                    row.platform
+                ))
+            })?,
+            external_id: row.external_id,
+            revision: row.revision,
+            intent: serde_json::from_value(row.intent).map_err(|error| {
+                AdvertisingError::Storage(format!("invalid stored campaign intent: {error}"))
+            })?,
+            remote_snapshot: serde_json::from_value(row.remote_snapshot).map_err(|error| {
+                AdvertisingError::Storage(format!("invalid campaign remote snapshot: {error}"))
+            })?,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CampaignChangeRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    campaign_id: Uuid,
+    revision: i64,
+    mutation_id: Option<Uuid>,
+    actor_id: Option<Uuid>,
+    source: String,
+    changed_fields: serde_json::Value,
+    before_state: serde_json::Value,
+    after_state: serde_json::Value,
+    created_at: DateTime<Utc>,
+}
+
+impl TryFrom<CampaignChangeRow> for CampaignChange {
+    type Error = AdvertisingError;
+
+    fn try_from(row: CampaignChangeRow) -> Result<Self, Self::Error> {
+        let source = match row.source.as_str() {
+            "sanvi" => ChangeSource::Sanvi,
+            "platform" => ChangeSource::Platform,
+            _ => {
+                return Err(AdvertisingError::Storage(
+                    "unknown campaign change source".to_string(),
+                ));
+            }
+        };
+        Ok(Self {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            campaign_id: row.campaign_id,
+            revision: row.revision,
+            mutation_id: row.mutation_id,
+            actor_id: row.actor_id,
+            source,
+            changed_fields: serde_json::from_value(row.changed_fields).map_err(|error| {
+                AdvertisingError::Storage(format!("invalid campaign change fields: {error}"))
+            })?,
+            before_state: serde_json::from_value(row.before_state).map_err(|error| {
+                AdvertisingError::Storage(format!("invalid campaign change before state: {error}"))
+            })?,
+            after_state: serde_json::from_value(row.after_state).map_err(|error| {
+                AdvertisingError::Storage(format!("invalid campaign change after state: {error}"))
+            })?,
+            created_at: row.created_at,
+        })
+    }
+}
+
+/// SQL persistence for campaign intent, last remote snapshot and mutation
+/// audit entries.  The surrounding `ScopedTx` sets the tenant RLS value.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxCampaignRepository;
+
+impl SqlxCampaignRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl CampaignRepository for SqlxCampaignRepository {
+    async fn insert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        campaign: &StoredCampaign,
+    ) -> Result<(), AdvertisingError> {
+        sqlx::query(
+            "INSERT INTO advertising.campaigns
+             (id, tenant_id, connection_id, platform, external_id, name, objective, status, budget,
+              schedule, drift, revision, intent, remote_snapshot)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+        )
+        .bind(campaign.id)
+        .bind(campaign.tenant_id)
+        .bind(campaign.connection_id)
+        .bind(campaign.platform.as_str())
+        .bind(&campaign.external_id)
+        .bind(&campaign.intent.name)
+        .bind(campaign.intent.objective.as_str())
+        .bind(campaign.intent.status.as_str())
+        .bind(
+            serde_json::to_value(&campaign.intent.budget)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&campaign.intent.schedule)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&campaign.intent.drift)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(campaign.revision)
+        .bind(
+            serde_json::to_value(&campaign.intent)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&campaign.remote_snapshot)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn find(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        campaign_id: Uuid,
+    ) -> Result<Option<StoredCampaign>, AdvertisingError> {
+        sqlx::query_as::<_, CampaignRow>(
+            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
+             FROM advertising.campaigns WHERE tenant_id = $1 AND id = $2",
+        ).bind(tenant_id).bind(campaign_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?
+        .map(TryInto::try_into).transpose()
+    }
+
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        campaign: &StoredCampaign,
+        expected_revision: i64,
+    ) -> Result<bool, AdvertisingError> {
+        let result = sqlx::query(
+            "UPDATE advertising.campaigns SET external_id=$1, name=$2, objective=$3, status=$4,
+               budget=$5, schedule=$6, drift=$7, revision=$8, intent=$9, remote_snapshot=$10,
+               updated_at=now() WHERE tenant_id=$11 AND id=$12 AND revision=$13",
+        )
+        .bind(&campaign.external_id)
+        .bind(&campaign.intent.name)
+        .bind(campaign.intent.objective.as_str())
+        .bind(campaign.intent.status.as_str())
+        .bind(
+            serde_json::to_value(&campaign.intent.budget)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&campaign.intent.schedule)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&campaign.intent.drift)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(campaign.revision)
+        .bind(
+            serde_json::to_value(&campaign.intent)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&campaign.remote_snapshot)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(campaign.tenant_id)
+        .bind(campaign.id)
+        .bind(expected_revision)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn append_change(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        change: &CampaignChange,
+    ) -> Result<(), AdvertisingError> {
+        sqlx::query(
+            "INSERT INTO advertising.campaign_changes
+             (id, tenant_id, campaign_id, revision, mutation_id, actor_id, source, changed_fields,
+              before_state, after_state, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+        )
+        .bind(change.id)
+        .bind(change.tenant_id)
+        .bind(change.campaign_id)
+        .bind(change.revision)
+        .bind(change.mutation_id)
+        .bind(change.actor_id)
+        .bind(change.source.as_str())
+        .bind(
+            serde_json::to_value(&change.changed_fields)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&change.before_state)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(
+            serde_json::to_value(&change.after_state)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        )
+        .bind(change.created_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn find_change_by_mutation(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        campaign_id: Uuid,
+        mutation_id: Uuid,
+    ) -> Result<Option<CampaignChange>, AdvertisingError> {
+        sqlx::query_as::<_, CampaignChangeRow>(
+            "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, source,
+                    changed_fields, before_state, after_state, created_at
+             FROM advertising.campaign_changes
+             WHERE tenant_id=$1 AND campaign_id=$2 AND mutation_id=$3",
+        )
+        .bind(tenant_id)
+        .bind(campaign_id)
+        .bind(mutation_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?
+        .map(TryInto::try_into)
+        .transpose()
+    }
 }
 
 #[async_trait]

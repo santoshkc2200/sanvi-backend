@@ -183,6 +183,18 @@ pub enum CampaignStatus {
     Archived,
 }
 
+impl CampaignStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Ended => "ended",
+            Self::Archived => "archived",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Campaign {
     pub id: String,

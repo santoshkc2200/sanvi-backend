@@ -12,5 +12,5 @@ pub mod stubs;
 pub use events::OutboxEventPublisher;
 pub use oauth_state_store::SqlxOAuthStateStore;
 pub use privacy_provider::AdvertisingPrivacyProvider;
-pub use repos::SqlxAdvertisingConnectionRepository;
+pub use repos::{SqlxAdvertisingConnectionRepository, SqlxCampaignRepository};
 pub use stubs::FakeAdPlatform;

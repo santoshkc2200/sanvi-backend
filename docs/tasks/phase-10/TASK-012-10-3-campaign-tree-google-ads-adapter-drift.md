@@ -1,7 +1,7 @@
 # TASK-012: 10.3 Campaign tree, Google Ads adapter & drift
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress
 **Requirement(s):** FR-1004, FR-1005, FR-1006, NFR-1007, NFR-1010
 **Depends on:** TASK-011
 **Created:** 2026-08-20
