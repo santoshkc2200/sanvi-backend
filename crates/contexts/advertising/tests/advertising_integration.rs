@@ -461,6 +461,17 @@ async fn reconnect_reuses_the_original_connection_row() {
         )
         .unwrap(),
     );
+    reconnect.record_permanent_refresh_failure(
+        SyncError::new(
+            "invalid_grant",
+            Some("token revoked".to_string()),
+            serde_json::from_value(serde_json::json!({"provider_reason": "password_changed"}))
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    reconnect.mark_disconnected_notified(now + Duration::minutes(2));
+    reconnect.mark_dependent_jobs_paused(now + Duration::minutes(2));
     let mut scope = manager.begin_for(tenant_id).await.unwrap();
     let stored = repository.upsert(&mut scope, &reconnect).await.unwrap();
     let connections = repository.list(&mut scope, tenant_id).await.unwrap();
@@ -470,6 +481,15 @@ async fn reconnect_reuses_the_original_connection_row() {
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .unwrap();
+    let persisted_lifecycle: (Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as(
+            "SELECT disconnected_notified_at, dependent_jobs_paused_at
+             FROM advertising.connections WHERE id = $1",
+        )
+        .bind(first_id)
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
     scope.commit().await.unwrap();
 
     assert_eq!(
@@ -480,5 +500,8 @@ async fn reconnect_reuses_the_original_connection_row() {
     assert_eq!(connections.len(), 1);
     assert_eq!(connections[0].id(), first_id);
     assert_eq!(connections[0].granted_scopes(), reconnect.granted_scopes());
+    assert_eq!(persisted_error["code"], "invalid_grant");
     assert_eq!(persisted_error["provider_reason"], "password_changed");
+    assert_eq!(persisted_lifecycle.0, Some(now + Duration::minutes(2)));
+    assert_eq!(persisted_lifecycle.1, Some(now + Duration::minutes(2)));
 }

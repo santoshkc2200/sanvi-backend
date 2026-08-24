@@ -27,6 +27,8 @@ struct ConnectionRow {
     token_expires_at: Option<DateTime<Utc>>,
     last_synced_at: Option<DateTime<Utc>>,
     last_error: Option<serde_json::Value>,
+    disconnected_notified_at: Option<DateTime<Utc>>,
+    dependent_jobs_paused_at: Option<DateTime<Utc>>,
 }
 
 impl TryFrom<ConnectionRow> for AdvertisingConnection {
@@ -62,6 +64,8 @@ impl TryFrom<ConnectionRow> for AdvertisingConnection {
             row.token_expires_at,
             row.last_synced_at,
             last_error,
+            row.disconnected_notified_at,
+            row.dependent_jobs_paused_at,
         )
     }
 }
@@ -90,18 +94,20 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
             "INSERT INTO advertising.connections
              (id, tenant_id, platform, external_account_id, account_name, currency, timezone,
               status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-              last_synced_at, last_error)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+              last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
              ON CONFLICT (tenant_id, platform, external_account_id) DO UPDATE SET
                account_name = EXCLUDED.account_name, currency = EXCLUDED.currency,
                timezone = EXCLUDED.timezone, status = EXCLUDED.status, scopes = EXCLUDED.scopes,
                token_ref = EXCLUDED.token_ref, connected_by = EXCLUDED.connected_by,
                connected_at = EXCLUDED.connected_at, token_expires_at = EXCLUDED.token_expires_at,
                last_synced_at = EXCLUDED.last_synced_at, last_error = EXCLUDED.last_error,
+               disconnected_notified_at = EXCLUDED.disconnected_notified_at,
+               dependent_jobs_paused_at = EXCLUDED.dependent_jobs_paused_at,
                updated_at = now()
              RETURNING id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error",
+               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at",
         )
         .bind(connection.id())
         .bind(connection.tenant_id())
@@ -128,6 +134,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
                     ))
                 })?,
         )
+        .bind(connection.disconnected_notified_at())
+        .bind(connection.dependent_jobs_paused_at())
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -142,7 +150,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         let rows = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error
+               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at
              FROM advertising.connections
              WHERE tenant_id = $1 ORDER BY connected_at DESC, id DESC",
         )
@@ -162,7 +170,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         let row = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error
+               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at
              FROM advertising.connections
              WHERE tenant_id = $1 AND id = $2",
         )

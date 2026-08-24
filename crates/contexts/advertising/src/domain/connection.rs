@@ -55,6 +55,8 @@ pub struct AdvertisingConnection {
     token_expires_at: Option<DateTime<Utc>>,
     last_synced_at: Option<DateTime<Utc>>,
     last_error: Option<SyncError>,
+    disconnected_notified_at: Option<DateTime<Utc>>,
+    dependent_jobs_paused_at: Option<DateTime<Utc>>,
 }
 
 impl AdvertisingConnection {
@@ -107,6 +109,8 @@ impl AdvertisingConnection {
             token_expires_at: None,
             last_synced_at: None,
             last_error: None,
+            disconnected_notified_at: None,
+            dependent_jobs_paused_at: None,
         })
     }
 
@@ -127,6 +131,8 @@ impl AdvertisingConnection {
         token_expires_at: Option<DateTime<Utc>>,
         last_synced_at: Option<DateTime<Utc>>,
         last_error: Option<SyncError>,
+        disconnected_notified_at: Option<DateTime<Utc>>,
+        dependent_jobs_paused_at: Option<DateTime<Utc>>,
     ) -> Result<Self, AdvertisingError> {
         let mut connection = Self::new(
             tenant_id,
@@ -145,6 +151,8 @@ impl AdvertisingConnection {
         connection.token_expires_at = token_expires_at;
         connection.last_synced_at = last_synced_at;
         connection.last_error = last_error;
+        connection.disconnected_notified_at = disconnected_notified_at;
+        connection.dependent_jobs_paused_at = dependent_jobs_paused_at;
         Ok(connection)
     }
 
@@ -162,6 +170,44 @@ impl AdvertisingConnection {
         self.token_expires_at = token_expires_at;
         self.status = ConnectionStatus::Active;
         self.last_error = None;
+        self.disconnected_notified_at = None;
+        self.dependent_jobs_paused_at = None;
+    }
+
+    /// Persist the successful observation together with the renewed access
+    /// token expiry. A recovered connection is eligible for dependent work
+    /// again only after a provider-confirmed refresh.
+    pub fn record_refresh_success(
+        &mut self,
+        token_expires_at: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) {
+        self.status = ConnectionStatus::Active;
+        self.token_expires_at = token_expires_at;
+        self.last_synced_at = Some(now);
+        self.last_error = None;
+        self.disconnected_notified_at = None;
+        self.dependent_jobs_paused_at = None;
+    }
+
+    /// A permanent credential failure stops further refresh attempts. Side
+    /// effects are marked separately after their respective ports succeed.
+    pub fn record_permanent_refresh_failure(&mut self, error: SyncError) {
+        self.status = ConnectionStatus::Disconnected;
+        self.last_error = Some(error);
+    }
+
+    /// Mark a successfully delivered reconnect notification. Keeping this
+    /// separate from failure observation prevents a transient notifier error
+    /// from being mistaken for a completed notification.
+    pub fn mark_disconnected_notified(&mut self, now: DateTime<Utc>) {
+        self.disconnected_notified_at.get_or_insert(now);
+    }
+
+    /// Mark dependent jobs paused only after the scheduler has committed the
+    /// pause. Repeated workers retain the first successful marker.
+    pub fn mark_dependent_jobs_paused(&mut self, now: DateTime<Utc>) {
+        self.dependent_jobs_paused_at.get_or_insert(now);
     }
 
     pub fn record_sync_error(&mut self, error: SyncError) {
@@ -226,6 +272,12 @@ impl AdvertisingConnection {
     pub(crate) fn last_error(&self) -> Option<&SyncError> {
         self.last_error.as_ref()
     }
+    pub(crate) fn disconnected_notified_at(&self) -> Option<DateTime<Utc>> {
+        self.disconnected_notified_at
+    }
+    pub(crate) fn dependent_jobs_paused_at(&self) -> Option<DateTime<Utc>> {
+        self.dependent_jobs_paused_at
+    }
 }
 
 fn normalize_external_account_id(value: String) -> Result<String, AdvertisingError> {
@@ -259,7 +311,7 @@ mod tests {
     fn connection() -> AdvertisingConnection {
         AdvertisingConnection::new(
             Uuid::now_v7(),
-            PlatformKey::parse("google_ads").unwrap(),
+            PlatformKey::parse("network_a").unwrap(),
             "123-456-7890",
             "jpy",
             "Asia/Tokyo",
@@ -289,7 +341,7 @@ mod tests {
     fn account_id_is_canonical_and_empty_secret_reference_is_rejected() {
         let connection = AdvertisingConnection::new(
             Uuid::now_v7(),
-            PlatformKey::parse("meta").unwrap(),
+            PlatformKey::parse("network_b").unwrap(),
             "  123-456-7890  ",
             "JPY",
             "Asia/Tokyo",
@@ -301,7 +353,7 @@ mod tests {
         assert_eq!(connection.external_account_id(), "123-456-7890");
         let result = AdvertisingConnection::new(
             Uuid::now_v7(),
-            PlatformKey::parse("meta").unwrap(),
+            PlatformKey::parse("network_b").unwrap(),
             "123-456-7890",
             "JPY",
             "Asia/Tokyo",
@@ -323,5 +375,37 @@ mod tests {
         let value = serde_json::to_value(&error).unwrap();
         assert_eq!(value["provider_reason"], "password_changed");
         assert_eq!(serde_json::from_value::<SyncError>(value).unwrap(), error);
+    }
+
+    #[test]
+    fn permanent_refresh_failure_records_only_completed_side_effects() {
+        let now = Utc::now();
+        let mut connection = connection();
+        let revoked = SyncError::new("invalid_grant", None, Map::new()).unwrap();
+
+        connection.record_permanent_refresh_failure(revoked.clone());
+        connection.record_permanent_refresh_failure(revoked);
+        assert_eq!(connection.status(), ConnectionStatus::Disconnected);
+        assert!(connection.disconnected_notified_at().is_none());
+        assert!(connection.dependent_jobs_paused_at().is_none());
+
+        connection.mark_disconnected_notified(now + Duration::minutes(2));
+        connection.mark_dependent_jobs_paused(now + Duration::minutes(2));
+        connection.mark_disconnected_notified(now + Duration::minutes(3));
+        connection.mark_dependent_jobs_paused(now + Duration::minutes(3));
+        assert_eq!(
+            connection.disconnected_notified_at(),
+            Some(now + Duration::minutes(2))
+        );
+        assert_eq!(
+            connection.dependent_jobs_paused_at(),
+            Some(now + Duration::minutes(2))
+        );
+
+        connection
+            .record_refresh_success(Some(now + Duration::hours(1)), now + Duration::minutes(2));
+        assert_eq!(connection.status(), ConnectionStatus::Active);
+        assert!(connection.disconnected_notified_at().is_none());
+        assert!(connection.dependent_jobs_paused_at().is_none());
     }
 }
