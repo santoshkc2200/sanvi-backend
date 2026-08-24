@@ -7,6 +7,73 @@ info:
   version: 0.10.0
 openapi: 3.1.0
 paths:
+  /api/v1/tenant/ads/campaigns/{campaign_id}/drift:
+    post:
+      operationId: resolve_campaign_drift
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required. A retry of this drift resolution returns its original result.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveCampaignDriftRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolvedCampaignDriftView'
+          description: Drift resolution applied or replayed
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing or malformed idempotency key, or invalid resolution
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Stale revision, idempotency conflict, or resolution in progress
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      summary: |-
+        Explicitly resolve a platform-observed campaign drift. The idempotency
+        claim is durable and created before any provider write; the adapter also
+        receives the same key for provider-side deduplication.
+      tags:
+      - advertising
   /api/v1/tenant/ads/platforms:
     get:
       operationId: list_ad_platforms

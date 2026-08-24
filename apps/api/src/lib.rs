@@ -45,7 +45,7 @@ use sanvi_advertising::{
         FakeAdPlatform, OutboxEventPublisher as AdvertisingEvents, SqlxCampaignRepository,
         SqlxOAuthStateStore,
     },
-    application::{ListPlatformCatalog, ReconcileCampaign},
+    application::{ListPlatformCatalog, ReconcileCampaign, ResolveCampaignDrift},
     routes as advertising_routes,
 };
 use sanvi_audit::{
@@ -2787,11 +2787,18 @@ pub fn build_advertising_state(
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
     Ok(sanvi_advertising::adapters::http::AdvertisingState {
         config: config.clone(),
-        catalog: std::sync::Arc::new(ListPlatformCatalog::new(registry)),
+        idempotency: sanvi_persistence::IdempotencyStore::new(tx.pool().clone()),
+        catalog: std::sync::Arc::new(ListPlatformCatalog::new(registry.clone())),
         reconcile_campaign: std::sync::Arc::new(ReconcileCampaign::new(
+            tx.clone(),
+            std::sync::Arc::new(SqlxCampaignRepository::new()),
+            std::sync::Arc::new(AdvertisingEvents::new()),
+        )),
+        resolve_campaign_drift: std::sync::Arc::new(ResolveCampaignDrift::new(
             tx,
             std::sync::Arc::new(SqlxCampaignRepository::new()),
             std::sync::Arc::new(AdvertisingEvents::new()),
+            registry.clone(),
         )),
         oauth_state: OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store),
     })

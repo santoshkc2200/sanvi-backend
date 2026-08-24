@@ -1,5 +1,6 @@
 use sanvi_advertising::adapters::http::handlers::{
-    AdvertisingProblemType, MetricPoint, MoneyView, RenderedMoneyView,
+    AdvertisingProblemType, MetricPoint, MoneyView, RenderedMoneyView, ResolveCampaignDriftRequest,
+    ResolvedCampaignDriftView,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -167,10 +168,11 @@ use utoipa::OpenApi;
         sanvi_payments::adapters::http::handlers::get_tax_settings,
         sanvi_payments::adapters::http::handlers::put_tax_settings,
         sanvi_advertising::adapters::http::handlers::list_ad_platforms,
+        sanvi_advertising::adapters::http::handlers::resolve_campaign_drift,
     ),
     components(schemas(
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
-        RenderedMoneyView
+        RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView
     )),
     tags(
         (name = "system", description = "System, health and build information"),
@@ -369,6 +371,11 @@ mod tests {
                 .get("/api/v1/tenant/ads/platforms")
                 .is_some()
         );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/campaigns/{campaign_id}/drift")
+                .is_some()
+        );
         let schemas = &document["components"]["schemas"];
         assert!(schemas.get("PlatformsView").is_some());
         for schema in [
@@ -376,6 +383,8 @@ mod tests {
             "MetricPoint",
             "MoneyView",
             "RenderedMoneyView",
+            "ResolveCampaignDriftRequest",
+            "ResolvedCampaignDriftView",
         ] {
             assert!(
                 schemas.get(schema).is_some(),

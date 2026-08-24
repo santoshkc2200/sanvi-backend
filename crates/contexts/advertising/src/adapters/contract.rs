@@ -8,6 +8,7 @@ use crate::domain::{
     CreativeText, DriftState, HashedIds, MetricQuery, Money, Objective, Schedule, Targeting,
     UploadedConversion,
 };
+use uuid::Uuid;
 
 /// Exercise the provider-neutral operations expected from every adapter.
 ///
@@ -59,7 +60,9 @@ pub async fn assert_ad_platform_contract(
 
     let mut changed = created.clone();
     changed.name = "Updated contract campaign".to_string();
-    let updated = adapter.update_campaign(&connection, changed).await?;
+    let updated = adapter
+        .update_campaign(&connection, changed, Uuid::now_v7())
+        .await?;
     if updated.name != "Updated contract campaign" {
         return Err(AdvertisingError::PlatformUnavailable(
             "campaign update was not retained".to_string(),

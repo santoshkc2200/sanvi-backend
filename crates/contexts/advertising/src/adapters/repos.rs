@@ -239,7 +239,7 @@ impl CampaignRepository for SqlxCampaignRepository {
     ) -> Result<Option<StoredCampaign>, AdvertisingError> {
         sqlx::query_as::<_, CampaignRow>(
             "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
-             FROM advertising.campaigns WHERE tenant_id = $1 AND id = $2",
+             FROM advertising.campaigns WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
         ).bind(tenant_id).bind(campaign_id)
         .fetch_optional(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?
         .map(TryInto::try_into).transpose()

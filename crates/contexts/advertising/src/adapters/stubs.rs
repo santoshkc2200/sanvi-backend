@@ -195,6 +195,7 @@ impl AdPlatformPort for FakeAdPlatform {
         &self,
         _connection: &ConnectionHandle,
         campaign: Campaign,
+        _mutation_id: uuid::Uuid,
     ) -> Result<Campaign, AdvertisingError> {
         let mut campaigns = self.campaigns.lock().map_err(|_| {
             AdvertisingError::PlatformUnavailable("fake state lock poisoned".to_string())

@@ -118,6 +118,7 @@ pub trait AdPlatformPort: Send + Sync {
         &self,
         connection: &ConnectionHandle,
         campaign: Campaign,
+        mutation_id: Uuid,
     ) -> Result<Campaign, AdvertisingError>;
     async fn pause_campaign(
         &self,

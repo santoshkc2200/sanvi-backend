@@ -1,12 +1,21 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use actix_web::{HttpResponse, web};
-use sanvi_http::{ApiError, CurrentTenant, ProblemDetail, RequiredAnyFeature, RequiredPermission};
-use serde::Serialize;
+use actix_web::{HttpRequest, HttpResponse, web};
+use sanvi_http::{
+    ApiError, CurrentSubject, CurrentTenant, ProblemDetail, RequiredAnyFeature, RequiredPermission,
+};
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use super::AdvertisingState;
-use crate::{CapabilityMatrix, domain::ConnectionState};
+use crate::{
+    CapabilityMatrix,
+    application::{DriftResolution, ResolvedCampaignDrift},
+    domain::{AdvertisingError, Campaign, ConnectionState},
+};
+
+const DRIFT_IDEMPOTENCY_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Stable envelope for the platform catalog. TASK-010 fills this only from
 /// registered capability matrices; no platform name is hard-coded here.
@@ -122,4 +131,165 @@ pub async fn list_ad_platforms(
     Ok(HttpResponse::Ok()
         .insert_header(("cache-control", "private, max-age=60"))
         .json(PlatformsView { platforms }))
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct ResolveCampaignDriftRequest {
+    pub revision: i64,
+    pub resolution: DriftResolution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ResolvedCampaignDriftView {
+    pub campaign: Campaign,
+    pub revision: i64,
+    pub resolution: DriftResolution,
+    pub replayed: bool,
+}
+
+fn idempotency_key(req: &HttpRequest) -> Result<Uuid, ApiError> {
+    let raw = req
+        .headers()
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::BadRequest {
+            detail: "Idempotency-Key header is required for campaign drift resolution".to_string(),
+        })?;
+    Uuid::parse_str(raw).map_err(|_| ApiError::BadRequest {
+        detail: "Idempotency-Key must be a UUID".to_string(),
+    })
+}
+
+fn api_error(error: AdvertisingError) -> ApiError {
+    match error {
+        AdvertisingError::InvalidInput(detail) => ApiError::BadRequest { detail },
+        AdvertisingError::PlatformUnavailable(detail) => ApiError::ServiceUnavailable { detail },
+        AdvertisingError::Storage(detail) => {
+            tracing::error!(error = %detail, "advertising drift resolution storage failure");
+            ApiError::internal("advertising drift resolution failed")
+        }
+        AdvertisingError::StaleRevision => ApiError::Conflict {
+            detail: "campaign revision is stale; refresh and resolve the latest drift".to_string(),
+        },
+        AdvertisingError::CampaignNotFound => ApiError::NotFound {
+            resource: "campaign".to_string(),
+        },
+    }
+}
+
+/// Explicitly resolve a platform-observed campaign drift. The idempotency
+/// claim is durable and created before any provider write; the adapter also
+/// receives the same key for provider-side deduplication.
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/campaigns/{campaign_id}/drift",
+    tag = "advertising",
+    operation_id = "resolve_campaign_drift",
+    request_body = ResolveCampaignDriftRequest,
+    params(
+        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("Idempotency-Key" = Uuid, Header, description = "Required. A retry of this drift resolution returns its original result.")
+    ),
+    responses(
+        (status = 200, description = "Drift resolution applied or replayed", body = ResolvedCampaignDriftView),
+        (status = 400, description = "Missing or malformed idempotency key, or invalid resolution", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.campaign.write permission or platform entitlement", body = ProblemDetail),
+        (status = 404, description = "Campaign not found", body = ProblemDetail),
+        (status = 409, description = "Stale revision, idempotency conflict, or resolution in progress", body = ProblemDetail),
+        (status = 503, description = "Platform adapter unavailable", body = ProblemDetail)
+    )
+)]
+pub async fn resolve_campaign_drift(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    subject: CurrentSubject,
+    path: web::Path<Uuid>,
+    req: HttpRequest,
+    body: web::Json<ResolveCampaignDriftRequest>,
+    _permission: RequiredPermission,
+    _entitlement: RequiredAnyFeature,
+) -> Result<HttpResponse, ApiError> {
+    let campaign_id = path.into_inner();
+    let command = body.into_inner();
+    let mutation_id = idempotency_key(&req)?;
+    // Revision is part of scope. A stale UI cannot turn a prior resolution
+    // into a successful resolution of a later drift observation.
+    let scope = format!(
+        "tenant.{}.advertising.campaign.{}.drift.{}",
+        tenant.0.tenant_id, campaign_id, command.revision
+    );
+    let key = mutation_id.to_string();
+    match state
+        .idempotency
+        .claim(&key, &scope, DRIFT_IDEMPOTENCY_TTL)
+        .await
+        .map_err(|error| ApiError::internal(format!("idempotency claim failed: {error}")))?
+    {
+        Some(hit) => {
+            let Some(response) = hit.response else {
+                return Err(ApiError::Conflict {
+                    detail: "campaign drift resolution is already in progress".to_string(),
+                });
+            };
+            let mut view: ResolvedCampaignDriftView =
+                serde_json::from_value(response).map_err(|error| {
+                    ApiError::internal(format!(
+                        "stored drift resolution response is invalid: {error}"
+                    ))
+                })?;
+            if view.resolution != command.resolution {
+                return Err(ApiError::Conflict {
+                    detail: "Idempotency-Key was already used for a different drift resolution"
+                        .to_string(),
+                });
+            }
+            view.replayed = true;
+            return Ok(HttpResponse::Ok().json(view));
+        }
+        None => {}
+    }
+
+    let resolved = state
+        .resolve_campaign_drift
+        .execute(
+            tenant.0.tenant_id,
+            campaign_id,
+            command.revision,
+            mutation_id,
+            subject.0.user_id,
+            command.resolution,
+        )
+        .await;
+    let resolved = match resolved {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            if let Err(release_error) = state.idempotency.release(&key, &scope).await {
+                tracing::error!(error = %release_error, "advertising drift idempotency release failed");
+            }
+            return Err(api_error(error));
+        }
+    };
+    let view = drift_view(resolved, command.resolution);
+    let response = serde_json::to_value(&view).map_err(|error| {
+        ApiError::internal(format!("drift response serialization failed: {error}"))
+    })?;
+    if let Err(error) = state.idempotency.resolve(&key, &scope, 200, response).await {
+        // Mutation and audit record have already committed. Do not tell the
+        // caller it failed and invite a retry after a successful provider
+        // write; expiry makes this claim recoverable for observability.
+        tracing::error!(error = %error, "advertising drift idempotency response storage failed");
+    }
+    Ok(HttpResponse::Ok().json(view))
+}
+
+fn drift_view(
+    resolved: ResolvedCampaignDrift,
+    resolution: DriftResolution,
+) -> ResolvedCampaignDriftView {
+    ResolvedCampaignDriftView {
+        campaign: resolved.campaign,
+        revision: resolved.revision,
+        resolution,
+        replayed: resolved.replayed,
+    }
 }

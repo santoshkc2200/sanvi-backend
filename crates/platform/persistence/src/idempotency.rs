@@ -154,10 +154,16 @@ impl IdempotencyStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let status: u16 = row
-            .status
-            .parse()
-            .context("stored idempotency status is not a number")?;
+        // An unfinished claim is an expected concurrent-request state, not a
+        // malformed completed response. Callers can turn its absent response
+        // into their operation-specific conflict safely.
+        let status = if row.response.is_none() && row.status == "in_progress" {
+            409
+        } else {
+            row.status
+                .parse()
+                .context("stored idempotency status is not a number")?
+        };
         Ok(Some(IdempotencyHit {
             status,
             response: row.response,
