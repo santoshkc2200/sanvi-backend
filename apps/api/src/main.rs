@@ -406,7 +406,13 @@ async fn main() -> ExitCode {
         audit.writer.clone(),
     ));
     let advertising = if config.features.advertising {
-        Some(build_advertising_state(&config.advertising))
+        match build_advertising_state(pool.clone(), &config.advertising) {
+            Ok(state) => Some(state),
+            Err(err) => {
+                eprintln!("failed to configure advertising: {err}");
+                return ExitCode::from(1);
+            }
+        }
     } else {
         None
     };

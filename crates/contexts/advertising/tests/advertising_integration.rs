@@ -3,7 +3,13 @@
 //! These tests use an isolated Postgres container so the phase-10 migration
 //! rollback and partition RLS checks never operate on a developer database.
 
-use chrono::{DateTime, Datelike, Months, Utc};
+use std::sync::Arc;
+
+use chrono::{DateTime, Datelike, Duration, Months, Utc};
+use sanvi_advertising::{
+    OAuthStateClaims, OAuthStateError, OAuthStateManager, OAuthStateStore, PlatformKey,
+    adapters::SqlxOAuthStateStore,
+};
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
 use sqlx::{Postgres as SqlxPostgres, QueryBuilder};
 use testcontainers::runners::AsyncRunner;
@@ -250,6 +256,17 @@ async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
     let tenant_b = seed_tenant(&pool, "advertising-beta").await;
 
     let occurred_at = insert_conversion_event(&pool, tenant_a, Uuid::now_v7()).await;
+    let oauth_store: Arc<dyn OAuthStateStore> =
+        Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool.clone())));
+    OAuthStateManager::with_store("x".repeat(32), oauth_store)
+        .issue(
+            tenant_a,
+            PlatformKey::parse("google_ads").unwrap(),
+            Utc::now(),
+            Duration::minutes(10),
+        )
+        .await
+        .unwrap();
 
     let partition = format!(
         "advertising.conversion_events_{:04}{:02}",
@@ -274,6 +291,12 @@ async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
         assert_eq!(campaign_count, 1, "tenant A must see its own campaign");
         let event_count = partition_row_count(tx, &partition).await;
         assert_eq!(event_count, 1, "tenant A must see its own partition row");
+        let oauth_state_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM advertising.oauth_states")
+                .fetch_one(&mut **tx)
+                .await
+                .unwrap();
+        assert_eq!(oauth_state_count, 1, "tenant A must see its OAuth state");
         tenant_a_scope.rollback().await.unwrap();
     }
 
@@ -300,5 +323,87 @@ async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
         event_count, 0,
         "tenant B must not see tenant A's partition row"
     );
+    let oauth_state_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM advertising.oauth_states")
+            .fetch_one(&mut **tx)
+            .await
+            .unwrap();
+    assert_eq!(
+        oauth_state_count, 0,
+        "tenant B must not see tenant A's OAuth state"
+    );
     tenant_b_scope.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn oauth_state_survives_restart_and_is_consumed_once() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_a = seed_tenant(&pool, "oauth-alpha").await;
+    let tenant_b = seed_tenant(&pool, "oauth-beta").await;
+    let store: Arc<dyn OAuthStateStore> = Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool)));
+    let platform = PlatformKey::parse("google_ads").unwrap();
+
+    let issuing_manager = OAuthStateManager::with_store("x".repeat(32), store.clone());
+    let state = issuing_manager
+        .issue(
+            tenant_a,
+            platform.clone(),
+            Utc::now(),
+            Duration::minutes(10),
+        )
+        .await
+        .unwrap();
+
+    // A new manager models a fresh API process: state has to be durable, not
+    // merely resident in the instance that started OAuth.
+    let callback_manager = OAuthStateManager::with_store("x".repeat(32), store);
+    assert_eq!(
+        callback_manager
+            .redeem(&state, tenant_b, &platform, Utc::now())
+            .await,
+        Err(OAuthStateError::CrossTenant)
+    );
+    assert!(
+        callback_manager
+            .redeem(&state, tenant_a, &platform, Utc::now())
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        callback_manager
+            .redeem(&state, tenant_a, &platform, Utc::now())
+            .await,
+        Err(OAuthStateError::Replayed)
+    );
+}
+
+#[tokio::test]
+async fn oauth_state_store_rejects_row_with_mismatched_signed_expiry() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "oauth-expiry").await;
+    let store: Arc<dyn OAuthStateStore> =
+        Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool.clone())));
+    let claims = OAuthStateClaims {
+        tenant_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        nonce: Uuid::now_v7(),
+        expires_at: Utc::now() + Duration::minutes(10),
+    };
+    store.issue(claims.clone()).await.unwrap();
+
+    let tx_manager = TxManager::new(pool);
+    let mut scope = tx_manager.begin_for(tenant_id).await.unwrap();
+    sqlx::query("UPDATE advertising.oauth_states SET expires_at = $2 WHERE nonce = $1")
+        .bind(claims.nonce)
+        .bind(claims.expires_at + Duration::minutes(1))
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    assert!(!store.consume(&claims).await.unwrap());
 }

@@ -20,7 +20,9 @@ pub use model::{
     ConnectionState, ConsentSnapshot, Creative, CreativeText, DriftState, HashedIds, Money,
     Objective, PlatformKey, Schedule, Targeting, TargetingDimension,
 };
-pub use oauth_state::{OAuthStateClaims, OAuthStateError, OAuthStateManager};
+pub use oauth_state::{
+    InMemoryOAuthStateStore, OAuthStateClaims, OAuthStateError, OAuthStateManager, OAuthStateStore,
+};
 pub use ports::{
     AdPlatformPort, AdvertisingError, AuthorizationRequest, AuthorizationStart, MetricPoint,
     MetricQuery, PlatformAccount, PlatformDescriptor, UploadedConversion,

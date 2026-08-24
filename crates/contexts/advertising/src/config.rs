@@ -12,6 +12,7 @@ pub struct AdvertisingConfig {
     pub google_ads_client_secret: String,
     pub meta_client_id: String,
     pub meta_client_secret: String,
+    pub oauth_state_signing_secret: String,
     pub tracking_site_key_signing_secret: String,
     pub google_ads_api_version: String,
     pub meta_api_version: String,
@@ -25,6 +26,7 @@ impl std::fmt::Debug for AdvertisingConfig {
             .field("google_ads_client_secret", &"[REDACTED]")
             .field("meta_client_id", &"[REDACTED]")
             .field("meta_client_secret", &"[REDACTED]")
+            .field("oauth_state_signing_secret", &"[REDACTED]")
             .field("tracking_site_key_signing_secret", &"[REDACTED]")
             .field("google_ads_api_version", &self.google_ads_api_version)
             .field("meta_api_version", &self.meta_api_version)
@@ -40,6 +42,7 @@ impl Default for AdvertisingConfig {
             google_ads_client_secret: String::new(),
             meta_client_id: String::new(),
             meta_client_secret: String::new(),
+            oauth_state_signing_secret: String::new(),
             tracking_site_key_signing_secret: String::new(),
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
@@ -52,6 +55,13 @@ impl AdvertisingConfig {
         if self.google_ads_api_version.trim().is_empty() || self.meta_api_version.trim().is_empty()
         {
             anyhow::bail!("advertising API versions must not be empty");
+        }
+        Ok(())
+    }
+
+    pub fn validate_oauth_enabled(&self) -> anyhow::Result<()> {
+        if self.oauth_state_signing_secret.len() < 32 {
+            anyhow::bail!("advertising OAuth state signing secret must be at least 32 bytes");
         }
         Ok(())
     }

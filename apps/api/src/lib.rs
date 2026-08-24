@@ -40,7 +40,9 @@ use sanvi_access::{
     },
 };
 use sanvi_advertising::{
-    AdvertisingConfig, adapters::FakeAdPlatform, application::ListPlatformCatalog,
+    AdvertisingConfig, OAuthStateManager,
+    adapters::{FakeAdPlatform, SqlxOAuthStateStore},
+    application::ListPlatformCatalog,
     routes as advertising_routes,
 };
 use sanvi_audit::{
@@ -2773,13 +2775,19 @@ pub fn build_payments_state(
 /// Phase 10's registry-derived capability catalog. The in-process adapter is
 /// deliberately the only registered implementation until real adapters land.
 pub fn build_advertising_state(
+    pool: sanvi_persistence::PgPool,
     config: &AdvertisingConfig,
-) -> sanvi_advertising::adapters::http::AdvertisingState {
+) -> anyhow::Result<sanvi_advertising::adapters::http::AdvertisingState> {
+    config.validate_oauth_enabled()?;
     let registry = std::sync::Arc::new(FakeAdPlatform::registered_catalog());
-    sanvi_advertising::adapters::http::AdvertisingState {
+    let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(
+        sanvi_persistence::TxManager::new(pool),
+    ));
+    Ok(sanvi_advertising::adapters::http::AdvertisingState {
         config: config.clone(),
         catalog: std::sync::Arc::new(ListPlatformCatalog::new(registry)),
-    }
+        oauth_state: OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store),
+    })
 }
 
 /// Build the domains context's application state: repositories, the

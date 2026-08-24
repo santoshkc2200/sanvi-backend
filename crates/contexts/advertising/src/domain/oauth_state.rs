@@ -9,6 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
@@ -40,6 +41,43 @@ pub enum OAuthStateError {
     CrossTenant,
     #[error("OAuth state was already redeemed or was never issued")]
     Replayed,
+    #[error("OAuth state store is unavailable")]
+    StoreUnavailable,
+}
+
+/// Durable, single-use nonce storage. Implementations must atomically consume
+/// a nonce only when all signed claims still match. The signature is verified
+/// before this port is reached, so a callback can never turn the store into an
+/// oracle for arbitrary nonce values.
+#[async_trait]
+pub trait OAuthStateStore: Send + Sync {
+    async fn issue(&self, claims: OAuthStateClaims) -> Result<(), OAuthStateError>;
+    async fn consume(&self, claims: &OAuthStateClaims) -> Result<bool, OAuthStateError>;
+}
+
+#[derive(Default)]
+pub struct InMemoryOAuthStateStore {
+    issued: Mutex<BTreeMap<Uuid, OAuthStateClaims>>,
+}
+
+#[async_trait]
+impl OAuthStateStore for InMemoryOAuthStateStore {
+    async fn issue(&self, claims: OAuthStateClaims) -> Result<(), OAuthStateError> {
+        self.issued
+            .lock()
+            .map_err(|_| OAuthStateError::StoreUnavailable)?
+            .insert(claims.nonce, claims);
+        Ok(())
+    }
+
+    async fn consume(&self, claims: &OAuthStateClaims) -> Result<bool, OAuthStateError> {
+        Ok(self
+            .issued
+            .lock()
+            .map_err(|_| OAuthStateError::StoreUnavailable)?
+            .remove(&claims.nonce)
+            .is_some_and(|stored| stored == *claims))
+    }
 }
 
 /// The nonce store is intentionally separate from the signature. Production
@@ -49,42 +87,46 @@ pub enum OAuthStateError {
 #[derive(Clone)]
 pub struct OAuthStateManager {
     signing_key: Arc<[u8]>,
-    issued: Arc<Mutex<BTreeMap<Uuid, OAuthStateClaims>>>,
+    store: Arc<dyn OAuthStateStore>,
 }
 
 impl OAuthStateManager {
     pub fn new(signing_key: impl AsRef<[u8]>) -> Self {
         Self {
             signing_key: Arc::from(signing_key.as_ref()),
-            issued: Arc::new(Mutex::new(BTreeMap::new())),
+            store: Arc::new(InMemoryOAuthStateStore::default()),
+        }
+    }
+
+    pub fn with_store(signing_key: impl AsRef<[u8]>, store: Arc<dyn OAuthStateStore>) -> Self {
+        Self {
+            signing_key: Arc::from(signing_key.as_ref()),
+            store,
         }
     }
 
     /// Issue an opaque state string. Its body includes no authorization code or
     /// token, so it is safe to carry through browser redirects.
-    pub fn issue(
+    pub async fn issue(
         &self,
         tenant_id: Uuid,
         platform: PlatformKey,
         now: DateTime<Utc>,
         ttl: Duration,
-    ) -> String {
+    ) -> Result<String, OAuthStateError> {
         let claims = OAuthStateClaims {
             tenant_id,
             platform,
             nonce: Uuid::now_v7(),
             expires_at: now + ttl,
         };
-        self.issued
-            .lock()
-            .expect("OAuth state store lock")
-            .insert(claims.nonce, claims.clone());
-        self.sign(&claims)
+        self.store.issue(claims.clone()).await?;
+        Ok(self.sign(&claims))
     }
 
     /// Verify signature, expiry, tenant/platform binding, then atomically burn
     /// state. A caller must redeem before exchanging the provider's code.
-    pub fn redeem(
+    pub async fn redeem(
         &self,
         state: &str,
         expected_tenant_id: Uuid,
@@ -95,15 +137,11 @@ impl OAuthStateManager {
         if claims.tenant_id != expected_tenant_id || &claims.platform != expected_platform {
             return Err(OAuthStateError::CrossTenant);
         }
-        let mut issued = self.issued.lock().expect("OAuth state store lock");
-        let stored = issued
-            .remove(&claims.nonce)
-            .ok_or(OAuthStateError::Replayed)?;
-        if stored != claims {
-            return Err(OAuthStateError::Forged);
-        }
         if claims.expires_at <= now {
             return Err(OAuthStateError::Expired);
+        }
+        if !self.store.consume(&claims).await? {
+            return Err(OAuthStateError::Replayed);
         }
         Ok(claims)
     }
@@ -160,31 +198,42 @@ mod tests {
         PlatformKey::parse("test_platform").unwrap()
     }
 
-    #[test]
-    fn signed_state_rejects_forgery_expiry_replay_and_cross_tenant_redemption() {
+    #[tokio::test]
+    async fn signed_state_rejects_forgery_expiry_replay_and_cross_tenant_redemption() {
         let manager = manager();
         let tenant_a = Uuid::now_v7();
         let tenant_b = Uuid::now_v7();
-        let state = manager.issue(tenant_a, platform(), now(), Duration::minutes(10));
+        let state = manager
+            .issue(tenant_a, platform(), now(), Duration::minutes(10))
+            .await
+            .unwrap();
         assert_eq!(
-            manager.redeem(&state, tenant_b, &platform(), now()),
+            manager.redeem(&state, tenant_b, &platform(), now()).await,
             Err(OAuthStateError::CrossTenant)
         );
-        assert!(manager.redeem(&state, tenant_a, &platform(), now()).is_ok());
+        assert!(
+            manager
+                .redeem(&state, tenant_a, &platform(), now())
+                .await
+                .is_ok()
+        );
         assert_eq!(
-            manager.redeem(&state, tenant_a, &platform(), now()),
+            manager.redeem(&state, tenant_a, &platform(), now()).await,
             Err(OAuthStateError::Replayed)
         );
 
         let forged = format!("{state}x");
         assert_eq!(
-            manager.redeem(&forged, tenant_a, &platform(), now()),
+            manager.redeem(&forged, tenant_a, &platform(), now()).await,
             Err(OAuthStateError::Forged)
         );
 
-        let expired = manager.issue(tenant_a, platform(), now(), Duration::seconds(-1));
+        let expired = manager
+            .issue(tenant_a, platform(), now(), Duration::seconds(-1))
+            .await
+            .unwrap();
         assert_eq!(
-            manager.redeem(&expired, tenant_a, &platform(), now()),
+            manager.redeem(&expired, tenant_a, &platform(), now()).await,
             Err(OAuthStateError::Expired)
         );
     }

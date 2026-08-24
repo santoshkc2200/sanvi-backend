@@ -12,8 +12,9 @@ pub mod domain;
 pub use config::AdvertisingConfig;
 pub use domain::{
     CapabilityMatrix, ConnectionHandle, ConnectionHealth, ConnectionStatus, ConsentSnapshot,
-    HashedIds, OAuthStateClaims, OAuthStateError, OAuthStateManager, Objective, PlatformKey,
-    RefreshFailureKind, RefreshTransition, SecretRef, refresh_failure_transition,
+    HashedIds, InMemoryOAuthStateStore, OAuthStateClaims, OAuthStateError, OAuthStateManager,
+    OAuthStateStore, Objective, PlatformKey, RefreshFailureKind, RefreshTransition, SecretRef,
+    refresh_failure_transition,
 };
 
 pub mod routes {
