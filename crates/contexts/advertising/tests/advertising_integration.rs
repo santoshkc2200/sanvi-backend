@@ -9,7 +9,20 @@ use chrono::{DateTime, Datelike, Duration, Months, Utc};
 use sanvi_advertising::{
     AdvertisingConnection, AdvertisingConnectionRepository, OAuthStateClaims, OAuthStateError,
     OAuthStateManager, OAuthStateStore, PlatformKey, SecretRef, SyncError,
-    adapters::{SqlxAdvertisingConnectionRepository, SqlxOAuthStateStore},
+    adapters::{
+        FakeAdPlatform, OutboxEventPublisher, SqlxAdvertisingConnectionRepository,
+        SqlxCampaignRepository, SqlxOAuthStateStore,
+    },
+    application::{
+        AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, GetCampaign,
+        ListCampaignChanges, ListCampaigns, NewAdFields, NewAdGroupFields, NewCampaignFields,
+        PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign, ReconcileDueCampaigns,
+        ResumeCampaign, UpdateAdGroup, ValidateCampaign,
+    },
+    domain::{
+        BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative, CreativeText,
+        Money, Objective, Targeting,
+    },
 };
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
 use sqlx::{Postgres as SqlxPostgres, QueryBuilder};
@@ -504,4 +517,466 @@ async fn reconnect_reuses_the_original_connection_row() {
     assert_eq!(persisted_error["provider_reason"], "password_changed");
     assert_eq!(persisted_lifecycle.0, Some(now + Duration::minutes(2)));
     assert_eq!(persisted_lifecycle.1, Some(now + Duration::minutes(2)));
+}
+
+/// End-to-end campaign tree lifecycle against the fake adapter: draft never
+/// touches the platform, publish assigns an external id exactly once even
+/// when retried, patch on a published campaign pushes live, pause/resume
+/// round-trip, and the change log attributes every step.
+#[tokio::test]
+async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "advertising-campaigns").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connections = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "123-456-7890",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connections.upsert(&mut scope, &connection).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connections);
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let get = GetCampaign::new(manager.clone(), campaigns.clone());
+    let list = ListCampaigns::new(manager.clone(), campaigns.clone());
+    let validate = ValidateCampaign::new(manager.clone(), campaigns.clone(), registry.clone());
+    let patch = PatchCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let publish = PublishCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let pause = PauseCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let resume = ResumeCampaign::new(manager.clone(), campaigns.clone(), events.clone(), registry);
+    let changes = ListCampaignChanges::new(manager, campaigns);
+
+    // Draft: never touches the platform.
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            actor_id,
+            NewCampaignFields {
+                name: "Summer sale".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(5_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(draft.external_id.is_none());
+    assert_eq!(draft.intent.status, CampaignStatus::Draft);
+    assert_eq!(draft.revision, 1);
+    assert_eq!(list.execute(tenant_id).await.unwrap().len(), 1);
+    assert_eq!(
+        get.execute(tenant_id, draft.id).await.unwrap().intent.name,
+        "Summer sale"
+    );
+
+    // Validate rejects an objective the platform doesn't support, without
+    // writing anything.
+    let violations = validate
+        .execute(
+            tenant_id,
+            draft.id,
+            CampaignFields {
+                objective: Some(Objective::parse("unsupported_objective").unwrap()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!violations.is_empty());
+    assert_eq!(get.execute(tenant_id, draft.id).await.unwrap().revision, 1);
+
+    // Publish assigns an external id; a retry with the same campaign id is a
+    // no-op success rather than a second campaign.
+    let published = publish
+        .execute(tenant_id, draft.id, actor_id)
+        .await
+        .unwrap();
+    assert!(published.external_id.is_some());
+    assert_eq!(published.intent.status, CampaignStatus::Active);
+    let replayed = publish
+        .execute(tenant_id, draft.id, actor_id)
+        .await
+        .unwrap();
+    assert_eq!(replayed.external_id, published.external_id);
+    assert_eq!(replayed.revision, published.revision);
+
+    // Patch on a published campaign pushes the edit live through the
+    // adapter as well as updating the stored intent.
+    let patched = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            published.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                name: Some("Summer sale v2".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(patched.intent.name, "Summer sale v2");
+    assert_eq!(patched.revision, published.revision + 1);
+
+    // A stale If-Match revision is rejected rather than silently applied.
+    let stale = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            published.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                name: Some("Should not apply".to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(matches!(
+        stale,
+        Err(sanvi_advertising::domain::AdvertisingError::StaleRevision)
+    ));
+
+    // Pause / resume round-trip and are attributed to the acting user.
+    let paused = pause.execute(tenant_id, draft.id, actor_id).await.unwrap();
+    assert_eq!(paused.intent.status, CampaignStatus::Paused);
+    let resumed = resume.execute(tenant_id, draft.id, actor_id).await.unwrap();
+    assert_eq!(resumed.intent.status, CampaignStatus::Active);
+
+    let history = changes.execute(tenant_id, draft.id, 50).await.unwrap();
+    assert!(
+        history.len() >= 5,
+        "expected create/publish/patch/pause/resume entries"
+    );
+    assert!(
+        history
+            .iter()
+            .all(|change| change.source == ChangeSource::Sanvi)
+    );
+    assert!(
+        history
+            .iter()
+            .all(|change| change.actor_id == Some(actor_id))
+    );
+}
+
+/// The nightly reconciliation sweep (TASK-012, 10.3): a change made directly
+/// in the platform's own UI — never through Sanvi — surfaces as drift on the
+/// next pass, and a second pass over the same unchanged remote state does
+/// not clear or resurrect it.
+#[tokio::test]
+async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_resurrecting() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "advertising-sweep").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "555-000-1111",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-sweep"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let publish = PublishCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let reconcile = Arc::new(ReconcileCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events,
+    ));
+    let sweep = ReconcileDueCampaigns::new(manager, campaigns, registry.clone(), reconcile);
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            actor_id,
+            NewCampaignFields {
+                name: "Sweep target".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(3_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+    let published = publish
+        .execute(tenant_id, draft.id, actor_id)
+        .await
+        .unwrap();
+    let external_id = published.external_id.clone().unwrap();
+
+    // Simulate a native edit made directly at the platform — bypassing
+    // Sanvi entirely, exactly as a tenant editing in Google Ads' own UI.
+    let platform_key = PlatformKey::parse("google_ads").unwrap();
+    let adapter = registry.adapter(&platform_key).unwrap();
+    let handle = sanvi_advertising::ConnectionHandle {
+        id: connection_id.to_string(),
+    };
+    adapter.pause_campaign(&handle, &external_id).await.unwrap();
+
+    let report = sweep.execute(50).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.drifted, 1);
+    assert_eq!(report.errors, 0);
+
+    // A second pass over the same, still-paused remote state is not new
+    // drift — and must not clear the existing drift flag on its own.
+    let report_again = sweep.execute(50).await.unwrap();
+    assert_eq!(report_again.checked, 1);
+    assert_eq!(
+        report_again.drifted, 0,
+        "unchanged remote state is not new drift"
+    );
+}
+
+/// Ad-group/ad sub-resource endpoints (TASK-012, 10.3): additions apply to
+/// the same campaign tree `PATCH` already covers, revision-CAS included,
+/// and a not-found ad group is a 404-shaped domain error rather than a
+/// silent no-op.
+#[tokio::test]
+async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tree() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "advertising-ad-groups").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "777-000-2222",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-ad-groups"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let add_ad_group = AddAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let update_ad_group = UpdateAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let add_ad = AddAd::new(manager, campaigns, events, registry);
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            actor_id,
+            NewCampaignFields {
+                name: "Ad group target".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(4_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(draft.intent.ad_groups.is_empty());
+
+    let with_group = add_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdGroupFields {
+                name: "Prospecting".to_string(),
+                targeting: Targeting::default(),
+                bid: BidSettings {
+                    strategy: "manual_cpc".to_string(),
+                    maximum_bid: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(with_group.intent.ad_groups.len(), 1);
+    assert_eq!(with_group.revision, draft.revision + 1);
+    let ad_group_id = with_group.intent.ad_groups[0].id.clone();
+
+    let with_ad = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id.clone(),
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: "creative-1".to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Sale".to_string(),
+                        body: "Shop now".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                },
+                landing_url: "https://example.com/sale".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(with_ad.intent.ad_groups[0].ads.len(), 1);
+    assert_eq!(with_ad.revision, with_group.revision + 1);
+
+    let renamed = update_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id.clone(),
+            with_ad.revision,
+            Uuid::now_v7(),
+            actor_id,
+            AdGroupFields {
+                name: Some("Prospecting v2".to_string()),
+                targeting: None,
+                bid: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.intent.ad_groups[0].name, "Prospecting v2");
+    // The ad added a step earlier survives an unrelated ad-group field edit.
+    assert_eq!(renamed.intent.ad_groups[0].ads.len(), 1);
+
+    // A not-found ad group is a domain error, not a silent no-op.
+    let missing = update_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            "does-not-exist".to_string(),
+            renamed.revision,
+            Uuid::now_v7(),
+            actor_id,
+            AdGroupFields::default(),
+        )
+        .await;
+    assert!(matches!(
+        missing,
+        Err(sanvi_advertising::domain::AdvertisingError::AdGroupNotFound)
+    ));
 }

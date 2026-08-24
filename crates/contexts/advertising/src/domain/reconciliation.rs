@@ -159,9 +159,9 @@ mod tests {
     fn unrelated_platform_change_updates_snapshot_without_drift() {
         let original = test_campaign();
         let mut state = CampaignReconciliationState::new(original.clone());
-        state.intent.name = "Edited in Google Ads".to_string();
+        state.intent.name = "Edited on the platform".to_string();
         let mut remote = original;
-        remote.name = "Edited in Google Ads".to_string();
+        remote.name = "Edited on the platform".to_string();
 
         assert_eq!(
             state.reconcile(remote.clone()),
@@ -201,9 +201,9 @@ mod tests {
             ReconciliationResult::Drifted { .. }
         ));
 
-        state.intent.name = "Renamed in Google Ads".to_string();
+        state.intent.name = "Renamed on the platform".to_string();
         let mut renamed = paused;
-        renamed.name = "Renamed in Google Ads".to_string();
+        renamed.name = "Renamed on the platform".to_string();
         assert_eq!(
             state.reconcile(renamed),
             ReconciliationResult::Drifted {

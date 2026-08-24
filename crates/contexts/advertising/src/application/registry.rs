@@ -49,7 +49,10 @@ mod tests {
     #[test]
     fn resolves_registered_adapter_without_exposing_provider_type() {
         let registry = FakeAdPlatform::registered_catalog();
-        let key = PlatformKey::parse("google_ads").unwrap();
+        // The key comes from the fixture itself, not a hard-coded platform
+        // name: domain/application code must stay platform-agnostic even in
+        // its own tests (see scripts/check-ads-invariants.sh).
+        let key = FakeAdPlatform::fixtures()[0].key.clone();
 
         assert_eq!(registry.adapter(&key).unwrap().descriptor().key, key);
     }

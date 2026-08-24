@@ -1,6 +1,8 @@
 use sanvi_advertising::adapters::http::handlers::{
-    AdvertisingProblemType, MetricPoint, MoneyView, RenderedMoneyView, ResolveCampaignDriftRequest,
-    ResolvedCampaignDriftView,
+    AdvertisingProblemType, CampaignChangesView, CampaignView, CampaignsView, CreateAdGroupRequest,
+    CreateAdRequest, CreateCampaignRequest, MetricPoint, MoneyView, PatchAdGroupRequest,
+    PatchAdRequest, PatchCampaignRequest, RenderedMoneyView, ResolveCampaignDriftRequest,
+    ResolvedCampaignDriftView, ValidationResultView,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -169,10 +171,26 @@ use utoipa::OpenApi;
         sanvi_payments::adapters::http::handlers::put_tax_settings,
         sanvi_advertising::adapters::http::handlers::list_ad_platforms,
         sanvi_advertising::adapters::http::handlers::resolve_campaign_drift,
+        sanvi_advertising::adapters::http::handlers::create_campaign,
+        sanvi_advertising::adapters::http::handlers::list_campaigns,
+        sanvi_advertising::adapters::http::handlers::get_campaign,
+        sanvi_advertising::adapters::http::handlers::patch_campaign,
+        sanvi_advertising::adapters::http::handlers::validate_campaign,
+        sanvi_advertising::adapters::http::handlers::publish_campaign,
+        sanvi_advertising::adapters::http::handlers::pause_campaign,
+        sanvi_advertising::adapters::http::handlers::resume_campaign,
+        sanvi_advertising::adapters::http::handlers::list_campaign_changes,
+        sanvi_advertising::adapters::http::handlers::add_ad_group,
+        sanvi_advertising::adapters::http::handlers::update_ad_group,
+        sanvi_advertising::adapters::http::handlers::add_ad,
+        sanvi_advertising::adapters::http::handlers::update_ad,
     ),
     components(schemas(
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
-        RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView
+        RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView,
+        CampaignView, CampaignsView, CreateCampaignRequest, PatchCampaignRequest,
+        ValidationResultView, CampaignChangesView, CreateAdGroupRequest, PatchAdGroupRequest,
+        CreateAdRequest, PatchAdRequest
     )),
     tags(
         (name = "system", description = "System, health and build information"),

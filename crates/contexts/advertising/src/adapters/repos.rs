@@ -290,6 +290,41 @@ impl CampaignRepository for SqlxCampaignRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    async fn list_by_tenant(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, CampaignRow>(
+            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
+             FROM advertising.campaigns WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC",
+        )
+        .bind(tenant_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn list_published_due_for_reconciliation(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, CampaignRow>(
+            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
+             FROM advertising.campaigns
+             WHERE external_id IS NOT NULL
+             ORDER BY updated_at ASC, id ASC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     async fn append_change(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -348,6 +383,32 @@ impl CampaignRepository for SqlxCampaignRepository {
         .map_err(storage)?
         .map(TryInto::try_into)
         .transpose()
+    }
+
+    async fn list_changes(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        campaign_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<CampaignChange>, AdvertisingError> {
+        sqlx::query_as::<_, CampaignChangeRow>(
+            "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, source,
+                    changed_fields, before_state, after_state, created_at
+             FROM advertising.campaign_changes
+             WHERE tenant_id=$1 AND campaign_id=$2
+             ORDER BY created_at DESC, id DESC
+             LIMIT $3",
+        )
+        .bind(tenant_id)
+        .bind(campaign_id)
+        .bind(limit)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect()
     }
 }
 

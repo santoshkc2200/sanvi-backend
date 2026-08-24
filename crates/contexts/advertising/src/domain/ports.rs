@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AdvertisingConnection, Campaign, CapabilityMatrix, ConnectionHandle, HashedIds, PlatformKey,
+    ValidationViolation,
 };
 use crate::domain::model::ConsentSnapshot;
 use sanvi_persistence::ScopedTx;
@@ -20,6 +21,18 @@ pub enum AdvertisingError {
     StaleRevision,
     #[error("campaign not found")]
     CampaignNotFound,
+    #[error("campaign violates platform capabilities")]
+    Validation(Vec<ValidationViolation>),
+    #[error("connection is not active")]
+    ConnectionNotActive,
+    #[error("advertising connection not found")]
+    ConnectionNotFound,
+    #[error("campaign is not yet published")]
+    CampaignNotPublished,
+    #[error("ad group not found")]
+    AdGroupNotFound,
+    #[error("ad not found")]
+    AdNotFound,
 }
 
 #[async_trait]

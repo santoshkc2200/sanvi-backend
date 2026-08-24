@@ -42,10 +42,14 @@ use sanvi_access::{
 use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
-        FakeAdPlatform, OutboxEventPublisher as AdvertisingEvents, SqlxCampaignRepository,
-        SqlxOAuthStateStore,
+        FakeAdPlatform, OutboxEventPublisher as AdvertisingEvents,
+        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxOAuthStateStore,
     },
-    application::{ListPlatformCatalog, ReconcileCampaign, ResolveCampaignDrift},
+    application::{
+        AddAd, AddAdGroup, CreateCampaign, GetCampaign, ListCampaignChanges, ListCampaigns,
+        ListPlatformCatalog, PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign,
+        ResolveCampaignDrift, ResumeCampaign, UpdateAd, UpdateAdGroup, ValidateCampaign,
+    },
     routes as advertising_routes,
 };
 use sanvi_audit::{
@@ -2782,24 +2786,95 @@ pub fn build_advertising_state(
     config: &AdvertisingConfig,
 ) -> anyhow::Result<sanvi_advertising::adapters::http::AdvertisingState> {
     config.validate_oauth_enabled()?;
-    let registry = std::sync::Arc::new(FakeAdPlatform::registered_catalog());
+    let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
+        &FakeAdPlatform::registered_catalog(),
+        config.quota_platform_wide_permits,
+        config.quota_per_connection_permits,
+    ));
     let tx = sanvi_persistence::TxManager::new(pool);
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
+    let campaigns: std::sync::Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        std::sync::Arc::new(SqlxCampaignRepository::new());
+    let connections: std::sync::Arc<dyn sanvi_advertising::AdvertisingConnectionRepository> =
+        std::sync::Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        std::sync::Arc::new(AdvertisingEvents::new());
     Ok(sanvi_advertising::adapters::http::AdvertisingState {
         config: config.clone(),
         idempotency: sanvi_persistence::IdempotencyStore::new(tx.pool().clone()),
         catalog: std::sync::Arc::new(ListPlatformCatalog::new(registry.clone())),
         reconcile_campaign: std::sync::Arc::new(ReconcileCampaign::new(
             tx.clone(),
-            std::sync::Arc::new(SqlxCampaignRepository::new()),
-            std::sync::Arc::new(AdvertisingEvents::new()),
+            campaigns.clone(),
+            events.clone(),
         )),
         resolve_campaign_drift: std::sync::Arc::new(ResolveCampaignDrift::new(
-            tx,
-            std::sync::Arc::new(SqlxCampaignRepository::new()),
-            std::sync::Arc::new(AdvertisingEvents::new()),
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
             registry.clone(),
         )),
+        create_campaign: std::sync::Arc::new(CreateCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            connections,
+            registry.clone(),
+            events.clone(),
+        )),
+        get_campaign: std::sync::Arc::new(GetCampaign::new(tx.clone(), campaigns.clone())),
+        list_campaigns: std::sync::Arc::new(ListCampaigns::new(tx.clone(), campaigns.clone())),
+        validate_campaign: std::sync::Arc::new(ValidateCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            registry.clone(),
+        )),
+        patch_campaign: std::sync::Arc::new(PatchCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        publish_campaign: std::sync::Arc::new(PublishCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        pause_campaign: std::sync::Arc::new(PauseCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        resume_campaign: std::sync::Arc::new(ResumeCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        list_campaign_changes: std::sync::Arc::new(ListCampaignChanges::new(
+            tx.clone(),
+            campaigns.clone(),
+        )),
+        add_ad_group: std::sync::Arc::new(AddAdGroup::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        update_ad_group: std::sync::Arc::new(UpdateAdGroup::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        add_ad: std::sync::Arc::new(AddAd::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        update_ad: std::sync::Arc::new(UpdateAd::new(tx.clone(), campaigns, events, registry)),
         oauth_state: OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store),
     })
 }

@@ -16,6 +16,12 @@ pub struct AdvertisingConfig {
     pub tracking_site_key_signing_secret: String,
     pub google_ads_api_version: String,
     pub meta_api_version: String,
+    /// Platform-wide cap on in-flight adapter calls (the shared
+    /// developer-token quota). See `adapters::rate_limit`.
+    pub quota_platform_wide_permits: usize,
+    /// Per-connection cap nested inside the platform-wide one, so one
+    /// tenant's bulk edit cannot claim every platform-wide slot.
+    pub quota_per_connection_permits: usize,
 }
 
 impl std::fmt::Debug for AdvertisingConfig {
@@ -30,6 +36,14 @@ impl std::fmt::Debug for AdvertisingConfig {
             .field("tracking_site_key_signing_secret", &"[REDACTED]")
             .field("google_ads_api_version", &self.google_ads_api_version)
             .field("meta_api_version", &self.meta_api_version)
+            .field(
+                "quota_platform_wide_permits",
+                &self.quota_platform_wide_permits,
+            )
+            .field(
+                "quota_per_connection_permits",
+                &self.quota_per_connection_permits,
+            )
             .finish()
     }
 }
@@ -46,6 +60,8 @@ impl Default for AdvertisingConfig {
             tracking_site_key_signing_secret: String::new(),
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
+            quota_platform_wide_permits: 20,
+            quota_per_connection_permits: 3,
         }
     }
 }
@@ -55,6 +71,14 @@ impl AdvertisingConfig {
         if self.google_ads_api_version.trim().is_empty() || self.meta_api_version.trim().is_empty()
         {
             anyhow::bail!("advertising API versions must not be empty");
+        }
+        if self.quota_platform_wide_permits == 0 || self.quota_per_connection_permits == 0 {
+            anyhow::bail!("advertising quota permits must be at least 1");
+        }
+        if self.quota_per_connection_permits > self.quota_platform_wide_permits {
+            anyhow::bail!(
+                "advertising per-connection quota permits cannot exceed the platform-wide budget"
+            );
         }
         Ok(())
     }

@@ -35,6 +35,14 @@ use sanvi_access::{
         QuotaUsageStore, RoleRepository,
     },
 };
+use sanvi_advertising::{
+    adapters::{
+        FakeAdPlatform, OutboxEventPublisher as AdvertisingEventPublisher, SqlxCampaignRepository,
+    },
+    application::{ReconcileCampaign, ReconcileDueCampaigns},
+    domain::CampaignRepository as AdvertisingCampaignRepository,
+    domain::EventPublisher as AdvertisingEvents,
+};
 use sanvi_audit::{
     AuditConfig,
     adapters::{SqlxAuditReader, SqlxAuditWriter},
@@ -553,6 +561,10 @@ pub struct SchedulerConfig {
     /// before any conversion endpoint exists: partition maintenance cannot be
     /// an afterthought on the first day of a new month.
     pub advertising_partition_maintenance_interval_secs: u64,
+    /// Cross-tenant campaign reconciliation sweep (TASK-012, 10.3) — the
+    /// nightly safety net alongside on-demand reconciliation. Never mutates
+    /// a platform; only observes and records drift.
+    pub advertising_reconciliation_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -584,6 +596,7 @@ impl Default for SchedulerConfig {
             payments_metrics_interval_secs: 60,
             payments_tax_check_interval_secs: 86_400,
             advertising_partition_maintenance_interval_secs: 86_400,
+            advertising_reconciliation_interval_secs: 86_400,
         }
     }
 }
@@ -1463,6 +1476,30 @@ async fn main() -> ExitCode {
         config.audit.verify_batch_size,
     ));
 
+    // TASK-012 (10.3): the nightly reconciliation sweep. The fake adapter is
+    // the only registered platform until the real Google Ads adapter lands;
+    // this still proves the sweep's own contract (fetch → apply through
+    // ReconcileCampaign → never write back) end to end.
+    let advertising_campaigns: Arc<dyn AdvertisingCampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let advertising_events: Arc<dyn AdvertisingEvents> = Arc::new(AdvertisingEventPublisher::new());
+    let advertising_platforms = Arc::new(sanvi_advertising::adapters::rate_limited_registry(
+        &FakeAdPlatform::registered_catalog(),
+        config.advertising.quota_platform_wide_permits,
+        config.advertising.quota_per_connection_permits,
+    ));
+    let advertising_reconcile_campaign = Arc::new(ReconcileCampaign::new(
+        tx_manager.clone(),
+        advertising_campaigns.clone(),
+        advertising_events,
+    ));
+    let advertising_reconciliation_sweep = Arc::new(ReconcileDueCampaigns::new(
+        tx_manager.clone(),
+        advertising_campaigns,
+        advertising_platforms,
+        advertising_reconcile_campaign,
+    ));
+
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
         Arc::new(FnJob::new(
             "advertising.partition_maintenance",
@@ -1481,6 +1518,32 @@ async fn main() -> ExitCode {
                         )
                         .execute(&pool)
                         .await?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "advertising.reconciliation",
+            Duration::from_secs(config.scheduler.advertising_reconciliation_interval_secs),
+            {
+                let sweep = advertising_reconciliation_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 || report.errors > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                updated = report.updated,
+                                drifted = report.drifted,
+                                errors = report.errors,
+                                "advertising reconciliation sweep pass"
+                            );
+                        }
                         Ok(())
                     })
                 }

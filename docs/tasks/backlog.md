@@ -37,7 +37,7 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | TASK-009 | 10 | 10.0 Contract, schema & foundations | in-progress | phase 03, 05, 08, 09 | local verification complete; staging deployment and repository-layer evidence pending |
 | TASK-010 | 10 | 10.1 Domain model, capability matrix & fake adapter | in-progress | TASK-009 |  |
 | TASK-011 | 10 | 10.2 Connections, OAuth & token lifecycle | in-progress | TASK-010 | OAuth signed-state boundary started |
-| TASK-012 | 10 | 10.3 Campaign tree, Google Ads adapter & drift | in-progress | TASK-011 | campaign intent snapshots, optimistic revisions, mutation audit, reconciliation use case |
+| TASK-012 | 10 | 10.3 Campaign tree, Google Ads adapter & drift | in-progress | TASK-011 | campaign intent snapshots, optimistic revisions, mutation audit, reconciliation use case, drift resolution; contract + application services for draft/publish/patch/pause/resume/validate/changes/ad-groups/ads land against the fake adapter with integration coverage; nightly cross-tenant reconciliation sweep wired into apps/worker (ReconcileDueCampaigns, drift-only, never writes back); per-connection + platform-wide quota queue (RateLimitedAdapter) wraps every registered adapter in both api and worker; still open: real Google Ads adapter (blocked on developer-token access — the fake adapter fills this until then, per the phase's own cross-track plan), review-status polling (needs the real adapter to have meaning) |
 | TASK-013 | 10 | 10.4 Meta adapter & creatives | todo | TASK-012 | |
 | TASK-014 | 10 | 10.5 Conversion capture & the directive gate | todo | TASK-011 | |
 | TASK-015 | 10 | 10.6 Conversion upload, dedupe & diagnostics | todo | TASK-014 | |

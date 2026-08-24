@@ -19,7 +19,7 @@ pub struct StoredCampaign {
     pub remote_snapshot: Campaign,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeSource {
     Sanvi,
@@ -35,7 +35,7 @@ impl ChangeSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CampaignChange {
     pub id: Uuid,
     pub tenant_id: Uuid,
@@ -65,6 +65,26 @@ pub trait CampaignRepository: Send + Sync {
         campaign_id: Uuid,
     ) -> Result<Option<StoredCampaign>, AdvertisingError>;
 
+    /// Newest-first. Callers needing a specific connection or platform filter
+    /// client-side; the list is tenant-bounded and expected to stay small
+    /// enough for one page until phase 10.7 adds pagination alongside metrics.
+    async fn list_by_tenant(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<StoredCampaign>, AdvertisingError>;
+
+    /// Cross-tenant, oldest-checked-first: the reconciliation sweep's feed.
+    /// A published campaign (`external_id` set) is due regardless of which
+    /// tenant last touched it, so one tenant's edits cannot starve every
+    /// other tenant's drift detection. Takes the audited platform scope,
+    /// never a tenant-bound transaction — see [`sanvi_persistence::TxManager::begin_unscoped`].
+    async fn list_published_due_for_reconciliation(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<StoredCampaign>, AdvertisingError>;
+
     /// Compare-and-swap update. A zero-row update is a stale `If-Match`
     /// revision; callers must load current state before returning `409`.
     async fn update(
@@ -87,4 +107,14 @@ pub trait CampaignRepository: Send + Sync {
         campaign_id: Uuid,
         mutation_id: Uuid,
     ) -> Result<Option<CampaignChange>, AdvertisingError>;
+
+    /// Newest-first audit trail for one campaign. This is what answers a
+    /// spend dispute, so it is append-only and never filtered by source.
+    async fn list_changes(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        campaign_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<CampaignChange>, AdvertisingError>;
 }

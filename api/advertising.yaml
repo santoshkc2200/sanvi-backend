@@ -7,6 +7,505 @@ info:
   version: 0.10.0
 openapi: 3.1.0
 paths:
+  /api/v1/tenant/ads/campaigns:
+    get:
+      operationId: list_campaigns
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignsView'
+          description: Every campaign owned by the tenant, newest first
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission or platform entitlement
+      tags:
+      - advertising
+    post:
+      operationId: create_campaign
+      parameters:
+      - description: Required. A retry with the same key returns the original draft.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCampaignRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Draft campaign created. Never touches the platform.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed Idempotency-Key or invalid campaign fields (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Connection not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Connection is not active
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}:
+    get:
+      operationId: get_campaign
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: The campaign's current intent and revision
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+      tags:
+      - advertising
+    patch:
+      operationId: patch_campaign
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required. The campaign's current revision; a stale value returns 409 with the current state.
+        in: header
+        name: If-Match
+        required: true
+        schema:
+          type: string
+      - description: Required. A retry with the same key returns the original result.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchCampaignRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Intent updated; if published, the edit was also pushed to the platform
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Stale revision or idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups:
+    post:
+      operationId: add_ad_group
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required. The campaign's current revision.
+        in: header
+        name: If-Match
+        required: true
+        schema:
+          type: string
+      - description: Required. A retry with the same key returns the original result.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAdGroupRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Ad group appended; if published, pushed to the platform
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Stale revision or idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}:
+    patch:
+      operationId: update_ad_group
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Ad group id
+        in: path
+        name: ad_group_id
+        required: true
+        schema:
+          type: string
+      - description: Required. The campaign's current revision.
+        in: header
+        name: If-Match
+        required: true
+        schema:
+          type: string
+      - description: Required. A retry with the same key returns the original result.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchAdGroupRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Ad group updated; if published, pushed to the platform
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign or ad group not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Stale revision or idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads:
+    post:
+      operationId: add_ad
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Ad group id
+        in: path
+        name: ad_group_id
+        required: true
+        schema:
+          type: string
+      - description: Required. The campaign's current revision.
+        in: header
+        name: If-Match
+        required: true
+        schema:
+          type: string
+      - description: Required. A retry with the same key returns the original result.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAdRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Ad appended; if published, pushed to the platform
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign or ad group not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Stale revision or idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads/{ad_id}:
+    patch:
+      operationId: update_ad
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Ad group id
+        in: path
+        name: ad_group_id
+        required: true
+        schema:
+          type: string
+      - description: Ad id
+        in: path
+        name: ad_id
+        required: true
+        schema:
+          type: string
+      - description: Required. The campaign's current revision.
+        in: header
+        name: If-Match
+        required: true
+        schema:
+          type: string
+      - description: Required. A retry with the same key returns the original result.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchAdRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Ad updated; if published, pushed to the platform
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign, ad group or ad not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Stale revision or idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/changes:
+    get:
+      operationId: list_campaign_changes
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignChangesView'
+          description: 'Newest-first attributed change log: actor, source (sanvi|platform), before/after state'
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+      tags:
+      - advertising
   /api/v1/tenant/ads/campaigns/{campaign_id}/drift:
     post:
       operationId: resolve_campaign_drift
@@ -72,6 +571,222 @@ paths:
         Explicitly resolve a platform-observed campaign drift. The idempotency
         claim is durable and created before any provider write; the adapter also
         receives the same key for provider-side deduplication.
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/pause:
+    post:
+      operationId: pause_campaign
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Paused on the platform
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed Idempotency-Key
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign is not yet published, or an idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/publish:
+    post:
+      operationId: publish_campaign
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required. A retry after a timeout returns the one campaign that was created, never a second.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Live on the platform; external_id is now set. Replaying publish on an already-published campaign is a no-op success.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign fails platform validation (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/resume:
+    post:
+      operationId: resume_campaign
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Required.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignView'
+          description: Resumed on the platform
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed Idempotency-Key
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign is not yet published, or an idempotency conflict
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/validate:
+    post:
+      operationId: validate_campaign
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchCampaignRequest'
+        description: Fields to validate; omitted fields keep the stored value. An empty body validates the campaign as stored.
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResultView'
+          description: Field-addressed violations; empty means valid. Never writes.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid objective in the candidate body
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission or platform entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not found
       tags:
       - advertising
   /api/v1/tenant/ads/platforms:
