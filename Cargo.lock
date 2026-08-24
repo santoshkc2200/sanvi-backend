@@ -3270,12 +3270,19 @@ dependencies = [
  "actix-web",
  "anyhow",
  "async-trait",
+ "chrono",
  "sanvi-http",
+ "sanvi-persistence",
  "sanvi-privacy",
  "serde",
  "serde_json",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror 2.0.20",
+ "tokio",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]
