@@ -45,6 +45,15 @@ pub enum OAuthStateError {
     StoreUnavailable,
 }
 
+impl From<OAuthStateError> for super::AdvertisingError {
+    fn from(error: OAuthStateError) -> Self {
+        match error {
+            OAuthStateError::StoreUnavailable => Self::Storage(error.to_string()),
+            _ => Self::InvalidInput(error.to_string()),
+        }
+    }
+}
+
 /// Durable, single-use nonce storage. Implementations must atomically consume
 /// a nonce only when all signed claims still match. The signature is verified
 /// before this port is reached, so a callback can never turn the store into an

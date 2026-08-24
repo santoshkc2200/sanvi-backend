@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::domain::{
     AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, CampaignChange,
-    CampaignRepository, ChangeSource, ConnectionStatus, PlatformKey, SecretRef, StoredCampaign,
-    SyncError,
+    CampaignRepository, ChangeSource, ConnectionStatus, PlatformAccount, PlatformKey, SecretRef,
+    StoredCampaign, SyncError,
 };
 
 #[derive(sqlx::FromRow)]
@@ -30,6 +30,7 @@ struct ConnectionRow {
     last_error: Option<serde_json::Value>,
     disconnected_notified_at: Option<DateTime<Utc>>,
     dependent_jobs_paused_at: Option<DateTime<Utc>>,
+    pending_accounts: Option<serde_json::Value>,
 }
 
 impl TryFrom<ConnectionRow> for AdvertisingConnection {
@@ -49,6 +50,15 @@ impl TryFrom<ConnectionRow> for AdvertisingConnection {
             .map_err(|error| {
                 AdvertisingError::Storage(format!("invalid advertising sync error: {error}"))
             })?;
+        let pending_accounts = row
+            .pending_accounts
+            .map(serde_json::from_value::<Vec<PlatformAccount>>)
+            .transpose()
+            .map_err(|error| {
+                AdvertisingError::Storage(format!(
+                    "invalid advertising pending accounts: {error}"
+                ))
+            })?;
         AdvertisingConnection::from_persisted(
             row.id,
             row.tenant_id,
@@ -67,6 +77,7 @@ impl TryFrom<ConnectionRow> for AdvertisingConnection {
             last_error,
             row.disconnected_notified_at,
             row.dependent_jobs_paused_at,
+            pending_accounts,
         )
     }
 }
@@ -82,6 +93,19 @@ impl SqlxAdvertisingConnectionRepository {
 
 fn storage(error: sqlx::Error) -> AdvertisingError {
     AdvertisingError::Storage(error.to_string())
+}
+
+fn pending_accounts_json(
+    accounts: Option<&[PlatformAccount]>,
+) -> Result<Option<serde_json::Value>, AdvertisingError> {
+    accounts
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| {
+            AdvertisingError::Storage(format!(
+                "advertising pending accounts serialization failed: {error}"
+            ))
+        })
 }
 
 #[derive(sqlx::FromRow)]
@@ -436,8 +460,9 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
             "INSERT INTO advertising.connections
              (id, tenant_id, platform, external_account_id, account_name, currency, timezone,
               status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-              last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+              last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
+              pending_accounts)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
              ON CONFLICT (tenant_id, platform, external_account_id) DO UPDATE SET
                account_name = EXCLUDED.account_name, currency = EXCLUDED.currency,
                timezone = EXCLUDED.timezone, status = EXCLUDED.status, scopes = EXCLUDED.scopes,
@@ -446,10 +471,12 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
                last_synced_at = EXCLUDED.last_synced_at, last_error = EXCLUDED.last_error,
                disconnected_notified_at = EXCLUDED.disconnected_notified_at,
                dependent_jobs_paused_at = EXCLUDED.dependent_jobs_paused_at,
+               pending_accounts = EXCLUDED.pending_accounts,
                updated_at = now()
              RETURNING id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at",
+               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
+               pending_accounts",
         )
         .bind(connection.id())
         .bind(connection.tenant_id())
@@ -478,9 +505,59 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         )
         .bind(connection.disconnected_notified_at())
         .bind(connection.dependent_jobs_paused_at())
+        .bind(pending_accounts_json(connection.pending_accounts())?)
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
+        row.try_into()
+    }
+
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &AdvertisingConnection,
+    ) -> Result<AdvertisingConnection, AdvertisingError> {
+        let row = sqlx::query_as::<_, ConnectionRow>(
+            "UPDATE advertising.connections SET
+               external_account_id = $3, account_name = $4, currency = $5, timezone = $6,
+               status = $7, scopes = $8, token_ref = $9, token_expires_at = $10,
+               last_synced_at = $11, last_error = $12, disconnected_notified_at = $13,
+               dependent_jobs_paused_at = $14, pending_accounts = $15, updated_at = now()
+             WHERE tenant_id = $1 AND id = $2
+             RETURNING id, tenant_id, platform, external_account_id, account_name, currency,
+               timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
+               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
+               pending_accounts",
+        )
+        .bind(connection.tenant_id())
+        .bind(connection.id())
+        .bind(connection.external_account_id())
+        .bind(connection.account_name())
+        .bind(connection.currency())
+        .bind(connection.timezone())
+        .bind(connection.status().as_str())
+        .bind(connection.granted_scopes())
+        .bind(connection.token_ref().persisted_locator())
+        .bind(connection.token_expires_at())
+        .bind(connection.last_synced_at())
+        .bind(
+            connection
+                .last_error()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    AdvertisingError::Storage(format!(
+                        "advertising sync error serialization failed: {error}"
+                    ))
+                })?,
+        )
+        .bind(connection.disconnected_notified_at())
+        .bind(connection.dependent_jobs_paused_at())
+        .bind(pending_accounts_json(connection.pending_accounts())?)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?
+        .ok_or(AdvertisingError::ConnectionNotFound)?;
         row.try_into()
     }
 
@@ -492,7 +569,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         let rows = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at
+               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
+               pending_accounts
              FROM advertising.connections
              WHERE tenant_id = $1 ORDER BY connected_at DESC, id DESC",
         )
@@ -512,7 +590,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         let row = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at
+               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
+               pending_accounts
              FROM advertising.connections
              WHERE tenant_id = $1 AND id = $2",
         )

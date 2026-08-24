@@ -17,9 +17,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use crate::domain::{
-    AdPlatformPort, AdvertisingError, AuthorizationRequest, AuthorizationStart, Campaign,
-    ConnectionHandle, ConsentSnapshot, HashedIds, MetricPoint, MetricQuery, PlatformAccount,
-    PlatformDescriptor, UploadedConversion,
+    AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
+    AuthorizationStart, Campaign, ConnectionHandle, ConsentSnapshot, ExchangedAuthorization,
+    HashedIds, MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor, UploadedConversion,
 };
 
 /// Bounds concurrent adapter calls two ways at once: a platform-wide cap
@@ -106,6 +106,17 @@ impl AdPlatformPort for RateLimitedAdapter {
     ) -> Result<Vec<PlatformAccount>, AdvertisingError> {
         let _permits = self.limiter.acquire(&connection.id).await;
         self.inner.list_accounts(connection).await
+    }
+
+    async fn exchange_authorization(
+        &self,
+        exchange: &AuthorizationExchange,
+    ) -> Result<ExchangedAuthorization, AdvertisingError> {
+        // No connection exists yet at exchange time; every in-flight
+        // exchange for this adapter shares one bucket so a burst of OAuth
+        // callbacks still respects the platform-wide quota.
+        let _permits = self.limiter.acquire("oauth-exchange").await;
+        self.inner.exchange_authorization(exchange).await
     }
 
     async fn create_campaign(
@@ -246,6 +257,13 @@ mod tests {
             &self,
             _connection: &ConnectionHandle,
         ) -> Result<Vec<PlatformAccount>, AdvertisingError> {
+            unimplemented!()
+        }
+
+        async fn exchange_authorization(
+            &self,
+            _exchange: &AuthorizationExchange,
+        ) -> Result<ExchangedAuthorization, AdvertisingError> {
             unimplemented!()
         }
 

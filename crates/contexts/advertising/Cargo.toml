@@ -9,11 +9,13 @@ publish.workspace = true
 
 [dependencies]
 actix-web.workspace = true
+aes-gcm.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 hmac.workspace = true
+rand.workspace = true
 sanvi-http.workspace = true
 sanvi-kernel.workspace = true
 sanvi-messaging.workspace = true

@@ -1,8 +1,10 @@
 use sanvi_advertising::adapters::http::handlers::{
-    AdvertisingProblemType, CampaignChangesView, CampaignView, CampaignsView, CreateAdGroupRequest,
-    CreateAdRequest, CreateCampaignRequest, MetricPoint, MoneyView, PatchAdGroupRequest,
-    PatchAdRequest, PatchCampaignRequest, RenderedMoneyView, ResolveCampaignDriftRequest,
-    ResolvedCampaignDriftView, ValidationResultView,
+    AccountView, AdvertisingProblemType, CampaignChangesView, CampaignView, CampaignsView,
+    ConnectionHealthView, ConnectionView, ConnectionsView, CreateAdGroupRequest, CreateAdRequest,
+    CreateCampaignRequest, CreateConnectionRequest, MetricPoint, MoneyView,
+    OAuthCallbackQuery, PatchAdGroupRequest, PatchAdRequest, PatchCampaignRequest,
+    PendingConnectionView, RenderedMoneyView, ResolveCampaignDriftRequest,
+    ResolvedCampaignDriftView, StartOAuthRequest, StartOAuthResponse, ValidationResultView,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -184,13 +186,20 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::handlers::update_ad_group,
         sanvi_advertising::adapters::http::handlers::add_ad,
         sanvi_advertising::adapters::http::handlers::update_ad,
+        sanvi_advertising::adapters::http::handlers::start_oauth,
+        sanvi_advertising::adapters::http::handlers::oauth_callback,
+        sanvi_advertising::adapters::http::handlers::create_connection,
+        sanvi_advertising::adapters::http::handlers::list_connections,
+        sanvi_advertising::adapters::http::handlers::delete_connection,
     ),
     components(schemas(
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
         RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView,
         CampaignView, CampaignsView, CreateCampaignRequest, PatchCampaignRequest,
         ValidationResultView, CampaignChangesView, CreateAdGroupRequest, PatchAdGroupRequest,
-        CreateAdRequest, PatchAdRequest
+        CreateAdRequest, PatchAdRequest, StartOAuthRequest, StartOAuthResponse,
+        OAuthCallbackQuery, AccountView, PendingConnectionView, CreateConnectionRequest,
+        ConnectionHealthView, ConnectionView, ConnectionsView
     )),
     tags(
         (name = "system", description = "System, health and build information"),

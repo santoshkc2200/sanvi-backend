@@ -789,6 +789,173 @@ paths:
           description: Campaign not found
       tags:
       - advertising
+  /api/v1/tenant/ads/connections:
+    get:
+      operationId: list_connections
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionsView'
+          description: Every connection with server-computed health
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+      tags:
+      - advertising
+    post:
+      operationId: create_connection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectionRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionView'
+          description: Connection finalized and active
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Chosen account was not among the fetched accounts, or invalid currency/timezone
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.connect permission or fresh MFA missing
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Connection not found
+      tags:
+      - advertising
+  /api/v1/tenant/ads/connections/{connection_id}:
+    delete:
+      operationId: delete_connection
+      parameters:
+      - description: Connection UUID
+        in: path
+        name: connection_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '204':
+          description: Disconnected in Sanvi; the platform side is untouched
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.connect permission or fresh MFA missing
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Connection not found
+      tags:
+      - advertising
+  /api/v1/tenant/ads/connections/{platform}/oauth/callback:
+    get:
+      operationId: oauth_callback
+      parameters:
+      - description: google_ads or meta
+        in: path
+        name: platform
+        required: true
+        schema:
+          type: string
+      - description: Opaque state returned by start
+        in: query
+        name: state
+        required: true
+        schema:
+          type: string
+      - description: Authorization code from the platform
+        in: query
+        name: code
+        required: true
+        schema:
+          type: string
+      - description: Must match the redirect_uri sent to start
+        in: query
+        name: redirect_uri
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingConnectionView'
+          description: Code redeemed; connection is pending account selection
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Forged, expired, replayed, or cross-tenant state, or the code could not be exchanged
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.connect permission
+      tags:
+      - advertising
+  /api/v1/tenant/ads/connections/{platform}/oauth/start:
+    post:
+      operationId: start_oauth
+      parameters:
+      - description: google_ads or meta
+        in: path
+        name: platform
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartOAuthRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartOAuthResponse'
+          description: Authorization URL and opaque state; the frontend never constructs the URL and never sees a token
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown platform or missing redirect_uri
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.connect permission, missing platform entitlement, or fresh MFA missing
+      tags:
+      - advertising
   /api/v1/tenant/ads/platforms:
     get:
       operationId: list_ad_platforms

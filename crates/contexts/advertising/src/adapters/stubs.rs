@@ -12,9 +12,10 @@ use crate::{
     CapabilityMatrix, ConnectionHandle, Objective, PlatformKey,
     application::PlatformRegistry,
     domain::{
-        AdPlatformPort, AdvertisingError, AuthorizationRequest, AuthorizationStart, BudgetType,
-        Campaign, CampaignStatus, CreativeAssetSpec, CreativePlacement, MetricPoint, MetricQuery,
-        Money, PlatformAccount, PlatformDescriptor, ScheduleGranularity, TargetingDimension,
+        AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
+        AuthorizationStart, BudgetType, Campaign, CampaignStatus, CreativeAssetSpec,
+        CreativePlacement, ExchangedAuthorization, MetricPoint, MetricQuery, Money,
+        PlatformAccount, PlatformDescriptor, ScheduleGranularity, TargetingDimension,
         UploadedConversion,
     },
 };
@@ -175,6 +176,26 @@ impl AdPlatformPort for FakeAdPlatform {
             external_id: connection.id.clone(),
             display_name: "Fake account".to_string(),
         }])
+    }
+
+    async fn exchange_authorization(
+        &self,
+        exchange: &AuthorizationExchange,
+    ) -> Result<ExchangedAuthorization, AdvertisingError> {
+        if exchange.code.trim().is_empty() || exchange.redirect_uri.trim().is_empty() {
+            return Err(AdvertisingError::InvalidInput(
+                "authorization exchange requires a code and redirect URI".to_string(),
+            ));
+        }
+        Ok(ExchangedAuthorization {
+            refresh_token: format!("fake-refresh-token-for-{}", exchange.code),
+            granted_scopes: vec!["ads.read".to_string(), "ads.manage".to_string()],
+            expires_at: None,
+            accounts: vec![PlatformAccount {
+                external_id: format!("fake-account-for-{}", exchange.code),
+                display_name: "Fake account".to_string(),
+            }],
+        })
     }
 
     async fn create_campaign(

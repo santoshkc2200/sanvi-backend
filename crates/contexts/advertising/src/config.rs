@@ -14,6 +14,15 @@ pub struct AdvertisingConfig {
     pub meta_client_secret: String,
     pub oauth_state_signing_secret: String,
     pub tracking_site_key_signing_secret: String,
+    /// The KEK (key-encryption key) for the per-tenant OAuth-token envelope,
+    /// base64-encoded 32 bytes (AES-256). Set only from a deployed secret
+    /// (`SANVI__ADVERTISING__TOKEN_KEK`), never a config file. Empty
+    /// disables connect/reconnect rather than silently storing tokens
+    /// unencrypted.
+    pub token_kek: String,
+    /// KEK identifier recorded alongside wrapped DEKs (rotation adds a key,
+    /// never overwrites one).
+    pub token_kek_id: String,
     pub google_ads_api_version: String,
     pub meta_api_version: String,
     /// Platform-wide cap on in-flight adapter calls (the shared
@@ -44,6 +53,8 @@ impl std::fmt::Debug for AdvertisingConfig {
             .field("meta_client_secret", &"[REDACTED]")
             .field("oauth_state_signing_secret", &"[REDACTED]")
             .field("tracking_site_key_signing_secret", &"[REDACTED]")
+            .field("token_kek", &"[REDACTED]")
+            .field("token_kek_id", &self.token_kek_id)
             .field("google_ads_api_version", &self.google_ads_api_version)
             .field("meta_api_version", &self.meta_api_version)
             .field(
@@ -68,6 +79,8 @@ impl Default for AdvertisingConfig {
             meta_client_secret: String::new(),
             oauth_state_signing_secret: String::new(),
             tracking_site_key_signing_secret: String::new(),
+            token_kek: String::new(),
+            token_kek_id: "kek-1".to_string(),
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
             quota_platform_wide_permits: default_quota_platform_wide_permits(),
@@ -98,5 +111,81 @@ impl AdvertisingConfig {
             anyhow::bail!("advertising OAuth state signing secret must be at least 32 bytes");
         }
         Ok(())
+    }
+
+    /// `true` once a KEK is configured — connect/reconnect refuse to run
+    /// without one rather than storing a refresh token unencrypted.
+    pub fn token_encryption_enabled(&self) -> bool {
+        !self.token_kek.is_empty()
+    }
+
+    /// Decodes and validates `token_kek`. Call at startup and again before
+    /// wiring the crypto adapter — never trust an unvalidated string into
+    /// `SqlxTenantEnvelopeCrypto::new`.
+    pub fn token_kek_bytes(&self) -> anyhow::Result<[u8; 32]> {
+        if self.token_kek.is_empty() {
+            anyhow::bail!("advertising.token_kek is not configured");
+        }
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &self.token_kek)
+                .map_err(|err| anyhow::anyhow!("advertising.token_kek is not valid base64: {err}"))?;
+        let kek: [u8; 32] = decoded
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("advertising.token_kek must decode to exactly 32 bytes (AES-256)"))?;
+        if self.token_kek_id.is_empty() {
+            anyhow::bail!("advertising.token_kek_id must not be empty");
+        }
+        Ok(kek)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(bytes: &[u8]) -> String {
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+    }
+
+    #[test]
+    fn token_encryption_is_disabled_until_a_kek_is_configured() {
+        let config = AdvertisingConfig::default();
+        assert!(!config.token_encryption_enabled());
+        assert!(config.token_kek_bytes().is_err());
+    }
+
+    #[test]
+    fn a_32_byte_kek_is_accepted() {
+        let config = AdvertisingConfig {
+            token_kek: encode(&[5u8; 32]),
+            ..AdvertisingConfig::default()
+        };
+        assert!(config.token_encryption_enabled());
+        assert_eq!(config.token_kek_bytes().unwrap(), [5u8; 32]);
+    }
+
+    #[test]
+    fn rejects_short_or_garbled_keks() {
+        let too_short = AdvertisingConfig {
+            token_kek: encode(&[1u8; 16]),
+            ..AdvertisingConfig::default()
+        };
+        assert!(too_short.token_kek_bytes().is_err());
+
+        let garbled = AdvertisingConfig {
+            token_kek: "not base64 !!".to_string(),
+            ..AdvertisingConfig::default()
+        };
+        assert!(garbled.token_kek_bytes().is_err());
+    }
+
+    #[test]
+    fn empty_kek_id_is_rejected_even_with_a_valid_kek() {
+        let config = AdvertisingConfig {
+            token_kek: encode(&[5u8; 32]),
+            token_kek_id: String::new(),
+            ..AdvertisingConfig::default()
+        };
+        assert!(config.token_kek_bytes().is_err());
     }
 }

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use crate::application::{
-    AddAd, AddAdGroup, CreateCampaign, GetCampaign, ListCampaignChanges, ListCampaigns,
-    ListPlatformCatalog, PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign,
-    ResolveCampaignDrift, ResumeCampaign, UpdateAd, UpdateAdGroup, ValidateCampaign,
+    AddAd, AddAdGroup, CreateCampaign, CreateConnection, DeleteConnection, GetCampaign,
+    HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListPlatformCatalog,
+    PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign, ResolveCampaignDrift,
+    ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup, ValidateCampaign,
 };
 use crate::{AdvertisingConfig, OAuthStateManager};
 
@@ -38,4 +39,11 @@ pub struct AdvertisingState {
     pub update_ad_group: Arc<UpdateAdGroup>,
     pub add_ad: Arc<AddAd>,
     pub update_ad: Arc<UpdateAd>,
+    /// Connections: OAuth start/callback, account selection, list, disconnect
+    /// (TASK-011).
+    pub start_authorization: Arc<StartAuthorization>,
+    pub handle_callback: Arc<HandleCallback>,
+    pub create_connection: Arc<CreateConnection>,
+    pub list_connections: Arc<ListConnections>,
+    pub delete_connection: Arc<DeleteConnection>,
 }

@@ -2,9 +2,10 @@ use actix_web::{http::Method, web};
 use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
 use super::handlers::{
-    add_ad, add_ad_group, create_campaign, get_campaign, list_ad_platforms, list_campaign_changes,
-    list_campaigns, patch_campaign, pause_campaign, publish_campaign, resolve_campaign_drift,
-    resume_campaign, update_ad, update_ad_group, validate_campaign,
+    add_ad, add_ad_group, create_campaign, create_connection, delete_connection, get_campaign,
+    list_ad_platforms, list_campaign_changes, list_campaigns, list_connections, oauth_callback,
+    patch_campaign, pause_campaign, publish_campaign, resolve_campaign_drift, resume_campaign,
+    start_oauth, update_ad, update_ad_group, validate_campaign,
 };
 
 /// A catalog is available when at least one platform can be used. Individual
@@ -14,6 +15,7 @@ pub const ADVERTISING_ENTITLEMENTS: &[&str] = &["advertising.google_ads", "adver
 pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     let read = require_permission!("advertising.read", tenant);
     let write = require_permission!("advertising.campaign.write", tenant);
+    let connect = require_permission!("advertising.connect", tenant);
     let feature_gate = || sanvi_http::RequiredAnyFeature::declared(ADVERTISING_ENTITLEMENTS);
 
     cfg.service(
@@ -21,6 +23,30 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
             .app_data(feature_gate())
             .route(web::get().to(list_ad_platforms)),
+    );
+    cfg.service(
+        web::resource("/ads/connections/{platform}/oauth/start")
+            .app_data(PermissionMap::new(vec![(Method::POST, connect)]))
+            .route(web::post().to(start_oauth)),
+    );
+    cfg.service(
+        web::resource("/ads/connections/{platform}/oauth/callback")
+            .app_data(PermissionMap::new(vec![(Method::GET, connect)]))
+            .route(web::get().to(oauth_callback)),
+    );
+    cfg.service(
+        web::resource("/ads/connections")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, read),
+                (Method::POST, connect),
+            ]))
+            .route(web::get().to(list_connections))
+            .route(web::post().to(create_connection)),
+    );
+    cfg.service(
+        web::resource("/ads/connections/{connection_id}")
+            .app_data(PermissionMap::new(vec![(Method::DELETE, connect)]))
+            .route(web::delete().to(delete_connection)),
     );
     cfg.service(
         web::resource("/ads/campaigns")
@@ -97,6 +123,36 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         "/api/v1/tenant/ads/platforms",
         Method::GET,
         "advertising.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/connections/{platform}/oauth/start",
+        Method::POST,
+        "advertising.connect",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/connections/{platform}/oauth/callback",
+        Method::GET,
+        "advertising.connect",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/connections",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/connections",
+        Method::POST,
+        "advertising.connect",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/connections/{connection_id}",
+        Method::DELETE,
+        "advertising.connect",
         ResourceSpec::Tenant,
     ),
     (
@@ -189,6 +245,31 @@ pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
     (
         "/api/v1/tenant/ads/platforms",
         Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/connections/{platform}/oauth/start",
+        Method::POST,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/connections/{platform}/oauth/callback",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/connections",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/connections",
+        Method::POST,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/connections/{connection_id}",
+        Method::DELETE,
         ADVERTISING_ENTITLEMENTS,
     ),
     (

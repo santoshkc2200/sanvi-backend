@@ -3268,11 +3268,13 @@ name = "sanvi-advertising"
 version = "0.10.0"
 dependencies = [
  "actix-web",
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
  "hmac 0.12.1",
+ "rand 0.8.7",
  "sanvi-http",
  "sanvi-kernel",
  "sanvi-messaging",

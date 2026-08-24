@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionStatus {
+    /// Code exchanged, refresh token stored, account not yet chosen. Cannot
+    /// sync, cannot be a campaign's connection — the picker step owns
+    /// finalizing it to `Active`.
+    Pending,
     Active,
     Disconnected,
     Expired,
@@ -18,6 +22,7 @@ pub enum ConnectionStatus {
 impl ConnectionStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Pending => "pending",
             Self::Active => "active",
             Self::Disconnected => "disconnected",
             Self::Expired => "expired",
@@ -26,6 +31,7 @@ impl ConnectionStatus {
 
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
+            "pending" => Some(Self::Pending),
             "active" => Some(Self::Active),
             "disconnected" => Some(Self::Disconnected),
             "expired" => Some(Self::Expired),
