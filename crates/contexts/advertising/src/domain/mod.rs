@@ -1,5 +1,6 @@
 //! Provider-neutral advertising vocabulary.
 
+pub mod connection;
 pub mod connection_lifecycle;
 pub mod events;
 pub mod matrix;
@@ -9,6 +10,7 @@ pub mod ports;
 pub mod secrets;
 pub mod validation;
 
+pub use connection::{AdvertisingConnection, SyncError};
 pub use connection_lifecycle::{
     ConnectionHealth, ConnectionStatus, RefreshFailureKind, RefreshTransition,
     refresh_failure_transition,
@@ -24,8 +26,9 @@ pub use oauth_state::{
     InMemoryOAuthStateStore, OAuthStateClaims, OAuthStateError, OAuthStateManager, OAuthStateStore,
 };
 pub use ports::{
-    AdPlatformPort, AdvertisingError, AuthorizationRequest, AuthorizationStart, MetricPoint,
-    MetricQuery, PlatformAccount, PlatformDescriptor, UploadedConversion,
+    AdPlatformPort, AdvertisingConnectionRepository, AdvertisingError, AuthorizationRequest,
+    AuthorizationStart, MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor,
+    UploadedConversion,
 };
 pub use secrets::SecretRef;
 pub use validation::{ValidationViolation, validate_campaign};

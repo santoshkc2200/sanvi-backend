@@ -10,6 +10,16 @@ impl SecretRef {
         Self(locator.into())
     }
 
+    /// Opaque credential-vault metadata. Persistence adapters may write it,
+    /// while transport and observability boundaries remain redacted.
+    pub(crate) fn persisted_locator(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.trim().is_empty()
+    }
+
     #[cfg(test)]
     pub(crate) fn locator(&self) -> &str {
         &self.0

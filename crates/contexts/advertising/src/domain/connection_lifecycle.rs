@@ -15,6 +15,25 @@ pub enum ConnectionStatus {
     Expired,
 }
 
+impl ConnectionStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disconnected => "disconnected",
+            Self::Expired => "expired",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "active" => Some(Self::Active),
+            "disconnected" => Some(Self::Disconnected),
+            "expired" => Some(Self::Expired),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionHealth {
     pub can_sync: bool,

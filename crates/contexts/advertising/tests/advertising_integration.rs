@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Duration, Months, Utc};
 use sanvi_advertising::{
-    OAuthStateClaims, OAuthStateError, OAuthStateManager, OAuthStateStore, PlatformKey,
-    adapters::SqlxOAuthStateStore,
+    AdvertisingConnection, AdvertisingConnectionRepository, OAuthStateClaims, OAuthStateError,
+    OAuthStateManager, OAuthStateStore, PlatformKey, SecretRef, SyncError,
+    adapters::{SqlxAdvertisingConnectionRepository, SqlxOAuthStateStore},
 };
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
 use sqlx::{Postgres as SqlxPostgres, QueryBuilder};
@@ -406,4 +407,78 @@ async fn oauth_state_store_rejects_row_with_mismatched_signed_expiry() {
     scope.commit().await.unwrap();
 
     assert!(!store.consume(&claims).await.unwrap());
+}
+
+#[tokio::test]
+async fn reconnect_reuses_the_original_connection_row() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "advertising-reconnect").await;
+    let manager = TxManager::new(pool);
+    let repository = SqlxAdvertisingConnectionRepository::new();
+    let now = Utc::now();
+
+    let first = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "123-456-7890",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-1"),
+        Some(Uuid::now_v7()),
+        now,
+    )
+    .unwrap();
+    let first_id = first.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let stored = repository.upsert(&mut scope, &first).await.unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(stored.id(), first_id);
+
+    let mut reconnect = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "123-456-7890",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-2"),
+        Some(Uuid::now_v7()),
+        now + Duration::minutes(1),
+    )
+    .unwrap();
+    reconnect.apply_credentials(
+        Some("Manager-selected account".to_string()),
+        vec!["ads.read".to_string(), "ads.manage".to_string()],
+        None,
+    );
+    reconnect.record_sync_error(
+        SyncError::new(
+            "invalid_grant",
+            Some("token revoked".to_string()),
+            serde_json::from_value(serde_json::json!({"provider_reason": "password_changed"}))
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let stored = repository.upsert(&mut scope, &reconnect).await.unwrap();
+    let connections = repository.list(&mut scope, tenant_id).await.unwrap();
+    let persisted_error: serde_json::Value =
+        sqlx::query_scalar("SELECT last_error FROM advertising.connections WHERE id = $1")
+            .bind(first_id)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.commit().await.unwrap();
+
+    assert_eq!(
+        stored.id(),
+        first_id,
+        "reconnect must preserve campaign history"
+    );
+    assert_eq!(connections.len(), 1);
+    assert_eq!(connections[0].id(), first_id);
+    assert_eq!(connections[0].granted_scopes(), reconnect.granted_scopes());
+    assert_eq!(persisted_error["provider_reason"], "password_changed");
 }

@@ -1,8 +1,12 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{Campaign, CapabilityMatrix, ConnectionHandle, HashedIds, PlatformKey};
+use super::{
+    AdvertisingConnection, Campaign, CapabilityMatrix, ConnectionHandle, HashedIds, PlatformKey,
+};
 use crate::domain::model::ConsentSnapshot;
+use sanvi_persistence::ScopedTx;
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdvertisingError {
@@ -10,6 +14,29 @@ pub enum AdvertisingError {
     InvalidInput(String),
     #[error("platform unavailable: {0}")]
     PlatformUnavailable(String),
+    #[error("advertising storage failure: {0}")]
+    Storage(String),
+}
+
+#[async_trait]
+pub trait AdvertisingConnectionRepository: Send + Sync {
+    /// A reconnect must retain its original id and campaign history.
+    async fn upsert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &AdvertisingConnection,
+    ) -> Result<AdvertisingConnection, AdvertisingError>;
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<Option<AdvertisingConnection>, AdvertisingError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
