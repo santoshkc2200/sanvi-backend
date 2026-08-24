@@ -39,7 +39,10 @@ use sanvi_access::{
         QuotaUsageStore, RoleRepository,
     },
 };
-use sanvi_advertising::{AdvertisingConfig, routes as advertising_routes};
+use sanvi_advertising::{
+    AdvertisingConfig, adapters::FakeAdPlatform, application::ListPlatformCatalog,
+    routes as advertising_routes,
+};
 use sanvi_audit::{
     AuditConfig,
     adapters::{SqlxAuditReader, SqlxAuditWriter},
@@ -2767,14 +2770,15 @@ pub fn build_payments_state(
     }
 }
 
-/// Phase 10's intentionally small composition root. Until TASK-010 the
-/// catalog is an honest empty list; keeping state-free transport here makes
-/// the entitlement and permission contract deployable before adapters exist.
+/// Phase 10's registry-derived capability catalog. The in-process adapter is
+/// deliberately the only registered implementation until real adapters land.
 pub fn build_advertising_state(
     config: &AdvertisingConfig,
 ) -> sanvi_advertising::adapters::http::AdvertisingState {
+    let registry = std::sync::Arc::new(FakeAdPlatform::registered_catalog());
     sanvi_advertising::adapters::http::AdvertisingState {
         config: config.clone(),
+        catalog: std::sync::Arc::new(ListPlatformCatalog::new(registry)),
     }
 }
 

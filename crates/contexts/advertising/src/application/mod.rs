@@ -1,1 +1,7 @@
-//! Application use cases arrive with the capability matrix in TASK-010.
+//! Advertising application services.
+
+pub mod catalog;
+pub mod registry;
+
+pub use catalog::ListPlatformCatalog;
+pub use registry::PlatformRegistry;

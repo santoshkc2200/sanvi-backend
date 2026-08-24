@@ -1,0 +1,47 @@
+[
+  {
+    "key": "google_ads",
+    "display_name": "Google Ads",
+    "entitlement_key": "advertising.google_ads",
+    "capability_matrix": {
+      "matrix_version": "2026-08-24",
+      "objectives": ["leads", "sales"],
+      "budget_types": ["daily", "lifetime"],
+      "minimum_budgets_minor": {"JPY": {"daily": 100, "lifetime": 100}},
+      "schedule_granularity": "daily",
+      "targeting_dimensions": ["geo", "keywords"],
+      "creative_placements": [{"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"]}}],
+      "text_limits": {"en": {"headline": 30, "body": 90}, "ja": {"headline": 30, "body": 45}}
+    }
+  },
+  {
+    "key": "meta",
+    "display_name": "Meta Ads",
+    "entitlement_key": "advertising.meta_ads",
+    "capability_matrix": {
+      "matrix_version": "2026-08-24",
+      "objectives": ["awareness", "sales"],
+      "budget_types": ["daily"],
+      "minimum_budgets_minor": {"JPY": {"daily": 100}},
+      "schedule_granularity": "daily",
+      "targeting_dimensions": ["geo", "interests"],
+      "creative_placements": [{"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"]}}],
+      "text_limits": {"en": {"headline": 40, "body": 90}, "ja": {"headline": 25, "body": 45}}
+    }
+  },
+  {
+    "key": "asymmetric_demo",
+    "display_name": "Asymmetric test network",
+    "entitlement_key": "advertising.asymmetric_demo",
+    "capability_matrix": {
+      "matrix_version": "2026-08-24",
+      "objectives": ["app_installs"],
+      "budget_types": ["lifetime"],
+      "minimum_budgets_minor": {"JPY": {"lifetime": 100}},
+      "schedule_granularity": "daily",
+      "targeting_dimensions": ["device"],
+      "creative_placements": [{"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"]}}],
+      "text_limits": {"en": {"headline": 18, "body": 90}, "ja": {"headline": 12, "body": 45}}
+    }
+  }
+]

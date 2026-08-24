@@ -10,7 +10,10 @@ pub mod config;
 pub mod domain;
 
 pub use config::AdvertisingConfig;
-pub use domain::SecretRef;
+pub use domain::{
+    CapabilityMatrix, ConnectionHandle, ConsentSnapshot, HashedIds, Objective, PlatformKey,
+    SecretRef,
+};
 
 pub mod routes {
     pub use crate::adapters::http::routes::advertising_tenant_scope_routes;

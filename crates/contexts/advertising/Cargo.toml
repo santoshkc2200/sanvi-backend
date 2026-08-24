@@ -12,15 +12,18 @@ actix-web.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 sanvi-http.workspace = true
+sanvi-kernel.workspace = true
+sanvi-messaging.workspace = true
+sanvi-persistence.workspace = true
 sanvi-privacy.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 utoipa.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
-sanvi-persistence.workspace = true
-serde_json.workspace = true
 sqlx.workspace = true
 testcontainers.workspace = true
 testcontainers-modules.workspace = true

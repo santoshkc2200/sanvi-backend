@@ -1,8 +1,11 @@
-use crate::AdvertisingConfig;
+use std::sync::Arc;
 
-/// Context state is deliberately configuration-only until TASK-010 supplies
-/// the registry-derived platform catalog.
+use crate::AdvertisingConfig;
+use crate::application::ListPlatformCatalog;
+
+/// Context state is assembled from registered adapters, never a handler list.
 #[derive(Clone)]
 pub struct AdvertisingState {
     pub config: AdvertisingConfig,
+    pub catalog: Arc<ListPlatformCatalog>,
 }

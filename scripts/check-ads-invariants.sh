@@ -11,6 +11,10 @@ contains_raw_identifier() {
   rg -n --glob '*.rs' -i '\b(email|phone)\b' "$1" >/dev/null
 }
 
+contains_platform_literal() {
+  rg -n --glob '*.rs' -i '\b(google(_ads)?|meta(_ads)?)\b' "$1" >/dev/null
+}
+
 ad_platform_port_body() {
   awk '
     /trait[[:space:]]+AdPlatformPort/ { inside = 1 }
@@ -61,6 +65,11 @@ if [[ "${1:-}" == "--self-test" ]]; then
     echo "self-test failed: safe fixture rejected" >&2
     exit 1
   fi
+  printf '%s\n' 'const PLATFORM: &str = "google_ads";' > "$temp/platform.rs"
+  if ! contains_platform_literal "$temp/platform.rs"; then
+    echo "self-test failed: platform literal fixture passed" >&2
+    exit 1
+  fi
   cat > "$temp/ports.rs" <<'EOF'
 struct HashedIds;
 struct ConsentSnapshot;
@@ -97,6 +106,16 @@ if contains_raw_identifier "$adapter_root"; then
   echo "advertising invariant failed: raw identifier field in adapter" >&2
   exit 1
 fi
+
+# Platform differences live in adapter descriptors and their matrix data. A
+# literal in domain/application code is a future adapter rewrite waiting to
+# happen; this gate fails before that dependency can become entrenched.
+for layer in "$root/crates/contexts/advertising/src/domain" "$root/crates/contexts/advertising/src/application"; do
+  if contains_platform_literal "$layer"; then
+    echo "advertising invariant failed: platform literal outside adapter" >&2
+    exit 1
+  fi
+done
 
 # Future upload ports must make their safety types explicit. TASK-010 creates
 # the port; TASK-014 supplies ConsentSnapshot. This detects a premature

@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use actix_web::{HttpResponse, web};
-use sanvi_http::{CurrentTenant, ProblemDetail, RequiredAnyFeature, RequiredPermission};
+use sanvi_http::{ApiError, CurrentTenant, ProblemDetail, RequiredAnyFeature, RequiredPermission};
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use super::AdvertisingState;
+use crate::{CapabilityMatrix, domain::ConnectionState};
 
 /// Stable envelope for the platform catalog. TASK-010 fills this only from
 /// registered capability matrices; no platform name is hard-coded here.
@@ -12,15 +15,19 @@ pub struct PlatformsView {
     pub platforms: Vec<PlatformView>,
 }
 
-/// Reserved catalog item shape. Keeping it in the contract now lets the
-/// frontend build against fixtures before OAuth approval queues clear.
+/// Registry-derived catalog item. A platform without entitlement remains in
+/// the list so clients can render its upgrade state rather than a dead end.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct PlatformView {
     #[schema(example = "google_ads")]
     pub key: String,
     #[schema(example = "Google Ads")]
     pub display_name: String,
+    pub entitlement_key: String,
     pub available: bool,
+    pub upgrade_required: bool,
+    pub connection_state: ConnectionState,
+    pub capability_matrix: CapabilityMatrix,
 }
 
 /// A stored amount is always integer minor units plus the originating ad
@@ -84,19 +91,35 @@ pub enum AdvertisingProblemType {
     tag = "advertising",
     operation_id = "list_ad_platforms",
     responses(
-        (status = 200, description = "Advertising platform catalog; empty until TASK-010", body = PlatformsView),
+        (status = 200, description = "Registry-derived, versioned advertising capability catalog", body = PlatformsView),
         (status = 403, description = "Missing advertising.read permission or both advertising platform entitlements", body = ProblemDetail)
     )
 )]
 pub async fn list_ad_platforms(
     state: web::Data<AdvertisingState>,
-    _tenant: CurrentTenant,
+    tenant: CurrentTenant,
     _permission: RequiredPermission,
     _entitlement: RequiredAnyFeature,
-) -> HttpResponse {
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
+) -> Result<HttpResponse, ApiError> {
     // Read config so the state is intentional, without exposing any value.
     let _api_version = &state.config.google_ads_api_version;
-    HttpResponse::Ok()
+    let mut platforms = Vec::new();
+    for descriptor in state.catalog.execute() {
+        let available = feature_gate
+            .check(tenant.0.tenant_id, &descriptor.entitlement_key)
+            .await?;
+        platforms.push(PlatformView {
+            key: descriptor.key.as_str().to_string(),
+            display_name: descriptor.display_name,
+            entitlement_key: descriptor.entitlement_key,
+            available,
+            upgrade_required: !available,
+            connection_state: ConnectionState::NotConnected,
+            capability_matrix: descriptor.capability_matrix,
+        });
+    }
+    Ok(HttpResponse::Ok()
         .insert_header(("cache-control", "private, max-age=60"))
-        .json(PlatformsView { platforms: vec![] })
+        .json(PlatformsView { platforms }))
 }

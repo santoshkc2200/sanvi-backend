@@ -35,7 +35,7 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | TASK-007 | 09 | 09.6 Payouts, tax liability & application fee | done | TASK-004, TASK-005 | working tree: 09.6 payouts (read port + webhook projection + failed-payout alert), tax liability (account-liability routing + compliance preflight + scheduled/webhook re-check), per-tenant application fee (platform-admin config, round-half-up, disclosure, blocked-combination guards + CI gate) |
 | TASK-008 | 09 | 09.7 Disconnect, hardening & release | done | TASK-006, TASK-007 | commit 33fa087 — 09.7 guarded disconnect, retention override, metrics/alerts/runbooks, SAQ-A review, flags default on, v0.10.0 changelog; tag pending cross-repo frontend 09.7 |
 | TASK-009 | 10 | 10.0 Contract, schema & foundations | in-progress | phase 03, 05, 08, 09 | local verification complete; staging deployment and repository-layer evidence pending |
-| TASK-010 | 10 | 10.1 Domain model, capability matrix & fake adapter | todo | TASK-009 | |
+| TASK-010 | 10 | 10.1 Domain model, capability matrix & fake adapter | in-progress | TASK-009 |  |
 | TASK-011 | 10 | 10.2 Connections, OAuth & token lifecycle | todo | TASK-010 | |
 | TASK-012 | 10 | 10.3 Campaign tree, Google Ads adapter & drift | todo | TASK-011 | |
 | TASK-013 | 10 | 10.4 Meta adapter & creatives | todo | TASK-012 | |

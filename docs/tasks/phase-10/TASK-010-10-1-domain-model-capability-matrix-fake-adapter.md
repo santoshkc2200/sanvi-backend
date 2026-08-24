@@ -1,7 +1,7 @@
 # TASK-010: 10.1 Domain model, capability matrix & fake adapter
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress
 **Requirement(s):** FR-1001, NFR-1008
 **Depends on:** TASK-009
 **Created:** 2026-08-20

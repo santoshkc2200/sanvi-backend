@@ -16,7 +16,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlatformsView'
-          description: Advertising platform catalog; empty until TASK-010
+          description: Registry-derived, versioned advertising capability catalog
         '403':
           content:
             application/json:

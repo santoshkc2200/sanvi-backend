@@ -3272,6 +3272,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "sanvi-http",
+ "sanvi-kernel",
+ "sanvi-messaging",
  "sanvi-persistence",
  "sanvi-privacy",
  "serde",
