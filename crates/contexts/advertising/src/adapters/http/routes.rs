@@ -28,7 +28,6 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
                 (Method::GET, read),
                 (Method::POST, write),
             ]))
-            .app_data(feature_gate())
             .route(web::get().to(list_campaigns))
             .route(web::post().to(create_campaign)),
     );
@@ -38,68 +37,57 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
                 (Method::GET, read),
                 (Method::PATCH, write),
             ]))
-            .app_data(feature_gate())
             .route(web::get().to(get_campaign))
             .route(web::patch().to(patch_campaign)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/validate")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
-            .app_data(feature_gate())
             .route(web::post().to(validate_campaign)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/publish")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
-            .app_data(feature_gate())
             .route(web::post().to(publish_campaign)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/pause")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
-            .app_data(feature_gate())
             .route(web::post().to(pause_campaign)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/resume")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
-            .app_data(feature_gate())
             .route(web::post().to(resume_campaign)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/changes")
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
-            .app_data(feature_gate())
             .route(web::get().to(list_campaign_changes)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/drift")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
-            .app_data(feature_gate())
             .route(web::post().to(resolve_campaign_drift)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/ad-groups")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
-            .app_data(feature_gate())
             .route(web::post().to(add_ad_group)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}")
             .app_data(PermissionMap::new(vec![(Method::PATCH, write)]))
-            .app_data(feature_gate())
             .route(web::patch().to(update_ad_group)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
-            .app_data(feature_gate())
             .route(web::post().to(add_ad)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads/{ad_id}")
             .app_data(PermissionMap::new(vec![(Method::PATCH, write)]))
-            .app_data(feature_gate())
             .route(web::patch().to(update_ad)),
     );
 }

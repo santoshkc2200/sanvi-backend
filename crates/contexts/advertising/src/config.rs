@@ -18,10 +18,20 @@ pub struct AdvertisingConfig {
     pub meta_api_version: String,
     /// Platform-wide cap on in-flight adapter calls (the shared
     /// developer-token quota). See `adapters::rate_limit`.
+    #[serde(default = "default_quota_platform_wide_permits")]
     pub quota_platform_wide_permits: usize,
     /// Per-connection cap nested inside the platform-wide one, so one
     /// tenant's bulk edit cannot claim every platform-wide slot.
+    #[serde(default = "default_quota_per_connection_permits")]
     pub quota_per_connection_permits: usize,
+}
+
+const fn default_quota_platform_wide_permits() -> usize {
+    20
+}
+
+const fn default_quota_per_connection_permits() -> usize {
+    3
 }
 
 impl std::fmt::Debug for AdvertisingConfig {
@@ -60,8 +70,8 @@ impl Default for AdvertisingConfig {
             tracking_site_key_signing_secret: String::new(),
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
-            quota_platform_wide_permits: 20,
-            quota_per_connection_permits: 3,
+            quota_platform_wide_permits: default_quota_platform_wide_permits(),
+            quota_per_connection_permits: default_quota_per_connection_permits(),
         }
     }
 }

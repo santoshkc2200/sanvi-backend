@@ -592,6 +592,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
         .execute(
             tenant_id,
             connection_id,
+            Uuid::now_v7(),
             actor_id,
             NewCampaignFields {
                 name: "Summer sale".to_string(),
@@ -632,14 +633,15 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
 
     // Publish assigns an external id; a retry with the same campaign id is a
     // no-op success rather than a second campaign.
+    let publish_mutation_id = Uuid::now_v7();
     let published = publish
-        .execute(tenant_id, draft.id, actor_id)
+        .execute(tenant_id, draft.id, publish_mutation_id, actor_id)
         .await
         .unwrap();
     assert!(published.external_id.is_some());
     assert_eq!(published.intent.status, CampaignStatus::Active);
     let replayed = publish
-        .execute(tenant_id, draft.id, actor_id)
+        .execute(tenant_id, draft.id, publish_mutation_id, actor_id)
         .await
         .unwrap();
     assert_eq!(replayed.external_id, published.external_id);
@@ -684,9 +686,15 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     ));
 
     // Pause / resume round-trip and are attributed to the acting user.
-    let paused = pause.execute(tenant_id, draft.id, actor_id).await.unwrap();
+    let paused = pause
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
+        .await
+        .unwrap();
     assert_eq!(paused.intent.status, CampaignStatus::Paused);
-    let resumed = resume.execute(tenant_id, draft.id, actor_id).await.unwrap();
+    let resumed = resume
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
+        .await
+        .unwrap();
     assert_eq!(resumed.intent.status, CampaignStatus::Active);
 
     let history = changes.execute(tenant_id, draft.id, 50).await.unwrap();
@@ -703,6 +711,10 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
         history
             .iter()
             .all(|change| change.actor_id == Some(actor_id))
+    );
+    assert!(
+        history.iter().all(|change| change.mutation_id.is_some()),
+        "every client mutation must be traceable to its idempotency key"
     );
 }
 
@@ -770,6 +782,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
         .execute(
             tenant_id,
             connection_id,
+            Uuid::now_v7(),
             actor_id,
             NewCampaignFields {
                 name: "Sweep target".to_string(),
@@ -784,7 +797,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
         .await
         .unwrap();
     let published = publish
-        .execute(tenant_id, draft.id, actor_id)
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
         .await
         .unwrap();
     let external_id = published.external_id.clone().unwrap();
@@ -878,6 +891,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
         .execute(
             tenant_id,
             connection_id,
+            Uuid::now_v7(),
             actor_id,
             NewCampaignFields {
                 name: "Ad group target".to_string(),

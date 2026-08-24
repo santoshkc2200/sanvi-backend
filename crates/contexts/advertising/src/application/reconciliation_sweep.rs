@@ -105,12 +105,17 @@ impl ReconcileDueCampaigns {
                         .execute(stored.tenant_id, stored.id, remote)
                         .await
                     {
-                        Ok(ReconciliationResult::Unchanged) => report.checked += 1,
+                        Ok(ReconciliationResult::Unchanged) => {
+                            self.mark_reconciled(stored.id).await?;
+                            report.checked += 1;
+                        }
                         Ok(ReconciliationResult::RemoteUpdated { .. }) => {
+                            self.mark_reconciled(stored.id).await?;
                             report.checked += 1;
                             report.updated += 1;
                         }
                         Ok(ReconciliationResult::Drifted { .. }) => {
+                            self.mark_reconciled(stored.id).await?;
                             report.checked += 1;
                             report.drifted += 1;
                         }
@@ -129,6 +134,7 @@ impl ReconcileDueCampaigns {
                     // drift needs a "removed" remote state distinct from
                     // "unchanged" — tracked as follow-up rather than guessed
                     // at here; a silent skip is safer than a false report.
+                    self.mark_reconciled(stored.id).await?;
                     report.checked += 1;
                 }
                 Err(error) => {
@@ -143,5 +149,20 @@ impl ReconcileDueCampaigns {
         }
 
         Ok(report)
+    }
+
+    async fn mark_reconciled(&self, campaign_id: uuid::Uuid) -> Result<(), AdvertisingError> {
+        let mut scope = self
+            .tx
+            .begin_unscoped("advertising_reconciliation_sweep", ACTOR)
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        self.campaigns
+            .mark_reconciled(&mut scope, campaign_id)
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))
     }
 }

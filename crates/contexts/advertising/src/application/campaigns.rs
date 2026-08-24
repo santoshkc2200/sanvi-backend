@@ -117,6 +117,7 @@ impl CreateCampaign {
         &self,
         tenant_id: Uuid,
         connection_id: Uuid,
+        mutation_id: Uuid,
         actor_id: Uuid,
         fields: NewCampaignFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
@@ -172,7 +173,7 @@ impl CreateCampaign {
                     tenant_id,
                     campaign_id: id,
                     revision: 1,
-                    mutation_id: None,
+                    mutation_id: Some(mutation_id),
                     actor_id: Some(actor_id),
                     source: ChangeSource::Sanvi,
                     changed_fields: vec!["*".to_string()],
@@ -194,6 +195,30 @@ impl CreateCampaign {
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         Ok(stored)
+    }
+
+    pub async fn platform_for_connection(
+        &self,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<crate::domain::PlatformKey, AdvertisingError> {
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id)
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        let connection = load_active_connection(
+            &mut scope,
+            self.connections.as_ref(),
+            tenant_id,
+            connection_id,
+        )
+        .await?;
+        scope
+            .rollback()
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        Ok(connection.platform().clone())
     }
 }
 
@@ -822,6 +847,7 @@ impl PublishCampaign {
         &self,
         tenant_id: Uuid,
         campaign_id: Uuid,
+        mutation_id: Uuid,
         actor_id: Uuid,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let mut scope = self
@@ -852,7 +878,11 @@ impl PublishCampaign {
         let mut published = stored.intent.clone();
         published.status = crate::domain::CampaignStatus::Active;
         let remote = adapter
-            .create_campaign(&connection_handle(stored.connection_id), published)
+            .create_campaign(
+                &connection_handle(stored.connection_id),
+                published,
+                mutation_id,
+            )
             .await?;
         let external_id = remote.id.clone();
 
@@ -878,7 +908,7 @@ impl PublishCampaign {
                     tenant_id,
                     campaign_id,
                     revision: updated.revision,
-                    mutation_id: None,
+                    mutation_id: Some(mutation_id),
                     actor_id: Some(actor_id),
                     source: ChangeSource::Sanvi,
                     changed_fields: vec!["status".to_string(), "external_id".to_string()],
@@ -922,6 +952,7 @@ impl SetCampaignRunState {
         &self,
         tenant_id: Uuid,
         campaign_id: Uuid,
+        mutation_id: Uuid,
         actor_id: Uuid,
         direction: PauseOrResume,
     ) -> Result<StoredCampaign, AdvertisingError> {
@@ -974,7 +1005,7 @@ impl SetCampaignRunState {
                     tenant_id,
                     campaign_id,
                     revision: updated.revision,
-                    mutation_id: None,
+                    mutation_id: Some(mutation_id),
                     actor_id: Some(actor_id),
                     source: ChangeSource::Sanvi,
                     changed_fields: vec!["status".to_string()],
@@ -1016,10 +1047,17 @@ impl PauseCampaign {
         &self,
         tenant_id: Uuid,
         campaign_id: Uuid,
+        mutation_id: Uuid,
         actor_id: Uuid,
     ) -> Result<StoredCampaign, AdvertisingError> {
         self.0
-            .execute(tenant_id, campaign_id, actor_id, PauseOrResume::Pause)
+            .execute(
+                tenant_id,
+                campaign_id,
+                mutation_id,
+                actor_id,
+                PauseOrResume::Pause,
+            )
             .await
     }
 }
@@ -1045,10 +1083,17 @@ impl ResumeCampaign {
         &self,
         tenant_id: Uuid,
         campaign_id: Uuid,
+        mutation_id: Uuid,
         actor_id: Uuid,
     ) -> Result<StoredCampaign, AdvertisingError> {
         self.0
-            .execute(tenant_id, campaign_id, actor_id, PauseOrResume::Resume)
+            .execute(
+                tenant_id,
+                campaign_id,
+                mutation_id,
+                actor_id,
+                PauseOrResume::Resume,
+            )
             .await
     }
 }

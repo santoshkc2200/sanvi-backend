@@ -400,3 +400,5 @@ oauth_state_signing_secret = ""
 tracking_site_key_signing_secret = ""
 google_ads_api_version = "v22"
 meta_api_version = "v24.0"
+quota_platform_wide_permits = 20
+quota_per_connection_permits = 3

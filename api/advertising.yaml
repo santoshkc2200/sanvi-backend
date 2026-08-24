@@ -22,7 +22,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.read permission or platform entitlement
+          description: Missing advertising.read permission
       tags:
       - advertising
     post:
@@ -97,7 +97,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.read permission or platform entitlement
+          description: Missing advertising.read permission
         '404':
           content:
             application/json:
@@ -497,7 +497,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.read permission or platform entitlement
+          description: Missing advertising.read permission
         '404':
           content:
             application/json:

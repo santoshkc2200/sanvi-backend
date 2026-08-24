@@ -325,6 +325,19 @@ impl CampaignRepository for SqlxCampaignRepository {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    async fn mark_reconciled(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        campaign_id: Uuid,
+    ) -> Result<(), AdvertisingError> {
+        sqlx::query("UPDATE advertising.campaigns SET updated_at=now() WHERE id=$1")
+            .bind(campaign_id)
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
+
     async fn append_change(
         &self,
         scope: &mut ScopedTx<'_>,

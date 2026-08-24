@@ -41,7 +41,7 @@ pub async fn assert_ad_platform_contract(
     }
 
     let created = adapter
-        .create_campaign(&connection, contract_campaign()?)
+        .create_campaign(&connection, contract_campaign()?, Uuid::now_v7())
         .await?;
     if created.status != CampaignStatus::Draft {
         return Err(AdvertisingError::PlatformUnavailable(

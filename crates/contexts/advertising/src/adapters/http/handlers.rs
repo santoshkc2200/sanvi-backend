@@ -212,6 +212,46 @@ fn api_error(error: AdvertisingError) -> ApiError {
     }
 }
 
+async fn require_platform_entitlement(
+    state: &AdvertisingState,
+    tenant_id: Uuid,
+    platform: &crate::domain::PlatformKey,
+    feature_gate: &Arc<dyn sanvi_http::FeatureGate>,
+) -> Result<(), ApiError> {
+    let descriptor = state
+        .catalog
+        .execute()
+        .into_iter()
+        .find(|descriptor| &descriptor.key == platform)
+        .ok_or_else(|| ApiError::ServiceUnavailable {
+            detail: "advertising platform is unavailable".to_string(),
+        })?;
+    if feature_gate
+        .check(tenant_id, &descriptor.entitlement_key)
+        .await?
+    {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden {
+            detail: format!("feature not enabled: {}", descriptor.entitlement_key),
+        })
+    }
+}
+
+async fn require_campaign_write_entitlement(
+    state: &AdvertisingState,
+    tenant_id: Uuid,
+    campaign_id: Uuid,
+    feature_gate: &Arc<dyn sanvi_http::FeatureGate>,
+) -> Result<(), ApiError> {
+    let stored = state
+        .get_campaign
+        .execute(tenant_id, campaign_id)
+        .await
+        .map_err(api_error)?;
+    require_platform_entitlement(state, tenant_id, &stored.platform, feature_gate).await
+}
+
 /// Domain validation failure → actix error whose problem body carries the
 /// violations as RFC 9457 extension members, mirroring
 /// `payments_problem`'s `DisconnectBlocked` handling.
@@ -269,9 +309,16 @@ pub async fn resolve_campaign_drift(
     req: HttpRequest,
     body: web::Json<ResolveCampaignDriftRequest>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, ApiError> {
     let campaign_id = path.into_inner();
+    require_campaign_write_entitlement(
+        &state,
+        tenant.0.tenant_id,
+        campaign_id,
+        feature_gate.get_ref(),
+    )
+    .await?;
     let command = body.into_inner();
     let mutation_id = idempotency_key(&req)?;
     // Revision is part of scope. A stale UI cannot turn a prior resolution
@@ -535,11 +582,17 @@ pub async fn create_campaign(
     req: HttpRequest,
     body: web::Json<CreateCampaignRequest>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let mutation_id = idempotency_key(&req)?;
     let command = body.into_inner();
+    let platform = state
+        .create_campaign
+        .platform_for_connection(tenant_id, command.connection_id)
+        .await
+        .map_err(api_error)?;
+    require_platform_entitlement(&state, tenant_id, &platform, feature_gate.get_ref()).await?;
     let objective = Objective::parse(&command.objective).map_err(|error| ApiError::BadRequest {
         detail: error.to_string(),
     })?;
@@ -554,6 +607,7 @@ pub async fn create_campaign(
         .execute(
             tenant_id,
             command.connection_id,
+            mutation_id,
             subject.0.user_id,
             NewCampaignFields {
                 name: command.name,
@@ -586,14 +640,13 @@ pub async fn create_campaign(
     operation_id = "list_campaigns",
     responses(
         (status = 200, description = "Every campaign owned by the tenant, newest first", body = CampaignsView),
-        (status = 403, description = "Missing advertising.read permission or platform entitlement", body = ProblemDetail)
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
     )
 )]
 pub async fn list_campaigns(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let campaigns = state
         .list_campaigns
@@ -613,7 +666,7 @@ pub async fn list_campaigns(
     params(("campaign_id" = Uuid, Path, description = "Campaign UUID")),
     responses(
         (status = 200, description = "The campaign's current intent and revision", body = CampaignView),
-        (status = 403, description = "Missing advertising.read permission or platform entitlement", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
         (status = 404, description = "Campaign not found", body = ProblemDetail)
     )
 )]
@@ -622,7 +675,6 @@ pub async fn get_campaign(
     tenant: CurrentTenant,
     path: web::Path<Uuid>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let stored = state
         .get_campaign
@@ -660,10 +712,12 @@ pub async fn patch_campaign(
     req: HttpRequest,
     body: web::Json<PatchCampaignRequest>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let campaign_id = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let expected_revision = if_match_revision(&req)?;
     let mutation_id = idempotency_key(&req)?;
     let fields = body.into_inner().into_fields()?;
@@ -721,15 +775,23 @@ pub async fn validate_campaign(
     path: web::Path<Uuid>,
     body: Option<web::Json<PatchCampaignRequest>>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, ApiError> {
+    let campaign_id = path.into_inner();
+    require_campaign_write_entitlement(
+        &state,
+        tenant.0.tenant_id,
+        campaign_id,
+        feature_gate.get_ref(),
+    )
+    .await?;
     let fields = body
         .map(|body| body.into_inner().into_fields())
         .transpose()?
         .unwrap_or_default();
     let violations = state
         .validate_campaign
-        .execute(tenant.0.tenant_id, path.into_inner(), fields)
+        .execute(tenant.0.tenant_id, campaign_id, fields)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(ValidationResultView { violations }))
@@ -760,10 +822,12 @@ pub async fn publish_campaign(
     path: web::Path<Uuid>,
     req: HttpRequest,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let campaign_id = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let mutation_id = idempotency_key(&req)?;
     let scope = format!("tenant.{tenant_id}.advertising.campaign.{campaign_id}.publish");
     let key = mutation_id.to_string();
@@ -773,7 +837,7 @@ pub async fn publish_campaign(
 
     let result = state
         .publish_campaign
-        .execute(tenant_id, campaign_id, subject.0.user_id)
+        .execute(tenant_id, campaign_id, mutation_id, subject.0.user_id)
         .await;
     let stored = match result {
         Ok(stored) => stored,
@@ -816,10 +880,12 @@ pub async fn pause_campaign(
     path: web::Path<Uuid>,
     req: HttpRequest,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let campaign_id = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let mutation_id = idempotency_key(&req)?;
     let scope = format!("tenant.{tenant_id}.advertising.campaign.{campaign_id}.pause");
     let key = mutation_id.to_string();
@@ -828,7 +894,7 @@ pub async fn pause_campaign(
     }
     let stored = match state
         .pause_campaign
-        .execute(tenant_id, campaign_id, subject.0.user_id)
+        .execute(tenant_id, campaign_id, mutation_id, subject.0.user_id)
         .await
     {
         Ok(stored) => stored,
@@ -867,10 +933,12 @@ pub async fn resume_campaign(
     path: web::Path<Uuid>,
     req: HttpRequest,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let campaign_id = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let mutation_id = idempotency_key(&req)?;
     let scope = format!("tenant.{tenant_id}.advertising.campaign.{campaign_id}.resume");
     let key = mutation_id.to_string();
@@ -879,7 +947,7 @@ pub async fn resume_campaign(
     }
     let stored = match state
         .resume_campaign
-        .execute(tenant_id, campaign_id, subject.0.user_id)
+        .execute(tenant_id, campaign_id, mutation_id, subject.0.user_id)
         .await
     {
         Ok(stored) => stored,
@@ -901,7 +969,7 @@ pub async fn resume_campaign(
     params(("campaign_id" = Uuid, Path, description = "Campaign UUID")),
     responses(
         (status = 200, description = "Newest-first attributed change log: actor, source (sanvi|platform), before/after state", body = CampaignChangesView),
-        (status = 403, description = "Missing advertising.read permission or platform entitlement", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
         (status = 404, description = "Campaign not found", body = ProblemDetail)
     )
 )]
@@ -910,7 +978,6 @@ pub async fn list_campaign_changes(
     tenant: CurrentTenant,
     path: web::Path<Uuid>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let changes = state
         .list_campaign_changes
@@ -985,10 +1052,12 @@ pub async fn add_ad_group(
     req: HttpRequest,
     body: web::Json<CreateAdGroupRequest>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let campaign_id = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let expected_revision = if_match_revision(&req)?;
     let mutation_id = idempotency_key(&req)?;
     let command = body.into_inner();
@@ -1060,10 +1129,12 @@ pub async fn update_ad_group(
     req: HttpRequest,
     body: web::Json<PatchAdGroupRequest>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let (campaign_id, ad_group_id) = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let expected_revision = if_match_revision(&req)?;
     let mutation_id = idempotency_key(&req)?;
     let command = body.into_inner();
@@ -1136,10 +1207,12 @@ pub async fn add_ad(
     req: HttpRequest,
     body: web::Json<CreateAdRequest>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let (campaign_id, ad_group_id) = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let expected_revision = if_match_revision(&req)?;
     let mutation_id = idempotency_key(&req)?;
     let command = body.into_inner();
@@ -1213,10 +1286,12 @@ pub async fn update_ad(
     req: HttpRequest,
     body: web::Json<PatchAdRequest>,
     _permission: RequiredPermission,
-    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let (campaign_id, ad_group_id, ad_id) = path.into_inner();
+    require_campaign_write_entitlement(&state, tenant_id, campaign_id, feature_gate.get_ref())
+        .await?;
     let expected_revision = if_match_revision(&req)?;
     let mutation_id = idempotency_key(&req)?;
     let command = body.into_inner();

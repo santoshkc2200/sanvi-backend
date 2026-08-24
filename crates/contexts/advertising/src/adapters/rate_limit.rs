@@ -52,21 +52,21 @@ impl QuotaLimiter {
             .clone()
     }
 
-    /// Wait for a slot in both budgets. The platform-wide permit is
-    /// acquired first so a connection queued behind it cannot hold its own
-    /// slot idle while starving every other connection's queue depth.
+    /// Wait for a slot in both budgets. Acquire the connection slot first:
+    /// otherwise a flood from one connection can occupy every platform-wide
+    /// permit while most of its work still waits on that connection's cap.
     async fn acquire(&self, connection_id: &str) -> (OwnedSemaphorePermit, OwnedSemaphorePermit) {
+        let connection_permit = self
+            .connection_semaphore(connection_id)
+            .acquire_owned()
+            .await
+            .expect("advertising per-connection quota semaphore is never closed");
         let platform_permit = self
             .platform_wide
             .clone()
             .acquire_owned()
             .await
             .expect("advertising platform-wide quota semaphore is never closed");
-        let connection_permit = self
-            .connection_semaphore(connection_id)
-            .acquire_owned()
-            .await
-            .expect("advertising per-connection quota semaphore is never closed");
         (platform_permit, connection_permit)
     }
 }
@@ -112,9 +112,12 @@ impl AdPlatformPort for RateLimitedAdapter {
         &self,
         connection: &ConnectionHandle,
         campaign: Campaign,
+        mutation_id: Uuid,
     ) -> Result<Campaign, AdvertisingError> {
         let _permits = self.limiter.acquire(&connection.id).await;
-        self.inner.create_campaign(connection, campaign).await
+        self.inner
+            .create_campaign(connection, campaign, mutation_id)
+            .await
     }
 
     async fn get_campaign(
@@ -250,6 +253,7 @@ mod tests {
             &self,
             _connection: &ConnectionHandle,
             campaign: Campaign,
+            _mutation_id: Uuid,
         ) -> Result<Campaign, AdvertisingError> {
             let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_observed.fetch_max(now, Ordering::SeqCst);
@@ -355,7 +359,11 @@ mod tests {
                     id: "connection-a".to_string(),
                 };
                 limited
-                    .create_campaign(&connection, draft_campaign(&format!("c{i}")))
+                    .create_campaign(
+                        &connection,
+                        draft_campaign(&format!("c{i}")),
+                        Uuid::now_v7(),
+                    )
                     .await
                     .unwrap();
             }));
@@ -392,7 +400,11 @@ mod tests {
                     id: "connection-a".to_string(),
                 };
                 limited
-                    .create_campaign(&connection, draft_campaign(&format!("a{i}")))
+                    .create_campaign(
+                        &connection,
+                        draft_campaign(&format!("a{i}")),
+                        Uuid::now_v7(),
+                    )
                     .await
                     .unwrap();
             }));
@@ -405,7 +417,7 @@ mod tests {
             id: "connection-b".to_string(),
         };
         limited
-            .create_campaign(&connection_b, draft_campaign("b0"))
+            .create_campaign(&connection_b, draft_campaign("b0"), Uuid::now_v7())
             .await
             .unwrap();
         assert!(

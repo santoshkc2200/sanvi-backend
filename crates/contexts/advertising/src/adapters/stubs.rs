@@ -181,6 +181,7 @@ impl AdPlatformPort for FakeAdPlatform {
         &self,
         _connection: &ConnectionHandle,
         campaign: Campaign,
+        _mutation_id: uuid::Uuid,
     ) -> Result<Campaign, AdvertisingError> {
         self.campaigns
             .lock()

@@ -85,6 +85,14 @@ pub trait CampaignRepository: Send + Sync {
         limit: i64,
     ) -> Result<Vec<StoredCampaign>, AdvertisingError>;
 
+    /// Record a completed pull without changing campaign intent or revision.
+    /// This is the sweep cursor for unchanged remote state.
+    async fn mark_reconciled(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        campaign_id: Uuid,
+    ) -> Result<(), AdvertisingError>;
+
     /// Compare-and-swap update. A zero-row update is a stale `If-Match`
     /// revision; callers must load current state before returning `409`.
     async fn update(
