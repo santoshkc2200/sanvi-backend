@@ -1,7 +1,7 @@
 # TASK-011: 10.2 Connections, OAuth & token lifecycle
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress
 **Requirement(s):** FR-1002, FR-1003, NFR-1003
 **Depends on:** TASK-010
 **Created:** 2026-08-20

@@ -1,8 +1,8 @@
 //! Advertising context (phase 10).
 //!
-//! TASK-009 deliberately exposes only the entitlement-gated empty platform
-//! catalog. It also establishes secret-safe vocabulary and configuration so
-//! platform adapters cannot arrive before their safety boundaries.
+//! TASK-009 establishes the entitlement-gated catalog and secret-safe
+//! vocabulary. TASK-011 adds the provider-neutral, signed OAuth-state
+//! boundary before any callback can exchange a provider authorization code.
 
 pub mod adapters;
 pub mod application;
@@ -11,8 +11,9 @@ pub mod domain;
 
 pub use config::AdvertisingConfig;
 pub use domain::{
-    CapabilityMatrix, ConnectionHandle, ConsentSnapshot, HashedIds, Objective, PlatformKey,
-    SecretRef,
+    CapabilityMatrix, ConnectionHandle, ConnectionHealth, ConnectionStatus, ConsentSnapshot,
+    HashedIds, OAuthStateClaims, OAuthStateError, OAuthStateManager, Objective, PlatformKey,
+    RefreshFailureKind, RefreshTransition, SecretRef, refresh_failure_transition,
 };
 
 pub mod routes {
