@@ -172,7 +172,7 @@ fn idempotency_key(req: &HttpRequest) -> Result<Uuid, ApiError> {
     })
 }
 
-fn api_error(error: AdvertisingError) -> ApiError {
+pub(super) fn api_error(error: AdvertisingError) -> ApiError {
     match error {
         AdvertisingError::InvalidInput(detail) => ApiError::BadRequest { detail },
         AdvertisingError::PlatformUnavailable(detail) => ApiError::ServiceUnavailable { detail },

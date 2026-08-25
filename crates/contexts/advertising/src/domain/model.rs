@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::AdvertisingError;
+use super::hashing::HashedIdentifier;
 
 /// Adapter-owned identifier. Domain code never switches on a platform name.
 #[derive(
@@ -226,8 +228,61 @@ pub struct HashedIds {
 }
 
 /// Capture-time directive proof required by every outbound upload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConsentSnapshot {
-    pub directive_version: String,
-    pub allowed_purposes: Vec<String>,
+    pub resolver_version: String,
+    pub jurisdiction: String,
+    pub purposes_asked: Vec<String>,
+    pub answers: BTreeMap<String, String>,
+    pub signal_source: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ClickIds {
+    pub gclid: Option<String>,
+    pub gbraid: Option<String>,
+    pub wbraid: Option<String>,
+    pub fbc: Option<String>,
+    pub fbp: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueSource {
+    PaymentRecord,
+    ClientReported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SuppressedByDirective {
+    pub purpose: String,
+    pub signal_source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum UploadState {
+    #[default]
+    Pending,
+    SuppressedByDirective(SuppressedByDirective),
+    Uploaded,
+    Failed {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ConversionEvent {
+    pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
+    pub event_id: String,
+    pub name: String,
+    pub occurred_at: DateTime<Utc>,
+    pub value: Option<Money>,
+    pub value_source: Option<ValueSource>,
+    pub order_ref: Option<String>,
+    pub click_ids: ClickIds,
+    pub hashed_identifiers: BTreeMap<String, HashedIdentifier>,
+    pub consent: ConsentSnapshot,
+    pub upload_state: UploadState,
 }

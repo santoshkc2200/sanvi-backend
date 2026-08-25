@@ -93,7 +93,10 @@ fn validate_refresh_token(refresh_token: &str) -> Result<(), AdvertisingError> {
 }
 
 impl TokenVault {
-    pub fn new(crypto: Arc<dyn TenantEnvelopeCrypto>, tokens: Arc<dyn ConnectionTokenRepository>) -> Self {
+    pub fn new(
+        crypto: Arc<dyn TenantEnvelopeCrypto>,
+        tokens: Arc<dyn ConnectionTokenRepository>,
+    ) -> Self {
         Self { crypto, tokens }
     }
 

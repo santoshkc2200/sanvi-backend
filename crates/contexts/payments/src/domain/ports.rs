@@ -570,6 +570,16 @@ pub trait CheckoutRepository: Send + Sync {
         key: Uuid,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
+    /// The most recently completed checkout for a merchant order reference —
+    /// the trustworthy conversion value phase 10's tracking gate joins by
+    /// order reference (NFR-1010: a client-supplied value is only a hint).
+    async fn find_completed_by_reference(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        reference: &str,
+    ) -> Result<Option<Checkout>, PaymentsError>;
+
     async fn update(
         &self,
         scope: &mut ScopedTx<'_>,

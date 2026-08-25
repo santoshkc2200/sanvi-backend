@@ -134,7 +134,12 @@ impl HandleCallback {
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let token_ref = self
             .tokens
-            .store_refresh_token(&mut scope, tenant_id, connection_id, &exchanged.refresh_token)
+            .store_refresh_token(
+                &mut scope,
+                tenant_id,
+                connection_id,
+                &exchanged.refresh_token,
+            )
             .await?;
         let pending = AdvertisingConnection::new_pending(
             connection_id,
@@ -190,7 +195,11 @@ impl CreateConnection {
             .ok_or(AdvertisingError::ConnectionNotFound)?;
         let chosen = connection
             .pending_accounts()
-            .and_then(|accounts| accounts.iter().find(|a| a.external_id == chosen_external_id))
+            .and_then(|accounts| {
+                accounts
+                    .iter()
+                    .find(|a| a.external_id == chosen_external_id)
+            })
             .cloned()
             .ok_or_else(|| {
                 AdvertisingError::InvalidInput(

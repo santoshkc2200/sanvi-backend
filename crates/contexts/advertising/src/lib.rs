@@ -18,7 +18,9 @@ pub use domain::{
 };
 
 pub mod routes {
-    pub use crate::adapters::http::routes::advertising_tenant_scope_routes;
+    pub use crate::adapters::http::routes::{
+        advertising_tenant_scope_routes, tracking_public_routes, tracking_tenant_routes,
+    };
 }
 
 pub mod catalog {

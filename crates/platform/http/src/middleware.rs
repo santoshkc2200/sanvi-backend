@@ -30,6 +30,23 @@ impl std::fmt::Display for RequestId {
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
+/// Header carrying the origin-bound site key that authenticates the public
+/// tracking beacon.
+const SITE_KEY_HEADER: &str = "x-site-key";
+
+/// Paths served to arbitrary third-party origins rather than to the
+/// platform's own front ends, and therefore exempt from
+/// [`CorsConfig::allowed_origins`].
+///
+/// `/public/track` is posted from every tenant's storefront. Those origins
+/// are tenant-owned and unbounded, so they cannot be enumerated in a
+/// platform-wide allow-list; the request is authenticated by a site key
+/// bound to the very `Origin` header being checked here, which is a
+/// stronger check than the list would have been. Its response is an empty
+/// `202` in every case, so reflecting the caller's origin discloses
+/// nothing.
+const PUBLIC_CROSS_ORIGIN_PATHS: &[&str] = &["/api/v1/public/track"];
+
 /// Apply the canonical middleware chain to an `App`.
 ///
 /// Outermost → innermost:
@@ -118,7 +135,12 @@ where
 fn build_cors(config: &CorsConfig) -> actix_cors::Cors {
     let origins = config.allowed_origins.clone();
     actix_cors::Cors::default()
-        .allowed_origin_fn(move |origin, _req_head| {
+        .allowed_origin_fn(move |origin, req_head| {
+            // The preflight carries the same path as the request it
+            // precedes, so one check covers both.
+            if PUBLIC_CROSS_ORIGIN_PATHS.contains(&req_head.uri.path()) {
+                return true;
+            }
             // Explicit allow-list only; actix-cors's origin matcher parses and
             // compares origins exactly — wildcards are rejected by config
             // validation.
@@ -133,9 +155,84 @@ fn build_cors(config: &CorsConfig) -> actix_cors::Cors {
             header::ACCEPT,
             header::ORIGIN,
             header::HeaderName::from_static(REQUEST_ID_HEADER),
+            header::HeaderName::from_static(SITE_KEY_HEADER),
         ])
         .max_age(config.max_age_secs as usize)
         .supports_credentials()
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use actix_web::{App, HttpResponse, http::header, test, web};
+
+    use super::*;
+
+    fn cors() -> actix_cors::Cors {
+        build_cors(&CorsConfig {
+            allowed_origins: vec!["https://console.example.com".to_string()],
+            allow_credentials: true,
+            max_age_secs: 600,
+        })
+    }
+
+    async fn preflight(path: &str, origin: &str, request_headers: &str) -> u16 {
+        let app = test::init_service(
+            App::new().wrap(cors()).service(
+                web::resource(path)
+                    .route(web::post().to(|| async { HttpResponse::Accepted().finish() })),
+            ),
+        )
+        .await;
+        let request = test::TestRequest::default()
+            .method(actix_web::http::Method::OPTIONS)
+            .uri(path)
+            .insert_header((header::ORIGIN, origin))
+            .insert_header((header::ACCESS_CONTROL_REQUEST_METHOD, "POST"))
+            .insert_header((header::ACCESS_CONTROL_REQUEST_HEADERS, request_headers))
+            .to_request();
+        test::call_service(&app, request).await.status().as_u16()
+    }
+
+    /// The beacon is posted from tenant-owned storefronts that can never be
+    /// in the platform allow-list, with a custom header that forces a
+    /// preflight. If either check rejects it, no browser ever reaches the
+    /// handler.
+    #[actix_web::test]
+    async fn the_public_beacon_preflight_passes_from_an_unlisted_tenant_origin() {
+        assert_eq!(
+            preflight(
+                "/api/v1/public/track",
+                "https://shop.tenant.example",
+                "content-type,x-site-key"
+            )
+            .await,
+            200
+        );
+    }
+
+    /// The exemption is path-scoped: everything else still answers only to
+    /// the configured origins.
+    #[actix_web::test]
+    async fn other_paths_still_reject_an_unlisted_origin() {
+        assert_ne!(
+            preflight(
+                "/api/v1/tenant/ads/conversions",
+                "https://shop.tenant.example",
+                "content-type"
+            )
+            .await,
+            200
+        );
+        assert_eq!(
+            preflight(
+                "/api/v1/tenant/ads/conversions",
+                "https://console.example.com",
+                "content-type"
+            )
+            .await,
+            200
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -46,4 +46,11 @@ pub struct AdvertisingState {
     pub create_connection: Arc<CreateConnection>,
     pub list_connections: Arc<ListConnections>,
     pub delete_connection: Arc<DeleteConnection>,
+
+    /// Conversion capture & the directive gate (TASK-014, 10.5).
+    pub tracking_ip_limiter: Arc<crate::adapters::rate_limit::QuotaLimiter>,
+    pub tracking_domain_limiter: Arc<crate::adapters::rate_limit::QuotaLimiter>,
+    pub capture: Arc<crate::application::tracking::capture::CaptureConversion>,
+    pub settings_mgr: Arc<crate::application::tracking::settings::ManageTrackingSettings>,
+    pub list_conversions: Arc<crate::application::tracking::conversions::ListConversions>,
 }

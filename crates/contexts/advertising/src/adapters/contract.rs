@@ -117,8 +117,11 @@ pub async fn assert_ad_platform_contract(
                 )]),
             },
             ConsentSnapshot {
-                directive_version: "contract-v1".to_string(),
-                allowed_purposes: vec!["ads_measurement".to_string()],
+                resolver_version: "contract-v1".to_string(),
+                jurisdiction: "US-CA".to_string(),
+                purposes_asked: vec!["ads_measurement".to_string()],
+                answers: std::collections::BTreeMap::new(),
+                signal_source: "unknown".to_string(),
             },
         )
         .await?;

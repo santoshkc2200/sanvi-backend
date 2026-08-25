@@ -22,6 +22,13 @@ use crate::domain::{
     HashedIds, MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor, UploadedConversion,
 };
 
+/// Ceiling on distinct keys held at once. Connection ids are bounded by
+/// how many connections a tenant owns, but the public track beacon keys
+/// this limiter by client IP and `Origin` — both chosen by an
+/// unauthenticated caller — so the table must be bounded, or N distinct
+/// values permanently allocate N semaphores.
+const MAX_TRACKED_KEYS: usize = 4096;
+
 /// Bounds concurrent adapter calls two ways at once: a platform-wide cap
 /// (the shared developer-token quota) and a per-connection cap nested
 /// inside it (so one connection cannot claim every platform-wide slot).
@@ -30,6 +37,10 @@ pub struct QuotaLimiter {
     platform_wide: Arc<Semaphore>,
     per_connection_permits: usize,
     connections: Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// Shared bucket for keys that arrive while every tracked key is busy.
+    /// Coarser than a key of one's own, but bounded — and still a real
+    /// budget, so an overflowing caller is throttled rather than refused.
+    overflow: Arc<Semaphore>,
 }
 
 impl QuotaLimiter {
@@ -38,6 +49,7 @@ impl QuotaLimiter {
             platform_wide: Arc::new(Semaphore::new(platform_wide_permits.max(1))),
             per_connection_permits: per_connection_permits.max(1),
             connections: Mutex::new(HashMap::new()),
+            overflow: Arc::new(Semaphore::new(per_connection_permits.max(1))),
         }
     }
 
@@ -46,10 +58,39 @@ impl QuotaLimiter {
             .connections
             .lock()
             .expect("advertising quota limiter mutex poisoned");
+
+        if let Some(existing) = connections.get(connection_id) {
+            return existing.clone();
+        }
+
+        if connections.len() >= MAX_TRACKED_KEYS {
+            // A semaphore the map alone still points at has no permit
+            // outstanding — `OwnedSemaphorePermit` holds an `Arc` for
+            // exactly as long as the call it guards — so the key is idle
+            // and evicting it drops no in-flight state.
+            connections.retain(|_, semaphore| Arc::strong_count(semaphore) > 1);
+        }
+        if connections.len() >= MAX_TRACKED_KEYS {
+            return self.overflow.clone();
+        }
+
         connections
             .entry(connection_id.to_string())
             .or_insert_with(|| Arc::new(Semaphore::new(self.per_connection_permits)))
             .clone()
+    }
+
+    /// Take a slot in both budgets if both are free right now, or give up.
+    /// The per-key slot goes first, so a flood under one key cannot occupy
+    /// every platform-wide permit.
+    pub fn try_acquire(
+        &self,
+        connection_id: &str,
+    ) -> Option<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
+        let connection_semaphore = self.connection_semaphore(connection_id);
+        let conn_permit = connection_semaphore.clone().try_acquire_owned().ok()?;
+        let global_permit = self.platform_wide.clone().try_acquire_owned().ok()?;
+        Some((conn_permit, global_permit))
     }
 
     /// Wait for a slot in both budgets. Acquire the connection slot first:
@@ -465,6 +506,42 @@ mod tests {
         let inner = registry.adapter(&key).unwrap();
         let limited = RateLimitedAdapter::new(inner, limiter);
         assert_ad_platform_contract(&limited).await.unwrap();
+    }
+
+    /// The public beacon keys this limiter by attacker-chosen strings, so
+    /// the table must not grow with the number of distinct values seen.
+    #[test]
+    fn idle_keys_are_evicted_rather_than_retained_forever() {
+        let limiter = QuotaLimiter::new(100, 2);
+        for i in 0..(MAX_TRACKED_KEYS * 2) {
+            // Each permit is dropped at the end of the iteration, leaving
+            // the key idle and therefore evictable.
+            let _permits = limiter.try_acquire(&format!("origin-{i}"));
+        }
+        let tracked = limiter.connections.lock().unwrap().len();
+        assert!(
+            tracked <= MAX_TRACKED_KEYS,
+            "limiter tracked {tracked} keys, above the {MAX_TRACKED_KEYS} ceiling"
+        );
+    }
+
+    /// Eviction must never hand out a fresh budget to a key that still has
+    /// calls in flight — that would let one key exceed its own cap.
+    #[test]
+    fn a_busy_key_survives_eviction_pressure() {
+        let limiter = QuotaLimiter::new(100, 2);
+        let held = limiter.try_acquire("busy").expect("first permit is free");
+        for i in 0..(MAX_TRACKED_KEYS * 2) {
+            let _permits = limiter.try_acquire(&format!("origin-{i}"));
+        }
+        // Cap of 2: one permit is still held, so exactly one more is free.
+        let second = limiter.try_acquire("busy");
+        assert!(second.is_some(), "busy key lost its second permit");
+        assert!(
+            limiter.try_acquire("busy").is_none(),
+            "busy key was re-keyed to a fresh budget and exceeded its cap"
+        );
+        drop((held, second));
     }
 
     #[test]

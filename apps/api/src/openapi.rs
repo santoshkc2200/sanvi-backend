@@ -1,10 +1,17 @@
 use sanvi_advertising::adapters::http::handlers::{
     AccountView, AdvertisingProblemType, CampaignChangesView, CampaignView, CampaignsView,
     ConnectionHealthView, ConnectionView, ConnectionsView, CreateAdGroupRequest, CreateAdRequest,
-    CreateCampaignRequest, CreateConnectionRequest, MetricPoint, MoneyView,
-    OAuthCallbackQuery, PatchAdGroupRequest, PatchAdRequest, PatchCampaignRequest,
-    PendingConnectionView, RenderedMoneyView, ResolveCampaignDriftRequest,
-    ResolvedCampaignDriftView, StartOAuthRequest, StartOAuthResponse, ValidationResultView,
+    CreateCampaignRequest, CreateConnectionRequest, MetricPoint, MoneyView, OAuthCallbackQuery,
+    PatchAdGroupRequest, PatchAdRequest, PatchCampaignRequest, PendingConnectionView,
+    RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView, StartOAuthRequest,
+    StartOAuthResponse, ValidationResultView,
+};
+use sanvi_advertising::adapters::http::tracking_handlers::{
+    TestTrackingEventResponse, TrackConversionRequest,
+};
+use sanvi_advertising::domain::{
+    ClickIds, ConsentSnapshot, ConversionEvent, HashedIdentifier, Money as AdvertisingMoney,
+    SuppressedByDirective, TrackingSettings, UploadState, ValueSource,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -191,6 +198,11 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::handlers::create_connection,
         sanvi_advertising::adapters::http::handlers::list_connections,
         sanvi_advertising::adapters::http::handlers::delete_connection,
+        sanvi_advertising::adapters::http::tracking_handlers::public_track_conversion,
+        sanvi_advertising::adapters::http::tracking_handlers::get_tracking_settings,
+        sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
+        sanvi_advertising::adapters::http::tracking_handlers::test_tracking_event,
+        sanvi_advertising::adapters::http::tracking_handlers::list_conversions,
     ),
     components(schemas(
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
@@ -199,7 +211,10 @@ use utoipa::OpenApi;
         ValidationResultView, CampaignChangesView, CreateAdGroupRequest, PatchAdGroupRequest,
         CreateAdRequest, PatchAdRequest, StartOAuthRequest, StartOAuthResponse,
         OAuthCallbackQuery, AccountView, PendingConnectionView, CreateConnectionRequest,
-        ConnectionHealthView, ConnectionView, ConnectionsView
+        ConnectionHealthView, ConnectionView, ConnectionsView,
+        TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, ConversionEvent,
+        ConsentSnapshot, ClickIds, ValueSource, SuppressedByDirective, UploadState,
+        AdvertisingMoney, HashedIdentifier
     )),
     tags(
         (name = "system", description = "System, health and build information"),

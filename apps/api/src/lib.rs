@@ -2784,11 +2784,19 @@ pub fn build_payments_state(
 
 /// Phase 10's registry-derived capability catalog. The in-process adapter is
 /// deliberately the only registered implementation until real adapters land.
-pub fn build_advertising_state(
+///
+/// `directive_resolver` and `subprocessors` come from the privacy context
+/// (phase 05): the directive gate (TASK-014) is the phase's core
+/// invariant, and advertising holds no directive or sub-processor state of
+/// its own to consult instead.
+pub async fn build_advertising_state(
     pool: sanvi_persistence::PgPool,
     config: &AdvertisingConfig,
+    directive_resolver: Arc<dyn DirectiveResolver>,
+    subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository>,
 ) -> anyhow::Result<sanvi_advertising::adapters::http::AdvertisingState> {
     config.validate_oauth_enabled()?;
+    config.validate_tracking_enabled()?;
     let token_kek = config.token_kek_bytes()?;
     let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
         &FakeAdPlatform::registered_catalog(),
@@ -2812,6 +2820,59 @@ pub fn build_advertising_state(
         std::sync::Arc::new(SqlxAdvertisingConnectionRepository::new());
     let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> =
         std::sync::Arc::new(AdvertisingEvents::new());
+
+    // 10.5: conversion capture & the directive gate. The sub-processor
+    // role snapshot is loaded once here rather than per beacon hit — see
+    // `SnapshotVendorRoleLookup`'s own doc comment for why.
+    let vendor_role: std::sync::Arc<dyn sanvi_advertising::domain::VendorRolePort> = {
+        let subprocessor_tx = tx.clone();
+        let mut subprocessor_scope = subprocessor_tx
+            .begin_unscoped(
+                "advertising: load sub-processor roles for the conversion tracking gate",
+                "system",
+            )
+            .await?;
+        std::sync::Arc::new(
+            sanvi_advertising::adapters::SnapshotVendorRoleLookup::load(
+                subprocessors.as_ref(),
+                &mut subprocessor_scope,
+            )
+            .await?,
+        )
+    };
+    let checkouts: std::sync::Arc<dyn sanvi_payments::domain::CheckoutRepository> =
+        std::sync::Arc::new(sanvi_payments::adapters::SqlxCheckoutRepository::new());
+    let payment_lookup: std::sync::Arc<dyn sanvi_advertising::domain::PaymentLookupPort> =
+        std::sync::Arc::new(sanvi_advertising::adapters::CheckoutPaymentLookup::new(
+            checkouts,
+        ));
+    let conversion_repo: std::sync::Arc<dyn sanvi_advertising::domain::ConversionEventRepository> =
+        std::sync::Arc::new(SqlxCampaignRepository::new());
+    let tracking_settings_repo: std::sync::Arc<
+        dyn sanvi_advertising::domain::TrackingSettingsRepository,
+    > = std::sync::Arc::new(sanvi_advertising::adapters::SqlxTrackingSettingsRepository::new());
+    let capture = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::capture::CaptureConversion::new(
+            tx.clone(),
+            conversion_repo.clone(),
+            payment_lookup,
+            vendor_role,
+            directive_resolver,
+        ),
+    );
+    let settings_mgr = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::settings::ManageTrackingSettings::new(
+            tx.clone(),
+            tracking_settings_repo,
+        ),
+    );
+    let list_conversions = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::conversions::ListConversions::new(
+            tx.clone(),
+            conversion_repo,
+        ),
+    );
+
     Ok(sanvi_advertising::adapters::http::AdvertisingState {
         config: config.clone(),
         idempotency: sanvi_persistence::IdempotencyStore::new(tx.pool().clone()),
@@ -2915,6 +2976,20 @@ pub fn build_advertising_state(
         )),
         delete_connection: std::sync::Arc::new(DeleteConnection::new(tx, connections)),
         oauth_state,
+        // Concurrency caps on the public track beacon: a coarse abuse
+        // control (see `tracking_handlers` module doc), not a
+        // time-windowed rate limiter — deliberately fixed rather than
+        // configurable, since there is no per-tenant knob for a
+        // pre-authentication endpoint.
+        tracking_ip_limiter: std::sync::Arc::new(sanvi_advertising::adapters::QuotaLimiter::new(
+            500, 5,
+        )),
+        tracking_domain_limiter: std::sync::Arc::new(
+            sanvi_advertising::adapters::QuotaLimiter::new(1000, 50),
+        ),
+        capture,
+        settings_mgr,
+        list_conversions,
     })
 }
 
@@ -3128,7 +3203,9 @@ pub fn build_app(
     };
     let tenant_scope = if config.features.advertising {
         match &advertising {
-            Some(_) => tenant_scope.configure(advertising_routes::advertising_tenant_scope_routes),
+            Some(_) => tenant_scope
+                .configure(advertising_routes::advertising_tenant_scope_routes)
+                .configure(advertising_routes::tracking_tenant_routes),
             None => tenant_scope,
         }
     } else {
@@ -3175,7 +3252,9 @@ pub fn build_app(
     };
 
     let app = match advertising {
-        Some(state) => app.app_data(web::Data::new(state)),
+        Some(state) => app
+            .app_data(web::Data::new(state))
+            .configure(advertising_routes::tracking_public_routes),
         None => app,
     };
 

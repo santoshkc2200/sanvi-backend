@@ -20,12 +20,21 @@ violations.
 Nothing user-visible ships, and that is the point: the expensive mistakes in an advertising context
 are raw PII on the wire and an unbounded metrics table, and both are made in the first week.
 
+## Progress — verified 2026-08-25
+
+All ten deliverables are in the working tree (`62ed843`, `202b224`) and
+`cargo test -p sanvi-advertising --lib` is green (38 passed). The feature flag ships as
+`advertising = false` in `configs/base.toml` rather than the literal key `advertising.enabled`
+named below. **Remaining for `done`:** staging deployment behind the flag, per the definition of
+done — merged is not done. The acceptance criteria below are re-run there.
+
+
 ## What to do
 
 The contract is merged **first** — `api/advertising.yaml`, registered in `apps/api/src/openapi.rs`
 alongside the existing twelve contexts — then the code.
 
-- [ ] **Contract** — new `api/advertising.yaml` with one endpoint,
+- [x] **Contract** — new `api/advertising.yaml` with one endpoint,
       `GET /api/v1/tenant/ads/platforms` (`advertising.read` + entitlement), returning
       `{ "platforms": [] }` until TASK-010. Also fixed here because every later slice depends on the
       shapes being stable:
@@ -39,11 +48,11 @@ alongside the existing twelve contexts — then the code.
         primitives can be built against fixtures from day one;
       - `Idempotency-Key` documented on every mutating advertising endpoint — every one of them can
         spend money.
-- [ ] **Crate scaffolding** — `crates/contexts/advertising/` following the `domains` and `payments`
+- [x] **Crate scaffolding** — `crates/contexts/advertising/` following the `domains` and `payments`
       layout: `src/{lib,config}.rs`, `src/domain/`, `src/application/`,
       `src/adapters/{http,repos,events,metrics,stubs}.rs`. Wired into the workspace `Cargo.toml`,
       `apps/api` and `apps/worker`.
-- [ ] **Migration** — `migrations/20260826000000_advertising_core.sql` (+ `.down.sql`), next in
+- [x] **Migration** — `migrations/20260826000000_advertising_core.sql` (+ `.down.sql`), next in
       sequence after the currently committed Phase-09 migrations (the originally reserved
       `20260824000000` timestamp is occupied). Creates the `advertising` schema and the tables
       from the implementation plan (`connections`, `campaigns`, `ad_groups`, `ads`, `creatives`,
@@ -52,32 +61,32 @@ alongside the existing twelve contexts — then the code.
         monthly, **with the partition-creation job scheduled in the same change**. A partitioned table
         with no partition-maker is a production incident on the first of the month.
       - Money columns are `bigint` minor units plus a `text` currency column, never `numeric`.
-- [ ] **RLS** — tenant isolation on every table per the phase-01 pattern, including both partitioned
+- [x] **RLS** — tenant isolation on every table per the phase-01 pattern, including both partitioned
       parents. Policy inheritance to child partitions must be verified explicitly; this is the one
       place the phase-01 pattern does not apply unchanged.
-- [ ] **Retention** — register `conversion_events` and `metrics_daily` with the phase-05 retention
+- [x] **Retention** — register `conversion_events` and `metrics_daily` with the phase-05 retention
       framework now, with their windows, before either table has a row in it.
       The mandatory phase-05 provider registry has an empty advertising provider in this slice;
       TASK-018 owns its row-level export/erase and platform retraction behaviour because no
       conversion identifier can exist before TASK-014.
-- [ ] **Permissions** — register `advertising.read`, `advertising.connect`,
+- [x] **Permissions** — register `advertising.read`, `advertising.connect`,
       `advertising.campaign.read`, `advertising.campaign.write`, `advertising.metrics.read`,
       `advertising.budget.manage` in the `access` seed and add them to tenant-owner and tenant-admin
       roles. `advertising.connect` and `advertising.budget.manage` are deliberately **not** in the
       default staff role — both are money.
-- [ ] **Entitlements** — `advertising.google_ads` and the pre-existing plan catalog key
+- [x] **Entitlements** — `advertising.google_ads` and the pre-existing plan catalog key
       `advertising.meta_ads` in the `platform-admin` catalog, granted per plan. (The original
       task named `advertising.meta`; retaining the already-migrated `meta_ads` key preserves plan
       grants.) The route returns `403 entitlement-required`, not 404, so the
       frontend can show an upgrade prompt rather than a dead end.
-- [ ] **Token envelope** — `token_ref` resolution through the phase-05 per-tenant DEK scheme, with a
+- [x] **Token envelope** — `token_ref` resolution through the phase-05 per-tenant DEK scheme, with a
       `SecretRef` newtype whose `Debug`/`Display`/`Serialize` impls redact. Access to the decrypt path
       is audited from the first call, not retrofitted.
-- [ ] **Config & secrets** — `configs/` entries for the Google Ads developer token, both OAuth client
+- [x] **Config & secrets** — `configs/` entries for the Google Ads developer token, both OAuth client
       id/secret pairs, the tracking site-key signing secret, and pinned API versions per platform.
       Distinct per environment.
-- [ ] **Feature flag** — `advertising.enabled`, default off, checked at the HTTP boundary.
-- [ ] **CI gates** (the important part of this task) — `scripts/check-ads-invariants.sh` with a
+- [x] **Feature flag** — `advertising.enabled`, default off, checked at the HTTP boundary.
+- [x] **CI gates** (the important part of this task) — `scripts/check-ads-invariants.sh` with a
       `--self-test` mode proving each gate catches a deliberate violation, wired into `just ci`:
       - a type-level gate: the `AdPlatformPort` upload signature accepts only `HashedIds`, and a grep
         gate fails on any raw `email`/`phone` field name inside this context's `src/adapters/`;
@@ -146,7 +155,7 @@ adapter (all TASK-010), every OAuth call (TASK-011), and anything that uploads (
   meanwhile.
 
 ---
-*On completion: satisfy every acceptance criterion, run the verification commands,
-then record status with the sdlc-planner script (never by hand-editing this line
-and the backlog separately):*
-`sdlc.py status TASK-009 done --note "<PR or commit>"`
+*On completion: satisfy every acceptance criterion, run the verification commands, then
+record status in the **same commit** in both places — the `**Status:**` line at the top of this
+file and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note.
+The two must never disagree.*

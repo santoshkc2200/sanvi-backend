@@ -27,9 +27,25 @@ Ad account access is money access. Treat this as a credential slice, not a setti
    tenant once, and *pauses* dependent jobs. It does not retry a broken credential every five minutes
    until the platform rate-limits the whole tenant.
 
+## Progress — verified 2026-08-25
+
+Shipped (`c30721b`, `7b69878`, `b35a5d4`): signed-state start/callback rejecting forged, missing,
+expired, replayed, and cross-tenant `state`; per-tenant encrypted refresh tokens; refresh scheduler
+and expiry handling; pending and reconnect lifecycle; `FreshAal2Required` step-up on connect and
+disconnect; connection health reporting `scopes_missing` from each adapter's `required_scopes`.
+
+**Still open**
+
+- **Google Ads OAuth** and **Meta OAuth** real adapters, and live `list_accounts` — blocked on
+  Google developer-token approval and Meta app review. `FakeAdPlatform` carries the interim.
+- **Connection audit entries** on connect and disconnect are not yet emitted; the step-up gate is in
+  place but the audit half of that deliverable is not.
+- Staging deployment behind the flag.
+
+
 ## What to do
 
-- [ ] **Contract** — `POST /connections/{platform}/oauth/start` (`advertising.connect` + step-up),
+- [x] **Contract** — `POST /connections/{platform}/oauth/start` (`advertising.connect` + step-up),
       `GET /connections/{platform}/oauth/callback` (signed `state` only),
       `GET /connections/{platform}/accounts`, `POST /connections` (selects the account),
       `GET /connections` (`advertising.read`), `DELETE /connections/{id}` (`advertising.connect` +
@@ -43,17 +59,17 @@ Ad account access is money access. Treat this as a credential slice, not a setti
 - [ ] **Meta OAuth** — Facebook Login for Business, system-user token where the tenant's business
       permits it, Business and ad-account selection, and permission checks against what was **granted**
       rather than what was requested.
-- [ ] **Signed state** — HMAC over `(tenant_id, platform, nonce, expiry)`, stored and burned on
+- [x] **Signed state** — HMAC over `(tenant_id, platform, nonce, expiry)`, stored and burned on
       redemption. A forged, expired, replayed, or cross-tenant state is rejected and audited.
-- [ ] **Token storage** — refresh tokens through TASK-009's envelope scheme with the per-tenant DEK.
+- [x] **Token storage** — refresh tokens through TASK-009's envelope scheme with the per-tenant DEK.
       Access tokens are cached in memory only. Nothing token-shaped is persisted outside the envelope
       and nothing token-shaped reaches a log line or a trace attribute.
-- [ ] **Refresh scheduler** — renews before expiry with jitter, per connection. On permanent failure
+- [x] **Refresh scheduler** — renews before expiry with jitter, per connection. On permanent failure
       (revoked, app uninstalled, password change): `status = Disconnected`, `AdAccountDisconnected`
       emitted, tenant notified once, dependent jobs paused.
-- [ ] **Scope drift** — on each sync, compare granted scopes against required. A missing scope surfaces
+- [x] **Scope drift** — on each sync, compare granted scopes against required. A missing scope surfaces
       as a re-consent state naming what is missing and what stopped working, not a generic error.
-- [ ] **Connection uniqueness** — `UNIQUE (tenant_id, platform, external_account_id)` from TASK-009. A
+- [x] **Connection uniqueness** — `UNIQUE (tenant_id, platform, external_account_id)` from TASK-009. A
       reconnect of the same account reuses the row and keeps campaign history; connecting a *different*
       account is a new row that inherits nothing.
 - [ ] **Step-up auth & audit** — connect and disconnect require fresh MFA and write an audit entry with
@@ -113,7 +129,7 @@ conversion capture (TASK-014), metrics ingestion (TASK-016).
 - Meta's granted-vs-requested permission gap is normal, not an error path to log and forget.
 
 ---
-*On completion: satisfy every acceptance criterion, run the verification commands,
-then record status with the sdlc-planner script (never by hand-editing this line
-and the backlog separately):*
-`sdlc.py status TASK-011 done --note "<PR or commit>"`
+*On completion: satisfy every acceptance criterion, run the verification commands, then
+record status in the **same commit** in both places — the `**Status:**` line at the top of this
+file and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note.
+The two must never disagree.*
