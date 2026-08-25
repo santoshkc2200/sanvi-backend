@@ -689,10 +689,19 @@ fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, A
             }
             _ => None,
         },
-        value_source: row.value_source.map(|source| match source.as_str() {
-            "payment_record" => crate::domain::ValueSource::PaymentRecord,
-            _ => crate::domain::ValueSource::ClientReported,
-        }),
+        // Never fall back to `ClientReported`: that would relabel a stored
+        // payment-record value as an untrusted client hint the moment a
+        // migration adds a variant this build doesn't know.
+        value_source: row
+            .value_source
+            .map(|source| match source.as_str() {
+                "payment_record" => Ok(crate::domain::ValueSource::PaymentRecord),
+                "client_reported" => Ok(crate::domain::ValueSource::ClientReported),
+                unknown => Err(AdvertisingError::Storage(format!(
+                    "unknown conversion value source {unknown:?}"
+                ))),
+            })
+            .transpose()?,
         order_ref: row.order_ref,
         click_ids: serde_json::from_value(row.click_ids).map_err(map_json_err)?,
         hashed_identifiers: serde_json::from_value(row.hashed_ids).map_err(map_json_err)?,

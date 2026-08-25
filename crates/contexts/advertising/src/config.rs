@@ -119,6 +119,22 @@ impl AdvertisingConfig {
         Ok(())
     }
 
+    /// The site key that authenticates `/public/track` is an HMAC over
+    /// `(tenant_id, origin)`. HMAC accepts a key of any length, so the
+    /// empty default produces signatures anyone can recompute for any
+    /// tenant — refuse to start rather than serve a forgeable beacon.
+    pub fn validate_tracking_enabled(&self) -> anyhow::Result<()> {
+        if self.tracking_site_key_signing_secret.len()
+            < crate::application::tracking::site_key::MIN_SIGNING_SECRET_BYTES
+        {
+            anyhow::bail!(
+                "advertising tracking site key signing secret must be at least {} bytes",
+                crate::application::tracking::site_key::MIN_SIGNING_SECRET_BYTES
+            );
+        }
+        Ok(())
+    }
+
     /// `true` once a KEK is configured — connect/reconnect refuse to run
     /// without one rather than storing a refresh token unencrypted.
     pub fn token_encryption_enabled(&self) -> bool {
@@ -153,6 +169,19 @@ mod tests {
 
     fn encode(bytes: &[u8]) -> String {
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+    }
+
+    #[test]
+    fn tracking_refuses_to_start_without_a_real_site_key_secret() {
+        let config = AdvertisingConfig::default();
+        assert!(config.tracking_site_key_signing_secret.is_empty());
+        assert!(config.validate_tracking_enabled().is_err());
+
+        let configured = AdvertisingConfig {
+            tracking_site_key_signing_secret: "a".repeat(32),
+            ..AdvertisingConfig::default()
+        };
+        assert!(configured.validate_tracking_enabled().is_ok());
     }
 
     #[test]

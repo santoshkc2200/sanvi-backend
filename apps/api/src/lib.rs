@@ -2796,6 +2796,7 @@ pub async fn build_advertising_state(
     subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository>,
 ) -> anyhow::Result<sanvi_advertising::adapters::http::AdvertisingState> {
     config.validate_oauth_enabled()?;
+    config.validate_tracking_enabled()?;
     let token_kek = config.token_kek_bytes()?;
     let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
         &FakeAdPlatform::registered_catalog(),

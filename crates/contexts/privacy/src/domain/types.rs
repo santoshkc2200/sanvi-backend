@@ -107,6 +107,23 @@ impl SubjectRef {
         }
     }
 
+    /// A device seen on one tenant's own site. Device references are
+    /// minted by that site, so they are unique only within the tenant —
+    /// keying them globally, as [`SubjectRef::device`] does, would let one
+    /// tenant's opt-out silence every other tenant's identically-named
+    /// device.
+    pub fn tenant_device(tenant_id: Uuid, device_ref: &str) -> Self {
+        Self {
+            kind: SubjectKind::Device,
+            tenant_id: Some(tenant_id),
+            key: format!("device:{tenant_id}:{device_ref}"),
+            identifiers: vec![SubjectIdentifier {
+                id_type: "device_ref".to_string(),
+                value: device_ref.to_string(),
+            }],
+        }
+    }
+
     pub fn device(device_ref: &str) -> Self {
         Self {
             kind: SubjectKind::Device,

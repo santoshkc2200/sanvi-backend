@@ -51,6 +51,12 @@ pub struct TrackConversionCommand {
     /// settings — resolved by the caller before invoking capture, since it
     /// decides which extra purposes the gate must ask for.
     pub platforms: Vec<PlatformKey>,
+    /// `true` when that list cannot be trusted as the complete set of
+    /// vendors this event will reach: no mapping for the event name yet,
+    /// or a mapped platform key this build doesn't recognise. The proof is
+    /// frozen onto the stored event and nothing downstream re-derives it,
+    /// so an incomplete list must widen the gate rather than narrow it.
+    pub platforms_incomplete: bool,
 }
 
 impl CaptureConversion {
@@ -72,12 +78,20 @@ impl CaptureConversion {
 
     /// Captures and persists a conversion event. Used by `/public/track`.
     pub async fn execute(&self, command: TrackConversionCommand) -> Result<(), AdvertisingError> {
+        // The gate runs *before* this context's transaction opens: the
+        // phase-05 resolver takes a connection of its own, once per
+        // purpose, from the same pool. Holding one here across that call
+        // lets a burst of concurrent beacons occupy every connection
+        // waiting for a connection, and the pool deadlocks until acquire
+        // timeouts unwind it.
+        let gate = self.resolve_gate(&command).await?;
+
         let mut scope = self
             .tx
             .begin_for(command.tenant_id)
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let event = self.build_event(&mut scope, command).await?;
+        let event = self.build_event(&mut scope, command, gate).await?;
         self.conversion_repo
             .insert_idempotent(&mut scope, &event)
             .await?;
@@ -96,18 +110,20 @@ impl CaptureConversion {
         &self,
         command: TrackConversionCommand,
     ) -> Result<ConversionEvent, AdvertisingError> {
+        let gate = self.resolve_gate(&command).await?;
         let mut scope = self
             .tx
             .begin_for(command.tenant_id)
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        self.build_event(&mut scope, command).await
+        self.build_event(&mut scope, command, gate).await
     }
 
     async fn build_event(
         &self,
         scope: &mut ScopedTx<'_>,
         command: TrackConversionCommand,
+        (consent, upload_state): (ConsentSnapshot, UploadState),
     ) -> Result<ConversionEvent, AdvertisingError> {
         let mut hashed_identifiers = BTreeMap::new();
         if let Some(ref email) = command.email {
@@ -117,8 +133,7 @@ impl CaptureConversion {
             hashed_identifiers.insert("phone".to_string(), hash_phone(phone));
         }
 
-        let (value, value_source) = self.resolve_value(scope, &command).await;
-        let (consent, upload_state) = self.resolve_gate(&command).await?;
+        let (value, value_source) = self.resolve_value(scope, &command).await?;
 
         Ok(ConversionEvent {
             id: Uuid::now_v7(),
@@ -143,23 +158,30 @@ impl CaptureConversion {
         &self,
         scope: &mut ScopedTx<'_>,
         command: &TrackConversionCommand,
-    ) -> (Option<Money>, Option<ValueSource>) {
-        if let Some(order_ref) = command.order_ref.as_deref()
-            && let Ok(Some(payment_value)) = self
+    ) -> Result<(Option<Money>, Option<ValueSource>), AdvertisingError> {
+        if let Some(order_ref) = command.order_ref.as_deref() {
+            // A failed lookup is not "no payment record". Falling through
+            // to the client's hint here would label an untrusted value as
+            // the event's value on a transient database error — exactly
+            // the substitution NFR-1010 forbids — and the failed statement
+            // has already aborted this transaction, so the insert that
+            // follows could not have succeeded anyway.
+            if let Some(payment_value) = self
                 .payment_lookup
                 .lookup_payment_value(scope, command.tenant_id, order_ref)
-                .await
-        {
-            return (Some(payment_value), Some(ValueSource::PaymentRecord));
+                .await?
+            {
+                return Ok((Some(payment_value), Some(ValueSource::PaymentRecord)));
+            }
         }
 
-        match (command.value, command.currency.as_deref()) {
+        Ok(match (command.value, command.currency.as_deref()) {
             (Some(amount_minor), Some(currency)) => match Money::new(amount_minor, currency) {
                 Ok(money) => (Some(money), Some(ValueSource::ClientReported)),
                 Err(_) => (None, None),
             },
             _ => (None, None),
-        }
+        })
     }
 
     /// Every event asks `ads_measurement`, plus `sale_or_share` and
@@ -168,22 +190,26 @@ impl CaptureConversion {
     /// denial found suppresses the event; the purpose and the directive's
     /// signal source that caused it are recorded on the event, not just
     /// logged.
+    ///
+    /// A `platforms_incomplete` command asks for those extra purposes
+    /// regardless. The decision is frozen onto the event here and never
+    /// re-derived, so an event captured before its mapping existed would
+    /// otherwise carry a proof that never asked about the vendor it later
+    /// gets uploaded to.
     async fn resolve_gate(
         &self,
         command: &TrackConversionCommand,
     ) -> Result<(ConsentSnapshot, UploadState), AdvertisingError> {
         let mut required_purposes = vec![ProcessingPurpose::AdsMeasurement];
+        let mut reaches_third_party = command.platforms_incomplete;
         for platform in &command.platforms {
             if self.vendor_role.lookup_role(platform).await? == VendorRole::ThirdParty {
-                for purpose in [
-                    ProcessingPurpose::SaleOrShare,
-                    ProcessingPurpose::TargetedAdvertising,
-                ] {
-                    if !required_purposes.contains(&purpose) {
-                        required_purposes.push(purpose);
-                    }
-                }
+                reaches_third_party = true;
             }
+        }
+        if reaches_third_party {
+            required_purposes.push(ProcessingPurpose::SaleOrShare);
+            required_purposes.push(ProcessingPurpose::TargetedAdvertising);
         }
 
         let mut answers = BTreeMap::new();

@@ -72,28 +72,45 @@ fn looks_like_bot(user_agent: Option<&str>) -> bool {
         .any(|needle| lowered.contains(needle))
 }
 
-fn resolve_platforms(settings: &TrackingSettings, event_name: &str) -> Vec<PlatformKey> {
-    settings
-        .mappings
-        .get(event_name)
-        .map(|platform_actions| {
-            platform_actions
-                .keys()
-                .filter_map(|key| PlatformKey::parse(key).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+/// The platforms this event maps to, and whether that list is the
+/// complete set of vendors the event will reach. An event name with no
+/// mapping yet, and a mapped key this build cannot parse, both mean it
+/// isn't: the gate must then ask for the third-party purposes anyway.
+/// Dropping an unparseable key silently would defeat
+/// `SnapshotVendorRoleLookup`'s protective `ThirdParty` default for
+/// exactly the keys it exists to cover.
+fn resolve_platforms(settings: &TrackingSettings, event_name: &str) -> (Vec<PlatformKey>, bool) {
+    let Some(platform_actions) = settings.mappings.get(event_name) else {
+        return (Vec::new(), true);
+    };
+
+    let mut platforms = Vec::new();
+    let mut incomplete = platform_actions.is_empty();
+    for key in platform_actions.keys() {
+        match PlatformKey::parse(key) {
+            Ok(platform) => platforms.push(platform),
+            Err(_) => incomplete = true,
+        }
+    }
+    (platforms, incomplete)
 }
 
 fn build_command(
     tenant_id: Uuid,
     body: &TrackConversionRequest,
-    platforms: Vec<PlatformKey>,
+    (platforms, platforms_incomplete): (Vec<PlatformKey>, bool),
 ) -> TrackConversionCommand {
+    // An email identifies a `Contact` (`email:{lowercased}`) — the key the
+    // privacy ledger actually writes. `end_user` keys a merchant-supplied
+    // external id, which no directive row here would ever match, so every
+    // consented conversion would resolve to the most-protective fallback
+    // and be suppressed. A device ref is only unique within the tenant
+    // whose site emitted it, so it is scoped to that tenant rather than
+    // shared platform-wide.
     let subject = match (body.email.as_deref(), body.device_id.as_deref()) {
-        (Some(email), _) => SubjectRef::end_user(tenant_id, email),
-        (None, Some(device_id)) => SubjectRef::device(device_id),
-        (None, None) => SubjectRef::device("anonymous"),
+        (Some(email), _) => SubjectRef::contact(email),
+        (None, Some(device_id)) => SubjectRef::tenant_device(tenant_id, device_id),
+        (None, None) => SubjectRef::tenant_device(tenant_id, "anonymous"),
     };
 
     TrackConversionCommand {
@@ -108,6 +125,7 @@ fn build_command(
         phone: body.phone.clone(),
         subject,
         platforms,
+        platforms_incomplete,
     }
 }
 
@@ -150,7 +168,14 @@ pub async fn public_track_conversion(
         return accepted();
     };
 
-    let Some(ip) = req.peer_addr().map(|addr| addr.ip().to_string()) else {
+    // `peer_addr` is the load balancer in every deployed environment, so
+    // budgeting on it would collapse the whole platform into one per-IP
+    // bucket while enforcing nothing against an actual abuser.
+    let client_ip = req
+        .connection_info()
+        .realip_remote_addr()
+        .map(|ip| ip.to_string());
+    let Some(ip) = client_ip else {
         return accepted();
     };
     let Some(_ip_permit) = state.tracking_ip_limiter.try_acquire(&ip) else {

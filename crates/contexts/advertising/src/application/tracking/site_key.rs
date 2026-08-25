@@ -14,19 +14,36 @@ use crate::domain::AdvertisingError;
 
 type HmacSha256 = Hmac<Sha256>;
 
-fn mac_for(secret: &str, tenant_id: Uuid, origin: &str) -> HmacSha256 {
+/// HMAC accepts a key of any length, including none — so an unconfigured
+/// secret still mints and verifies signatures that anyone else can compute
+/// for any tenant. Both directions fail closed instead.
+/// [`AdvertisingConfig::validate_tracking_enabled`] enforces the same
+/// bound at startup; this is the guard that holds if that call is ever
+/// bypassed.
+pub const MIN_SIGNING_SECRET_BYTES: usize = 32;
+
+fn mac_for(secret: &str, tenant_id: Uuid, origin: &str) -> Result<HmacSha256, AdvertisingError> {
+    if secret.len() < MIN_SIGNING_SECRET_BYTES {
+        return Err(AdvertisingError::InvalidInput(
+            "tracking site key signing secret is not configured".to_string(),
+        ));
+    }
     let mut mac =
         HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts a key of any size");
     mac.update(tenant_id.as_bytes());
     mac.update(origin.as_bytes());
-    mac
+    Ok(mac)
 }
 
-pub fn generate_site_key(secret: &str, tenant_id: Uuid, origin: &str) -> String {
-    let signature = mac_for(secret, tenant_id, origin).finalize().into_bytes();
+pub fn generate_site_key(
+    secret: &str,
+    tenant_id: Uuid,
+    origin: &str,
+) -> Result<String, AdvertisingError> {
+    let signature = mac_for(secret, tenant_id, origin)?.finalize().into_bytes();
     let encoded =
         base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, signature);
-    format!("{tenant_id}.{encoded}")
+    Ok(format!("{tenant_id}.{encoded}"))
 }
 
 pub fn verify_site_key(
@@ -41,6 +58,8 @@ pub fn verify_site_key(
     let tenant_id = Uuid::parse_str(tenant_part)
         .map_err(|_| AdvertisingError::InvalidInput("invalid tenant id in site key".to_string()))?;
 
+    let mac = mac_for(secret, tenant_id, origin)?;
+
     let signature_bytes = base64::Engine::decode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
         signature_part,
@@ -52,8 +71,7 @@ pub fn verify_site_key(
     // `verify_slice` compares in constant time — a plain `==` on the
     // decoded/re-encoded strings would leak how many leading bytes matched
     // through response timing.
-    mac_for(secret, tenant_id, origin)
-        .verify_slice(&signature_bytes)
+    mac.verify_slice(&signature_bytes)
         .map_err(|_| AdvertisingError::InvalidInput("site key signature mismatch".to_string()))?;
 
     Ok(tenant_id)
@@ -65,16 +83,46 @@ mod tests {
 
     #[test]
     fn round_trips_and_binds_to_origin() {
-        let secret = "test-signing-secret";
+        let secret = "test-signing-secret-of-at-least-32-bytes";
         let tenant_id = Uuid::now_v7();
-        let key = generate_site_key(secret, tenant_id, "https://shop.example.com");
+        let key = generate_site_key(secret, tenant_id, "https://shop.example.com").unwrap();
 
         assert_eq!(
             verify_site_key(secret, &key, "https://shop.example.com").unwrap(),
             tenant_id
         );
         assert!(verify_site_key(secret, &key, "https://evil.example.com").is_err());
-        assert!(verify_site_key("wrong-secret", &key, "https://shop.example.com").is_err());
+        assert!(
+            verify_site_key(
+                "another-signing-secret-of-at-least-32-bytes",
+                &key,
+                "https://shop.example.com"
+            )
+            .is_err()
+        );
         assert!(verify_site_key(secret, "not-a-site-key", "https://shop.example.com").is_err());
+    }
+
+    /// The empty default must never mint or accept a key: `HMAC("")` is
+    /// computable by anyone, so it would authenticate every tenant to
+    /// every caller.
+    #[test]
+    fn an_unconfigured_secret_neither_signs_nor_verifies() {
+        let tenant_id = Uuid::now_v7();
+        let origin = "https://shop.example.com";
+        let real = generate_site_key(
+            "test-signing-secret-of-at-least-32-bytes",
+            tenant_id,
+            origin,
+        )
+        .unwrap();
+
+        assert!(generate_site_key("", tenant_id, origin).is_err());
+        assert!(verify_site_key("", &real, origin).is_err());
+
+        let too_short = "0123456789abcdef0123456789abcde";
+        assert_eq!(too_short.len(), MIN_SIGNING_SECRET_BYTES - 1);
+        assert!(generate_site_key(too_short, tenant_id, origin).is_err());
+        assert!(verify_site_key(too_short, &real, origin).is_err());
     }
 }

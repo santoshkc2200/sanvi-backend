@@ -23,21 +23,26 @@ fn sha256_hex(input: &str) -> HashedIdentifier {
     HashedIdentifier(format!("{:064x}", hasher.finalize()))
 }
 
-/// Lowercase, trim, and strip dots and a `+tag` from the local part before
-/// hashing — the enhanced-match normalization every ad platform's upload
-/// API expects, so `A.User+tag@Example.COM` and `auser@example.com` hash
-/// identically.
+/// Trim and lowercase; then, for Gmail addresses only, also strip dots and
+/// a `+tag` from the local part.
+///
+/// That extra step is Gmail-specific: Google's enhanced-conversion spec
+/// defines it for `gmail.com`/`googlemail.com` alone, and Meta strips
+/// neither dots nor tags for any domain. Applying it everywhere hashed
+/// `first.last@company.com` as `firstlast@company.com`, an address that
+/// matches nothing on either platform — and since only the digest is
+/// persisted, those conversions could never be repaired after the fact.
 pub fn hash_email(raw_email: &str) -> HashedIdentifier {
     let email = raw_email.trim().to_lowercase();
     let normalized = match email.split_once('@') {
-        Some((local, domain)) => {
+        Some((local, domain @ ("gmail.com" | "googlemail.com"))) => {
             let mut local = local.replace('.', "");
             if let Some(plus_at) = local.find('+') {
                 local.truncate(plus_at);
             }
             format!("{local}@{domain}")
         }
-        None => email,
+        _ => email,
     };
     sha256_hex(&normalized)
 }
@@ -61,10 +66,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn email_normalization_is_case_and_tag_insensitive() {
+    fn gmail_normalization_ignores_case_dots_and_tags() {
         assert_eq!(
-            hash_email("A.User+tag@Example.COM"),
-            hash_email("auser@example.com")
+            hash_email(" A.User+tag@GMail.COM "),
+            hash_email("auser@gmail.com")
+        );
+        assert_eq!(
+            hash_email("a.user@googlemail.com"),
+            hash_email("auser@googlemail.com")
+        );
+    }
+
+    /// Only Gmail collapses dots and tags. Doing it elsewhere produces a
+    /// digest no ad platform will ever match.
+    #[test]
+    fn other_domains_keep_dots_and_tags_and_only_lose_case() {
+        assert_ne!(
+            hash_email("first.last@company.com"),
+            hash_email("firstlast@company.com")
+        );
+        assert_ne!(
+            hash_email("user+tag@company.com"),
+            hash_email("user@company.com")
+        );
+        assert_eq!(
+            hash_email(" First.Last@Company.COM "),
+            hash_email("first.last@company.com")
         );
     }
 

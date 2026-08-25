@@ -160,6 +160,36 @@ impl DirectiveResolver for FakeDirectiveResolver {
     }
 }
 
+/// Mirrors the one thing about the real `DirectiveResolver` that matters
+/// to capture's transaction shape: resolving takes a connection from this
+/// same pool, once per purpose.
+struct PoolTakingResolver {
+    inner: FakeDirectiveResolver,
+    tx: TxManager,
+}
+
+#[async_trait]
+impl DirectiveResolver for PoolTakingResolver {
+    async fn resolve(
+        &self,
+        subject: &SubjectRef,
+        purpose: ProcessingPurpose,
+    ) -> Result<PurposeDirective, PrivacyError> {
+        let scope = self
+            .tx
+            .begin_unscoped("advertising_directive_gate", "privacy")
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        let directive = self.inner.resolve(subject, purpose).await;
+        drop(scope);
+        directive
+    }
+
+    async fn snapshot(&self, subject: &SubjectRef) -> Result<DirectiveSnapshot, PrivacyError> {
+        self.inner.snapshot(subject).await
+    }
+}
+
 struct FixedPaymentLookup(Option<Money>);
 
 #[async_trait]
@@ -212,8 +242,9 @@ fn base_command(tenant_id: Uuid, event_id: &str) -> TrackConversionCommand {
         currency: None,
         email: Some("A.User+tag@Example.COM".to_string()),
         phone: Some("+1 (415) 555-0100".to_string()),
-        subject: SubjectRef::end_user(tenant_id, "customer-1"),
+        subject: SubjectRef::contact("customer-1@example.com"),
         platforms: vec![PlatformKey::parse("google_ads").unwrap()],
+        platforms_incomplete: false,
     }
 }
 
@@ -443,10 +474,17 @@ async fn no_raw_email_or_phone_is_ever_persisted() {
     assert!(!serialized.contains("555-0100"));
 
     // The normalization equivalence itself, proven end to end through the
-    // stored hash rather than just the unit-level hashing function.
+    // stored hash rather than just the unit-level hashing function. Only
+    // case and surrounding space are folded here: dots and `+tag` are
+    // collapsed for Gmail addresses alone, and this fixture is not one.
     let hashed = row["hashed_ids"]["email"].as_str().unwrap().to_string();
-    let via_plain_address = sanvi_advertising::domain::hashing::hash_email("auser@example.com");
+    let via_plain_address =
+        sanvi_advertising::domain::hashing::hash_email("a.user+tag@example.com");
     assert_eq!(hashed, via_plain_address.as_str());
+    assert_ne!(
+        hashed,
+        sanvi_advertising::domain::hashing::hash_email("auser@example.com").as_str()
+    );
 }
 
 #[tokio::test]
@@ -609,4 +647,56 @@ async fn checkout_payment_lookup_joins_the_real_payments_schema() {
 
     assert_eq!(value.amount_minor, 4_980);
     assert_eq!(value.currency, "JPY");
+}
+
+/// Capture must resolve the gate *before* opening its own transaction. If
+/// it holds one connection across a resolver that needs a second, enough
+/// concurrent beacons take every connection in the pool and then wait for
+/// a connection that only they could release — the pool deadlocks until
+/// acquire timeouts unwind it, and `/public/track` loses the events behind
+/// its unconditional `202`.
+#[tokio::test]
+async fn concurrent_captures_never_hold_a_connection_while_the_gate_needs_one() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+
+    // Two connections, and more beacons in flight than that: with the
+    // nested-transaction shape every one of them would be stuck.
+    let pool = build_pool(&DatabaseConfig {
+        max_connections: 2,
+        min_connections: 1,
+        ..db_config(port, "sanvi_app", "app")
+    })
+    .await
+    .unwrap();
+    let tenant_id = seed_tenant(&pool, "gate-pool").await;
+    let tx = TxManager::new(pool.clone());
+
+    let capture = Arc::new(CaptureConversion::new(
+        tx.clone(),
+        Arc::new(SqlxCampaignRepository::new()),
+        Arc::new(FixedPaymentLookup(None)),
+        // ThirdParty asks all three purposes, so the resolver is entered
+        // three times per event.
+        Arc::new(FixedVendorRole(VendorRole::ThirdParty)),
+        Arc::new(PoolTakingResolver {
+            inner: FakeDirectiveResolver::allow_all(),
+            tx,
+        }),
+    ));
+
+    let mut handles = Vec::new();
+    for i in 0..8 {
+        let capture = capture.clone();
+        handles.push(tokio::spawn(async move {
+            capture
+                .execute(base_command(tenant_id, &format!("evt-pool-{i}")))
+                .await
+        }));
+    }
+
+    for handle in handles {
+        let outcome = handle.await.unwrap();
+        outcome.expect("a capture failed to acquire a connection");
+    }
 }
