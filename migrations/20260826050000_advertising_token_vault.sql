@@ -12,7 +12,7 @@ CREATE TABLE advertising.tenant_secret_keys (
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 SELECT platform.enable_tenant_rls('advertising', 'tenant_secret_keys');
-GRANT SELECT, INSERT ON advertising.tenant_secret_keys TO sanvi_app;
+GRANT SELECT, INSERT, UPDATE ON advertising.tenant_secret_keys TO sanvi_app;
 
 CREATE TABLE advertising.connection_tokens (
   connection_id uuid        PRIMARY KEY REFERENCES advertising.connections(id) ON DELETE CASCADE,

@@ -561,6 +561,58 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         row.try_into()
     }
 
+    async fn finalize_pending(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &AdvertisingConnection,
+    ) -> Result<AdvertisingConnection, AdvertisingError> {
+        let pending_id = connection.id();
+        let stored = self.upsert(scope, connection).await?;
+        if stored.id() == pending_id {
+            return Ok(stored);
+        }
+
+        let moved = sqlx::query(
+            "INSERT INTO advertising.connection_tokens (connection_id, tenant_id, ciphertext)
+             SELECT $3, tenant_id, ciphertext
+             FROM advertising.connection_tokens
+             WHERE tenant_id = $1 AND connection_id = $2
+             ON CONFLICT (connection_id) DO UPDATE SET
+               ciphertext = EXCLUDED.ciphertext, tenant_id = EXCLUDED.tenant_id, updated_at = now()",
+        )
+        .bind(connection.tenant_id())
+        .bind(pending_id)
+        .bind(stored.id())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        if moved.rows_affected() != 1 {
+            return Err(AdvertisingError::Storage(
+                "advertising pending connection token missing".to_string(),
+            ));
+        }
+
+        sqlx::query(
+            "UPDATE advertising.connections SET token_ref = $3, updated_at = now()
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(connection.tenant_id())
+        .bind(stored.id())
+        .bind(stored.id().to_string())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        sqlx::query("DELETE FROM advertising.connections WHERE tenant_id = $1 AND id = $2")
+            .bind(connection.tenant_id())
+            .bind(pending_id)
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        self.find_by_id(scope, connection.tenant_id(), stored.id())
+            .await?
+            .ok_or(AdvertisingError::ConnectionNotFound)
+    }
+
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,

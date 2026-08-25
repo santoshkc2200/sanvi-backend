@@ -198,7 +198,10 @@ impl CreateConnection {
                 )
             })?;
         connection.finalize(&chosen, currency, timezone)?;
-        let stored = self.connections.update(&mut scope, &connection).await?;
+        let stored = self
+            .connections
+            .finalize_pending(&mut scope, &connection)
+            .await?;
         scope
             .commit()
             .await
@@ -211,17 +214,34 @@ impl CreateConnection {
 pub struct ListConnections {
     tx: TxManager,
     connections: Arc<dyn AdvertisingConnectionRepository>,
+    platforms: Arc<PlatformRegistry>,
 }
 
 impl ListConnections {
-    pub fn new(tx: TxManager, connections: Arc<dyn AdvertisingConnectionRepository>) -> Self {
-        Self { tx, connections }
+    pub fn new(
+        tx: TxManager,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
+        platforms: Arc<PlatformRegistry>,
+    ) -> Self {
+        Self {
+            tx,
+            connections,
+            platforms,
+        }
+    }
+
+    pub fn health(
+        &self,
+        connection: &AdvertisingConnection,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<ConnectionHealth, AdvertisingError> {
+        let adapter = self.platforms.adapter(connection.platform())?;
+        Ok(connection.health(&adapter.required_scopes(), now))
     }
 
     pub async fn execute(
         &self,
         tenant_id: Uuid,
-        required_scopes: &[String],
     ) -> Result<Vec<(AdvertisingConnection, ConnectionHealth)>, AdvertisingError> {
         let mut scope = self
             .tx
@@ -234,13 +254,13 @@ impl ListConnections {
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let now = Utc::now();
-        Ok(connections
+        connections
             .into_iter()
             .map(|connection| {
-                let health = connection.health(required_scopes, now);
-                (connection, health)
+                let health = self.health(&connection, now)?;
+                Ok((connection, health))
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -279,5 +299,48 @@ impl DeleteConnection {
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use sanvi_persistence::TxManager;
+    use uuid::Uuid;
+
+    use crate::{
+        AdvertisingConnection, PlatformKey, SecretRef,
+        adapters::{FakeAdPlatform, SqlxAdvertisingConnectionRepository},
+    };
+
+    use super::ListConnections;
+
+    #[tokio::test]
+    async fn health_uses_the_selected_adapters_required_scopes() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .unwrap();
+        let registry = Arc::new(FakeAdPlatform::registered_catalog());
+        let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+        let list = ListConnections::new(TxManager::new(pool), connections, registry);
+        let mut connection = AdvertisingConnection::new(
+            Uuid::now_v7(),
+            PlatformKey::parse("google_ads").unwrap(),
+            "123-456-7890",
+            "JPY",
+            "Asia/Tokyo",
+            SecretRef::new("vault-ref"),
+            None,
+            Utc::now(),
+        )
+        .unwrap();
+        connection.apply_credentials(None, vec!["ads.read".to_string()], None);
+
+        let health = list.health(&connection, Utc::now()).unwrap();
+
+        assert!(!health.can_sync);
+        assert_eq!(health.scopes_missing, ["ads.manage"]);
     }
 }

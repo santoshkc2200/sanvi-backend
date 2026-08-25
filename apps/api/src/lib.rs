@@ -2900,7 +2900,7 @@ pub fn build_advertising_state(
         handle_callback: std::sync::Arc::new(HandleCallback::new(
             tx.clone(),
             connections.clone(),
-            registry,
+            registry.clone(),
             oauth_state.clone(),
             token_vault,
         )),
@@ -2908,7 +2908,11 @@ pub fn build_advertising_state(
             tx.clone(),
             connections.clone(),
         )),
-        list_connections: std::sync::Arc::new(ListConnections::new(tx.clone(), connections.clone())),
+        list_connections: std::sync::Arc::new(ListConnections::new(
+            tx.clone(),
+            connections.clone(),
+            registry,
+        )),
         delete_connection: std::sync::Arc::new(DeleteConnection::new(tx, connections)),
         oauth_state,
     })

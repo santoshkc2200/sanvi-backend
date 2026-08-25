@@ -91,6 +91,10 @@ impl AdPlatformPort for RateLimitedAdapter {
         self.inner.descriptor()
     }
 
+    fn required_scopes(&self) -> Vec<String> {
+        self.inner.required_scopes()
+    }
+
     async fn begin_authorization(
         &self,
         connection: &ConnectionHandle,
@@ -243,6 +247,10 @@ mod tests {
     impl AdPlatformPort for ConcurrencyProbe {
         fn descriptor(&self) -> PlatformDescriptor {
             self.descriptor.clone()
+        }
+
+        fn required_scopes(&self) -> Vec<String> {
+            vec!["ads.read".to_string(), "ads.manage".to_string()]
         }
 
         async fn begin_authorization(

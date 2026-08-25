@@ -150,6 +150,10 @@ impl AdPlatformPort for FakeAdPlatform {
         self.descriptor.clone()
     }
 
+    fn required_scopes(&self) -> Vec<String> {
+        vec!["ads.read".to_string(), "ads.manage".to_string()]
+    }
+
     async fn begin_authorization(
         &self,
         connection: &ConnectionHandle,

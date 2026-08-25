@@ -19,9 +19,11 @@ pub struct AdvertisingConfig {
     /// (`SANVI__ADVERTISING__TOKEN_KEK`), never a config file. Empty
     /// disables connect/reconnect rather than silently storing tokens
     /// unencrypted.
+    #[serde(default)]
     pub token_kek: String,
     /// KEK identifier recorded alongside wrapped DEKs (rotation adds a key,
     /// never overwrites one).
+    #[serde(default = "default_token_kek_id")]
     pub token_kek_id: String,
     pub google_ads_api_version: String,
     pub meta_api_version: String,
@@ -41,6 +43,10 @@ const fn default_quota_platform_wide_permits() -> usize {
 
 const fn default_quota_per_connection_permits() -> usize {
     3
+}
+
+fn default_token_kek_id() -> String {
+    "kek-1".to_string()
 }
 
 impl std::fmt::Debug for AdvertisingConfig {
@@ -80,7 +86,7 @@ impl Default for AdvertisingConfig {
             oauth_state_signing_secret: String::new(),
             tracking_site_key_signing_secret: String::new(),
             token_kek: String::new(),
-            token_kek_id: "kek-1".to_string(),
+            token_kek_id: default_token_kek_id(),
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
             quota_platform_wide_permits: default_quota_platform_wide_permits(),
@@ -152,6 +158,25 @@ mod tests {
         let config = AdvertisingConfig::default();
         assert!(!config.token_encryption_enabled());
         assert!(config.token_kek_bytes().is_err());
+    }
+
+    #[test]
+    fn missing_kek_fields_deserialize_to_safe_defaults() {
+        let config: AdvertisingConfig = serde_json::from_value(serde_json::json!({
+            "google_ads_developer_token": "",
+            "google_ads_client_id": "",
+            "google_ads_client_secret": "",
+            "meta_client_id": "",
+            "meta_client_secret": "",
+            "oauth_state_signing_secret": "",
+            "tracking_site_key_signing_secret": "",
+            "google_ads_api_version": "v22",
+            "meta_api_version": "v24.0"
+        }))
+        .unwrap();
+
+        assert_eq!(config.token_kek, "");
+        assert_eq!(config.token_kek_id, "kek-1");
     }
 
     #[test]

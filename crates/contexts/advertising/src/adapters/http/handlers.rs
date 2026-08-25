@@ -1580,7 +1580,10 @@ pub async fn create_connection(
         )
         .await
         .map_err(api_error)?;
-    let health = connection.health(&[], chrono::Utc::now());
+    let health = state
+        .list_connections
+        .health(&connection, chrono::Utc::now())
+        .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(connection_view(connection, health)))
 }
 
@@ -1607,7 +1610,7 @@ pub async fn list_connections(
     let tenant_id = tenant.0.tenant_id;
     let connections = state
         .list_connections
-        .execute(tenant_id, &[])
+        .execute(tenant_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(ConnectionsView {

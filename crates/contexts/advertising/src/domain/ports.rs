@@ -58,6 +58,14 @@ pub trait AdvertisingConnectionRepository: Send + Sync {
         scope: &mut ScopedTx<'_>,
         connection: &AdvertisingConnection,
     ) -> Result<AdvertisingConnection, AdvertisingError>;
+    /// Finalize a pending row. If its selected account already exists, retain
+    /// that canonical row (and its campaign history), replace its token with
+    /// the pending credential, and remove the temporary row.
+    async fn finalize_pending(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &AdvertisingConnection,
+    ) -> Result<AdvertisingConnection, AdvertisingError>;
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -155,6 +163,9 @@ pub struct UploadedConversion {
 #[async_trait]
 pub trait AdPlatformPort: Send + Sync {
     fn descriptor(&self) -> PlatformDescriptor;
+    /// Every permission needed for campaign sync and conversion uploads.
+    /// Health reports which of these were not granted at authorization time.
+    fn required_scopes(&self) -> Vec<String>;
     async fn begin_authorization(
         &self,
         connection: &ConnectionHandle,
