@@ -285,8 +285,8 @@ impl PersonalDataProvider for PaymentsPrivacyProvider {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_statutory_override_is_registered_in_the_data_map() {
+    #[tokio::test]
+    async fn the_statutory_override_is_registered_in_the_data_map() {
         let provider = PaymentsPrivacyProvider::new(TxManager::new(
             sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                 .expect("lazy pool construction is configuration only"),

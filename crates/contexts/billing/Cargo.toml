@@ -37,6 +37,5 @@ sanvi-privacy.workspace = true
 actix-http.workspace = true
 futures-util.workspace = true
 sanvi-audit.workspace = true
-testcontainers.workspace = true
-testcontainers-modules.workspace = true
+sanvi-testsupport.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

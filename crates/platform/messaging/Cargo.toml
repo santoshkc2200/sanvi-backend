@@ -25,5 +25,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 sanvi-persistence.workspace = true
-testcontainers.workspace = true
-testcontainers-modules.workspace = true
+sanvi-testsupport.workspace = true

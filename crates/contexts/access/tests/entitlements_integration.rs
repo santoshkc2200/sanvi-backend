@@ -1,4 +1,4 @@
-//! Entitlement integration tests (testcontainers Postgres): an override
+//! Entitlement integration tests (real Postgres): an override
 //! flips the gate for one tenant only, resolution composes defaults, and
 //! quota consumption is atomic at the boundary (no oversell under 100
 //! parallel calls).
@@ -21,70 +21,15 @@ use sanvi_access::{
     },
 };
 use sanvi_audit::{adapters::SqlxAuditWriter, domain::AuditWriter};
-use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
+use sanvi_persistence::TxManager;
+use sanvi_testsupport::TestDb;
 use uuid::Uuid;
 
-fn migrations_dir() -> String {
-    format!("{}/../../../migrations", env!("CARGO_MANIFEST_DIR"))
-}
-
-async fn prepare() -> (
-    sanvi_persistence::PgPool,
-    sanvi_persistence::PgPool,
-    testcontainers::ContainerAsync<Postgres>,
-) {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-    let admin = build_pool(&DatabaseConfig {
-        host: "localhost".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .expect("admin pool");
-    for statement in [
-        "CREATE ROLE sanvi_migrator LOGIN PASSWORD 'migrator' NOSUPERUSER NOCREATEDB NOCREATEROLE",
-        "CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS",
-        "CREATE DATABASE sanvi_test OWNER sanvi_migrator",
-    ] {
-        sqlx::query(statement)
-            .execute(&admin)
-            .await
-            .expect("role/database setup");
-    }
-    let migrator = build_pool(&DatabaseConfig {
-        host: "localhost".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "migrator".to_string(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .expect("migrator pool");
-    Migrator::new(migrations_dir())
-        .run(&migrator)
-        .await
-        .expect("migrations up");
-    let app = build_pool(&DatabaseConfig {
-        host: "localhost".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .expect("app pool");
-    (app, migrator, node)
+async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, TestDb) {
+    let db = sanvi_testsupport::test_db().await;
+    let app = db.app_pool();
+    let migrator = db.migrator_pool().await;
+    (app, migrator, db)
 }
 
 /// Insert a tenant row directly (the entitlement FK needs one).

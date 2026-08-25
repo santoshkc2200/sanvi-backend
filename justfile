@@ -119,8 +119,31 @@ ads-invariants:
 ads-invariants-self-test:
     ./scripts/check-ads-invariants.sh --self-test
 
+# One Postgres + Redis for the whole run; each test still gets its own
+# database, cloned from a pre-migrated template. Without `test-db` every test
+# process starts (and leaves behind) a container of its own.
+test-db:
+    ./scripts/test-db.sh up
+
+test-db-down:
+    ./scripts/test-db.sh down
+
+# `target/debug/incremental` is a cache cargo writes to but never prunes: it
+# reached 101 GB on a machine that had been building this workspace for a
+# while, at which point reading it costs more than the rebuilds it saves.
+# Deleting it only costs one full rebuild.
+clean-incremental:
+    rm -rf target/debug/incremental
+
 test:
-    cargo test --workspace
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    if command -v cargo-nextest >/dev/null; then
+        cargo nextest run --workspace
+    else
+        cargo test --workspace
+    fi
 
 openapi:
     cargo run -p sanvi-cli -- openapi --check

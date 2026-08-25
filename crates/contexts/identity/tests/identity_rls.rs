@@ -7,84 +7,12 @@ use sanvi_identity::adapters::repo::{SqlxMembershipRepository, SqlxUserRepositor
 use sanvi_identity::domain::{
     Email, Membership, MembershipRepository, User, UserId, UserRepository,
 };
-use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
+use sanvi_persistence::TxManager;
+use sanvi_testsupport::TestDb;
 
-fn migrations_dir() -> String {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../migrations")
-        .canonicalize()
-        .expect("migrations directory must exist")
-        .to_string_lossy()
-        .to_string()
-}
-
-async fn prepare() -> (sanvi_persistence::PgPool, u16) {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-    // The container must outlive the test binary.
-    std::mem::forget(node);
-
-    let admin = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_rls_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("GRANT CONNECT ON DATABASE sanvi_rls_test TO sanvi_app")
-        .execute(&admin)
-        .await
-        .unwrap();
-
-    let migrator = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_rls_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "mig".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir())
-        .run(&migrator)
-        .await
-        .expect("migrations up");
-
-    let app = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_rls_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    (app, port)
+async fn prepare() -> (sanvi_persistence::PgPool, TestDb) {
+    let db = sanvi_testsupport::test_db().await;
+    (db.app_pool(), db)
 }
 
 async fn seed_user(tx: &TxManager, users: &SqlxUserRepository, email: &str) -> UserId {
@@ -118,7 +46,7 @@ async fn grant(
 
 #[tokio::test]
 async fn memberships_are_isolated_between_tenants() {
-    let (pool, _port) = prepare().await;
+    let (pool, _db) = prepare().await;
     let tx = TxManager::new(pool.clone());
     let users = SqlxUserRepository::new();
     let memberships = SqlxMembershipRepository::new();
@@ -228,7 +156,7 @@ async fn memberships_are_isolated_between_tenants() {
 
 #[tokio::test]
 async fn raw_sql_cannot_bypass_rls_either() {
-    let (pool, _port) = prepare().await;
+    let (pool, _db) = prepare().await;
     let tx = TxManager::new(pool.clone());
 
     let mut scope = tx.begin_for(uuid::Uuid::now_v7()).await.unwrap();

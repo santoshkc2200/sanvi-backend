@@ -1,116 +1,21 @@
-//! Integration tests: real Postgres and Redis in containers. Run with
-//! `cargo nextest run` (docker must be available).
+//! Integration tests: real Postgres and Redis. Run with `just test`
+//! (docker must be available).
 
 use sanvi_messaging::{OutboxDispatcher, RedisConfig, StreamName, StreamsClient, connect_redis};
-use sanvi_persistence::{DatabaseConfig, Migrator, build_pool};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::{postgres::Postgres, redis::Redis};
+use sanvi_testsupport::TestDb;
 
-fn migrations_dir() -> String {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .join("../../../migrations")
-        .canonicalize()
-        .expect("migrations directory must exist")
-        .to_string_lossy()
-        .to_string()
-}
-
-async fn prepare_postgres() -> (
-    sanvi_persistence::PgPool,
-    testcontainers::ContainerAsync<Postgres>,
-) {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-
-    let admin = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("GRANT CONNECT ON DATABASE sanvi_test TO sanvi_app")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let migrator_pool = build_pool(&DatabaseConfig {
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "mig".to_string(),
-        ..DatabaseConfig {
-            host: "127.0.0.1".to_string(),
-            port,
-            name: "postgres".to_string(),
-            user: String::new(),
-            password: String::new(),
-            migrations_dir: migrations_dir(),
-            ..DatabaseConfig::default()
-        }
-    })
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir())
-        .run(&migrator_pool)
-        .await
-        .expect("migrations up");
-    migrator_pool.close().await;
-
-    let app_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    (app_pool, node)
+async fn prepare_postgres() -> (sanvi_persistence::PgPool, TestDb) {
+    let db = sanvi_testsupport::test_db().await;
+    (db.app_pool(), db)
 }
 
 #[tokio::test]
 async fn dispatcher_relays_outbox_rows_to_the_stream() {
-    // The container handle must stay alive for the whole test: dropping it
-    // stops Postgres underneath the pool.
-    let (pool, _pg_node) = prepare_postgres().await;
-
-    let redis_node = Redis::default()
-        .start()
-        .await
-        .expect("failed to start redis");
-    let redis_port = redis_node
-        .get_host_port_ipv4(6379)
-        .await
-        .expect("redis port");
+    let (pool, _db) = prepare_postgres().await;
 
     let streams = StreamsClient::new(
         connect_redis(&RedisConfig {
-            url: format!("redis://127.0.0.1:{redis_port}"),
+            url: sanvi_testsupport::redis_url().await,
             ..RedisConfig::default()
         })
         .await
@@ -130,8 +35,8 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
     .await
     .unwrap();
 
-    let dispatcher =
-        OutboxDispatcher::new(pool.clone(), streams.clone(), StreamName::default(), 50, 5);
+    let stream = StreamName(sanvi_testsupport::test_stream("events"));
+    let dispatcher = OutboxDispatcher::new(pool.clone(), streams.clone(), stream.clone(), 50, 5);
 
     let published = dispatcher.run_once().await.expect("dispatch");
     assert_eq!(published, 1);
@@ -147,7 +52,10 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
 
     // …and the event reached the per-context stream (`{base}.{aggregate
     // context}`) with the same id as the outbox row.
-    let entries = streams.range("sanvi.events.test", "-", "+").await.unwrap();
+    let entries = streams
+        .range(&stream.stream_for("test.aggregate"), "-", "+")
+        .await
+        .unwrap();
     assert_eq!(entries.len(), 1);
     let (_, fields) = &entries[0];
     let event_json = fields
@@ -171,20 +79,11 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
 /// `run_once()` could see the same "unlocked" rows and double-publish them.
 #[tokio::test]
 async fn concurrent_dispatchers_never_double_claim_the_same_row() {
-    let (pool, _pg_node) = prepare_postgres().await;
-
-    let redis_node = Redis::default()
-        .start()
-        .await
-        .expect("failed to start redis");
-    let redis_port = redis_node
-        .get_host_port_ipv4(6379)
-        .await
-        .expect("redis port");
+    let (pool, _db) = prepare_postgres().await;
 
     let streams = StreamsClient::new(
         connect_redis(&RedisConfig {
-            url: format!("redis://127.0.0.1:{redis_port}"),
+            url: sanvi_testsupport::redis_url().await,
             ..RedisConfig::default()
         })
         .await
@@ -208,7 +107,7 @@ async fn concurrent_dispatchers_never_double_claim_the_same_row() {
         event_ids.push(event_id);
     }
 
-    let stream = StreamName("sanvi.concurrent-test".to_string());
+    let stream = StreamName(sanvi_testsupport::test_stream("concurrent"));
     // A large batch size relative to ROWS: unprotected, either dispatcher
     // could greedily claim the whole table on its own.
     let dispatcher_a = OutboxDispatcher::new(pool.clone(), streams.clone(), stream.clone(), 50, 5);
@@ -222,7 +121,7 @@ async fn concurrent_dispatchers_never_double_claim_the_same_row() {
     );
 
     let entries = streams
-        .range("sanvi.concurrent-test.test", "-", "+")
+        .range(&stream.stream_for("test.aggregate"), "-", "+")
         .await
         .unwrap();
     assert_eq!(
@@ -253,33 +152,26 @@ async fn concurrent_dispatchers_never_double_claim_the_same_row() {
 
 #[tokio::test]
 async fn consumer_group_creation_is_idempotent() {
-    let redis_node = Redis::default()
-        .start()
-        .await
-        .expect("failed to start redis");
-    let redis_port = redis_node
-        .get_host_port_ipv4(6379)
-        .await
-        .expect("redis port");
     let streams = StreamsClient::new(
         connect_redis(&RedisConfig {
-            url: format!("redis://127.0.0.1:{redis_port}"),
+            url: sanvi_testsupport::redis_url().await,
             ..RedisConfig::default()
         })
         .await
         .unwrap(),
     );
 
+    let stream = sanvi_testsupport::test_stream("groups");
     streams
-        .ensure_consumer_group("sanvi.test", "consumer-a")
+        .ensure_consumer_group(&stream, "consumer-a")
         .await
         .unwrap();
     streams
-        .ensure_consumer_group("sanvi.test", "consumer-a")
+        .ensure_consumer_group(&stream, "consumer-a")
         .await
         .unwrap();
     streams
-        .ensure_consumer_group("sanvi.test", "consumer-b")
+        .ensure_consumer_group(&stream, "consumer-b")
         .await
         .unwrap();
 }

@@ -1,4 +1,4 @@
-//! Audit integration tests (testcontainers Postgres): the chain appends,
+//! Audit integration tests (real Postgres): the chain appends,
 //! verifies, rejects UPDATE/DELETE at the database level, and isolates
 //! tenant rows via RLS.
 
@@ -9,73 +9,16 @@ use sanvi_audit::{
         ActorType, AuditEntryData, AuditError, AuditReader, AuditWriter, GENESIS_HASH, verify_chain,
     },
 };
-use sanvi_persistence::{DatabaseConfig, Migrator, PlatformScope, build_pool};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
-
-fn migrations_dir() -> String {
-    format!("{}/../../../migrations", env!("CARGO_MANIFEST_DIR"))
-}
+use sanvi_persistence::PlatformScope;
+use sanvi_testsupport::TestDb;
 
 /// Fresh database with all migrations applied; returns app-role and
-/// owner-role pools (and the container handle, which must stay alive).
-async fn prepare() -> (
-    sanvi_persistence::PgPool,
-    sanvi_persistence::PgPool,
-    testcontainers::ContainerAsync<Postgres>,
-) {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-    let admin = build_pool(&DatabaseConfig {
-        host: "localhost".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .expect("admin pool");
-
-    for statement in [
-        "CREATE ROLE sanvi_migrator LOGIN PASSWORD 'migrator' NOSUPERUSER NOCREATEDB NOCREATEROLE",
-        "CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS",
-        "CREATE DATABASE sanvi_test OWNER sanvi_migrator",
-    ] {
-        sqlx::query(statement)
-            .execute(&admin)
-            .await
-            .expect("role/database setup");
-    }
-    let migrator = build_pool(&DatabaseConfig {
-        host: "localhost".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "migrator".to_string(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .expect("migrator pool");
-    Migrator::new(migrations_dir())
-        .run(&migrator)
-        .await
-        .expect("migrations up");
-
-    let app = build_pool(&DatabaseConfig {
-        host: "localhost".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .expect("app pool");
-    (app, migrator, node)
+/// owner-role pools, on a database private to the caller.
+async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, TestDb) {
+    let db = sanvi_testsupport::test_db().await;
+    let app = db.app_pool();
+    let migrator = db.migrator_pool().await;
+    (app, migrator, db)
 }
 
 fn data(action: &str, tenant_id: Option<uuid::Uuid>) -> AuditEntryData {

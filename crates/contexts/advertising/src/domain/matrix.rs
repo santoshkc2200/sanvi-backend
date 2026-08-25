@@ -308,7 +308,12 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].field_path, "aspect_ratio");
         assert_eq!(violations[0].code, "capability_unsupported");
-        assert!(violations[0].message.to_lowercase().contains("aspect ratio"));
+        assert!(
+            violations[0]
+                .message
+                .to_lowercase()
+                .contains("aspect ratio")
+        );
     }
 
     #[test]
@@ -345,7 +350,10 @@ mod tests {
             aspect_ratio: "1080:1080".to_string(),
         };
         let violations = spec.validate_asset(&asset);
-        assert!(violations.is_empty(), "Expected 1080:1080 to match 1:1: {violations:?}");
+        assert!(
+            violations.is_empty(),
+            "Expected 1080:1080 to match 1:1: {violations:?}"
+        );
     }
 
     #[test]
@@ -397,7 +405,9 @@ mod tests {
         assert!(
             short_violations
                 .iter()
-                .any(|v| v.field_path == "duration_seconds" && v.message.contains("duration") && v.message.contains("below"))
+                .any(|v| v.field_path == "duration_seconds"
+                    && v.message.contains("duration")
+                    && v.message.contains("below"))
         );
 
         let too_long = AssetMetadata {
@@ -412,7 +422,9 @@ mod tests {
         assert!(
             long_violations
                 .iter()
-                .any(|v| v.field_path == "duration_seconds" && v.message.contains("duration") && v.message.contains("exceeds"))
+                .any(|v| v.field_path == "duration_seconds"
+                    && v.message.contains("duration")
+                    && v.message.contains("exceeds"))
         );
     }
 
@@ -440,7 +452,11 @@ mod tests {
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].field_path, "duration_seconds");
         assert_eq!(violations[0].code, "invalid");
-        assert!(violations[0].message.contains("video duration is required for this placement"));
+        assert!(
+            violations[0]
+                .message
+                .contains("video duration is required for this placement")
+        );
     }
 
     #[test]
@@ -464,7 +480,10 @@ mod tests {
             aspect_ratio: "1:1".to_string(),
         };
         let violations = spec.validate_asset(&image_with_duration);
-        assert!(violations.is_empty(), "Image asset should not be checked for duration: {violations:?}");
+        assert!(
+            violations.is_empty(),
+            "Image asset should not be checked for duration: {violations:?}"
+        );
     }
 
     #[test]
@@ -488,7 +507,10 @@ mod tests {
             aspect_ratio: "1:1".to_string(),
         };
         let violations = spec.validate_asset(&valid_video);
-        assert!(violations.is_empty(), "Valid video should pass: {violations:?}");
+        assert!(
+            violations.is_empty(),
+            "Valid video should pass: {violations:?}"
+        );
     }
 
     #[test]
@@ -611,7 +633,11 @@ mod tests {
             !story_violations.is_empty(),
             "Asset should fail story placement"
         );
-        assert!(story_violations.iter().any(|v| v.message.contains("aspect ratio")));
+        assert!(
+            story_violations
+                .iter()
+                .any(|v| v.message.contains("aspect ratio"))
+        );
     }
 
     #[test]
@@ -620,12 +646,20 @@ mod tests {
         let mut asset = sample_image_asset();
         asset.width_px = 500;
         let violations = spec.validate_asset(&asset);
-        assert!(violations.iter().any(|v| v.field_path == "width_px" && v.message.contains("width")));
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.field_path == "width_px" && v.message.contains("width"))
+        );
 
         asset.width_px = 1080;
         asset.height_px = 400;
         let violations_h = spec.validate_asset(&asset);
-        assert!(violations_h.iter().any(|v| v.field_path == "height_px" && v.message.contains("height")));
+        assert!(
+            violations_h
+                .iter()
+                .any(|v| v.field_path == "height_px" && v.message.contains("height"))
+        );
     }
 
     #[test]
@@ -738,8 +772,20 @@ mod tests {
         }];
         let violations = matrix.validate_creative_text(&texts);
         assert_eq!(violations.len(), 2);
-        assert!(violations.iter().all(|v| v.code == "capability_unsupported"));
-        assert!(violations.iter().any(|v| v.message.contains("headline has no limit for locale de")));
-        assert!(violations.iter().any(|v| v.message.contains("body has no limit for locale de")));
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.code == "capability_unsupported")
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("headline has no limit for locale de"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("body has no limit for locale de"))
+        );
     }
 }

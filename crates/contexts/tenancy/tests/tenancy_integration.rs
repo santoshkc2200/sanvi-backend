@@ -1,10 +1,9 @@
-//! Integration tests: real Postgres in containers, the sanvi_app role
-//! (NOBYPASSRLS), full migrations. Run with `cargo nextest run -p
-//! sanvi-tenancy` (docker must be available).
+//! Integration tests: real Postgres, the sanvi_app role (NOBYPASSRLS),
+//! full migrations. Run with `just test` (docker must be available).
 
 use std::sync::Arc;
 
-use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
+use sanvi_persistence::TxManager;
 use sanvi_tenancy::{
     adapters::{
         OutboxEventPublisher, SystemClock, SystemIdGenerator,
@@ -19,102 +18,21 @@ use sanvi_tenancy::{
         TenantId, TenantRepository, TenantSettingsRepository,
     },
 };
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
-
-fn migrations_dir() -> String {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .join("../../../migrations")
-        .canonicalize()
-        .expect("migrations directory must exist")
-        .to_string_lossy()
-        .to_string()
-}
+use sanvi_testsupport::TestDb;
 
 /// Fresh database with both migrations applied; returns app-role, owner-role
-/// and admin pools (and the container handle, which must stay alive).
+/// and admin pools, on a database private to the caller.
 async fn prepare() -> (
     sanvi_persistence::PgPool,
     sanvi_persistence::PgPool,
     sanvi_persistence::PgPool,
-    testcontainers::ContainerAsync<Postgres>,
+    TestDb,
 ) {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-
-    let admin = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("GRANT CONNECT ON DATABASE sanvi_test TO sanvi_app")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let migrator_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "mig".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir())
-        .run(&migrator_pool)
-        .await
-        .expect("migrations up");
-
-    let app_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    let owner_pool = migrator_pool;
-
-    (app_pool, owner_pool, admin_pool(port), node)
-}
-
-fn admin_pool(port: u16) -> sanvi_persistence::PgPool {
-    // Admin access to the same database (for direct row inspection).
-    sqlx::PgPool::connect_lazy(&format!(
-        "postgres://postgres:postgres@127.0.0.1:{port}/sanvi_test"
-    ))
-    .expect("admin pool url")
+    let db = sanvi_testsupport::test_db().await;
+    let app = db.app_pool();
+    let owner = db.migrator_pool().await;
+    let admin = db.admin_pool().await;
+    (app, owner, admin, db)
 }
 
 fn command(slug: &str) -> ProvisionTenantCommand {

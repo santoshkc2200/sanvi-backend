@@ -537,6 +537,8 @@ pub enum DataClass {
     AdvertisingConversionEvent,
     /// Daily tenant/platform/campaign advertising rollups.
     AdvertisingMetric,
+    /// Who changed which campaign field, and when.
+    AdvertisingCampaignChange,
 }
 
 impl DataClass {
@@ -557,6 +559,7 @@ impl DataClass {
             "request_record" => Ok(Self::RequestRecord),
             "advertising_conversion_event" => Ok(Self::AdvertisingConversionEvent),
             "advertising_metric" => Ok(Self::AdvertisingMetric),
+            "advertising_campaign_change" => Ok(Self::AdvertisingCampaignChange),
             other => Err(PrivacyError::InvalidDataClass(other.to_string())),
         }
     }
@@ -578,6 +581,7 @@ impl DataClass {
             Self::RequestRecord => "request_record",
             Self::AdvertisingConversionEvent => "advertising_conversion_event",
             Self::AdvertisingMetric => "advertising_metric",
+            Self::AdvertisingCampaignChange => "advertising_campaign_change",
         }
     }
 }

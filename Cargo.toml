@@ -4,6 +4,7 @@ members = [
     "crates/kernel",
     "crates/platform/telemetry",
     "crates/platform/persistence",
+    "crates/platform/testsupport",
     "crates/platform/messaging",
     "crates/platform/cache",
     "crates/platform/http",
@@ -43,6 +44,7 @@ publish = false
 sanvi-kernel = { path = "crates/kernel" }
 sanvi-telemetry = { path = "crates/platform/telemetry" }
 sanvi-persistence = { path = "crates/platform/persistence" }
+sanvi-testsupport = { path = "crates/platform/testsupport" }
 sanvi-messaging = { path = "crates/platform/messaging" }
 sanvi-cache = { path = "crates/platform/cache" }
 sanvi-http = { path = "crates/platform/http" }
@@ -130,6 +132,17 @@ testcontainers-modules = { version = "0.15", features = ["postgres", "redis"] }
 
 [profile.dev]
 opt-level = 1
+# Line tables, not full DWARF: panics and backtraces still name a file and a
+# line, which is how these suites are debugged. The cost is that a debugger
+# can no longer inspect locals in workspace code — delete this line for a
+# session that needs it. (`opt-level = 0` was measured as an alternative and
+# was worse: unoptimized code more than gave back what it saved.)
+debug = "line-tables-only"
+
+# Dependencies are built once and then cached, and their debug info is never
+# stepped through — it is pure weight in the binaries the workspace links.
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 lto = "thin"

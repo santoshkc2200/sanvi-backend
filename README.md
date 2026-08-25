@@ -165,7 +165,8 @@ by `scripts/check-layering.sh` in CI, not by convention.
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ./scripts/check-layering.sh            # + --self-test
-cargo test --workspace                 # unit/application; integration needs Docker
+eval "$(./scripts/test-db.sh up)"       # one Postgres + Redis for the whole run
+cargo nextest run --workspace          # or `just test`, which does both
 cargo sqlx prepare --workspace --check # committed .sqlx must match the schema
 ./scripts/check-openapi.sh             # api/*.yaml must match code annotations
 ```

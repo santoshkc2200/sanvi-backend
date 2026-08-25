@@ -39,8 +39,8 @@
 4. **Composition**: wire the adapter into the use case in
    `apps/api/src/lib.rs` and mount routes.
 5. **Tests**: unit tests for invariants, application tests with fake ports
-   (in-memory), integration via testcontainers when the adapter hits real
-   infrastructure.
+   (in-memory), integration against a real Postgres via
+   `sanvi_testsupport::test_db()` when the adapter hits real infrastructure.
 6. **Contract**: `cargo run -p sanvi-cli -- openapi --write`, commit
    `api/<context>.yaml`.
 7. **Docs**: migrations (if any), threat model note if security-relevant.
@@ -51,8 +51,39 @@
 |---|---|---|
 | Unit | `#[cfg(test)]` in crate | `cargo test -p <crate>` |
 | Application | fakes in test modules | `cargo test -p <crate>` |
-| Integration | `tests/` with testcontainers (Docker required) | `cargo test -p sanvi-persistence -p sanvi-messaging` |
+| Integration | `tests/` against a real Postgres (Docker required) | `just test` |
 | Contract | `apps/api/tests/http_contract.rs` | `cargo test -p sanvi-api` |
+
+`sanvi_testsupport::test_db()` hands back a private, fully migrated database.
+It is cloned from a template the harness migrates once, and every test in the
+run shares one server, so a suite costs a `CREATE DATABASE` rather than a
+container start plus 54 migrations.
+
+`just test` starts that server (`scripts/test-db.sh up`) and exports
+`SANVI_TEST_PG_PORT` / `SANVI_TEST_REDIS_PORT`. Running `cargo test` or
+`cargo nextest run` without them still works — each test *process* falls back
+to starting its own container, and leaves it running (`./scripts/test-db.sh
+prune` reaps strays). Under `nextest`, which runs a process per test, that
+fallback is expensive: export the variables first.
+
+Redis has no per-test equivalent of `CREATE DATABASE` — a stock server has
+sixteen logical databases and the workspace has hundreds of tests — so the
+one shared server is divided by key name instead. **Every Redis key a test
+touches must come from `sanvi_testsupport::test_stream()`**, which is unique
+per test and per run. A hard-coded key name is shared with every other test
+using it and with every previous run, which shows up as a count assertion
+finding two of something it created one of.
+
+### macOS: the first run after a build is slow
+
+On macOS, the first execution of each freshly linked binary is held up while
+Gatekeeper scans it, and the scans serialise: for this workspace's ~50 test
+binaries that is several minutes before the first test runs, with `syspolicyd`
+and `XprotectService` busy and every test process parked in `dyld`. Later runs
+against the same binaries start instantly.
+
+Add your terminal to **System Settings → Privacy & Security → Developer
+Tools** to exempt the processes it spawns from that scan.
 
 ## Commits & PRs
 
