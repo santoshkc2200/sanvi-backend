@@ -26,8 +26,8 @@ fn sha256_hex(input: &str) -> HashedIdentifier {
 /// Trim and lowercase; then, for Gmail addresses only, also strip dots and
 /// a `+tag` from the local part.
 ///
-/// That extra step is Gmail-specific: Google's enhanced-conversion spec
-/// defines it for `gmail.com`/`googlemail.com` alone, and Meta strips
+/// That extra step is Gmail-specific: provider enhanced-conversion specifications
+/// define it for `gmail.com`/`googlemail.com` alone, and other platforms strip
 /// neither dots nor tags for any domain. Applying it everywhere hashed
 /// `first.last@company.com` as `firstlast@company.com`, an address that
 /// matches nothing on either platform — and since only the digest is
