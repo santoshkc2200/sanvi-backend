@@ -20,7 +20,9 @@ pub use connection_lifecycle::{
     refresh_failure_transition,
 };
 pub use events::{AdEvent, EVENT_TYPES, EventPublisher};
-pub use matrix::{CapabilityMatrix, CreativeAssetSpec, CreativePlacement, ScheduleGranularity};
+pub use matrix::{
+    AssetMetadata, CapabilityMatrix, CreativeAssetSpec, CreativePlacement, ScheduleGranularity,
+};
 pub use model::{
     Ad, AdGroup, BidSettings, Budget, BudgetType, Campaign, CampaignStatus, ConnectionHandle,
     ConnectionState, ConsentSnapshot, Creative, CreativeText, DriftState, HashedIds, Money,
