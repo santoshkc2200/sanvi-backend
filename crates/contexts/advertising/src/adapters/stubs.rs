@@ -54,8 +54,20 @@ impl FakeAdPlatform {
                 &["sales", "leads"],
                 &[BudgetType::Daily, BudgetType::Lifetime],
                 &["geo", "keywords"],
-                30,
-                30,
+                (30, 30),
+                vec![CreativePlacement {
+                    key: "feed".to_string(),
+                    asset_spec: CreativeAssetSpec {
+                        image_required: true,
+                        video_allowed: true,
+                        aspect_ratios: vec!["1:1".to_string(), "4:5".to_string()],
+                        min_width_px: Some(300),
+                        min_height_px: Some(300),
+                        max_file_size_bytes: Some(5_242_880),
+                        min_duration_seconds: Some(5),
+                        max_duration_seconds: Some(180),
+                    },
+                }],
             ),
             descriptor(
                 "meta",
@@ -64,8 +76,20 @@ impl FakeAdPlatform {
                 &["awareness", "sales"],
                 &[BudgetType::Daily],
                 &["geo", "interests"],
-                40,
-                25,
+                (40, 25),
+                vec![CreativePlacement {
+                    key: "feed".to_string(),
+                    asset_spec: CreativeAssetSpec {
+                        image_required: true,
+                        video_allowed: true,
+                        aspect_ratios: vec!["1:1".to_string(), "4:5".to_string()],
+                        min_width_px: Some(600),
+                        min_height_px: Some(600),
+                        max_file_size_bytes: Some(31_457_280),
+                        min_duration_seconds: Some(1),
+                        max_duration_seconds: Some(241),
+                    },
+                }],
             ),
             descriptor(
                 "asymmetric_demo",
@@ -74,8 +98,20 @@ impl FakeAdPlatform {
                 &["app_installs"],
                 &[BudgetType::Lifetime],
                 &["device"],
-                18,
-                12,
+                (18, 12),
+                vec![CreativePlacement {
+                    key: "feed".to_string(),
+                    asset_spec: CreativeAssetSpec {
+                        image_required: true,
+                        video_allowed: false,
+                        aspect_ratios: vec!["1:1".to_string()],
+                        min_width_px: Some(1080),
+                        min_height_px: Some(1080),
+                        max_file_size_bytes: Some(1_048_576),
+                        min_duration_seconds: None,
+                        max_duration_seconds: None,
+                    },
+                }],
             ),
         ]
     }
@@ -88,9 +124,10 @@ fn descriptor(
     objectives: &[&str],
     budget_types: &[BudgetType],
     dimensions: &[&str],
-    english_headline_limit: usize,
-    japanese_headline_limit: usize,
+    headline_limits: (usize, usize),
+    creative_placements: Vec<CreativePlacement>,
 ) -> PlatformDescriptor {
+    let (english_headline_limit, japanese_headline_limit) = headline_limits;
     let objective_set = objectives
         .iter()
         .map(|value| Objective::parse(value).expect("static objective"))
@@ -131,14 +168,7 @@ fn descriptor(
             minimum_budgets_minor: minimums,
             schedule_granularity: ScheduleGranularity::Daily,
             targeting_dimensions: dimensions,
-            creative_placements: vec![CreativePlacement {
-                key: "feed".to_string(),
-                asset_spec: CreativeAssetSpec {
-                    image_required: true,
-                    video_allowed: true,
-                    aspect_ratios: vec!["1:1".to_string(), "4:5".to_string()],
-                },
-            }],
+            creative_placements,
             text_limits,
         },
     }
