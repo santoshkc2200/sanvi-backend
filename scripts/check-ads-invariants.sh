@@ -8,7 +8,13 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 adapter_root="$root/crates/contexts/advertising/src/adapters"
 
 contains_raw_identifier() {
-  rg -n --glob '*.rs' -i '\b(email|phone)\b' "$1" >/dev/null
+  # TASK-014's public track handler is the one legitimate place a raw
+  # identifier reaches an adapter: it receives it as short-lived transport
+  # input and hands it straight to domain/hashing.rs, which is the only
+  # code that may ever turn it into a `HashedIdentifier` — the handler
+  # itself never stores or forwards the raw value anywhere else. Every
+  # other adapter file stays banned.
+  rg -n --glob '*.rs' --glob '!tracking_handlers.rs' -i '\b(email|phone)\b' "$1" >/dev/null
 }
 
 contains_platform_literal() {
@@ -63,6 +69,17 @@ if [[ "${1:-}" == "--self-test" ]]; then
   printf '%s\n' 'struct Safe { hashed_ids: String }' > "$temp/safe.rs"
   if contains_raw_identifier "$temp/safe.rs"; then
     echo "self-test failed: safe fixture rejected" >&2
+    exit 1
+  fi
+  mkdir -p "$temp/http_dir"
+  printf '%s\n' 'struct TrackConversionRequest { email: Option<String> }' > "$temp/http_dir/tracking_handlers.rs"
+  if contains_raw_identifier "$temp/http_dir"; then
+    echo "self-test failed: tracking_handlers.rs transport DTO rejected" >&2
+    exit 1
+  fi
+  printf '%s\n' 'struct Illegal { email: String }' > "$temp/http_dir/other_handlers.rs"
+  if ! contains_raw_identifier "$temp/http_dir"; then
+    echo "self-test failed: raw identifier outside tracking_handlers.rs passed" >&2
     exit 1
   fi
   printf '%s\n' 'const PLATFORM: &str = "google_ads";' > "$temp/platform.rs"

@@ -55,6 +55,16 @@ impl QuotaLimiter {
     /// Wait for a slot in both budgets. Acquire the connection slot first:
     /// otherwise a flood from one connection can occupy every platform-wide
     /// permit while most of its work still waits on that connection's cap.
+    pub fn try_acquire(
+        &self,
+        connection_id: &str,
+    ) -> Option<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
+        let connection_semaphore = self.connection_semaphore(connection_id);
+        let conn_permit = connection_semaphore.clone().try_acquire_owned().ok()?;
+        let global_permit = self.platform_wide.clone().try_acquire_owned().ok()?;
+        Some((conn_permit, global_permit))
+    }
+
     async fn acquire(&self, connection_id: &str) -> (OwnedSemaphorePermit, OwnedSemaphorePermit) {
         let connection_permit = self
             .connection_semaphore(connection_id)

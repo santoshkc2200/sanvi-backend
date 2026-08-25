@@ -406,7 +406,24 @@ async fn main() -> ExitCode {
         audit.writer.clone(),
     ));
     let advertising = if config.features.advertising {
-        match build_advertising_state(pool.clone(), &config.advertising) {
+        // The directive gate (TASK-014) is advertising's core invariant —
+        // there is no meaningful way to run this context without the
+        // privacy context's resolver to ask.
+        let Some(directive_resolver) = privacy.as_ref().map(|wiring| wiring.resolver.clone())
+        else {
+            eprintln!("failed to configure advertising: the privacy feature must be enabled");
+            return ExitCode::from(1);
+        };
+        let subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository> =
+            Arc::new(sanvi_privacy::adapters::SqlxSubProcessorRepository::new());
+        match build_advertising_state(
+            pool.clone(),
+            &config.advertising,
+            directive_resolver,
+            subprocessors,
+        )
+        .await
+        {
             Ok(state) => Some(state),
             Err(err) => {
                 eprintln!("failed to configure advertising: {err}");

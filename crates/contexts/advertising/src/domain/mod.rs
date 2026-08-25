@@ -40,3 +40,12 @@ pub use token_vault::{
     ConnectionTokenRepository, TenantEnvelopeCrypto, TenantKeyRepository, TenantKeyRow, TokenVault,
 };
 pub use validation::{ValidationViolation, validate_campaign};
+pub mod hashing;
+
+pub use model::{ClickIds, ConversionEvent, SuppressedByDirective, UploadState, ValueSource};
+pub use ports::{
+    ConversionEventRepository, PaymentLookupPort, TrackingSettings, TrackingSettingsRepository,
+    VendorRole, VendorRolePort,
+};
+
+pub use hashing::HashedIdentifier;

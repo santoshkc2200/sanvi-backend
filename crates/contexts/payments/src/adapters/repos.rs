@@ -668,6 +668,29 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         row.map(row_to_checkout).transpose()
     }
 
+    async fn find_completed_by_reference(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        reference: &str,
+    ) -> Result<Option<Checkout>, PaymentsError> {
+        let row = sqlx::query_as::<_, CheckoutRow>(
+            "SELECT id, tenant_id, connection_id, reference, customer_ref,
+                    amount_minor, currency, status, external_session_id,
+                    idempotency_key, locale, expires_at, completed_at, created_at
+             FROM payments.checkouts
+             WHERE tenant_id = $1 AND reference = $2 AND status = 'complete'
+             ORDER BY completed_at DESC NULLS LAST
+             LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(reference)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(row_to_checkout).transpose()
+    }
+
     async fn update(
         &self,
         scope: &mut ScopedTx<'_>,

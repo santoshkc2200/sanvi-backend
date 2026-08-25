@@ -134,10 +134,12 @@ impl AdvertisingConfig {
         }
         let decoded =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &self.token_kek)
-                .map_err(|err| anyhow::anyhow!("advertising.token_kek is not valid base64: {err}"))?;
-        let kek: [u8; 32] = decoded
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("advertising.token_kek must decode to exactly 32 bytes (AES-256)"))?;
+                .map_err(|err| {
+                    anyhow::anyhow!("advertising.token_kek is not valid base64: {err}")
+                })?;
+        let kek: [u8; 32] = decoded.try_into().map_err(|_| {
+            anyhow::anyhow!("advertising.token_kek must decode to exactly 32 bytes (AES-256)")
+        })?;
         if self.token_kek_id.is_empty() {
             anyhow::bail!("advertising.token_kek_id must not be empty");
         }

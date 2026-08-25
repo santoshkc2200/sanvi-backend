@@ -227,3 +227,67 @@ pub trait AdPlatformPort: Send + Sync {
         consent: ConsentSnapshot,
     ) -> Result<(), AdvertisingError>;
 }
+
+#[async_trait]
+pub trait ConversionEventRepository: Send + Sync {
+    /// Idempotent insert respecting the existing UNIQUE (tenant_id, event_id)
+    async fn insert_idempotent(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        event: &super::model::ConversionEvent,
+    ) -> Result<(), AdvertisingError>;
+
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
+}
+
+#[async_trait]
+pub trait PaymentLookupPort: Send + Sync {
+    async fn lookup_payment_value(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        order_ref: &str,
+    ) -> Result<Option<super::model::Money>, AdvertisingError>;
+}
+
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TrackingSettings {
+    pub tenant_id: Uuid,
+    /// event name -> (platform key -> the platform's conversion action)
+    pub mappings: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+#[async_trait]
+pub trait TrackingSettingsRepository: Send + Sync {
+    async fn get(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Option<TrackingSettings>, AdvertisingError>;
+
+    async fn upsert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        settings: &TrackingSettings,
+    ) -> Result<(), AdvertisingError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VendorRole {
+    ServiceProvider,
+    ThirdParty,
+}
+
+#[async_trait]
+pub trait VendorRolePort: Send + Sync {
+    async fn lookup_role(
+        &self,
+        platform: &super::PlatformKey,
+    ) -> Result<VendorRole, super::AdvertisingError>;
+}

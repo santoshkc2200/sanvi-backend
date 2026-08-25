@@ -7,6 +7,7 @@ pub mod drift_resolution;
 pub mod reconciliation;
 pub mod reconciliation_sweep;
 pub mod registry;
+pub mod tracking;
 
 pub use campaigns::{
     AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, GetCampaign,

@@ -343,3 +343,38 @@ pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
         ADVERTISING_ENTITLEMENTS,
     ),
 ];
+
+pub fn tracking_public_routes(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::scope("/api/v1/public").service(
+            web::resource("/track")
+                .app_data(super::tracking_handlers::tracking_json_config())
+                .route(web::post().to(super::tracking_handlers::public_track_conversion)),
+        ),
+    );
+}
+
+pub fn tracking_tenant_routes(cfg: &mut web::ServiceConfig) {
+    let connect = require_permission!("advertising.connect", tenant);
+    let metrics_read = require_permission!("advertising.metrics.read", tenant);
+
+    cfg.service(
+        web::resource("/ads/tracking/settings")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, connect),
+                (Method::PUT, connect),
+            ]))
+            .route(web::get().to(super::tracking_handlers::get_tracking_settings))
+            .route(web::put().to(super::tracking_handlers::put_tracking_settings)),
+    );
+    cfg.service(
+        web::resource("/ads/tracking/test-event")
+            .app_data(PermissionMap::new(vec![(Method::POST, metrics_read)]))
+            .route(web::post().to(super::tracking_handlers::test_tracking_event)),
+    );
+    cfg.service(
+        web::resource("/ads/conversions")
+            .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
+            .route(web::get().to(super::tracking_handlers::list_conversions)),
+    );
+}

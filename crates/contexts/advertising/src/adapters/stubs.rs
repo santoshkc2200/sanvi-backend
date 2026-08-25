@@ -334,7 +334,7 @@ impl AdPlatformPort for FakeAdPlatform {
     ) -> Result<(), AdvertisingError> {
         if conversion.event_id.trim().is_empty()
             || ids.values.values().any(|value| value.trim().is_empty())
-            || consent.directive_version.trim().is_empty()
+            || consent.resolver_version.trim().is_empty()
         {
             return Err(AdvertisingError::InvalidInput(
                 "conversion upload requires a complete directive proof".to_string(),

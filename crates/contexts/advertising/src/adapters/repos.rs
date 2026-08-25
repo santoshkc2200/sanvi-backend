@@ -55,9 +55,7 @@ impl TryFrom<ConnectionRow> for AdvertisingConnection {
             .map(serde_json::from_value::<Vec<PlatformAccount>>)
             .transpose()
             .map_err(|error| {
-                AdvertisingError::Storage(format!(
-                    "invalid advertising pending accounts: {error}"
-                ))
+                AdvertisingError::Storage(format!("invalid advertising pending accounts: {error}"))
             })?;
         AdvertisingConnection::from_persisted(
             row.id,
@@ -653,5 +651,200 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         .await
         .map_err(storage)?;
         row.map(TryInto::try_into).transpose()
+    }
+}
+
+use crate::domain::{
+    ConversionEvent, ConversionEventRepository, TrackingSettings, TrackingSettingsRepository,
+};
+
+#[derive(sqlx::FromRow)]
+struct ConversionEventRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    event_id: String,
+    name: String,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+    value_minor: Option<i64>,
+    currency: Option<String>,
+    value_source: Option<String>,
+    order_ref: Option<String>,
+    click_ids: serde_json::Value,
+    hashed_ids: serde_json::Value,
+    consent: serde_json::Value,
+    upload_state: serde_json::Value,
+}
+
+fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, AdvertisingError> {
+    let map_json_err = |err: serde_json::Error| AdvertisingError::Storage(err.to_string());
+    Ok(ConversionEvent {
+        id: row.id,
+        tenant_id: row.tenant_id,
+        event_id: row.event_id,
+        name: row.name,
+        occurred_at: row.occurred_at,
+        value: match (row.value_minor, row.currency) {
+            (Some(amount_minor), Some(currency)) => {
+                Some(crate::domain::Money::new(amount_minor, &currency)?)
+            }
+            _ => None,
+        },
+        value_source: row.value_source.map(|source| match source.as_str() {
+            "payment_record" => crate::domain::ValueSource::PaymentRecord,
+            _ => crate::domain::ValueSource::ClientReported,
+        }),
+        order_ref: row.order_ref,
+        click_ids: serde_json::from_value(row.click_ids).map_err(map_json_err)?,
+        hashed_identifiers: serde_json::from_value(row.hashed_ids).map_err(map_json_err)?,
+        consent: serde_json::from_value(row.consent).map_err(map_json_err)?,
+        upload_state: serde_json::from_value(row.upload_state).map_err(map_json_err)?,
+    })
+}
+
+#[async_trait]
+impl ConversionEventRepository for SqlxCampaignRepository {
+    async fn insert_idempotent(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        event: &ConversionEvent,
+    ) -> Result<(), AdvertisingError> {
+        let map_err = |e: sqlx::Error| AdvertisingError::Storage(e.to_string());
+
+        // The dedup row owns the (tenant_id, event_id) unique key that
+        // `conversion_events` foreign-keys against; a retried or duplicated
+        // beacon loses the race here and never reaches the insert below —
+        // that's the whole idempotency guarantee, in one INSERT.
+        let dedup_result = sqlx::query(
+            "INSERT INTO advertising.conversion_event_dedup (tenant_id, event_id, occurred_at)
+             VALUES ($1, $2, $3) ON CONFLICT (tenant_id, event_id) DO NOTHING",
+        )
+        .bind(event.tenant_id)
+        .bind(&event.event_id)
+        .bind(event.occurred_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_err)?;
+
+        if dedup_result.rows_affected() == 0 {
+            return Ok(());
+        }
+
+        let value_minor = event.value.as_ref().map(|money| money.amount_minor);
+        let currency = event.value.as_ref().map(|money| money.currency.clone());
+        let value_source = event.value_source.as_ref().map(|source| match source {
+            crate::domain::ValueSource::PaymentRecord => "payment_record",
+            crate::domain::ValueSource::ClientReported => "client_reported",
+        });
+        let click_ids = serde_json::to_value(&event.click_ids)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let hashed_ids = serde_json::to_value(&event.hashed_identifiers)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let consent = serde_json::to_value(&event.consent)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let upload_state = serde_json::to_value(&event.upload_state)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        sqlx::query(
+            "INSERT INTO advertising.conversion_events
+               (id, tenant_id, event_id, name, occurred_at, value_minor, currency,
+                value_source, order_ref, click_ids, hashed_ids, consent, upload_state)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        )
+        .bind(event.id)
+        .bind(event.tenant_id)
+        .bind(&event.event_id)
+        .bind(&event.name)
+        .bind(event.occurred_at)
+        .bind(value_minor)
+        .bind(currency)
+        .bind(value_source)
+        .bind(&event.order_ref)
+        .bind(click_ids)
+        .bind(hashed_ids)
+        .bind(consent)
+        .bind(upload_state)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_err)?;
+
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, ConversionEventRow>(
+            "SELECT id, tenant_id, event_id, name, occurred_at, value_minor, currency,
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_state
+             FROM advertising.conversion_events
+             WHERE tenant_id = $1
+             ORDER BY occurred_at DESC
+             LIMIT 200",
+        )
+        .bind(tenant_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        rows.into_iter().map(row_to_conversion_event).collect()
+    }
+}
+
+#[derive(Default)]
+pub struct SqlxTrackingSettingsRepository;
+
+impl SqlxTrackingSettingsRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl TrackingSettingsRepository for SqlxTrackingSettingsRepository {
+    async fn get(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Option<TrackingSettings>, AdvertisingError> {
+        use sqlx::Row;
+        let row =
+            sqlx::query("SELECT mappings FROM advertising.tracking_settings WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_optional(&mut **scope.tx_mut().as_inner())
+                .await
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        if let Some(r) = row {
+            let val: serde_json::Value = r.get("mappings");
+            let mappings: std::collections::BTreeMap<
+                String,
+                std::collections::BTreeMap<String, String>,
+            > = serde_json::from_value(val)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+            Ok(Some(TrackingSettings {
+                tenant_id,
+                mappings,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn upsert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        settings: &TrackingSettings,
+    ) -> Result<(), AdvertisingError> {
+        let json = serde_json::to_value(&settings.mappings)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        sqlx::query("INSERT INTO advertising.tracking_settings (tenant_id, mappings) VALUES ($1, $2) ON CONFLICT (tenant_id) DO UPDATE SET mappings = $2, updated_at = now()")
+            .bind(settings.tenant_id)
+            .bind(json)
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        Ok(())
     }
 }

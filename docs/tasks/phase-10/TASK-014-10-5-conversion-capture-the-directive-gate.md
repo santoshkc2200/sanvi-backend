@@ -1,7 +1,7 @@
 # TASK-014: 10.5 Conversion capture & the directive gate
 
 **Phase:** 10
-**Status:** todo
+**Status:** in progress — directive gate, hashing, idempotent capture, tracking settings/test-event/conversions endpoints, and OpenAPI contract are code-complete and tested (unit + Postgres-backed integration, incl. the JPY payment-record override and all four directive scenarios exercised directly). Not yet done: server-issued `event_id` from the phase-09 order record, mounting `/public/track` on the tenant's own phase-08 domain (currently a shared-domain endpoint authenticated by site key + Origin), server-side click-id extraction from cookies/URL (capture_time/landing_url), and HTTP-level tests of the abuse-control paths (payload cap/bad origin/rate limit) — the logic exists but is only unit-tested at the site-key layer, not end-to-end.
 **Requirement(s):** FR-1008, FR-1009, NFR-1001, NFR-1002, NFR-1010
 **Depends on:** TASK-011
 **Created:** 2026-08-20

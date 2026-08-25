@@ -3278,6 +3278,7 @@ dependencies = [
  "sanvi-http",
  "sanvi-kernel",
  "sanvi-messaging",
+ "sanvi-payments",
  "sanvi-persistence",
  "sanvi-privacy",
  "serde",
