@@ -25,17 +25,16 @@ architecture, PostgreSQL via compile-time-checked SQLx, Redis, docker-compose fo
 From phase 09 the delivery layers are: [the roadmap](shared/roadmap.md) (why the phase exists) → the
 phase implementation plan (what and how) → [`requirements.md`](requirements.md) (numbered
 requirements) → [`tasks/`](tasks/backlog.md) (one agent-executable spec per slice, ordered by that
-phase's `tasks/phase-NN/README.md`). Every layer traces to the one above it; `sdlc.py check`
-enforces it mechanically.
+phase's `tasks/phase-NN/README.md`). Every layer traces to the one above it: every requirement is
+covered by at least one task, and every task names a requirement. A reviewer checks that by reading.
 
 Cross-track coordination lives in the tasks themselves: a task blocked on `sanvi-frontend` work says
 so in a `**Blocked by (cross-repo):**` line. There is no shared schedule document.
 
-```bash
-SDLC="python3 ~/.claude/skills/sdlc-planner/scripts/sdlc.py"
-$SDLC check                          # traceability + status drift, run from this repo root
-$SDLC status TASK-002 in-progress    # never hand-edit the status line and the backlog separately
-```
+Status is recorded by hand in two places in the same commit — the task file's `**Status:**` line and
+its row in [`tasks/backlog.md`](tasks/backlog.md). Tasks are executed with the Superpowers workflow
+(`superpowers:executing-plans`, or `superpowers:subagent-driven-development` for a fresh subagent per
+task).
 
 Phases 00–08 predate this practice and stay documented by their implementation plans alone.
 

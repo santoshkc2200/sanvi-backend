@@ -21,10 +21,9 @@ requirements and an executable task backlog, one task per slice per project:
 - [`sanvi-backend/docs/requirements.md`](../requirements.md) · [`tasks/backlog.md`](../tasks/backlog.md)
 - `sanvi-frontend/docs/requirements.md` · `sanvi-frontend/docs/tasks/backlog.md`
 
-Every layer traces to the one above it: task → requirement → phase → roadmap. Task status is changed
-only through the sdlc-planner script, which keeps the task file and the backlog row in sync, and
-`sdlc.py check` reports drift. Phases 00–08 predate this and remain documented by their
-implementation plans alone.
+Every layer traces to the one above it: task → requirement → phase → roadmap. Task status is
+recorded by hand in the task file and its backlog row, in the same commit, so the two never
+disagree. Phases 00–08 predate this and remain documented by their implementation plans alone.
 
 ### Phases planned ahead of the code
 

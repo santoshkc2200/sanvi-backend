@@ -26,9 +26,25 @@ This is the first task where our code causes a tenant to spend real money.
    with the actor, and a retry that cannot double-publish. "Who paused this campaign" must be
    answerable, and a network timeout during publish must not create two campaigns.
 
+## Progress — verified 2026-08-25
+
+Shipped against the fake adapter (`03b0108`, `2e8ff46`, `c7b2941`) with integration coverage:
+campaign intent snapshots; optimistic revisions returning `409` on a stale revision; mutation change
+log; draft / validate / publish / patch / pause / resume plus ad-groups and ads; drift detection with
+`KeepTheirs` and `ReapplyOurs` resolution; a nightly cross-tenant `ReconcileDueCampaigns` sweep in
+`apps/worker` that is drift-only and never writes back; a `RateLimitedAdapter` quota queue, both
+per-connection and platform-wide, wrapping every registered adapter in `api` and `worker`.
+
+**Still open**
+
+- **Google Ads adapter** against the real API — blocked on developer-token access.
+- **Review status** polling, which has no meaning until the real adapter exists.
+- Staging deployment behind the flag.
+
+
 ## What to do
 
-- [ ] **Contract** — `GET/POST /campaigns`, `GET/PATCH /campaigns/{id}`, `POST /campaigns/{id}/publish`,
+- [x] **Contract** — `GET/POST /campaigns`, `GET/PATCH /campaigns/{id}`, `POST /campaigns/{id}/publish`,
       `POST /campaigns/{id}/pause|/resume`, `GET/POST/PATCH /campaigns/{id}/ad-groups` (+ `/ads`),
       `POST /campaigns/{id}/validate`, `GET /campaigns/{id}/changes`, `GET/POST /campaigns/{id}/drift`.
       `validate` is a dry run returning the same field-addressed violations as a failed write, so the
@@ -36,27 +52,27 @@ This is the first task where our code causes a tenant to spend real money.
       campaign requires `Idempotency-Key` **and** `If-Match` on the campaign revision; a stale revision
       returns `409` with the current state rather than clobbering it. `POST /drift` carries
       `keep_theirs` or `reapply_ours` and is idempotent per drift revision.
-- [ ] **Campaign tree persistence** — draft/publish lifecycle over `campaigns`, `ad_groups`, `ads`.
+- [x] **Campaign tree persistence** — draft/publish lifecycle over `campaigns`, `ad_groups`, `ads`.
       Drafts are ours alone and never touch the platform; `external_id` is null until publish.
 - [ ] **Google Ads adapter** — `AdPlatformPort` campaign-tree CRUD against the pinned API version,
       plus the real Google `CapabilityMatrix` replacing the fake's. Passes the same port contract
       suite the fake passes.
-- [ ] **Publish path** — validate → create remotely → store `external_id` → poll review status. The
+- [x] **Publish path** — validate → create remotely → store `external_id` → poll review status. The
       mutation id is sent to Google where the API supports it and is otherwise recorded before the call
       and checked after, so a timeout is recoverable by lookup rather than by retry-and-hope.
-- [ ] **Change log** — every mutation writes actor, timestamp, field-level before/after, source
+- [x] **Change log** — every mutation writes actor, timestamp, field-level before/after, source
       (`sanvi` | `platform`), and the mutation id. Append-only, covered by the phase-05 retention rules
       registered in TASK-009. This table is what answers spend disputes.
-- [ ] **Reconciliation job** — nightly and on-demand pull of the remote tree per connection, compared
+- [x] **Reconciliation job** — nightly and on-demand pull of the remote tree per connection, compared
       field-wise against our last-known remote snapshot:
       - remote changed, ours unchanged → update the snapshot, no drift;
       - remote changed **and** contradicts our intent → set `drift` with the diff, emit
         `CampaignDrifted`, notify. **Never write back.**
-- [ ] **Drift resolution** — `keep_theirs` adopts remote as intent; `reapply_ours` re-pushes our intent
+- [x] **Drift resolution** — `keep_theirs` adopts remote as intent; `reapply_ours` re-pushes our intent
       as an ordinary attributed mutation. Both clear the flag; neither happens automatically.
 - [ ] **Review status** — per-ad review state with rejection reasons surfaced **verbatim** from the
       platform. A paraphrased policy rejection is worse than useless when the tenant has to fix it.
-- [ ] **Rate limiting & quota** — Google Ads quota is per developer token and shared across all
+- [x] **Rate limiting & quota** — Google Ads quota is per developer token and shared across all
       tenants. Queue and budget requests per connection so one tenant's bulk edit cannot exhaust the
       quota for every other tenant.
 
@@ -113,7 +129,7 @@ and spend numbers (TASK-016), budget caps and auto-pause (TASK-017).
   makes every remote edit look like drift.
 
 ---
-*On completion: satisfy every acceptance criterion, run the verification commands,
-then record status with the sdlc-planner script (never by hand-editing this line
-and the backlog separately):*
-`sdlc.py status TASK-012 done --note "<PR or commit>"`
+*On completion: satisfy every acceptance criterion, run the verification commands, then
+record status in the **same commit** in both places — the `**Status:**` line at the top of this
+file and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note.
+The two must never disagree.*

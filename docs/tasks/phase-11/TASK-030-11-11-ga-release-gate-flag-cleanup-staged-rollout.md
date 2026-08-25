@@ -106,7 +106,7 @@ post-GA backlog with an owner and a date — that is the mechanism that makes th
 - Cross-repo: this task cannot tag `v1.0.0` until `sanvi-frontend` TASK-030 is done.
 
 ---
-*On completion: satisfy every acceptance criterion, run the verification commands,
-then record status with the sdlc-planner script (never by hand-editing this line
-and the backlog separately):*
-`sdlc.py status TASK-030 done --note "<PR or commit>"`
+*On completion: satisfy every acceptance criterion, run the verification commands, then
+record status in the **same commit** in both places — the `**Status:**` line at the top of this
+file and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note.
+The two must never disagree.*

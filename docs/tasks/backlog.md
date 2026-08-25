@@ -1,17 +1,23 @@
 # Backlog — sanvi-backend
 
-Single source of truth for task status. Generated and updated by the sdlc-planner
-script — don't hand-edit rows or hand-number IDs; the script keeps this table and
-the task files in sync, and `check` flags it when they drift.
+Single source of truth for task status. Maintained by hand, in the same commit as the task file
+it describes.
 
-```bash
-SDLC="python3 ~/.claude/skills/sdlc-planner/scripts/sdlc.py"
+**Recording status.** A status change touches exactly two places, and they must never disagree:
 
-$SDLC check                                     # traceability + status drift (run from this repo root)
-$SDLC status TASK-002 in-progress               # updates the task file AND the row below
-$SDLC status TASK-002 done --note "PR #123"
-$SDLC new-task 10 "<title>" --requirement FR-1003 --depends TASK-010
-```
+1. the `**Status:**` line at the top of `phase-NN/TASK-0NN-….md`, and
+2. that task's row in the table below, with the PR or commit in the **Notes** column.
+
+**Adding a task.** Take the next free `TASK-0NN` — IDs are permanent and never reused — name its
+requirement from [`../requirements.md`](../requirements.md), and add it both here and as a file in
+the phase's `tasks/phase-NN/` directory. Two invariants hold over the set, and a reviewer checks
+them by reading: every requirement is covered by at least one task, and every task names a
+requirement.
+
+**Executing a task.** Tasks are executed with the Superpowers workflow — `superpowers:executing-plans`
+for inline execution, or `superpowers:subagent-driven-development` for a fresh subagent per task with
+review between tasks. The checkboxes inside a task file are the working record of that execution;
+this table is the summary.
 
 Each task traces to a numbered requirement in [`../requirements.md`](../requirements.md); the *why*
 behind each one lives in that phase's implementation plan
@@ -34,10 +40,10 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | TASK-006 | 09 | 09.5 Payments, refunds & disputes | done | TASK-005 | review findings fixed in ef30312 (refund recovery + idempotent replay, dispute routing via payment_intent, deep links, streamed export); 8 acceptance tests added |
 | TASK-007 | 09 | 09.6 Payouts, tax liability & application fee | done | TASK-004, TASK-005 | working tree: 09.6 payouts (read port + webhook projection + failed-payout alert), tax liability (account-liability routing + compliance preflight + scheduled/webhook re-check), per-tenant application fee (platform-admin config, round-half-up, disclosure, blocked-combination guards + CI gate) |
 | TASK-008 | 09 | 09.7 Disconnect, hardening & release | done | TASK-006, TASK-007 | commit 33fa087 — 09.7 guarded disconnect, retention override, metrics/alerts/runbooks, SAQ-A review, flags default on, v0.10.0 changelog; tag pending cross-repo frontend 09.7 |
-| TASK-009 | 10 | 10.0 Contract, schema & foundations | in-progress | phase 03, 05, 08, 09 | local verification complete; staging deployment and repository-layer evidence pending |
-| TASK-010 | 10 | 10.1 Domain model, capability matrix & fake adapter | in-progress | TASK-009 |  |
-| TASK-011 | 10 | 10.2 Connections, OAuth & token lifecycle | in-progress | TASK-010 | OAuth signed-state boundary started |
-| TASK-012 | 10 | 10.3 Campaign tree, Google Ads adapter & drift | in-progress | TASK-011 | campaign intent snapshots, optimistic revisions, mutation audit, reconciliation use case, drift resolution; contract + application services for draft/publish/patch/pause/resume/validate/changes/ad-groups/ads land against the fake adapter with integration coverage; nightly cross-tenant reconciliation sweep wired into apps/worker (ReconcileDueCampaigns, drift-only, never writes back); per-connection + platform-wide quota queue (RateLimitedAdapter) wraps every registered adapter in both api and worker; still open: real Google Ads adapter (blocked on developer-token access — the fake adapter fills this until then, per the phase's own cross-track plan), review-status polling (needs the real adapter to have meaning) |
+| TASK-009 | 10 | 10.0 Contract, schema & foundations | in-progress | phase 03, 05, 08, 09 | code complete (62ed843, 202b224): api/advertising.yaml, sanvi-advertising crate, migration 20260826000000 + 7 follow-ups (8 tables, RLS, monthly partitions on conversion_events/metrics_daily), retention rules in privacy.retention_rules, 6 advertising.* permissions + 3 entitlements, per-tenant KEK token vault, `advertising = false` flag, `just ads-invariants` (+ self-test) in `just ci`. Pending: staging deploy per DoD |
+| TASK-010 | 10 | 10.1 Domain model, capability matrix & fake adapter | in-progress | TASK-009 | code complete (5ad9498): domain/{model,matrix,validation,ports,events}.rs, AdPlatformPort (auth, list_accounts, campaign CRUD, pause/resume/delete, fetch_metrics, upload), FakeAdPlatform + fixtures/capability-matrices.json exported to sanvi-frontend, outbox event round-trip green, GET /ads/platforms catalog. Pending: staging deploy per DoD |
+| TASK-011 | 10 | 10.2 Connections, OAuth & token lifecycle | in-progress | TASK-010 | shipped (c30721b, 7b69878, b35a5d4): signed-state OAuth start/callback rejecting forgery/expiry/replay/cross-tenant redemption, per-tenant encrypted refresh tokens, refresh scheduler + expiry, pending/reconnect lifecycle, FreshAal2Required step-up on connect+disconnect, health from each adapter's required_scopes. Still open: real Google & Meta OAuth adapters and live list_accounts — blocked on Google developer-token approval and Meta app review; fake adapter covers the interim |
+| TASK-012 | 10 | 10.3 Campaign tree, Google Ads adapter & drift | in-progress | TASK-011 | shipped (03b0108, 2e8ff46, c7b2941): campaign intent snapshots, optimistic revisions (409 on stale), mutation change log, draft/validate/publish/patch/pause/resume + ad-groups/ads, drift detection with KeepTheirs/ReapplyOurs, nightly cross-tenant ReconcileDueCampaigns sweep in apps/worker (drift-only, never writes back), RateLimitedAdapter per-connection + platform-wide quota queue in api and worker, all against the fake adapter with integration coverage. Still open: real Google Ads adapter (blocked on developer-token access) and review-status polling (needs the real adapter to have meaning) |
 | TASK-013 | 10 | 10.4 Meta adapter & creatives | todo | TASK-012 | |
 | TASK-014 | 10 | 10.5 Conversion capture & the directive gate | todo | TASK-011 | |
 | TASK-015 | 10 | 10.6 Conversion upload, dedupe & diagnostics | todo | TASK-014 | |

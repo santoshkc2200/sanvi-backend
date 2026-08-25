@@ -1,52 +1,85 @@
 # Phase 10 — Advertising & Campaign Management (backend)
 
-**Target version:** 0.11.0
-**Depends on:** phases 01, 02, 03 (entitlements), 05 (consent gates conversion upload), 06, 08 (tracking on tenant domains), 09 (revenue for ROAS)
-**Unlocks:** tenants running and measuring paid acquisition from inside Sanvi
+**Version:** 0.11.0 · **Status:** in progress — slices 10.0–10.3 shipped against the fake adapter
+**Depends on:** 01, 02, 03 (entitlements), 05 (directives, envelope crypto), 06, 08 (tenant domains),
+09 (revenue) · **Unlocks:** tenants running and measuring paid acquisition inside Sanvi
 
-## Goal
+**This document is the phase spec — the *what* and *why*.** Slice order and per-slice exit criteria
+live in [`../tasks/phase-10/README.md`](../tasks/phase-10/README.md); the executable step-by-step
+breakdown lives in the ten `TASK-0NN` files beside it. Status lives in
+[`../tasks/backlog.md`](../tasks/backlog.md).
 
-An `advertising` bounded context where a tenant connects Google Ads and Meta (Facebook/Instagram)
-accounts, creates and manages campaigns, tracks conversions back to revenue, and sees spend, sales,
-conversions, and ROAS in one dashboard. The platform abstraction must make the third and fourth ad
-network an adapter, not a rewrite.
+---
 
-## Scope
+## 1. Goal
 
-**In**
-- Ad platform connections (OAuth), account selection, token lifecycle.
-- Unified campaign model: campaign → ad set/ad group → ad → creative, with per-platform capability
-  declarations and validation.
-- Campaign operations: create, update, pause/resume, budget changes, schedule — synced both ways.
-- Conversion tracking: first-party event capture on tenant storefronts, server-side upload to Google
-  Ads (offline/enhanced conversions) and Meta (Conversions API), consent-gated and deduplicated.
-- Metrics pipeline: scheduled ingestion of spend/impressions/clicks/conversions, joined with phase 09
-  revenue, into an aggregate store powering the dashboard.
-- Budget/spend guardrails and alerting.
+An `advertising` bounded context where a tenant connects Google Ads and Meta, manages campaigns,
+tracks conversions back to revenue, and reads spend/sales/conversions/ROAS in one dashboard.
+The platform abstraction must make the third and fourth ad network **an adapter, not a rewrite**.
 
-**Out**
-- Creative generation/asset editing (the tenant supplies assets; `course-media`-style upload reuse).
-- Bid strategy automation and ML optimisation (later; the metric store is designed to support it).
-- Networks beyond Google and Meta in this release (adapters planned: TikTok, LINE, X, Yahoo! JAPAN).
+## 2. Progress
 
-## Key decisions
+Verified 2026-08-25 against the working tree (`cargo test -p sanvi-advertising --lib`: 38 passed).
+
+| Slice | Task | Status | Shipped | Open |
+|---|---|---|---|---|
+| 10.0 contract & foundations | TASK-009 | ✅ code complete | `api/advertising.yaml`; `sanvi-advertising` crate; migration `20260826000000_advertising_core` (+7 follow-ups) with 8 tables, RLS, monthly partitions on `conversion_events`/`metrics_daily`; retention rules inserted into `privacy.retention_rules`; 6 `advertising.*` permissions + 3 entitlements registered; per-tenant KEK token vault; `advertising = false` flag; `just ads-invariants` (+ self-test) wired into `just ci` | staging deploy evidence |
+| 10.1 domain & capability matrix | TASK-010 | ✅ code complete | `domain/{model,matrix,validation,ports,events}.rs`; `AdPlatformPort` (auth, accounts, campaign CRUD, pause/resume/delete, `fetch_metrics`, `upload`); `FakeAdPlatform` + `fixtures/capability-matrices.json` exported for `sanvi-frontend`; outbox event round-trip test green; `GET /ads/platforms` catalog | — |
+| 10.2 connections & OAuth | TASK-011 | 🟡 partial | signed-state OAuth start/callback (forgery, expiry, replay, cross-tenant redemption all rejected); per-tenant encrypted refresh tokens; refresh scheduler + expiry; pending/reconnect lifecycle; `FreshAal2Required` step-up on connect/disconnect; health derived from each adapter's `required_scopes` | **real Google & Meta OAuth adapters and live `list_accounts`** — blocked on Google developer-token approval and Meta app review |
+| 10.3 campaigns, Google adapter & drift | TASK-012 | 🟡 partial | campaign intent snapshots; optimistic revisions (`409` on stale); mutation change log; draft/validate/publish/patch/pause/resume + ad-groups/ads; drift detection with `KeepTheirs`/`ReapplyOurs`; nightly cross-tenant `ReconcileDueCampaigns` sweep in `apps/worker` (drift-only, never writes back); `RateLimitedAdapter` per-connection + platform-wide quota queue in api and worker | **real Google Ads adapter**; review-status polling (needs the real adapter to mean anything) |
+| 10.4 Meta adapter & creatives | TASK-013 | ⬜ todo | — | blocked on 10.3 |
+| 10.5 conversion capture & directive gate | TASK-014 | ⬜ todo | — | unblocked by 10.2 — **next available slice** |
+| 10.6 upload, dedupe & diagnostics | TASK-015 | ⬜ todo | — | blocked on 10.5 |
+| 10.7 metrics, rollups & ROAS | TASK-016 | ⬜ todo | — | blocked on 10.3 |
+| 10.8 budget guardrails & alerts | TASK-017 | ⬜ todo | — | blocked on 10.7 |
+| 10.9 privacy, hardening & release | TASK-018 | ⬜ todo | — | blocked on 10.4, 10.6, 10.8 |
+
+**Critical path note.** Both remaining 10.2/10.3 gaps are the same external blocker: no live platform
+credentials. The fake adapter carries the abstraction until they land, exactly as the cross-track plan
+intends. Do **not** idle on the queue — 10.5 depends only on 10.2's connection lifecycle and the
+phase-05 resolver, so conversion capture proceeds in parallel.
+
+## 3. Scope
+
+**In** — OAuth connections + token lifecycle · unified campaign tree (campaign → ad group/set → ad →
+creative) with per-platform capability declarations · campaign CRUD, pause/resume, budget, schedule,
+two-way sync · consent-gated deduplicated conversion capture and server-side upload · scheduled
+metrics ingestion joined with phase-09 revenue · budget guardrails and alerting.
+
+**Out** — creative generation or asset editing (tenant supplies assets; reuse `course-media` upload) ·
+bid automation and ML optimisation (the metric store is designed to support it later) · networks
+beyond Google and Meta this release (adapters planned: TikTok, LINE, X, Yahoo! JAPAN).
+
+## 4. Invariants
+
+Three rules govern every slice. A change that breaks one is wrong even if it passes its own tests.
+
+1. **No identifier leaves Sanvi without a live directive that permits it** (NFR-1001/1002). Every
+   outbound upload — conversion, audience refresh, enhanced match — asks the phase-05
+   `DirectiveResolver` first and records the answer. There is no per-batch bypass.
+2. **Two numbers, never one** (NFR-1006). Platform-reported conversion value and Sanvi-observed
+   revenue are always side by side and labelled. Any field, screen, or export blending them is wrong.
+3. **Our code spends the tenant's money** (NFR-1007). Every mutation is idempotent, attributed in a
+   change log, and bounded by a cap.
+
+## 5. Key decisions
 
 | Decision | Choice | Why |
 |---|---|---|
-| Model | Unified domain model + per-platform `CapabilityMatrix` declaring supported objectives, budget types, targeting dimensions | A true lowest-common-denominator model is useless; a capability-aware one is honest |
-| Sync direction | Two-way, with **the ad platform as the source of truth for delivery/metrics** and Sanvi as the source of truth for *intent* (drafts, schedules, our-side approvals) | Ads change outside our UI constantly; pretending otherwise causes destructive overwrites |
-| Conflict policy | Last-writer-wins per field with a change log, plus a "drifted" flag when a remote change contradicts our intent | Users must see, not silently lose, changes made in Google/Meta UIs |
-| Conversion capture | First-party endpoint on the tenant's own domain (phase 08) → server-side upload | Survives ITP/ad-blockers; keeps PII server-side where we can hash and consent-gate it |
-| Identity for matching | Hashed (SHA-256, normalised) email/phone; **only** when phase 05 resolves `ads_measurement` to `Allowed`; never raw PII | Legal requirement and platform requirement |
-| Directive gate | Every upload asks the phase-05 `DirectiveResolver` for `ads_measurement` **and**, when the receiving vendor is registered as a third party rather than a service provider, `sale_or_share` / `targeted_advertising`; the answer already accounts for EU consent, APPI, and US opt-outs incl. GPC | Sending identifiers to an ad platform is a "sale"/"share" under US law; a measurement-only gate would honour the EU rules and quietly violate the US ones |
-| Audience uploads | Customer-list/audience sync requires `sale_or_share` **and** `targeted_advertising` per subject; subjects who opted out are excluded from the list and from any later refresh | An audience list is the one place an opt-out is easiest to leak past and hardest to retract |
-| Deduplication | Stable `event_id` shared between browser pixel and server-side upload | Both platforms dedupe on it; without it, conversions double-count and ROAS lies |
-| Token storage | OAuth refresh tokens encrypted with the phase-05 envelope scheme, per-tenant DEK, never logged | Ad account access is money access |
-| Metrics store | Postgres with monthly partitions + rollup tables (`daily`, `campaign_daily`, `platform_daily`); revisit a columnar store only if volume demands | Simple, joinable with revenue, good enough for years at this scale |
-| Attribution | Report **platform-reported conversions** and **Sanvi-observed revenue** side by side, never a single blended number presented as truth | Attribution windows differ per platform; a merged number is a lie with a decimal point |
-| Currency | Ad platforms report in the ad account currency; store minor units + currency, convert only for display with a dated FX rate | Never store converted values |
+| Model | Unified domain model + per-platform `CapabilityMatrix` (objectives, budget types, targeting dimensions) | A lowest-common-denominator model is useless; a capability-aware one is honest |
+| Sync direction | Two-way. Platform owns **delivery and metrics**; Sanvi owns **intent** (drafts, schedules, our approvals) | Ads change outside our UI constantly; pretending otherwise causes destructive overwrites |
+| Conflict policy | Last-writer-wins per field + change log, plus a `drifted` flag when a remote change contradicts our intent | Users must see, never silently lose, changes made in the native UIs |
+| Conversion capture | First-party endpoint on the tenant's own phase-08 domain, then server-side upload | Survives ITP and ad-blockers; keeps PII server-side where we hash and gate it |
+| Identity for matching | Normalised SHA-256 email/phone, **only** when phase 05 resolves `ads_measurement` to `Allowed`. Never raw PII | Legal and platform requirement |
+| Directive gate | Every upload asks for `ads_measurement` **and**, when the vendor is registered as a third party rather than a service provider, `sale_or_share` / `targeted_advertising`. The resolver already accounts for EU consent, APPI, and US opt-outs including GPC | Sending identifiers to an ad platform is a "sale"/"share" under US law; a measurement-only gate honours the EU rules and quietly violates the US ones |
+| Audience uploads | Require `sale_or_share` **and** `targeted_advertising` per subject; opted-out subjects are excluded from the list and from every later refresh | An audience list is where an opt-out leaks most easily and retracts hardest |
+| Deduplication | Stable `event_id` shared by browser pixel and server upload | Both platforms dedupe on it; without it conversions double-count and ROAS lies |
+| Token storage | Refresh tokens under the phase-05 envelope scheme, per-tenant DEK, never logged | Ad account access is money access |
+| Metrics store | Postgres, monthly partitions + rollups (`daily`, `campaign_daily`, `platform_daily`) | Simple, joinable with revenue, sufficient for years at this scale; columnar is a documented escape hatch |
+| Attribution | Report platform conversions and Sanvi revenue side by side, never one blended number | Attribution windows differ per platform; a merged number is a lie with a decimal point |
+| Currency | Store minor units + the ad account's currency; convert only for display, with a dated FX rate | Never persist a converted value |
 
-## Domain model
+## 6. Domain model
 
 ```rust
 pub struct AdPlatformConnection { id, tenant_id, platform: AdPlatform /*GoogleAds|Meta*/,
@@ -70,19 +103,21 @@ pub struct MetricPoint { tenant_id, platform, campaign_id, date, impressions, cl
     spend_minor, currency, conversions, conversion_value_minor, sanvi_revenue_minor }
 ```
 
-Ports: `AdPlatformPort` (auth, list accounts, CRUD campaign tree, fetch metrics, upload conversions),
-`ConversionSinkPort`, `FxRatePort`.
+**Ports:** `AdPlatformPort` (auth, list accounts, campaign-tree CRUD, fetch metrics, upload
+conversions) · `ConversionSinkPort` · `FxRatePort`.
 
-Events: `AdAccountConnected/Disconnected`, `CampaignCreated/Updated/Paused/Resumed`,
-`CampaignDrifted`, `ConversionRecorded`, `ConversionUploaded/UploadFailed`, `SpendThresholdReached`,
-`MetricsIngested`.
+**Events:** `AdAccountConnected/Disconnected` · `CampaignCreated/Updated/Paused/Resumed` ·
+`CampaignDrifted` · `ConversionRecorded` · `ConversionUploaded/UploadFailed` ·
+`SpendThresholdReached` · `MetricsIngested`.
 
-## Deliverables
+## 7. Schema
 
-### Schema
+Shipped in `migrations/20260826000000_advertising_core.sql`. RLS on every table; `conversion_events`
+and `metrics_daily` partitioned monthly with retention registered in the phase-05 data map.
 
 ```sql
 CREATE SCHEMA advertising;
+
 CREATE TABLE advertising.connections (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, platform text NOT NULL,
   external_account_id text NOT NULL, account_name text, currency text, timezone text,
@@ -90,13 +125,12 @@ CREATE TABLE advertising.connections (
   connected_by uuid, connected_at timestamptz, last_synced_at timestamptz, last_error jsonb,
   UNIQUE (tenant_id, platform, external_account_id));
 
-CREATE TABLE advertising.campaigns (id uuid PRIMARY KEY, tenant_id uuid NOT NULL, platform text,
-  connection_id uuid NOT NULL, external_id text, name text NOT NULL, objective text NOT NULL,
-  status text NOT NULL, budget jsonb NOT NULL, schedule jsonb, drift jsonb,
+CREATE TABLE advertising.campaigns (
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, platform text, connection_id uuid NOT NULL,
+  external_id text, name text NOT NULL, objective text NOT NULL, status text NOT NULL,
+  budget jsonb NOT NULL, schedule jsonb, drift jsonb,
   created_at timestamptz, updated_at timestamptz, UNIQUE (connection_id, external_id));
-CREATE TABLE advertising.ad_groups (...);
-CREATE TABLE advertising.ads (...);
-CREATE TABLE advertising.creatives (...);
+-- advertising.ad_groups, advertising.ads, advertising.creatives follow the same shape.
 
 CREATE TABLE advertising.conversion_events (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, event_id text NOT NULL, name text NOT NULL,
@@ -113,152 +147,148 @@ CREATE TABLE advertising.metrics_daily (
   PARTITION BY RANGE (date);
 ```
 
-RLS on everything; conversion and metric tables partitioned monthly with a retention rule registered
-in phase 05.
+## 8. Subsystems
 
-### Connection & OAuth
+### 8.1 Connections & OAuth — TASK-011
 
-- Google Ads: OAuth 2.0 (offline access), developer token, login-customer-id for manager accounts,
-  account picker after consent. Meta: Facebook Login for Business, system-user token where possible,
-  Business/Ad account selection, permission checks.
-- `state` parameter is a signed, single-use, tenant-bound nonce — CSRF protection is mandatory on
-  every OAuth surface.
-- Refresh scheduler renews tokens before expiry; revocation/expiry sets `status = Disconnected`,
-  notifies the tenant, and pauses dependent jobs rather than failing them repeatedly.
-- Scope changes on the platform side are detected on sync and surfaced as a re-consent prompt.
+- **Google Ads:** OAuth 2.0 offline access, developer token, `login-customer-id` for manager
+  accounts, account picker after consent. **Meta:** Facebook Login for Business, system-user token
+  where possible, Business/Ad account selection, permission checks.
+- `state` is a signed, single-use, tenant-bound nonce. CSRF protection is mandatory on every OAuth
+  surface.
+- The refresh scheduler renews before expiry. Revocation or expiry sets `status = Disconnected`,
+  notifies the tenant once, and **pauses** dependent jobs rather than failing them repeatedly.
+- Scope changes detected on sync surface as a re-consent prompt naming the missing scope.
 
-### Campaign operations
+### 8.2 Campaign operations — TASK-012 (Google), TASK-013 (Meta)
 
 - Draft in Sanvi → validate against the platform's `CapabilityMatrix` (objective, budget type,
-  targeting availability, creative specs, character limits per locale) → publish → poll/receive review
-  status → live.
-- Every mutation is idempotent (client-generated mutation id) and recorded in a change log with the
-  actor, so "who paused this campaign" is answerable.
-- Nightly reconciliation pulls the remote tree; differences from our last-known state mark `drift`
-  and notify, they never silently overwrite tenant edits made in the native UI.
+  targeting availability, creative specs, per-locale character limits) → publish → poll review status
+  → live.
+- Every mutation is idempotent via a client-generated mutation id, and recorded in a change log with
+  the actor — so "who paused this campaign" is answerable.
+- Nightly reconciliation pulls the remote tree. Differences from our last-known state mark `drift`
+  and notify; they never silently overwrite tenant edits made in the native UI.
 - Budget guardrails: per-campaign and per-tenant daily/monthly caps enforced by us (pause on breach)
-  in addition to the platform's own controls, with a warning threshold at 80 %.
+  **in addition to** the platform's own controls, warning at 80 %.
 
-### Conversion pipeline
+### 8.3 Conversion pipeline — TASK-014 (capture), TASK-015 (upload)
 
 ```
 storefront event (purchase/lead/signup) on the tenant's own domain
-  → POST /api/v1/public/track  (first-party, tenant-domain, rate-limited, bot-filtered)
-  → resolve the directive snapshot (phase 05), which already applies the subject's jurisdiction:
-    `ads_measurement` not `Allowed`, or `sale_or_share`/`targeted_advertising` denied for a
-    third-party vendor (incl. a US opt-out or a GPC signal) → store as analytics-only,
-    DO NOT upload, and mark `suppressed_by_directive` with the purpose and source that blocked it
-  → enrich: click ids from cookies/URL (gclid/gbraid/wbraid/fbc/fbp), order value from phase 09
-    payment record (server-side value is the trustworthy one)
-  → hash identifiers (normalise → SHA-256), never persist raw PII beyond what the order needs
-  → queue upload → Google Ads conversion upload / Meta Conversions API, batched, retried with
-    backoff, deduplicated by `event_id`
+  → POST /api/v1/public/track          first-party, tenant-domain, rate-limited, bot-filtered
+  → resolve the phase-05 directive snapshot for the subject's jurisdiction.
+      ads_measurement not Allowed, or sale_or_share / targeted_advertising denied for a
+      third-party vendor (incl. a US opt-out or a GPC signal)
+        → store analytics-only, DO NOT upload, mark suppressed_by_directive
+          with the purpose and the signal source that blocked it
+  → enrich: click ids from cookies/URL (gclid, gbraid, wbraid, fbc, fbp);
+            order value from the phase-09 payment record — the server-side value is the trustworthy one
+  → hash identifiers (normalise, then SHA-256); never persist raw PII beyond what the order needs
+  → queue upload → Google Ads conversion upload / Meta Conversions API,
+                   batched, backoff-retried, deduplicated by event_id
   → record per-platform upload state and errors; expose a per-conversion diagnostic view
 ```
 
-Value integrity: the conversion value comes from our own payment record where one exists, so
-inflated client-side values cannot poison ROAS.
+**Value integrity:** the conversion value comes from our own payment record wherever one exists, so
+an inflated client-side value cannot poison ROAS.
 
-### Metrics & ROAS
+### 8.4 Metrics & ROAS — TASK-016
 
-- Scheduled ingestion per connection (hourly for today, daily backfill for the trailing 30 days —
-  ad platforms restate conversions for days after the fact, so a single fetch is never enough).
+- Ingest per connection: hourly for today, daily backfill across the trailing 30 days. Ad platforms
+  restate conversions days after the fact, so a single fetch is never enough.
 - Rollups: `metrics_daily` → campaign/platform/tenant aggregates; revenue joined from phase 09 by
   `order_ref` and by date bucket.
-- Dashboard queries served from rollups with a bounded date range; ROAS computed as
+- Dashboard queries read the rollups over a bounded date range. ROAS is computed as
   `sanvi_revenue / spend` **and** `platform_conversion_value / spend`, both labelled, never merged.
-- FX: rates snapshotted daily; display conversion only, with the rate date shown.
+- FX rates are snapshotted daily and used for display only, with the rate date shown.
 
-### API surface (`api/advertising.yaml`)
+## 9. API surface (`api/advertising.yaml`)
 
-| Method | Path | Permission |
-|---|---|---|
-| GET | `/api/v1/tenant/ads/platforms` | `advertising.read` (+ entitlement per platform) |
-| POST | `/api/v1/tenant/ads/connections/{platform}/oauth/start` \| `/callback` | `advertising.connect` |
-| GET/DELETE | `/api/v1/tenant/ads/connections` | `advertising.connect` |
-| GET/POST/PATCH | `/api/v1/tenant/ads/campaigns` (+ ad groups, ads, creatives) | `advertising.campaign.*` |
-| POST | `/api/v1/tenant/ads/campaigns/{id}/pause` \| `/resume` | `advertising.campaign.write` |
-| GET | `/api/v1/tenant/ads/metrics?from&to&group_by` | `advertising.metrics.read` |
-| GET | `/api/v1/tenant/ads/conversions` (+ diagnostics) | `advertising.metrics.read` |
-| POST | `/api/v1/public/track` | none (tenant-domain, signed site key, rate-limited) |
-| GET | `/api/v1/tenant/ads/budget-alerts` | `advertising.read` |
+| Method | Path | Permission | Slice |
+|---|---|---|---|
+| GET | `/api/v1/tenant/ads/platforms` | `advertising.read` + per-platform entitlement | 10.1 |
+| POST | `/api/v1/tenant/ads/connections/{platform}/oauth/start` \| `/callback` | `advertising.connect` + step-up | 10.2 |
+| GET/DELETE | `/api/v1/tenant/ads/connections` | `advertising.connect` | 10.2 |
+| GET/POST/PATCH | `/api/v1/tenant/ads/campaigns` (+ ad-groups, ads, creatives) | `advertising.campaign.*` | 10.3 |
+| POST | `/api/v1/tenant/ads/campaigns/{id}/publish` \| `/validate` \| `/pause` \| `/resume` | `advertising.campaign.write` | 10.3 |
+| GET | `/api/v1/tenant/ads/campaigns/{id}/changes` \| `/drift` | `advertising.campaign.read` | 10.3 |
+| POST | `/api/v1/public/track` | none — tenant-domain, signed site key, rate-limited | 10.5 |
+| GET | `/api/v1/tenant/ads/conversions` (+ diagnostics) | `advertising.metrics.read` | 10.6 |
+| GET | `/api/v1/tenant/ads/metrics?from&to&group_by` | `advertising.metrics.read` | 10.7 |
+| GET/PUT | `/api/v1/tenant/ads/budget-caps`, `GET /ads/budget-alerts` | `advertising.budget.manage` / `.read` | 10.8 |
 
-## Work breakdown
+## 10. Work breakdown → tasks
 
-1. Domain model + `CapabilityMatrix` + validation engine.
-2. OAuth flows (both platforms), signed state, token encryption, refresh scheduler, revocation.
-3. `AdPlatformPort` + Google Ads adapter (campaign tree CRUD, metrics, conversion upload).
-4. Meta adapter (Marketing API campaign tree, Insights, Conversions API).
-5. Tracking endpoint: bot filtering, rate limits, consent resolution, click-id capture, event storage.
-6. Upload workers with batching, retry, dedupe, per-event diagnostics, and consent suppression.
-7. Metrics ingestion scheduler, restatement-aware backfill, partitioning and rollups.
-8. Revenue join with phase 09 and the ROAS query layer.
-9. Budget guardrails, threshold alerts, auto-pause, and its audit trail.
-10. Drift detection and reconciliation reporting.
-11. Privacy integration: `PersonalDataProvider` for this context (export/erase conversion identifiers).
-12. Runbooks: token revoked, platform API outage, conversion upload failures, spend anomaly.
+The twelve numbered work-breakdown items and the task each lands in are maintained in
+[`../tasks/phase-10/README.md`](../tasks/phase-10/README.md) § *Traceability to the implementation
+plan*, so the mapping has one owner. Current status per slice is in § 2 above.
 
-## Testing
+## 11. Testing
 
-- Adapter contract tests against recorded fixtures per platform, plus a sandbox/test-account suite.
-- Capability validation tests: rejecting an objective/budget combination the platform cannot express.
-- Directive tests: no `ads_measurement` → nothing is uploaded, and withdrawal stops future uploads
-  (contract test against phase 05's port). Run the same case for a US subject who never consented but
-  never opted out (upload proceeds), one who opted out (nothing uploaded), and one whose browser sent
-  GPC (nothing uploaded) — the three cases that a consent-only gate gets wrong.
-- Audience test: an opted-out subject is absent from a newly built list and removed from an existing
+- **Adapter contract suite** — one shared suite every adapter passes, run against recorded fixtures
+  per platform plus a sandbox/test-account suite.
+- **Capability validation** — an objective/budget combination the platform cannot express is
+  rejected with a field path, before submission.
+- **Directive matrix** — four cases a consent-only gate gets wrong, all required:
+  no `ads_measurement` → nothing uploaded, and withdrawal stops future uploads · a US subject who
+  never consented and never opted out → upload proceeds · a US subject who opted out → nothing
+  uploaded · a browser sending GPC → nothing uploaded. Contract-tested against the phase-05 port.
+- **Audience** — an opted-out subject is absent from a newly built list and removed from an existing
   one on the next refresh.
-- Dedupe test: browser pixel + server event with the same `event_id` counts once.
-- Restatement test: re-ingesting a day updates rollups without double counting.
-- Drift test: a campaign paused in Google's UI shows as drifted, is not resurrected by our sync.
-- ROAS arithmetic tests across currencies, including JPY, and with zero spend (no division by zero).
-- Load: 500 campaigns × 90 days ingestion within the scheduling window.
+- **Dedupe** — browser pixel plus server event sharing an `event_id` count once.
+- **Restatement** — re-ingesting a day updates rollups without double counting.
+- **Drift** — a campaign paused in Google's UI shows as drifted and is never resurrected by our sync.
+- **ROAS arithmetic** — across currencies including JPY, and with zero spend (null, never `∞`).
+- **Load** — 500 campaigns × 90 days ingested within the scheduling window.
 
-## Security & compliance
+## 12. Security & compliance
 
-- Refresh tokens encrypted per tenant; access to the decrypt path is audited; tokens never logged and
-  redacted in traces.
-- `/api/v1/public/track` is unauthenticated by design: signed site key per tenant domain, strict
-  origin checks, aggressive rate limiting, payload size caps, and no reflection of input.
-- Hashed identifiers only; raw PII is never sent to ad platforms; consent snapshot stored with each
-  event as proof.
-- Ad account access is high-value: connection changes require fresh MFA and are audited.
-- Sub-processor registry (phase 05) updated with Google and Meta, including their **role**
+- Refresh tokens encrypted per tenant; the decrypt path is audited; tokens never logged and redacted
+  in traces.
+- `/api/v1/public/track` is unauthenticated by design: per-domain signed site key, strict origin
+  checks, aggressive rate limiting, payload size caps, and no reflection of input.
+- Hashed identifiers only. Raw PII never reaches an ad platform. The consent snapshot is stored with
+  each event as proof.
+- Ad account access is money-adjacent: connection changes require fresh MFA and are audited.
+- Phase-05 sub-processor registry updated with Google and Meta, including their **role**
   (service provider/contractor vs. third party — the field that decides whether an upload is a "sale"
   or "share" under US law), the contract terms relied on, and transfer disclosures for APPI
-  cross-border provision and EU/UK transfers to US platforms.
-- A retracted directive (consent withdrawal or a US opt-out) triggers a deletion/suppression request
-  to the platforms that support one, and removal from every audience list on the next refresh.
+  cross-border provision and EU/UK transfers.
+- A retracted directive (withdrawal or US opt-out) triggers a deletion/suppression request to every
+  platform that supports one, and removal from every audience list on the next refresh.
 
-## Observability
+## 13. Observability
 
-Metrics: `ads_sync_duration{platform}`, `ads_sync_failures_total{platform,code}`,
-`conversion_upload_total{platform,result}`, `conversion_suppressed_total{reason}`,
-`ads_token_refresh_failures`, `metrics_ingestion_lag_hours`, `budget_threshold_alerts_total`.
-Alerts: ingestion lag > 6 h, upload failure ratio > 5 %, token refresh failures, spend anomaly
-(> 3σ day-over-day).
+**Metrics:** `ads_sync_duration{platform}` · `ads_sync_failures_total{platform,code}` ·
+`conversion_upload_total{platform,result}` · `conversion_suppressed_total{reason}` ·
+`ads_token_refresh_failures` · `metrics_ingestion_lag_hours` · `budget_threshold_alerts_total`.
 
-## Acceptance criteria
+**Alerts:** ingestion lag > 6 h · upload failure ratio > 5 % · token refresh failures ·
+spend anomaly > 3σ day-over-day.
+
+## 14. Phase acceptance criteria
 
 - [ ] A tenant connects Google Ads and Meta, creates a campaign in Sanvi, and it appears live on the
       platform with matching budget and schedule.
-- [ ] A storefront purchase produces exactly one conversion on each connected platform, with the
-      value taken from the server-side payment record.
-- [ ] With `ads_measurement` withdrawn, or with a US opt-out of sale/share (including one expressed
-      only via GPC), no conversion is uploaded and the suppression is visible in diagnostics with the
-      purpose and source that caused it.
+- [ ] A storefront purchase produces exactly one conversion on each connected platform, valued from
+      the server-side payment record.
+- [ ] With `ads_measurement` withdrawn, or a US opt-out of sale/share including one expressed only
+      via GPC, no conversion is uploaded and the suppression is visible in diagnostics with the
+      purpose and the signal source that caused it.
 - [ ] The dashboard shows spend, clicks, conversions, revenue, and ROAS for a date range, matching
       the platform's own reporting within the documented restatement window.
 - [ ] A campaign paused natively is reported as drifted rather than overwritten.
-- [ ] Adding a third network requires only an adapter + capability matrix (proven with a fake).
+- [ ] An opted-out subject is absent from new audience lists and removed from existing ones on refresh.
+- [ ] Adding a third network requires only an adapter plus a capability matrix — proven with the fake.
 
-## Risks
+## 15. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Ad platform API changes / deprecations | Versioned adapters, contract tests against fixtures, deprecation calendar tracked per platform |
-| Google Ads developer token approval delays | Start the application at phase kickoff; test-account access unblocks development in the meantime |
-| Conversion double counting destroys trust in ROAS | Shared `event_id`, dedupe tests, and side-by-side platform vs Sanvi revenue reporting |
-| Attribution mismatch complaints | Documented methodology in-product, both numbers shown, windows stated |
-| Metrics volume growth | Partitioning, rollups, retention policy; columnar store is a documented escape hatch |
-| Tenant spends real money through our bugs | Budget caps, auto-pause, mutation change log, and dry-run mode for bulk edits |
+| **Live credentials block 10.2/10.3 (active)** | Fake adapter carries the abstraction; 10.5 proceeds in parallel; developer-token and app-review applications submitted at kickoff |
+| Ad platform API changes and deprecations | Versioned adapters, contract tests against fixtures, a per-platform deprecation calendar |
+| Conversion double counting destroys trust in ROAS | Shared `event_id`, dedupe tests, side-by-side platform vs. Sanvi revenue |
+| Attribution mismatch complaints | In-product methodology, both numbers shown, windows stated |
+| Metrics volume growth | Partitioning, rollups, retention policy; columnar store as a documented escape hatch |
+| Tenant spends real money through our bugs | Budget caps, auto-pause, mutation change log, dry-run for bulk edits |
