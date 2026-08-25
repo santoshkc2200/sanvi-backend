@@ -5,7 +5,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use super::{AdvertisingError, ConnectionHealth, ConnectionStatus, PlatformKey, SecretRef};
+use super::{
+    AdvertisingError, ConnectionHealth, ConnectionStatus, PlatformAccount, PlatformKey, SecretRef,
+};
+
+/// ISO-4217's reserved "no currency involved" code — the correct placeholder
+/// for a pending connection whose account (and therefore real currency)
+/// isn't chosen yet, rather than an invented sentinel.
+const PENDING_CURRENCY: &str = "XXX";
+const PENDING_TIMEZONE: &str = "UTC";
 
 /// Provider failure retained for operator diagnostics. Extra provider fields
 /// stay intact through database round-trips rather than being discarded.
@@ -57,6 +65,10 @@ pub struct AdvertisingConnection {
     last_error: Option<SyncError>,
     disconnected_notified_at: Option<DateTime<Utc>>,
     dependent_jobs_paused_at: Option<DateTime<Utc>>,
+    /// Set only while `status == Pending`: the account list fetched at
+    /// exchange time, cached because the authorization code that produced
+    /// it is already spent and cannot be replayed.
+    pending_accounts: Option<Vec<PlatformAccount>>,
 }
 
 impl AdvertisingConnection {
@@ -111,7 +123,105 @@ impl AdvertisingConnection {
             last_error: None,
             disconnected_notified_at: None,
             dependent_jobs_paused_at: None,
+            pending_accounts: None,
         })
+    }
+
+    /// A connection between "code exchanged" and "account chosen": no real
+    /// currency/timezone yet, so those fields carry the ISO/tz placeholders
+    /// rather than a guess — `finalize` overwrites them once known.
+    /// `id` is caller-chosen (rather than freshly generated here) so the
+    /// caller can compute `token_ref` — the connection's own id, stringified
+    /// — before this returns, instead of mutating it in afterward.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_pending(
+        id: Uuid,
+        tenant_id: Uuid,
+        platform: PlatformKey,
+        token_ref: SecretRef,
+        granted_scopes: Vec<String>,
+        token_expires_at: Option<DateTime<Utc>>,
+        accounts: Vec<PlatformAccount>,
+        connected_by: Option<Uuid>,
+        now: DateTime<Utc>,
+    ) -> Result<Self, AdvertisingError> {
+        if accounts.is_empty() {
+            return Err(AdvertisingError::InvalidInput(
+                "advertising authorization exchange returned no accounts".to_string(),
+            ));
+        }
+        let mut connection = Self::new(
+            tenant_id,
+            platform,
+            format!("pending:{id}"),
+            PENDING_CURRENCY,
+            PENDING_TIMEZONE,
+            token_ref,
+            connected_by,
+            now,
+        )?;
+        connection.id = id;
+        connection.status = ConnectionStatus::Pending;
+        connection.granted_scopes = normalize_scopes(granted_scopes);
+        connection.token_expires_at = token_expires_at;
+        connection.pending_accounts = Some(accounts);
+        Ok(connection)
+    }
+
+    /// Disconnect in Sanvi. Does not reach the platform side — the tenant's
+    /// ads keep running there until they act in the platform's own UI.
+    pub fn disconnect(&mut self) {
+        self.status = ConnectionStatus::Disconnected;
+    }
+
+    /// The tenant chose an account: leave `Pending`, adopt its identity and
+    /// real currency/timezone, and drop the cached candidate list. Fails if
+    /// the chosen account was never in that list — the picker only offers
+    /// accounts this connection actually fetched.
+    pub fn finalize(
+        &mut self,
+        chosen: &PlatformAccount,
+        currency: impl Into<String>,
+        timezone: impl Into<String>,
+    ) -> Result<(), AdvertisingError> {
+        if self.status != ConnectionStatus::Pending {
+            return Err(AdvertisingError::InvalidInput(
+                "advertising connection is not pending selection".to_string(),
+            ));
+        }
+        let offered = self
+            .pending_accounts
+            .as_ref()
+            .is_some_and(|accounts| accounts.contains(chosen));
+        if !offered {
+            return Err(AdvertisingError::InvalidInput(
+                "chosen advertising account was not among the fetched accounts".to_string(),
+            ));
+        }
+        let currency = currency.into().trim().to_ascii_uppercase();
+        let timezone = timezone.into().trim().to_string();
+        if currency.len() != 3 || !currency.chars().all(|c| c.is_ascii_alphabetic()) {
+            return Err(AdvertisingError::InvalidInput(
+                "advertising account currency must be ISO-4217".to_string(),
+            ));
+        }
+        if timezone.is_empty() {
+            return Err(AdvertisingError::InvalidInput(
+                "advertising account timezone is required".to_string(),
+            ));
+        }
+        self.external_account_id = normalize_external_account_id(chosen.external_id.clone())?;
+        self.account_name = (!chosen.display_name.trim().is_empty())
+            .then(|| chosen.display_name.trim().to_string());
+        self.currency = currency;
+        self.timezone = timezone;
+        self.status = ConnectionStatus::Active;
+        self.pending_accounts = None;
+        Ok(())
+    }
+
+    pub fn pending_accounts(&self) -> Option<&[PlatformAccount]> {
+        self.pending_accounts.as_deref()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -133,6 +243,7 @@ impl AdvertisingConnection {
         last_error: Option<SyncError>,
         disconnected_notified_at: Option<DateTime<Utc>>,
         dependent_jobs_paused_at: Option<DateTime<Utc>>,
+        pending_accounts: Option<Vec<PlatformAccount>>,
     ) -> Result<Self, AdvertisingError> {
         let mut connection = Self::new(
             tenant_id,
@@ -153,6 +264,7 @@ impl AdvertisingConnection {
         connection.last_error = last_error;
         connection.disconnected_notified_at = disconnected_notified_at;
         connection.dependent_jobs_paused_at = dependent_jobs_paused_at;
+        connection.pending_accounts = pending_accounts;
         Ok(connection)
     }
 

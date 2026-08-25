@@ -2,6 +2,7 @@
 
 pub mod campaigns;
 pub mod catalog;
+pub mod connections;
 pub mod drift_resolution;
 pub mod reconciliation;
 pub mod reconciliation_sweep;
@@ -14,6 +15,9 @@ pub use campaigns::{
     ValidateCampaign,
 };
 pub use catalog::ListPlatformCatalog;
+pub use connections::{
+    CreateConnection, DeleteConnection, HandleCallback, ListConnections, StartAuthorization,
+};
 pub use drift_resolution::{DriftResolution, ResolveCampaignDrift, ResolvedCampaignDrift};
 pub use reconciliation::ReconcileCampaign;
 pub use reconciliation_sweep::{ReconcileDueCampaigns, ReconciliationSweepReport};

@@ -43,13 +43,16 @@ use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
         FakeAdPlatform, OutboxEventPublisher as AdvertisingEvents,
-        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxOAuthStateStore,
+        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
+        SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
     },
     application::{
-        AddAd, AddAdGroup, CreateCampaign, GetCampaign, ListCampaignChanges, ListCampaigns,
-        ListPlatformCatalog, PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign,
-        ResolveCampaignDrift, ResumeCampaign, UpdateAd, UpdateAdGroup, ValidateCampaign,
+        AddAd, AddAdGroup, CreateCampaign, CreateConnection, DeleteConnection, GetCampaign,
+        HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListPlatformCatalog,
+        PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign, ResolveCampaignDrift,
+        ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup, ValidateCampaign,
     },
+    domain::TokenVault,
     routes as advertising_routes,
 };
 use sanvi_audit::{
@@ -2786,6 +2789,7 @@ pub fn build_advertising_state(
     config: &AdvertisingConfig,
 ) -> anyhow::Result<sanvi_advertising::adapters::http::AdvertisingState> {
     config.validate_oauth_enabled()?;
+    let token_kek = config.token_kek_bytes()?;
     let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
         &FakeAdPlatform::registered_catalog(),
         config.quota_platform_wide_permits,
@@ -2793,6 +2797,15 @@ pub fn build_advertising_state(
     ));
     let tx = sanvi_persistence::TxManager::new(pool);
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
+    let oauth_state =
+        OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store);
+    let token_vault = std::sync::Arc::new(TokenVault::new(
+        std::sync::Arc::new(SqlxTenantEnvelopeCrypto::new(
+            token_kek,
+            config.token_kek_id.clone(),
+        )),
+        std::sync::Arc::new(SqlxConnectionTokenRepository::new()),
+    ));
     let campaigns: std::sync::Arc<dyn sanvi_advertising::domain::CampaignRepository> =
         std::sync::Arc::new(SqlxCampaignRepository::new());
     let connections: std::sync::Arc<dyn sanvi_advertising::AdvertisingConnectionRepository> =
@@ -2817,7 +2830,7 @@ pub fn build_advertising_state(
         create_campaign: std::sync::Arc::new(CreateCampaign::new(
             tx.clone(),
             campaigns.clone(),
-            connections,
+            connections.clone(),
             registry.clone(),
             events.clone(),
         )),
@@ -2874,8 +2887,34 @@ pub fn build_advertising_state(
             events.clone(),
             registry.clone(),
         )),
-        update_ad: std::sync::Arc::new(UpdateAd::new(tx.clone(), campaigns, events, registry)),
-        oauth_state: OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store),
+        update_ad: std::sync::Arc::new(UpdateAd::new(
+            tx.clone(),
+            campaigns,
+            events,
+            registry.clone(),
+        )),
+        start_authorization: std::sync::Arc::new(StartAuthorization::new(
+            registry.clone(),
+            oauth_state.clone(),
+        )),
+        handle_callback: std::sync::Arc::new(HandleCallback::new(
+            tx.clone(),
+            connections.clone(),
+            registry.clone(),
+            oauth_state.clone(),
+            token_vault,
+        )),
+        create_connection: std::sync::Arc::new(CreateConnection::new(
+            tx.clone(),
+            connections.clone(),
+        )),
+        list_connections: std::sync::Arc::new(ListConnections::new(
+            tx.clone(),
+            connections.clone(),
+            registry,
+        )),
+        delete_connection: std::sync::Arc::new(DeleteConnection::new(tx, connections)),
+        oauth_state,
     })
 }
 

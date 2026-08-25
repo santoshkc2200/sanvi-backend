@@ -14,14 +14,14 @@ use sanvi_advertising::{
         SqlxCampaignRepository, SqlxOAuthStateStore,
     },
     application::{
-        AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, GetCampaign,
-        ListCampaignChanges, ListCampaigns, NewAdFields, NewAdGroupFields, NewCampaignFields,
-        PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign, ReconcileDueCampaigns,
-        ResumeCampaign, UpdateAdGroup, ValidateCampaign,
+        AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, CreateConnection,
+        GetCampaign, ListCampaignChanges, ListCampaigns, NewAdFields, NewAdGroupFields,
+        NewCampaignFields, PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign,
+        ReconcileDueCampaigns, ResumeCampaign, UpdateAdGroup, ValidateCampaign,
     },
     domain::{
         BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative, CreativeText,
-        Money, Objective, Targeting,
+        Money, Objective, PlatformAccount, Targeting, TenantEnvelopeCrypto,
     },
 };
 use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
@@ -31,6 +31,7 @@ use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 const ADVERTISING_MIGRATION: i64 = 20_260_826_000_000;
+const TOKEN_VAULT_MIGRATION: i64 = 20_260_826_050_000;
 
 fn migrations_dir() -> std::path::PathBuf {
     std::env::var("CARGO_MANIFEST_DIR")
@@ -517,6 +518,182 @@ async fn reconnect_reuses_the_original_connection_row() {
     assert_eq!(persisted_error["provider_reason"], "password_changed");
     assert_eq!(persisted_lifecycle.0, Some(now + Duration::minutes(2)));
     assert_eq!(persisted_lifecycle.1, Some(now + Duration::minutes(2)));
+}
+
+#[tokio::test]
+async fn selecting_a_reconnected_account_reuses_the_original_row_and_token() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "advertising-reconnect-selection").await;
+    let manager = TxManager::new(pool);
+    let repository: Arc<dyn AdvertisingConnectionRepository> =
+        Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let platform = PlatformKey::parse("google_ads").unwrap();
+    let account = PlatformAccount {
+        external_id: "123-456-7890".to_string(),
+        display_name: "Reconnected account".to_string(),
+    };
+
+    let existing = AdvertisingConnection::new(
+        tenant_id,
+        platform.clone(),
+        account.external_id.clone(),
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("existing-token"),
+        Some(Uuid::now_v7()),
+        Utc::now(),
+    )
+    .unwrap();
+    let existing_id = existing.id();
+    let pending_id = Uuid::now_v7();
+    let pending = AdvertisingConnection::new_pending(
+        pending_id,
+        tenant_id,
+        platform,
+        SecretRef::new(pending_id.to_string()),
+        vec!["ads.read".to_string()],
+        None,
+        vec![account.clone()],
+        Some(Uuid::now_v7()),
+        Utc::now(),
+    )
+    .unwrap();
+
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    repository.upsert(&mut scope, &existing).await.unwrap();
+    repository.upsert(&mut scope, &pending).await.unwrap();
+    sqlx::query(
+        "INSERT INTO advertising.connection_tokens (connection_id, tenant_id, ciphertext)
+         VALUES ($1, $2, $3), ($4, $2, $5)",
+    )
+    .bind(existing_id)
+    .bind(tenant_id)
+    .bind(b"old-token".as_slice())
+    .bind(pending_id)
+    .bind(b"new-token".as_slice())
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+
+    let create = CreateConnection::new(manager.clone(), repository.clone());
+    let stored = create
+        .execute(
+            tenant_id,
+            pending_id,
+            &account.external_id,
+            "JPY".to_string(),
+            "Asia/Tokyo".to_string(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(stored.id(), existing_id);
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let connection_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM advertising.connections WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    let token: Vec<u8> = sqlx::query_scalar(
+        "SELECT ciphertext FROM advertising.connection_tokens WHERE tenant_id = $1 AND connection_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(existing_id)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    let pending_token_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM advertising.connection_tokens WHERE tenant_id = $1 AND connection_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(pending_id)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+
+    assert_eq!(connection_count, 1);
+    assert_eq!(token, b"new-token");
+    assert_eq!(pending_token_count, 0);
+}
+
+#[tokio::test]
+async fn existing_tenant_key_is_usable_after_process_restart() {
+    let (port, _node) = start_postgres().await;
+    migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "advertising-tenant-key-restart").await;
+    let manager = TxManager::new(pool);
+
+    let first_process = sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto::new(
+        [7u8; 32],
+        "test-kek".to_string(),
+    );
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    first_process
+        .encrypt_for_tenant(&mut scope, tenant_id, b"first token")
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let restarted_process = sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto::new(
+        [7u8; 32],
+        "test-kek".to_string(),
+    );
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    restarted_process
+        .encrypt_for_tenant(&mut scope, tenant_id, b"second token")
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+}
+
+#[tokio::test]
+// Rollback must preserve RLS-protected rows between callback and account selection.
+async fn rolling_back_pending_connections_converts_them_to_disconnected() {
+    let (port, _node) = start_postgres().await;
+    let migrator_pool = migrate(port).await;
+    let pool = app_pool(port).await;
+    let tenant_id = seed_tenant(&pool, "advertising-pending-rollback").await;
+    let connection_id = Uuid::now_v7();
+    let manager = TxManager::new(pool.clone());
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    sqlx::query(
+        "INSERT INTO advertising.connections
+         (id, tenant_id, platform, external_account_id, currency, timezone, status, token_ref,
+          pending_accounts)
+         VALUES ($1, $2, 'google_ads', $3, 'XXX', 'UTC', 'pending', $4, '[]'::jsonb)",
+    )
+    .bind(connection_id)
+    .bind(tenant_id)
+    .bind(format!("pending:{connection_id}"))
+    .bind(connection_id.to_string())
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+
+    Migrator::new(migrations_dir())
+        .undo(&migrator_pool, TOKEN_VAULT_MIGRATION)
+        .await
+        .unwrap();
+
+    let manager = TxManager::new(pool);
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM advertising.connections WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(connection_id)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(status, "disconnected");
 }
 
 /// End-to-end campaign tree lifecycle against the fake adapter: draft never

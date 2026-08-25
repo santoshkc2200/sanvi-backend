@@ -10,6 +10,7 @@ pub mod oauth_state;
 pub mod ports;
 pub mod reconciliation;
 pub mod secrets;
+pub mod token_vault;
 pub mod validation;
 
 pub use campaign_store::{CampaignChange, CampaignRepository, ChangeSource, StoredCampaign};
@@ -29,10 +30,13 @@ pub use oauth_state::{
     InMemoryOAuthStateStore, OAuthStateClaims, OAuthStateError, OAuthStateManager, OAuthStateStore,
 };
 pub use ports::{
-    AdPlatformPort, AdvertisingConnectionRepository, AdvertisingError, AuthorizationRequest,
-    AuthorizationStart, MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor,
-    UploadedConversion,
+    AdPlatformPort, AdvertisingConnectionRepository, AdvertisingError, AuthorizationExchange,
+    AuthorizationRequest, AuthorizationStart, ExchangedAuthorization, MetricPoint, MetricQuery,
+    PlatformAccount, PlatformDescriptor, UploadedConversion,
 };
 pub use reconciliation::{CampaignReconciliationState, ReconciliationResult};
 pub use secrets::SecretRef;
+pub use token_vault::{
+    ConnectionTokenRepository, TenantEnvelopeCrypto, TenantKeyRepository, TenantKeyRow, TokenVault,
+};
 pub use validation::{ValidationViolation, validate_campaign};

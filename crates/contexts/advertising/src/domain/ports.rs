@@ -33,12 +33,35 @@ pub enum AdvertisingError {
     AdGroupNotFound,
     #[error("ad not found")]
     AdNotFound,
+    #[error("advertising token encryption is not configured")]
+    EncryptionUnconfigured,
+    #[error("advertising token encryption failure: {0}")]
+    EncryptionFailure(String),
 }
 
 #[async_trait]
 pub trait AdvertisingConnectionRepository: Send + Sync {
-    /// A reconnect must retain its original id and campaign history.
+    /// A reconnect must retain its original id and campaign history. Merges
+    /// on the natural key `(tenant_id, platform, external_account_id)` — not
+    /// suitable for finalizing a pending connection, whose whole point is to
+    /// *change* that key; use `update` there instead.
     async fn upsert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &AdvertisingConnection,
+    ) -> Result<AdvertisingConnection, AdvertisingError>;
+    /// Persist mutations to an already-known row, addressed by id: finalize
+    /// (external_account_id changes, so it cannot go through `upsert`'s
+    /// natural-key conflict target) and refresh success/failure.
+    async fn update(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        connection: &AdvertisingConnection,
+    ) -> Result<AdvertisingConnection, AdvertisingError>;
+    /// Finalize a pending row. If its selected account already exists, retain
+    /// that canonical row (and its campaign history), replace its token with
+    /// the pending credential, and remove the temporary row.
+    async fn finalize_pending(
         &self,
         scope: &mut ScopedTx<'_>,
         connection: &AdvertisingConnection,
@@ -81,6 +104,38 @@ pub struct AuthorizationStart {
     pub authorization_url: String,
 }
 
+/// The callback's authorization code, ready to redeem. `redirect_uri` must
+/// match what `begin_authorization` sent — the platform rejects a mismatch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorizationExchange {
+    pub code: String,
+    pub redirect_uri: String,
+}
+
+/// The result of redeeming an authorization code: a refresh token (never
+/// logged, never returned to a caller outside the connections service) and
+/// the accounts it can see, for the picker. The exchange endpoint of every
+/// platform this port supports returns both in one round trip, so this is
+/// one port method rather than two.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ExchangedAuthorization {
+    pub refresh_token: String,
+    pub granted_scopes: Vec<String>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub accounts: Vec<PlatformAccount>,
+}
+
+impl std::fmt::Debug for ExchangedAuthorization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExchangedAuthorization")
+            .field("refresh_token", &"[REDACTED]")
+            .field("granted_scopes", &self.granted_scopes)
+            .field("expires_at", &self.expires_at)
+            .field("accounts", &self.accounts)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetricQuery {
     pub from: String,
@@ -108,6 +163,9 @@ pub struct UploadedConversion {
 #[async_trait]
 pub trait AdPlatformPort: Send + Sync {
     fn descriptor(&self) -> PlatformDescriptor;
+    /// Every permission needed for campaign sync and conversion uploads.
+    /// Health reports which of these were not granted at authorization time.
+    fn required_scopes(&self) -> Vec<String>;
     async fn begin_authorization(
         &self,
         connection: &ConnectionHandle,
@@ -117,6 +175,13 @@ pub trait AdPlatformPort: Send + Sync {
         &self,
         connection: &ConnectionHandle,
     ) -> Result<Vec<PlatformAccount>, AdvertisingError>;
+    /// Redeem a callback's authorization code for a refresh token and the
+    /// accounts it can see. The code is single-use: call this exactly once
+    /// per callback, before anything is persisted.
+    async fn exchange_authorization(
+        &self,
+        exchange: &AuthorizationExchange,
+    ) -> Result<ExchangedAuthorization, AdvertisingError>;
     async fn create_campaign(
         &self,
         connection: &ConnectionHandle,

@@ -2,8 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use actix_web::{HttpRequest, HttpResponse, web};
 use sanvi_http::{
-    ApiError, CurrentSubject, CurrentTenant, PROBLEM_TYPE_BASE, ProblemDetail, RequiredAnyFeature,
-    RequiredPermission,
+    ApiError, CurrentSubject, CurrentTenant, FreshAal2Required, PROBLEM_TYPE_BASE, ProblemDetail,
+    RequiredAnyFeature, RequiredPermission,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -17,8 +17,9 @@ use crate::{
         NewCampaignFields, ResolvedCampaignDrift,
     },
     domain::{
-        AdGroup, AdvertisingError, BidSettings, Budget, Campaign, CampaignChange, ConnectionState,
-        Creative, Objective, Schedule, StoredCampaign, Targeting, ValidationViolation,
+        AdGroup, AdvertisingConnection, AdvertisingError, BidSettings, Budget, Campaign,
+        CampaignChange, ConnectionHealth, ConnectionState, Creative, Objective, PlatformAccount,
+        PlatformKey, Schedule, StoredCampaign, Targeting, ValidationViolation,
     },
 };
 
@@ -209,6 +210,16 @@ fn api_error(error: AdvertisingError) -> ApiError {
                 violations.len()
             ),
         },
+        AdvertisingError::EncryptionUnconfigured => {
+            tracing::error!("advertising token encryption is not configured");
+            ApiError::ServiceUnavailable {
+                detail: "advertising connections are temporarily unavailable".to_string(),
+            }
+        }
+        AdvertisingError::EncryptionFailure(detail) => {
+            tracing::error!(error = %detail, "advertising token encryption failure");
+            ApiError::internal("advertising connection could not be completed")
+        }
     }
 }
 
@@ -1334,4 +1345,307 @@ pub async fn update_ad(
     let view = CampaignView::from(stored);
     resolve_idempotent(&state, &key, &scope, &view).await;
     Ok(HttpResponse::Ok().json(view))
+}
+
+// --- Connections: OAuth start/callback, account selection, list, disconnect
+// (TASK-011). --------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct StartOAuthRequest {
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct StartOAuthResponse {
+    pub authorization_url: String,
+    pub state: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/connections/{platform}/oauth/start",
+    tag = "advertising",
+    operation_id = "start_oauth",
+    params(("platform" = String, Path, description = "google_ads or meta")),
+    request_body = StartOAuthRequest,
+    responses(
+        (status = 200, description = "Authorization URL and opaque state; the frontend never constructs the URL and never sees a token", body = StartOAuthResponse),
+        (status = 400, description = "Unknown platform or missing redirect_uri", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.connect permission, missing platform entitlement, or fresh MFA missing", body = ProblemDetail)
+    )
+)]
+pub async fn start_oauth(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<String>,
+    body: web::Json<StartOAuthRequest>,
+    _permission: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let platform = PlatformKey::parse(&path.into_inner()).map_err(api_error)?;
+    require_platform_entitlement(&state, tenant_id, &platform, feature_gate.get_ref()).await?;
+    let (authorization_url, oauth_state) = state
+        .start_authorization
+        .execute(tenant_id, platform, body.into_inner().redirect_uri)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(StartOAuthResponse {
+        authorization_url,
+        state: oauth_state,
+    }))
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct OAuthCallbackQuery {
+    pub state: String,
+    pub code: String,
+    /// Must match the `redirect_uri` sent to `start` — the platform rejects
+    /// a mismatch at exchange time.
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AccountView {
+    pub external_id: String,
+    pub display_name: String,
+}
+
+impl From<PlatformAccount> for AccountView {
+    fn from(account: PlatformAccount) -> Self {
+        Self {
+            external_id: account.external_id,
+            display_name: account.display_name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PendingConnectionView {
+    #[schema(value_type = String, format = Uuid)]
+    pub id: Uuid,
+    pub platform: String,
+    pub status: String,
+    pub accounts: Vec<AccountView>,
+}
+
+fn pending_connection_view(connection: AdvertisingConnection) -> PendingConnectionView {
+    PendingConnectionView {
+        id: connection.id(),
+        platform: connection.platform().as_str().to_string(),
+        status: connection.status().as_str().to_string(),
+        accounts: connection
+            .pending_accounts()
+            .map(|accounts| accounts.iter().cloned().map(AccountView::from).collect())
+            .unwrap_or_default(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/connections/{platform}/oauth/callback",
+    tag = "advertising",
+    operation_id = "oauth_callback",
+    params(
+        ("platform" = String, Path, description = "google_ads or meta"),
+        ("state" = String, Query, description = "Opaque state returned by start"),
+        ("code" = String, Query, description = "Authorization code from the platform"),
+        ("redirect_uri" = String, Query, description = "Must match the redirect_uri sent to start")
+    ),
+    responses(
+        (status = 200, description = "Code redeemed; connection is pending account selection", body = PendingConnectionView),
+        (status = 400, description = "Forged, expired, replayed, or cross-tenant state, or the code could not be exchanged", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.connect permission", body = ProblemDetail)
+    )
+)]
+pub async fn oauth_callback(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    subject: CurrentSubject,
+    path: web::Path<String>,
+    query: web::Query<OAuthCallbackQuery>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let platform = PlatformKey::parse(&path.into_inner()).map_err(api_error)?;
+    let query = query.into_inner();
+    let connection = state
+        .handle_callback
+        .execute(
+            tenant_id,
+            platform,
+            &query.state,
+            query.code,
+            query.redirect_uri,
+            Some(subject.0.user_id),
+        )
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(pending_connection_view(connection)))
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateConnectionRequest {
+    #[schema(value_type = String, format = Uuid)]
+    pub connection_id: Uuid,
+    pub external_account_id: String,
+    #[schema(example = "JPY")]
+    pub currency: String,
+    #[schema(example = "Asia/Tokyo")]
+    pub timezone: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ConnectionHealthView {
+    pub can_sync: bool,
+    pub can_upload_conversions: bool,
+    pub token_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub scopes_missing: Vec<String>,
+    pub last_error: Option<String>,
+    pub last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub reconnect_required: bool,
+}
+
+impl From<ConnectionHealth> for ConnectionHealthView {
+    fn from(health: ConnectionHealth) -> Self {
+        Self {
+            can_sync: health.can_sync,
+            can_upload_conversions: health.can_upload_conversions,
+            token_expires_at: health.token_expires_at,
+            scopes_missing: health.scopes_missing,
+            last_error: health.last_error,
+            last_synced_at: health.last_synced_at,
+            reconnect_required: health.reconnect_required,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ConnectionView {
+    #[schema(value_type = String, format = Uuid)]
+    pub id: Uuid,
+    pub platform: String,
+    pub external_account_id: String,
+    pub account_name: Option<String>,
+    pub currency: String,
+    pub timezone: String,
+    pub status: String,
+    pub health: ConnectionHealthView,
+}
+
+fn connection_view(connection: AdvertisingConnection, health: ConnectionHealth) -> ConnectionView {
+    ConnectionView {
+        id: connection.id(),
+        platform: connection.platform().as_str().to_string(),
+        external_account_id: connection.external_account_id().to_string(),
+        account_name: connection.account_name().map(str::to_string),
+        currency: connection.currency().to_string(),
+        timezone: connection.timezone().to_string(),
+        status: connection.status().as_str().to_string(),
+        health: health.into(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/connections",
+    tag = "advertising",
+    operation_id = "create_connection",
+    request_body = CreateConnectionRequest,
+    responses(
+        (status = 200, description = "Connection finalized and active", body = ConnectionView),
+        (status = 400, description = "Chosen account was not among the fetched accounts, or invalid currency/timezone", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.connect permission or fresh MFA missing", body = ProblemDetail),
+        (status = 404, description = "Connection not found", body = ProblemDetail)
+    )
+)]
+pub async fn create_connection(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    body: web::Json<CreateConnectionRequest>,
+    _permission: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let command = body.into_inner();
+    let connection = state
+        .create_connection
+        .execute(
+            tenant_id,
+            command.connection_id,
+            &command.external_account_id,
+            command.currency,
+            command.timezone,
+        )
+        .await
+        .map_err(api_error)?;
+    let health = state
+        .list_connections
+        .health(&connection, chrono::Utc::now())
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(connection_view(connection, health)))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ConnectionsView {
+    pub connections: Vec<ConnectionView>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/connections",
+    tag = "advertising",
+    operation_id = "list_connections",
+    responses(
+        (status = 200, description = "Every connection with server-computed health", body = ConnectionsView),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn list_connections(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let connections = state
+        .list_connections
+        .execute(tenant_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(ConnectionsView {
+        connections: connections
+            .into_iter()
+            .map(|(connection, health)| connection_view(connection, health))
+            .collect(),
+    }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/tenant/ads/connections/{connection_id}",
+    tag = "advertising",
+    operation_id = "delete_connection",
+    params(("connection_id" = Uuid, Path, description = "Connection UUID")),
+    responses(
+        (status = 204, description = "Disconnected in Sanvi; the platform side is untouched"),
+        (status = 403, description = "Missing advertising.connect permission or fresh MFA missing", body = ProblemDetail),
+        (status = 404, description = "Connection not found", body = ProblemDetail)
+    )
+)]
+pub async fn delete_connection(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<Uuid>,
+    _permission: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let connection_id = path.into_inner();
+    state
+        .delete_connection
+        .execute(tenant_id, connection_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::NoContent().finish())
 }
