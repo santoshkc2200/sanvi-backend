@@ -1,6 +1,6 @@
 //! The payments context's integration tests (sub-phases 09.0–09.5).
 //!
-//! Real Postgres in containers, the `sanvi_app` role (NOBYPASSRLS), full
+//! Real Postgres, the `sanvi_app` role (NOBYPASSRLS), full
 //! migrations — the same recipe the domains/billing suites use. 09.0
 //! covered the schema, RLS and the catalog route's gates; 09.1 added the
 //! registry-derived catalog and the registry → port → repo → outbox
@@ -38,10 +38,8 @@ use sanvi_payments::domain::ports::{CreateAccountRequest, PaymentProviderPort};
 use sanvi_payments::domain::provider::{ConnectionStatus, ProviderKind};
 use sanvi_payments::domain::{Money, ProviderConnection, ProviderConnectionRepository};
 use sanvi_payments::routes::payments_tenant_scope_routes;
-use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
+use sanvi_persistence::{Migrator, TxManager};
 use sanvi_privacy::domain::{DataClass, EraseMode, PersonalDataProvider, SubjectRef};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 
 /// Test double for the phase-08 verified-domain allow-list: exactly one
 /// hostname is live, for whichever tenant asks — cross-tenant behaviour
@@ -98,64 +96,11 @@ impl ApplicationFeePolicy for TestFeePolicy {
 }
 
 fn migrations_dir() -> std::path::PathBuf {
-    std::env::var("CARGO_MANIFEST_DIR")
-        .map(|dir| std::path::PathBuf::from(dir).join("../../../migrations"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("migrations"))
+    sanvi_testsupport::migrations_dir().into()
 }
 
 /// The migration this slice ships (up/down round-trip target).
 const PAYMENTS_MIGRATION: i64 = 20_260_823_000_000;
-
-async fn start_postgres() -> (u16, testcontainers::ContainerAsync<Postgres>) {
-    let node = Postgres::default().start().await.unwrap();
-    let port = node.get_host_port_ipv4(5432).await.unwrap();
-    let admin = sqlx::PgPool::connect(&format!(
-        "postgres://postgres:postgres@127.0.0.1:{port}/postgres"
-    ))
-    .await
-    .unwrap();
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    (port, node)
-}
-
-fn db_config(port: u16, user: &str, password: &str) -> DatabaseConfig {
-    DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: user.to_string(),
-        password: password.to_string(),
-        ..DatabaseConfig::default()
-    }
-}
-
-async fn migrate(port: u16) -> sqlx::PgPool {
-    let config = db_config(port, "sanvi_migrator", "mig");
-    let url = format!(
-        "postgres://{}:{}@127.0.0.1:{}/{}",
-        config.user, config.password, port, config.name
-    );
-    let pool = sqlx::PgPool::connect(&url).await.unwrap();
-    Migrator::new(migrations_dir()).run(&pool).await.unwrap();
-    pool
-}
-
-async fn app_pool(port: u16) -> sanvi_persistence::PgPool {
-    build_pool(&db_config(port, "sanvi_app", "app"))
-        .await
-        .unwrap()
-}
 
 async fn seed_tenant(pool: &sqlx::PgPool, slug: &str) -> Uuid {
     let tenant_id = Uuid::now_v7();
@@ -178,9 +123,9 @@ async fn seed_tenant(pool: &sqlx::PgPool, slug: &str) -> Uuid {
 
 #[tokio::test]
 async fn migration_round_trips_on_a_seeded_database() {
-    let (port, _node) = start_postgres().await;
-    let migrator_pool = migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let migrator_pool = db.migrator_pool().await;
+    let pool = db.app_pool();
 
     let tenant_id = seed_tenant(&pool, "round-trip").await;
     let connection = ProviderConnection::pending(
@@ -237,8 +182,8 @@ async fn migration_round_trips_on_a_seeded_database() {
 
 #[tokio::test]
 async fn retention_override_rollback_preserves_an_operator_owned_rule() {
-    let (port, _node) = start_postgres().await;
-    let pool = migrate(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.migrator_pool().await;
 
     // Simulate an operator's pre-existing rule winning the forward
     // migration's ON CONFLICT. The reverse must not delete that rule.
@@ -273,9 +218,8 @@ async fn retention_override_rollback_preserves_an_operator_owned_rule() {
 
 #[tokio::test]
 async fn tenant_a_cannot_read_tenant_bs_connections() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
 
     let tenant_a = seed_tenant(&pool, "alpha").await;
     let tenant_b = seed_tenant(&pool, "beta").await;
@@ -339,9 +283,8 @@ async fn tenant_a_cannot_read_tenant_bs_connections() {
 
 #[tokio::test]
 async fn one_active_connection_per_provider_but_history_is_kept() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "single").await;
 
     // Two live rows for the same provider collide (partial unique index)…
@@ -414,20 +357,14 @@ async fn one_active_connection_per_provider_but_history_is_kept() {
 
 #[tokio::test]
 async fn webhook_events_are_platform_scoped_not_tenant_readable() {
-    let (port, _node) = start_postgres().await;
+    let db = sanvi_testsupport::test_db().await;
 
     // The four tenant-scoped tables carry the tenant_isolation policy;
     // webhook_events deliberately does not (Connect events arrive before
     // the tenant is known and map to one only through
     // external_account_id — the table is touched solely through
     // platform-scope transactions).
-    let config = db_config(port, "sanvi_migrator", "mig");
-    let url = format!(
-        "postgres://{}:{}@127.0.0.1:{}/{}",
-        config.user, config.password, port, config.name
-    );
-    let admin = sqlx::PgPool::connect(&url).await.unwrap();
-    Migrator::new(migrations_dir()).run(&admin).await.unwrap();
+    let admin = db.migrator_pool().await;
 
     for table in ["provider_connections", "checkouts", "payments", "refunds"] {
         let policies: Vec<(String,)> = sqlx::query_as(
@@ -874,9 +811,8 @@ fn start_command(tenant_id: Uuid, idempotency_key: Uuid) -> StartConnectionComma
 
 #[tokio::test]
 async fn starting_a_fake_provider_connection_emits_the_started_event_end_to_end() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "outbox").await;
 
     let use_case = start_connection_use_case(&pool);
@@ -945,9 +881,9 @@ async fn starting_a_fake_provider_connection_emits_the_started_event_end_to_end(
 
 #[tokio::test]
 async fn the_provider_check_admits_the_fake_kind_and_reverts_cleanly() {
-    let (port, _node) = start_postgres().await;
-    let migrator_pool = migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let migrator_pool = db.migrator_pool().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "fake-kind").await;
 
     // The CHECK admits 'fake' — the whole point of the 09.1 migration.
@@ -1038,9 +974,8 @@ fn session_fixture(pool: &sanvi_persistence::PgPool) -> (CreateAccountSession, F
 
 #[tokio::test]
 async fn concurrent_creates_with_the_same_key_yield_one_account_and_one_row() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "concurrent").await;
 
     let use_case = Arc::new(start_connection_use_case(&pool));
@@ -1087,9 +1022,8 @@ async fn concurrent_creates_with_the_same_key_yield_one_account_and_one_row() {
 
 #[tokio::test]
 async fn an_orphaned_provider_account_is_adopted_on_retry() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "orphan").await;
 
     // The crash window: the account was created at the provider, then the
@@ -1182,9 +1116,8 @@ async fn pending_connection(
 
 #[tokio::test]
 async fn minting_a_session_moves_pending_to_onboarding_and_writes_the_audit_entry() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "session").await;
     let (use_case, provider) = session_fixture(&pool);
     let connection = pending_connection(&pool, tenant_id, &provider).await;
@@ -1244,9 +1177,8 @@ async fn minting_a_session_moves_pending_to_onboarding_and_writes_the_audit_entr
 
 #[tokio::test]
 async fn a_session_is_refused_for_a_disconnected_connection() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "disconnected").await;
     let (use_case, provider) = session_fixture(&pool);
     let connection = pending_connection(&pool, tenant_id, &provider).await;
@@ -1271,9 +1203,8 @@ async fn a_session_is_refused_for_a_disconnected_connection() {
 
 #[tokio::test]
 async fn an_expired_session_secret_is_rejected() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "expired").await;
     let (use_case, provider) = session_fixture(&pool);
     let connection = pending_connection(&pool, tenant_id, &provider).await;
@@ -1294,9 +1225,8 @@ async fn an_expired_session_secret_is_rejected() {
 
 #[tokio::test]
 async fn creating_a_connection_writes_the_audit_entry() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "audit").await;
     let use_case = start_connection_use_case(&pool);
     let actor = Uuid::now_v7();
@@ -1623,9 +1553,8 @@ impl WebhookFixture {
 
 #[tokio::test]
 async fn the_connect_endpoint_verifies_the_signature_before_storing_and_dedupes_redeliveries() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let fixture = webhook_fixture(&pool).await;
 
     let event = account_event("evt_sig_1", "acct_sig", epoch(0));
@@ -1698,9 +1627,8 @@ async fn the_connect_endpoint_verifies_the_signature_before_storing_and_dedupes_
 
 #[tokio::test]
 async fn an_event_for_an_unknown_account_is_recorded_but_creates_no_rows() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "unknown-acct").await;
     let _ = tenant_id;
     let fixture = webhook_fixture(&pool).await;
@@ -1739,9 +1667,8 @@ async fn an_event_for_an_unknown_account_is_recorded_but_creates_no_rows() {
 
 #[tokio::test]
 async fn the_same_event_delivered_twice_produces_exactly_one_state_change() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "dedupe").await;
     let fixture = webhook_fixture(&pool).await;
     let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
@@ -1785,9 +1712,8 @@ async fn the_same_event_delivered_twice_produces_exactly_one_state_change() {
 
 #[tokio::test]
 async fn a_stale_pending_event_leaves_an_active_connection_active() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "stale").await;
     let fixture = webhook_fixture(&pool).await;
     let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
@@ -1826,9 +1752,8 @@ async fn a_stale_pending_event_leaves_an_active_connection_active() {
 
 #[tokio::test]
 async fn a_poison_event_is_dead_lettered_does_not_block_the_queue_and_is_replayable() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "poison").await;
     let fixture = webhook_fixture(&pool).await;
 
@@ -1919,9 +1844,8 @@ async fn a_poison_event_is_dead_lettered_does_not_block_the_queue_and_is_replaya
 
 #[tokio::test]
 async fn the_lost_webhook_drill_reconciliation_alone_reaches_active() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "drill").await;
     let fixture = webhook_fixture(&pool).await;
     let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
@@ -2047,9 +1971,8 @@ async fn the_connection_view_maps_requirements_blockers_and_readiness() {
 
 #[tokio::test]
 async fn get_connection_returns_the_enriched_truthful_view() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "get-view").await;
     let fixture = webhook_fixture(&pool).await;
     let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
@@ -2519,9 +2442,8 @@ fn checkout_body(reference: &str, amount_minor: i64, currency: &str) -> serde_js
 
 #[tokio::test]
 async fn a_double_click_creates_one_checkout_and_a_replayed_key_returns_the_same_session() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "double-click").await;
     let provider = FakeProvider::new();
     activate_connection(&pool, tenant_id, &provider).await;
@@ -2614,9 +2536,8 @@ async fn a_double_click_creates_one_checkout_and_a_replayed_key_returns_the_same
 
 #[tokio::test]
 async fn checkout_is_refused_while_the_connection_cannot_accept_payments() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "not-active").await;
     let provider = FakeProvider::new();
     // A connection exists but never finished onboarding.
@@ -2649,9 +2570,8 @@ async fn checkout_is_refused_while_the_connection_cannot_accept_payments() {
 
 #[tokio::test]
 async fn a_redirect_off_the_verified_domain_allow_list_is_rejected() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "allow-list").await;
     let provider = FakeProvider::new();
     activate_connection(&pool, tenant_id, &provider).await;
@@ -2710,9 +2630,8 @@ async fn a_redirect_off_the_verified_domain_allow_list_is_rejected() {
 
 #[tokio::test]
 async fn tenant_b_cannot_create_on_or_read_tenant_as_checkouts() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_a = seed_tenant(&pool, "alpha-buyer").await;
     let tenant_b = seed_tenant(&pool, "beta-buyer").await;
     let provider = FakeProvider::new();
@@ -2789,9 +2708,8 @@ async fn tenant_b_cannot_create_on_or_read_tenant_as_checkouts() {
 
 #[tokio::test]
 async fn a_currency_the_account_cannot_settle_is_refused_before_stripe() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "currency").await;
     let provider = FakeProvider::new();
     activate_connection(&pool, tenant_id, &provider).await;
@@ -2819,9 +2737,8 @@ async fn a_currency_the_account_cannot_settle_is_refused_before_stripe() {
 
 #[tokio::test]
 async fn checkout_creation_flooding_is_throttled_per_tenant() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "throttled").await;
     let provider = FakeProvider::new();
     activate_connection(&pool, tenant_id, &provider).await;
@@ -2859,9 +2776,8 @@ async fn checkout_creation_flooding_is_throttled_per_tenant() {
 
 #[tokio::test]
 async fn missing_idempotency_key_is_a_bad_request_not_a_second_session() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "no-key").await;
     let provider = FakeProvider::new();
     activate_connection(&pool, tenant_id, &provider).await;
@@ -2992,9 +2908,8 @@ async fn live_account_id(fixture: &WebhookFixture, tenant_id: Uuid) -> String {
 
 #[tokio::test]
 async fn the_webhook_is_the_fact_a_customer_who_never_returns_still_ends_paid() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "webhook-truth").await;
     let fixture = webhook_fixture(&pool).await;
 
@@ -3119,9 +3034,8 @@ async fn the_webhook_is_the_fact_a_customer_who_never_returns_still_ends_paid() 
 
 #[tokio::test]
 async fn a_forged_return_url_yields_no_order_and_failures_expire_correctly() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "forged-return").await;
     let fixture = webhook_fixture(&pool).await;
     let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
@@ -3281,9 +3195,8 @@ async fn a_forged_return_url_yields_no_order_and_failures_expire_correctly() {
 
 #[tokio::test]
 async fn the_confirmation_view_is_webhook_truthful_and_the_conversion_id_is_stable() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "confirmation").await;
     let fixture = webhook_fixture(&pool).await;
     let connection = pending_connection(&pool, tenant_id, &fixture.provider).await;
@@ -3479,9 +3392,8 @@ async fn payment_row_id(pool: &sqlx::PgPool, tenant_id: Uuid, pi_id: &str) -> Uu
 
 #[tokio::test]
 async fn a_retried_refund_key_issues_exactly_one_provider_refund_and_replays_the_record() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "refund-retry").await;
     let fixture = webhook_fixture(&pool).await;
     seed_paid_payment(&pool, &fixture, tenant_id, "order-retry", "pi_retry_1").await;
@@ -3533,9 +3445,8 @@ async fn a_failed_provider_call_marks_the_refund_failed_and_a_retried_key_redriv
     // Review finding: the old code left the row Pending forever after a
     // provider rejection — a phantom pending refund that owned its
     // idempotency key and never re-executed.
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "refunde-fail").await;
     let fixture = webhook_fixture(&pool).await;
     seed_paid_payment(&pool, &fixture, tenant_id, "order-fail", "pi_fail_1").await;
@@ -3605,9 +3516,8 @@ async fn a_failed_provider_call_marks_the_refund_failed_and_a_retried_key_redriv
 
 #[tokio::test]
 async fn partial_refunds_sum_to_the_total_and_an_over_refund_reports_the_remaining() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "refund-partial").await;
     let fixture = webhook_fixture(&pool).await;
     seed_paid_payment(&pool, &fixture, tenant_id, "order-partial", "pi_partial_1").await;
@@ -3670,9 +3580,8 @@ async fn a_replayed_key_answers_with_the_refund_even_after_the_total_is_consumed
     // Review finding: the over-refund guard ran BEFORE the idempotency
     // lookup, so replaying a fully-consumed refund answered 400 instead
     // of the record it already owed.
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "refund-full").await;
     let fixture = webhook_fixture(&pool).await;
     seed_paid_payment(&pool, &fixture, tenant_id, "order-full", "pi_full_1").await;
@@ -3713,9 +3622,8 @@ async fn a_replayed_key_answers_with_the_refund_even_after_the_total_is_consumed
 
 #[tokio::test]
 async fn a_dashboard_refund_lands_in_the_read_model_without_manual_intervention() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "refund-dashboard").await;
     let fixture = webhook_fixture(&pool).await;
     seed_paid_payment(&pool, &fixture, tenant_id, "order-dash", "pi_dash_1").await;
@@ -3786,9 +3694,8 @@ async fn a_dispute_lifecycle_routes_by_payment_intent_shows_disputed_then_closed
     // keyed by payment intent — every real dispute was silently dropped.
     // The fixture carries a charge id that matches nothing, forcing the
     // payment_intent route.
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "disputes").await;
     let fixture = webhook_fixture(&pool).await;
     seed_paid_payment(&pool, &fixture, tenant_id, "order-dispute", "pi_dispute_1").await;
@@ -3890,9 +3797,8 @@ async fn a_dispute_lifecycle_routes_by_payment_intent_shows_disputed_then_closed
 
 #[tokio::test]
 async fn the_csv_export_is_streamed_tenant_scoped_and_audited() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
 
     // Two tenants, one succeeded payment each — the export must leak
     // neither way. One shared provider fixture: account ids are unique
@@ -3967,9 +3873,8 @@ async fn the_csv_export_is_streamed_tenant_scoped_and_audited() {
 
 #[tokio::test]
 async fn the_payments_list_serves_every_filter_and_walks_pages_without_loss_or_duplication() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "list-filters").await;
     let fixture = webhook_fixture(&pool).await;
 
@@ -4111,9 +4016,8 @@ fn payout_event(
 
 #[tokio::test]
 async fn a_pending_payout_webhook_blocks_disconnect() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "pending-payout-disconnect").await;
     let fixture = webhook_fixture(&pool).await;
     let connection = activate_connection(&pool, tenant_id, &fixture.provider).await;
@@ -4153,9 +4057,8 @@ async fn a_pending_payout_webhook_blocks_disconnect() {
 
 #[tokio::test]
 async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_alerts() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "payouts").await;
     let fixture = webhook_fixture(&pool).await;
 
@@ -4236,9 +4139,8 @@ async fn enable_tax(
 
 #[tokio::test]
 async fn an_account_with_no_registrations_cannot_enable_automatic_tax_and_the_reason_is_specific() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "tax-preflight").await;
     let provider = FakeProvider::new();
 
@@ -4283,9 +4185,8 @@ async fn an_account_with_no_registrations_cannot_enable_automatic_tax_and_the_re
 
 #[tokio::test]
 async fn a_session_created_with_automatic_tax_carries_the_account_liability() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "tax-liability").await;
     let provider = FakeProvider::new();
 
@@ -4321,9 +4222,8 @@ async fn a_session_created_with_automatic_tax_carries_the_account_liability() {
 
 #[tokio::test]
 async fn lapsed_registrations_warn_on_the_scheduled_re_check() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "tax-lapse").await;
     let fixture = webhook_fixture(&pool).await;
     activate_connection(&pool, tenant_id, &fixture.provider).await;
@@ -4370,9 +4270,8 @@ async fn lapsed_registrations_warn_on_the_scheduled_re_check() {
 
 #[tokio::test]
 async fn a_tax_event_on_the_account_triggers_the_recheck() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "tax-event").await;
     let fixture = webhook_fixture(&pool).await;
     activate_connection(&pool, tenant_id, &fixture.provider).await;
@@ -4412,9 +4311,8 @@ async fn a_tax_event_on_the_account_triggers_the_recheck() {
 
 #[tokio::test]
 async fn the_platform_fee_is_disclosed_on_the_payment_when_charged() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "fee-disclosure").await;
     let fixture = webhook_fixture(&pool).await;
     activate_connection(&pool, tenant_id, &fixture.provider).await;
@@ -4550,9 +4448,8 @@ async fn disconnect_refuses_each_blocker_and_names_it_in_the_response() {
     // open disputes and pending payouts each refuse with their own
     // stable code.
     async fn run_case(label: &'static str, seed: Seed, code: &str) {
-        let (port, _node) = start_postgres().await;
-        migrate(port).await;
-        let pool = app_pool(port).await;
+        let db = sanvi_testsupport::test_db().await;
+        let pool = db.app_pool();
         let tenant_id = seed_tenant(&pool, "blocker").await;
         let provider = FakeProvider::new();
         let connection = activate_connection(&pool, tenant_id, &provider).await;
@@ -4635,9 +4532,8 @@ async fn disconnect_refuses_each_blocker_and_names_it_in_the_response() {
 
 #[tokio::test]
 async fn privacy_erasure_scrubs_customer_ref_but_retains_transaction_record() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "payments-privacy").await;
     let provider = FakeProvider::new();
     let connection = activate_connection(&pool, tenant_id, &provider).await;
@@ -4691,9 +4587,8 @@ async fn privacy_erasure_scrubs_customer_ref_but_retains_transaction_record() {
 
 #[tokio::test]
 async fn disconnect_when_clean_stops_checkout_keeps_history_and_allows_reconnect() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "clean-disconnect").await;
     let provider = FakeProvider::new();
     let connection = activate_connection(&pool, tenant_id, &provider).await;
@@ -4797,9 +4692,8 @@ async fn disconnect_when_clean_stops_checkout_keeps_history_and_allows_reconnect
 
 #[tokio::test]
 async fn deleting_an_already_disconnected_connection_is_an_idempotent_ok() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "idem-delete").await;
     let provider = FakeProvider::new();
     let connection = activate_connection(&pool, tenant_id, &provider).await;
@@ -4830,9 +4724,8 @@ async fn deleting_an_already_disconnected_connection_is_an_idempotent_ok() {
 
 #[tokio::test]
 async fn a_payment_completing_after_disconnect_is_still_recorded() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let fixture = webhook_fixture(&pool).await;
     let tenant_id = seed_tenant(&pool, "post-disconnect-money").await;
 

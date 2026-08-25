@@ -1,5 +1,5 @@
-//! Integration tests: real Postgres in a container. Run with the workspace
-//! `cargo nextest run` (docker must be available).
+//! Integration tests: real Postgres. Run with `just test` (docker must be
+//! available).
 
 use std::time::Duration;
 
@@ -31,52 +31,13 @@ fn config_for(port: u16, user: &str, password: &str) -> DatabaseConfig {
 
 #[tokio::test]
 async fn migrations_run_and_revert_cleanly() {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
+    // A database with the two roles in place but nothing applied: this test
+    // is the one that has to run the migrations itself, up and back down.
+    let db = sanvi_testsupport::blank_db().await;
+    let migrator_pool = db.migrator_pool().await;
+    let pool = db.app_pool();
 
-    // The least-privilege app role must exist for the GRANTs in migrations,
-    // and a separate owner role runs the migrations (mirrors production).
-    let admin = build_pool(&config_for(port, "postgres", "postgres"))
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("GRANT CONNECT ON DATABASE sanvi_test TO sanvi_app")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let migrator_config = DatabaseConfig {
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "mig".to_string(),
-        ..config_for(port, "postgres", "postgres")
-    };
-    let migrator_pool = build_pool(&migrator_config).await.expect("migrator pool");
-
-    let app_config = DatabaseConfig {
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        ..config_for(port, "postgres", "postgres")
-    };
-    let pool = build_pool(&app_config).await.expect("app pool");
-
-    let migrator = Migrator::new(&app_config.migrations_dir);
+    let migrator = Migrator::new(sanvi_testsupport::migrations_dir());
     migrator.run(&migrator_pool).await.expect("migrations up");
 
     // Outbox table exists and the app role can write to it.

@@ -119,7 +119,7 @@ Context list and responsibility:
 |-------|------|---------|
 | Unit | Domain invariants, pure logic | `cargo test`, property tests via `proptest` |
 | Application | Use cases against in-memory fake ports | fakes in `tests/support` |
-| Integration | Repos + migrations + RLS | `#[sqlx::test]`, testcontainers Postgres/Redis |
+| Integration | Repos + migrations + RLS | `sanvi_testsupport::test_db()` — a private database per test, cloned from a migrated template on a shared Postgres/Redis |
 | Contract | Handlers vs OpenAPI, external APIs vs recorded fixtures | schema validation, `wiremock` |
 | E2E | Cross-context journeys through HTTP | `apps/api` in docker-compose |
 | Non-functional | Load, soak, chaos, security scans | `k6`, `cargo audit`, ZAP |

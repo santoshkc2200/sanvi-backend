@@ -1,16 +1,15 @@
-//! Integration tests: real Postgres in containers, the sanvi_app role
-//! (NOBYPASSRLS), full migrations — proving the publish/rollback state
+//! Integration tests: real Postgres, the sanvi_app role (NOBYPASSRLS),
+//! full migrations — proving the publish/rollback state
 //! machine, resolved-theme delivery, cache invalidation, entitlement
 //! filtering, yank semantics and RLS isolation.
 //!
-//! Run with `cargo nextest run -p sanvi-theming` (docker must be
-//! available).
+//! Run with `just test` (docker must be available).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use sanvi_persistence::{DatabaseConfig, Migrator, build_pool};
 use sanvi_privacy::domain::{EraseMode, PersonalDataProvider, SubjectRef};
+use sanvi_testsupport::TestDb;
 use sanvi_theming::{
     ThemingConfig,
     adapters::{
@@ -28,88 +27,10 @@ use sanvi_theming::{
         ThemeState, ThemingError, TokenValue,
     },
 };
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 
-fn migrations_dir() -> String {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .join("../../../migrations")
-        .canonicalize()
-        .expect("migrations directory must exist")
-        .to_string_lossy()
-        .to_string()
-}
-
-async fn prepare() -> (
-    sanvi_persistence::PgPool,
-    testcontainers::ContainerAsync<Postgres>,
-) {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-
-    let admin = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("GRANT CONNECT ON DATABASE sanvi_test TO sanvi_app")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let migrator_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "mig".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir())
-        .run(&migrator_pool)
-        .await
-        .expect("migrations up");
-
-    let app_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    (app_pool, node)
+async fn prepare() -> (sanvi_persistence::PgPool, TestDb) {
+    let db = sanvi_testsupport::test_db().await;
+    (db.app_pool(), db)
 }
 
 async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> uuid::Uuid {

@@ -1,0 +1,33 @@
+# cargo-nextest configuration. `just test` uses `default`; CI passes
+# `--profile ci`.
+
+[profile.default]
+# One failing test should not hide the state of the rest of the suite: the
+# whole run costs the same either way, and a partial result means a second
+# 15-minute round trip to find the next failure.
+fail-fast = false
+
+# Every database-backed test clones a template database, so a couple of
+# seconds is normal and 30 s means something is wrong — report it then, but
+# only give up after ten minutes. The gap is deliberate: on macOS a test
+# process can sit in `dyld` for minutes while Gatekeeper scans a
+# newly-linked binary (see CONTRIBUTING.md), and killing it there would
+# report a hang that is not one.
+slow-timeout = { period = "30s", terminate-after = 20 }
+
+# Failures printed where they happen *and* collected at the end, so a long
+# run does not have to be scrolled back through.
+failure-output = "immediate-final"
+
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+# Only slow and failing tests are worth a line in CI logs.
+final-status-level = "slow"
+# Shared runners lose containers and connections in ways a developer machine
+# does not. Two retries turn that into a "flaky" annotation instead of a red
+# build; a test that fails three times in a row is a real failure.
+retries = { backoff = "exponential", count = 2, delay = "2s", jitter = true }
+
+[profile.ci.junit]
+path = "junit.xml"

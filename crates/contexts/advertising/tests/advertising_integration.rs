@@ -1,6 +1,6 @@
 //! Advertising schema integration tests.
 //!
-//! These tests use an isolated Postgres container so the phase-10 migration
+//! These tests use an isolated Postgres database so the phase-10 migration
 //! rollback and partition RLS checks never operate on a developer database.
 
 use std::sync::Arc;
@@ -24,10 +24,8 @@ use sanvi_advertising::{
         Money, Objective, PlatformAccount, Targeting, TenantEnvelopeCrypto,
     },
 };
-use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
+use sanvi_persistence::{Migrator, TxManager};
 use sqlx::{Postgres as SqlxPostgres, QueryBuilder};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 const ADVERTISING_MIGRATION: i64 = 20_260_826_000_000;
@@ -37,58 +35,6 @@ fn migrations_dir() -> std::path::PathBuf {
     std::env::var("CARGO_MANIFEST_DIR")
         .map(|dir| std::path::PathBuf::from(dir).join("../../../migrations"))
         .unwrap_or_else(|_| std::path::PathBuf::from("migrations"))
-}
-
-async fn start_postgres() -> (u16, testcontainers::ContainerAsync<Postgres>) {
-    let node = Postgres::default().start().await.unwrap();
-    let port = node.get_host_port_ipv4(5432).await.unwrap();
-    let admin = sqlx::PgPool::connect(&format!(
-        "postgres://postgres:postgres@127.0.0.1:{port}/postgres"
-    ))
-    .await
-    .unwrap();
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    (port, node)
-}
-
-fn db_config(port: u16, user: &str, password: &str) -> DatabaseConfig {
-    DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: user.to_string(),
-        password: password.to_string(),
-        ..DatabaseConfig::default()
-    }
-}
-
-async fn migrate(port: u16) -> sqlx::PgPool {
-    let config = db_config(port, "sanvi_migrator", "mig");
-    let pool = sqlx::PgPool::connect(&format!(
-        "postgres://{}:{}@127.0.0.1:{}/{}",
-        config.user, config.password, port, config.name
-    ))
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir()).run(&pool).await.unwrap();
-    pool
-}
-
-async fn app_pool(port: u16) -> sanvi_persistence::PgPool {
-    build_pool(&db_config(port, "sanvi_app", "app"))
-        .await
-        .unwrap()
 }
 
 async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid {
@@ -196,9 +142,9 @@ async fn partition_row_count(tx: &mut sqlx::Transaction<'_, SqlxPostgres>, parti
 
 #[tokio::test]
 async fn advertising_migration_round_trips_on_a_seeded_database() {
-    let (port, _node) = start_postgres().await;
-    let migrator_pool = migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let migrator_pool = db.migrator_pool().await;
+    let pool = db.app_pool();
     seed_tenant(&pool, "advertising-round-trip").await;
     let now = Utc::now();
     let next_month = now
@@ -264,9 +210,8 @@ async fn advertising_migration_round_trips_on_a_seeded_database() {
 
 #[tokio::test]
 async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_a = seed_tenant(&pool, "advertising-alpha").await;
     let tenant_b = seed_tenant(&pool, "advertising-beta").await;
 
@@ -352,9 +297,8 @@ async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
 
 #[tokio::test]
 async fn oauth_state_survives_restart_and_is_consumed_once() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_a = seed_tenant(&pool, "oauth-alpha").await;
     let tenant_b = seed_tenant(&pool, "oauth-beta").await;
     let store: Arc<dyn OAuthStateStore> = Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool)));
@@ -396,9 +340,8 @@ async fn oauth_state_survives_restart_and_is_consumed_once() {
 
 #[tokio::test]
 async fn oauth_state_store_rejects_row_with_mismatched_signed_expiry() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "oauth-expiry").await;
     let store: Arc<dyn OAuthStateStore> =
         Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool.clone())));
@@ -425,9 +368,8 @@ async fn oauth_state_store_rejects_row_with_mismatched_signed_expiry() {
 
 #[tokio::test]
 async fn reconnect_reuses_the_original_connection_row() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-reconnect").await;
     let manager = TxManager::new(pool);
     let repository = SqlxAdvertisingConnectionRepository::new();
@@ -522,9 +464,8 @@ async fn reconnect_reuses_the_original_connection_row() {
 
 #[tokio::test]
 async fn selecting_a_reconnected_account_reuses_the_original_row_and_token() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-reconnect-selection").await;
     let manager = TxManager::new(pool);
     let repository: Arc<dyn AdvertisingConnectionRepository> =
@@ -623,9 +564,8 @@ async fn selecting_a_reconnected_account_reuses_the_original_row_and_token() {
 
 #[tokio::test]
 async fn existing_tenant_key_is_usable_after_process_restart() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-tenant-key-restart").await;
     let manager = TxManager::new(pool);
 
@@ -655,9 +595,9 @@ async fn existing_tenant_key_is_usable_after_process_restart() {
 #[tokio::test]
 // Rollback must preserve RLS-protected rows between callback and account selection.
 async fn rolling_back_pending_connections_converts_them_to_disconnected() {
-    let (port, _node) = start_postgres().await;
-    let migrator_pool = migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let migrator_pool = db.migrator_pool().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-pending-rollback").await;
     let connection_id = Uuid::now_v7();
     let manager = TxManager::new(pool.clone());
@@ -702,9 +642,8 @@ async fn rolling_back_pending_connections_converts_them_to_disconnected() {
 /// round-trip, and the change log attributes every step.
 #[tokio::test]
 async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-campaigns").await;
     let manager = TxManager::new(pool);
     let actor_id = Uuid::now_v7();
@@ -901,9 +840,8 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
 /// not clear or resurrect it.
 #[tokio::test]
 async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_resurrecting() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-sweep").await;
     let manager = TxManager::new(pool);
     let actor_id = Uuid::now_v7();
@@ -1009,9 +947,8 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
 /// silent no-op.
 #[tokio::test]
 async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tree() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-ad-groups").await;
     let manager = TxManager::new(pool);
     let actor_id = Uuid::now_v7();

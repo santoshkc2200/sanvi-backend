@@ -1,5 +1,5 @@
 //! TASK-014 (slice 10.5) acceptance tests: conversion capture and the
-//! directive gate, against a real Postgres container.
+//! directive gate, against a real Postgres.
 //!
 //! `DirectiveResolver`, `PaymentLookupPort` and `VendorRolePort` are faked
 //! here on purpose — this suite proves `CaptureConversion`'s own gate
@@ -21,71 +21,12 @@ use sanvi_advertising::application::tracking::capture::{
 use sanvi_advertising::domain::{
     ClickIds, Money, PaymentLookupPort, PlatformKey, VendorRole, VendorRolePort,
 };
-use sanvi_persistence::{DatabaseConfig, Migrator, ScopedTx, TxManager, build_pool};
+use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
 use sanvi_privacy::domain::{
     DirectiveResolver, DirectiveSnapshot, DirectiveSource, DirectiveState, JurisdictionRef,
     PrivacyError, ProcessingPurpose, PurposeDirective, SubjectRef,
 };
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
-
-fn migrations_dir() -> std::path::PathBuf {
-    std::env::var("CARGO_MANIFEST_DIR")
-        .map(|dir| std::path::PathBuf::from(dir).join("../../../migrations"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("migrations"))
-}
-
-async fn start_postgres() -> (u16, testcontainers::ContainerAsync<Postgres>) {
-    let node = Postgres::default().start().await.unwrap();
-    let port = node.get_host_port_ipv4(5432).await.unwrap();
-    let admin = sqlx::PgPool::connect(&format!(
-        "postgres://postgres:postgres@127.0.0.1:{port}/postgres"
-    ))
-    .await
-    .unwrap();
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    (port, node)
-}
-
-fn db_config(port: u16, user: &str, password: &str) -> DatabaseConfig {
-    DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: user.to_string(),
-        password: password.to_string(),
-        ..DatabaseConfig::default()
-    }
-}
-
-async fn migrate(port: u16) {
-    let config = db_config(port, "sanvi_migrator", "mig");
-    let pool = sqlx::PgPool::connect(&format!(
-        "postgres://{}:{}@127.0.0.1:{}/{}",
-        config.user, config.password, port, config.name
-    ))
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir()).run(&pool).await.unwrap();
-}
-
-async fn app_pool(port: u16) -> sanvi_persistence::PgPool {
-    build_pool(&db_config(port, "sanvi_app", "app"))
-        .await
-        .unwrap()
-}
 
 async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid {
     let tenant_id = Uuid::now_v7();
@@ -293,9 +234,8 @@ async fn row_count(pool: &sanvi_persistence::PgPool, tenant_id: Uuid, event_id: 
 
 #[tokio::test]
 async fn eu_subject_with_no_consent_is_suppressed() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "eu-no-consent").await;
     let tx = TxManager::new(pool.clone());
 
@@ -315,9 +255,8 @@ async fn eu_subject_with_no_consent_is_suppressed() {
 
 #[tokio::test]
 async fn us_subject_with_no_signal_is_permitted() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "us-no-signal").await;
     let tx = TxManager::new(pool.clone());
 
@@ -334,9 +273,8 @@ async fn us_subject_with_no_signal_is_permitted() {
 
 #[tokio::test]
 async fn us_subject_opted_out_is_suppressed() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "us-opt-out").await;
     let tx = TxManager::new(pool.clone());
 
@@ -357,9 +295,8 @@ async fn us_subject_opted_out_is_suppressed() {
 
 #[tokio::test]
 async fn gpc_signal_is_suppressed() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "gpc-signal").await;
     let tx = TxManager::new(pool.clone());
 
@@ -379,9 +316,8 @@ async fn gpc_signal_is_suppressed() {
 
 #[tokio::test]
 async fn vendor_role_changes_the_gate_outcome_for_the_same_event() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "vendor-role").await;
 
     let denied_sale_or_share = || {
@@ -421,9 +357,8 @@ async fn vendor_role_changes_the_gate_outcome_for_the_same_event() {
 
 #[tokio::test]
 async fn every_stored_event_carries_a_complete_consent_snapshot() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "consent-snapshot").await;
     let tx = TxManager::new(pool.clone());
 
@@ -449,9 +384,8 @@ async fn every_stored_event_carries_a_complete_consent_snapshot() {
 
 #[tokio::test]
 async fn no_raw_email_or_phone_is_ever_persisted() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "pii-scan").await;
     let tx = TxManager::new(pool.clone());
 
@@ -489,9 +423,8 @@ async fn no_raw_email_or_phone_is_ever_persisted() {
 
 #[tokio::test]
 async fn client_value_is_overridden_by_the_payment_record_and_marked() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "value-override").await;
     let tx = TxManager::new(pool.clone());
 
@@ -517,9 +450,8 @@ async fn client_value_is_overridden_by_the_payment_record_and_marked() {
 
 #[tokio::test]
 async fn same_event_id_posted_five_times_yields_one_row() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "dedupe").await;
 
     for _ in 0..5 {
@@ -541,9 +473,8 @@ async fn same_event_id_posted_five_times_yields_one_row() {
 
 #[tokio::test]
 async fn click_ids_present_partial_and_absent_are_distinguishable() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "click-ids").await;
 
     let cases = [
@@ -599,9 +530,8 @@ async fn click_ids_present_partial_and_absent_are_distinguishable() {
 /// through correctly is "never touched", not "handled specially".
 #[tokio::test]
 async fn checkout_payment_lookup_joins_the_real_payments_schema() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
-    let pool = app_pool(port).await;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "checkout-join").await;
 
     let seed_tx = TxManager::new(pool.clone());
@@ -657,15 +587,14 @@ async fn checkout_payment_lookup_joins_the_real_payments_schema() {
 /// its unconditional `202`.
 #[tokio::test]
 async fn concurrent_captures_never_hold_a_connection_while_the_gate_needs_one() {
-    let (port, _node) = start_postgres().await;
-    migrate(port).await;
+    let db = sanvi_testsupport::test_db().await;
 
     // Two connections, and more beacons in flight than that: with the
     // nested-transaction shape every one of them would be stuck.
     let pool = build_pool(&DatabaseConfig {
         max_connections: 2,
         min_connections: 1,
-        ..db_config(port, "sanvi_app", "app")
+        ..db.app_config()
     })
     .await
     .unwrap();

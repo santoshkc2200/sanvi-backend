@@ -39,5 +39,4 @@ zip.workspace = true
 [dev-dependencies]
 actix-http.workspace = true
 futures-util.workspace = true
-testcontainers.workspace = true
-testcontainers-modules.workspace = true
+sanvi-testsupport.workspace = true

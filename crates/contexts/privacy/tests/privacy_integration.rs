@@ -1,4 +1,4 @@
-//! Integration tests: real Postgres in containers (sanvi_app role,
+//! Integration tests: real Postgres (sanvi_app role,
 //! NOBYPASSRLS), full migrations, the real privacy use cases and repos —
 //! with fake providers standing in for the other contexts (their providers
 //! are covered by the provider-registry CI test and their own integration
@@ -7,11 +7,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
-use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool};
+use sanvi_persistence::TxManager;
 use sanvi_privacy::adapters::{
     LoggingNotifications, OutboxEventPublisher, PrivacyContextProvider, Sha256Hasher,
     SqlxAppealRepository, SqlxAuthorizedAgentRepository, SqlxConsentRepository,
@@ -37,81 +35,13 @@ use sanvi_privacy::domain::{
     ProviderRegistry, RectifyPatch, RetentionRuleRepository, SignalRepository,
     SubProcessorRepository, SubjectRef, SubjectRepository, VerificationRepository,
 };
+use sanvi_testsupport::TestDb;
 
-fn migrations_dir() -> String {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../migrations")
-        .canonicalize()
-        .expect("migrations directory must exist")
-        .to_string_lossy()
-        .to_string()
-}
-
-async fn prepare() -> (
-    sanvi_persistence::PgPool,
-    sanvi_persistence::PgPool,
-    testcontainers::ContainerAsync<Postgres>,
-) {
-    let node = Postgres::default().start().await.expect("postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("port");
-    let admin = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("GRANT CONNECT ON DATABASE sanvi_test TO sanvi_app")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let migrator_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "mig".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir())
-        .run(&migrator_pool)
-        .await
-        .expect("migrations up");
-
-    let app_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    (app_pool, migrator_pool, node)
+async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, TestDb) {
+    let db = sanvi_testsupport::test_db().await;
+    let app = db.app_pool();
+    let migrator = db.migrator_pool().await;
+    (app, migrator, db)
 }
 
 // ---------------------------------------------------------------------------
@@ -213,13 +143,13 @@ struct Wired {
     processors: Arc<dyn SubProcessorRepository>,
     registry: ProviderRegistry,
     fake_erase_counts: Vec<Arc<std::sync::Mutex<usize>>>,
-    _node: testcontainers::ContainerAsync<Postgres>,
+    _db: TestDb,
     _migrator: sanvi_persistence::PgPool,
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn wire() -> Wired {
-    let (pool, migrator, node) = prepare().await;
+    let (pool, migrator, db) = prepare().await;
     let tx = TxManager::new(pool.clone());
     let subjects: Arc<dyn SubjectRepository> = Arc::new(SqlxSubjectRepository::new());
     let jurisdictions: Arc<dyn JurisdictionRepository> =
@@ -422,7 +352,7 @@ async fn wire() -> Wired {
         processors,
         registry,
         fake_erase_counts,
-        _node: node,
+        _db: db,
         _migrator: migrator,
     }
 }

@@ -22,102 +22,12 @@ use sanvi_identity::domain::{
     User, UserId, UserRepository, UserStatus,
 };
 
-use sanvi_persistence::{DatabaseConfig, Migrator, PlatformScope, ScopedTx, TxManager, build_pool};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
-
-/// One Postgres container per test binary, lazily started, with the full
-/// migration set applied. Pools are per-test (a sqlx pool binds its
-/// background tasks to the runtime that created it — sharing one across
-/// `#[tokio::test]` runtimes leaks every connection on the first
-/// runtime's shutdown).
-static DB_PORT: tokio::sync::OnceCell<u16> = tokio::sync::OnceCell::const_new();
-
-async fn db_port() -> u16 {
-    *DB_PORT
-        .get_or_init(|| async {
-            let node = Postgres::default()
-                .start()
-                .await
-                .expect("failed to start postgres");
-            let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-            // The container must outlive every test: leak it deliberately.
-            std::mem::forget(node);
-
-            let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../migrations")
-                .canonicalize()
-                .expect("migrations directory must exist")
-                .to_string_lossy()
-                .to_string();
-
-            let admin = build_pool(&DatabaseConfig {
-                host: "127.0.0.1".to_string(),
-                port,
-                name: "postgres".to_string(),
-                user: "postgres".to_string(),
-                password: "postgres".to_string(),
-                migrations_dir: migrations_dir.clone(),
-                ..DatabaseConfig::default()
-            })
-            .await
-            .unwrap();
-            sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-                .execute(&admin)
-                .await
-                .unwrap();
-            sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-                .execute(&admin)
-                .await
-                .unwrap();
-            sqlx::query("CREATE DATABASE sanvi_identity_test OWNER sanvi_migrator")
-                .execute(&admin)
-                .await
-                .unwrap();
-            sqlx::query("GRANT CONNECT ON DATABASE sanvi_identity_test TO sanvi_app")
-                .execute(&admin)
-                .await
-                .unwrap();
-
-            let migrator = build_pool(&DatabaseConfig {
-                host: "127.0.0.1".to_string(),
-                port,
-                name: "sanvi_identity_test".to_string(),
-                user: "sanvi_migrator".to_string(),
-                password: "mig".to_string(),
-                migrations_dir: migrations_dir.clone(),
-                ..DatabaseConfig::default()
-            })
-            .await
-            .unwrap();
-            Migrator::new(migrations_dir.clone())
-                .run(&migrator)
-                .await
-                .expect("migrations up");
-            port
-        })
-        .await
-}
+use sanvi_persistence::{PlatformScope, ScopedTx, TxManager};
 
 async fn test_pool() -> sanvi_persistence::PgPool {
-    let port = db_port().await;
-    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../migrations")
-        .canonicalize()
-        .expect("migrations directory must exist")
-        .to_string_lossy()
-        .to_string();
-    build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_identity_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        migrations_dir,
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap()
+    // The pool is a handle in its own right; the `TestDb` wrapper is only
+    // needed for the extra roles, which this suite does not use.
+    sanvi_testsupport::test_db().await.app_pool()
 }
 
 // ---------------------------------------------------------------------------

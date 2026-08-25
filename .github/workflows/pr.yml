@@ -10,6 +10,11 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: "true"
+  # Incremental compilation only pays off across edits to the same tree. A
+  # runner gets a fresh checkout every time, so the artifacts are never
+  # reused — they just make the build slower to write and the cache that
+  # `Swatinem/rust-cache` saves and restores much larger.
+  CARGO_INCREMENTAL: "0"
 
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref }}
@@ -59,13 +64,43 @@ jobs:
   test:
     name: cargo test (unit + application, SQLx offline)
     runs-on: ubuntu-latest
+    services:
+      # One server for the whole job. The suites clone a private database per
+      # test from a pre-migrated template instead of starting a container
+      # each — `nextest` runs a process per test, so a container each would
+      # mean hundreds of them.
+      postgres:
+        image: postgres:11-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      SANVI_TEST_PG_PORT: 5432
+      SANVI_TEST_REDIS_PORT: 6379
     steps:
       - uses: actions/checkout@v7
       - name: install pinned toolchain (rust-toolchain.toml)
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy
+      - run: cargo nextest run --profile ci --workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy
         env:
           SQLX_OFFLINE: "true"
 
@@ -102,15 +137,45 @@ jobs:
           DATABASE_URL: postgres://prep:prep@127.0.0.1:5432/prep
 
   integration:
-    name: integration tests (testcontainers)
+    name: integration tests
     runs-on: ubuntu-latest
+    services:
+      # One server for the whole job. The suites clone a private database per
+      # test from a pre-migrated template instead of starting a container
+      # each — `nextest` runs a process per test, so a container each would
+      # mean hundreds of them.
+      postgres:
+        image: postgres:11-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      SANVI_TEST_PG_PORT: 5432
+      SANVI_TEST_REDIS_PORT: 6379
     steps:
       - uses: actions/checkout@v7
       - name: install pinned toolchain (rust-toolchain.toml)
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy -p sanvi-billing -p sanvi-privacy -p sanvi-localization -p sanvi-domains -p sanvi-payments
+      - run: cargo nextest run --profile ci -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy -p sanvi-billing -p sanvi-privacy -p sanvi-localization -p sanvi-domains -p sanvi-payments
 
   openapi:
     name: OpenAPI contract drift
@@ -202,6 +267,36 @@ jobs:
   coverage:
     name: coverage (ratchets upward)
     runs-on: ubuntu-latest
+    services:
+      # One server for the whole job. The suites clone a private database per
+      # test from a pre-migrated template instead of starting a container
+      # each — `nextest` runs a process per test, so a container each would
+      # mean hundreds of them.
+      postgres:
+        image: postgres:11-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      SANVI_TEST_PG_PORT: 5432
+      SANVI_TEST_REDIS_PORT: 6379
     steps:
       - uses: actions/checkout@v7
       - name: install pinned toolchain (rust-toolchain.toml)

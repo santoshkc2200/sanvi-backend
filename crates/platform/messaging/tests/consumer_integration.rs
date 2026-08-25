@@ -1,6 +1,5 @@
-//! Integration tests: stream consumers against real Postgres + Redis in
-//! containers. Run with `cargo nextest run -p sanvi-messaging` (docker must
-//! be available).
+//! Integration tests: stream consumers against a real Postgres and Redis.
+//! Run with `just test` (docker must be available).
 
 use std::sync::{
     Arc,
@@ -8,139 +7,33 @@ use std::sync::{
 };
 
 use sanvi_messaging::{ConsumerMetrics, RedisConfig, StreamConsumer, StreamsClient, connect_redis};
-use sanvi_persistence::{DatabaseConfig, Migrator, build_pool};
-use testcontainers::{GenericImage, core::WaitFor, runners::AsyncRunner};
-use testcontainers_modules::{postgres::Postgres, redis::Redis};
+use sanvi_testsupport::TestDb;
 
-fn migrations_dir() -> String {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .join("../../../migrations")
-        .canonicalize()
-        .expect("migrations directory must exist")
-        .to_string_lossy()
-        .to_string()
+async fn prepare_postgres() -> (sanvi_persistence::PgPool, TestDb) {
+    let db = sanvi_testsupport::test_db().await;
+    (db.app_pool(), db)
 }
 
-async fn prepare_postgres() -> (
-    sanvi_persistence::PgPool,
-    testcontainers::ContainerAsync<Postgres>,
-) {
-    let node = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres");
-    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-
-    let admin = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "postgres".to_string(),
-        user: "postgres".to_string(),
-        password: "postgres".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    sqlx::query("CREATE ROLE sanvi_migrator LOGIN PASSWORD 'mig'")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE ROLE sanvi_app LOGIN PASSWORD 'app' NOBYPASSRLS")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("CREATE DATABASE sanvi_test OWNER sanvi_migrator")
-        .execute(&admin)
-        .await
-        .unwrap();
-    sqlx::query("GRANT CONNECT ON DATABASE sanvi_test TO sanvi_app")
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-
-    let migrator_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_migrator".to_string(),
-        password: "mig".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-    Migrator::new(migrations_dir())
-        .run(&migrator_pool)
-        .await
-        .expect("migrations up");
-    migrator_pool.close().await;
-
-    let app_pool = build_pool(&DatabaseConfig {
-        host: "127.0.0.1".to_string(),
-        port,
-        name: "sanvi_test".to_string(),
-        user: "sanvi_app".to_string(),
-        password: "app".to_string(),
-        migrations_dir: migrations_dir(),
-        ..DatabaseConfig::default()
-    })
-    .await
-    .unwrap();
-
-    (app_pool, node)
-}
-
-async fn prepare_redis() -> (StreamsClient, testcontainers::ContainerAsync<Redis>) {
-    let node = Redis::default()
-        .start()
-        .await
-        .expect("failed to start redis");
-    let port = node.get_host_port_ipv4(6379).await.expect("redis port");
-    let streams = StreamsClient::new(
+/// A `StreamsClient` on the shared Redis. Key spaces are kept apart by
+/// stream name (`sanvi_testsupport::test_stream`), not by server or database.
+async fn prepare_redis() -> StreamsClient {
+    StreamsClient::new(
         connect_redis(&RedisConfig {
-            url: format!("redis://127.0.0.1:{port}"),
+            url: sanvi_testsupport::redis_url().await,
             ..RedisConfig::default()
         })
         .await
         .unwrap(),
-    );
-    (streams, node)
-}
-
-/// `testcontainers_modules::redis::Redis` is pinned to Redis 5.0, which
-/// predates `XAUTOCLAIM` (Redis 6.2+). Production runs `redis:8` (see
-/// `docker-compose.yml`), so tests that exercise `XAUTOCLAIM`-based
-/// crash-recovery need a matching image.
-async fn prepare_redis8() -> (StreamsClient, testcontainers::ContainerAsync<GenericImage>) {
-    let node = GenericImage::new("redis", "8")
-        .with_exposed_port(6379.into())
-        .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
-        .start()
-        .await
-        .expect("failed to start redis 8");
-    let port = node.get_host_port_ipv4(6379).await.expect("redis port");
-    let streams = StreamsClient::new(
-        connect_redis(&RedisConfig {
-            url: format!("redis://127.0.0.1:{port}"),
-            ..RedisConfig::default()
-        })
-        .await
-        .unwrap(),
-    );
-    (streams, node)
+    )
 }
 
 #[tokio::test]
 async fn consumer_processes_each_event_exactly_once_across_redelivery() {
-    let (pool, _pg) = prepare_postgres().await;
-    let (streams, _redis) = prepare_redis().await;
+    let (pool, _db) = prepare_postgres().await;
+    let streams = prepare_redis().await;
 
     let handled = Arc::new(AtomicUsize::new(0));
-    let stream = "sanvi.events.tenancy";
+    let stream = sanvi_testsupport::test_stream("tenancy");
 
     let envelope = sanvi_kernel::EventEnvelope::new(
         "tenancy.tenant",
@@ -152,11 +45,11 @@ async fn consumer_processes_each_event_exactly_once_across_redelivery() {
 
     // Deliver the same event twice (simulates at-least-once redelivery).
     streams
-        .append(stream, &[("event", payload.as_str())], 100)
+        .append(&stream, &[("event", payload.as_str())], 100)
         .await
         .unwrap();
     streams
-        .append(stream, &[("event", payload.as_str())], 100)
+        .append(&stream, &[("event", payload.as_str())], 100)
         .await
         .unwrap();
 
@@ -167,11 +60,12 @@ async fn consumer_processes_each_event_exactly_once_across_redelivery() {
         let handled = handled.clone();
         let pool = pool.clone();
         let streams = streams.clone();
+        let stream = stream.clone();
         tokio::spawn(async move {
             let consumer = StreamConsumer::new(pool.clone(), streams.clone());
             consumer
                 .run_until_shutdown(
-                    stream,
+                    &stream,
                     "tenancy",
                     &consumer_name,
                     Arc::new(move |envelope| {
@@ -208,11 +102,11 @@ async fn consumer_processes_each_event_exactly_once_across_redelivery() {
 
 #[tokio::test]
 async fn failing_handler_dead_letters_the_event_and_unblocks_the_group() {
-    let (pool, _pg) = prepare_postgres().await;
-    let (streams, _redis) = prepare_redis().await;
+    let (pool, _db) = prepare_postgres().await;
+    let streams = prepare_redis().await;
 
     let consumer = StreamConsumer::new(pool.clone(), streams.clone());
-    let stream = "sanvi.events.broken";
+    let stream = sanvi_testsupport::test_stream("broken");
 
     let envelope = sanvi_kernel::EventEnvelope::new(
         "tenancy.tenant",
@@ -222,26 +116,29 @@ async fn failing_handler_dead_letters_the_event_and_unblocks_the_group() {
     );
     let payload = serde_json::to_string(&envelope).unwrap();
     streams
-        .append(stream, &[("event", payload.as_str())], 100)
+        .append(&stream, &[("event", payload.as_str())], 100)
         .await
         .unwrap();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let consumer_name = format!("broken-test-{}", uuid::Uuid::now_v7());
-    let run = tokio::spawn(async move {
-        consumer
-            .run_until_shutdown(
-                stream,
-                "broken",
-                &consumer_name,
-                Arc::new(move |_envelope| {
-                    Box::pin(async move {
-                        anyhow::bail!("handler exploded");
-                    })
-                }),
-                shutdown_rx,
-            )
-            .await;
+    let run = tokio::spawn({
+        let stream = stream.clone();
+        async move {
+            consumer
+                .run_until_shutdown(
+                    &stream,
+                    "broken",
+                    &consumer_name,
+                    Arc::new(move |_envelope| {
+                        Box::pin(async move {
+                            anyhow::bail!("handler exploded");
+                        })
+                    }),
+                    shutdown_rx,
+                )
+                .await;
+        }
     });
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -265,7 +162,7 @@ async fn failing_handler_dead_letters_the_event_and_unblocks_the_group() {
     );
     let payload = serde_json::to_string(&good).unwrap();
     streams
-        .append(stream, &[("event", payload.as_str())], 100)
+        .append(&stream, &[("event", payload.as_str())], 100)
         .await
         .unwrap();
 
@@ -276,10 +173,11 @@ async fn failing_handler_dead_letters_the_event_and_unblocks_the_group() {
         let handled = handled.clone();
         let pool = pool.clone();
         let streams = streams.clone();
+        let stream = stream.clone();
         async move {
             StreamConsumer::new(pool, streams)
                 .run_until_shutdown(
-                    stream,
+                    &stream,
                     "broken",
                     &consumer_name,
                     Arc::new(move |_envelope| {
@@ -324,12 +222,12 @@ async fn consumer_metrics_registry_roundtrip() {
 /// by *any* consumer once they've been idle long enough.
 #[tokio::test]
 async fn crashed_consumers_stale_entries_are_reclaimed_and_processed() {
-    let (pool, _pg) = prepare_postgres().await;
-    let (streams, _redis) = prepare_redis8().await;
+    let (pool, _db) = prepare_postgres().await;
+    let streams = prepare_redis().await;
 
-    let stream = "sanvi.events.tenancy";
+    let stream = sanvi_testsupport::test_stream("tenancy");
     let group = "tenancy-crash-recovery";
-    streams.ensure_consumer_group(stream, group).await.unwrap();
+    streams.ensure_consumer_group(&stream, group).await.unwrap();
 
     let envelope = sanvi_kernel::EventEnvelope::new(
         "tenancy.tenant",
@@ -339,7 +237,7 @@ async fn crashed_consumers_stale_entries_are_reclaimed_and_processed() {
     );
     let payload = serde_json::to_string(&envelope).unwrap();
     streams
-        .append(stream, &[("event", payload.as_str())], 100)
+        .append(&stream, &[("event", payload.as_str())], 100)
         .await
         .unwrap();
 
@@ -352,7 +250,7 @@ async fn crashed_consumers_stale_entries_are_reclaimed_and_processed() {
             .group(group, "dead-consumer")
             .count(1);
         let _: redis::streams::StreamReadReply = conn
-            .xread_options(&[stream], &[">"], &options)
+            .xread_options(&[stream.as_str()], &[">"], &options)
             .await
             .unwrap();
     }
@@ -377,6 +275,7 @@ async fn crashed_consumers_stale_entries_are_reclaimed_and_processed() {
         let pool = pool.clone();
         let streams = streams.clone();
         let group = group.to_string();
+        let stream = stream.clone();
         tokio::spawn(async move {
             let consumer = StreamConsumer::new(pool.clone(), streams.clone())
                 // Real recovery waits 60s of idle time on a 30s cadence;
@@ -387,7 +286,7 @@ async fn crashed_consumers_stale_entries_are_reclaimed_and_processed() {
                 );
             consumer
                 .run_until_shutdown(
-                    stream,
+                    &stream,
                     &group,
                     &consumer_name,
                     Arc::new(move |envelope| {
