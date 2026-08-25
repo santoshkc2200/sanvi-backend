@@ -25,7 +25,7 @@
       "minimum_budgets_minor": {"JPY": {"daily": 100}},
       "schedule_granularity": "daily",
       "targeting_dimensions": ["geo", "interests"],
-      "creative_placements": [{"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"], "min_width_px": 600, "min_height_px": 600, "max_file_size_bytes": 31457280, "min_duration_seconds": 1, "max_duration_seconds": 241}}],
+      "creative_placements": [{"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"], "min_width_px": 600, "min_height_px": 600, "max_file_size_bytes": 31457280, "min_duration_seconds": 1, "max_duration_seconds": 14460}}],
       "text_limits": {"en": {"headline": 40, "body": 90}, "ja": {"headline": 25, "body": 45}}
     }
   },

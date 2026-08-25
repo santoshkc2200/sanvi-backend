@@ -87,7 +87,8 @@ impl FakeAdPlatform {
                         min_height_px: Some(600),
                         max_file_size_bytes: Some(31_457_280),
                         min_duration_seconds: Some(1),
-                        max_duration_seconds: Some(241),
+                        // 241 minutes = 14,460 seconds
+                        max_duration_seconds: Some(14460),
                     },
                 }],
             ),
