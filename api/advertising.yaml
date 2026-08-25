@@ -990,6 +990,171 @@ paths:
           description: Missing advertising.metrics.read permission
       tags:
       - advertising
+  /api/v1/tenant/ads/creatives:
+    get:
+      operationId: list_creatives
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativesView'
+          description: Every creative owned by the tenant
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+      tags:
+      - advertising
+    post:
+      operationId: create_creative
+      parameters:
+      - description: Required. A retry with the same key returns the original creative.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCreativeRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativeView'
+          description: Creative created with upload-time matrix validation.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing/malformed Idempotency-Key or invalid creative fields (advertising/campaign-invalid carries field violations)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Connection not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Connection is not active
+      tags:
+      - advertising
+  /api/v1/tenant/ads/creatives/{creative_id}:
+    delete:
+      operationId: delete_creative
+      parameters:
+      - description: Creative UUID
+        in: path
+        name: creative_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '204':
+          description: Creative deleted
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Creative not found
+      tags:
+      - advertising
+    get:
+      operationId: get_creative
+      parameters:
+      - description: Creative UUID
+        in: path
+        name: creative_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativeView'
+          description: Stored creative specification and metadata
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Creative not found
+      tags:
+      - advertising
+  /api/v1/tenant/ads/creatives/{creative_id}/previews:
+    get:
+      operationId: get_creative_previews
+      parameters:
+      - description: Creative UUID
+        in: path
+        name: creative_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - in: path
+        name: placement
+        required: true
+        schema:
+          type:
+          - string
+          - 'null'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreativePreviewsView'
+          description: Spec-rendered placement previews
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Creative not found
+      tags:
+      - advertising
   /api/v1/tenant/ads/platforms:
     get:
       operationId: list_ad_platforms

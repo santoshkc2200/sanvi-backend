@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::domain::{
     AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, CampaignChange,
-    CampaignRepository, ChangeSource, ConnectionStatus, PlatformAccount, PlatformKey, SecretRef,
-    StoredCampaign, SyncError,
+    CampaignRepository, ChangeSource, ConnectionStatus, CreativeRepository, PlatformAccount,
+    PlatformKey, SecretRef, StoredCampaign, StoredCreative, SyncError,
 };
 
 #[derive(sqlx::FromRow)]
@@ -855,5 +855,145 @@ impl TrackingSettingsRepository for SqlxTrackingSettingsRepository {
             .await
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
         Ok(())
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CreativeRow {
+    id: Uuid,
+    tenant_id: Uuid,
+    external_id: Option<String>,
+    specification: serde_json::Value,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CreativeSpecificationPayload {
+    connection_id: Uuid,
+    platform: PlatformKey,
+    creative: crate::domain::Creative,
+    #[serde(default)]
+    assets: Vec<crate::domain::AssetMetadata>,
+}
+
+impl TryFrom<CreativeRow> for StoredCreative {
+    type Error = AdvertisingError;
+
+    fn try_from(row: CreativeRow) -> Result<Self, Self::Error> {
+        let payload: CreativeSpecificationPayload = serde_json::from_value(row.specification)
+            .map_err(|error| {
+                AdvertisingError::Storage(format!("invalid creative specification: {error}"))
+            })?;
+        Ok(Self {
+            id: row.id,
+            tenant_id: row.tenant_id,
+            connection_id: payload.connection_id,
+            platform: payload.platform,
+            external_id: row.external_id,
+            creative: payload.creative,
+            assets: payload.assets,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxCreativeRepository;
+
+impl SqlxCreativeRepository {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl CreativeRepository for SqlxCreativeRepository {
+    async fn insert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        creative: &StoredCreative,
+    ) -> Result<(), AdvertisingError> {
+        let payload = CreativeSpecificationPayload {
+            connection_id: creative.connection_id,
+            platform: creative.platform.clone(),
+            creative: creative.creative.clone(),
+            assets: creative.assets.clone(),
+        };
+        let specification =
+            serde_json::to_value(&payload).map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        sqlx::query(
+            "INSERT INTO advertising.creatives (id, tenant_id, external_id, specification, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(creative.id)
+        .bind(creative.tenant_id)
+        .bind(&creative.external_id)
+        .bind(specification)
+        .bind(creative.created_at)
+        .bind(creative.updated_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn find(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        creative_id: Uuid,
+    ) -> Result<Option<StoredCreative>, AdvertisingError> {
+        let row = sqlx::query_as::<_, CreativeRow>(
+            "SELECT id, tenant_id, external_id, specification, created_at, updated_at
+             FROM advertising.creatives
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(creative_id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+
+        row.map(StoredCreative::try_from).transpose()
+    }
+
+    async fn list_by_tenant(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<StoredCreative>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, CreativeRow>(
+            "SELECT id, tenant_id, external_id, specification, created_at, updated_at
+             FROM advertising.creatives
+             WHERE tenant_id = $1
+             ORDER BY created_at DESC",
+        )
+        .bind(tenant_id)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+
+        rows.into_iter().map(StoredCreative::try_from).collect()
+    }
+
+    async fn delete(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        creative_id: Uuid,
+    ) -> Result<bool, AdvertisingError> {
+        let result = sqlx::query(
+            "DELETE FROM advertising.creatives
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(creative_id)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+
+        Ok(result.rows_affected() > 0)
     }
 }

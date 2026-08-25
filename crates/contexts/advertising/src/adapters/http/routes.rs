@@ -2,8 +2,9 @@ use actix_web::{http::Method, web};
 use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
 use super::handlers::{
-    add_ad, add_ad_group, create_campaign, create_connection, delete_connection, get_campaign,
-    list_ad_platforms, list_campaign_changes, list_campaigns, list_connections, oauth_callback,
+    add_ad, add_ad_group, create_campaign, create_connection, create_creative, delete_connection,
+    delete_creative, get_campaign, get_creative, get_creative_previews, list_ad_platforms,
+    list_campaign_changes, list_campaigns, list_connections, list_creatives, oauth_callback,
     patch_campaign, pause_campaign, publish_campaign, resolve_campaign_drift, resume_campaign,
     start_oauth, update_ad, update_ad_group, validate_campaign,
 };
@@ -115,6 +116,29 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
         web::resource("/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads/{ad_id}")
             .app_data(PermissionMap::new(vec![(Method::PATCH, write)]))
             .route(web::patch().to(update_ad)),
+    );
+    cfg.service(
+        web::resource("/ads/creatives")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, read),
+                (Method::POST, write),
+            ]))
+            .route(web::get().to(list_creatives))
+            .route(web::post().to(create_creative)),
+    );
+    cfg.service(
+        web::resource("/ads/creatives/{creative_id}")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, read),
+                (Method::DELETE, write),
+            ]))
+            .route(web::get().to(get_creative))
+            .route(web::delete().to(delete_creative)),
+    );
+    cfg.service(
+        web::resource("/ads/creatives/{creative_id}/previews")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .route(web::get().to(get_creative_previews)),
     );
 }
 
@@ -239,6 +263,36 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         "advertising.campaign.write",
         ResourceSpec::Tenant,
     ),
+    (
+        "/api/v1/tenant/ads/creatives",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives",
+        Method::POST,
+        "advertising.campaign.write",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives/{creative_id}",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives/{creative_id}",
+        Method::DELETE,
+        "advertising.campaign.write",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives/{creative_id}/previews",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
 ];
 
 pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
@@ -340,6 +394,31 @@ pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
     (
         "/api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads/{ad_id}",
         Method::PATCH,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives",
+        Method::POST,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives/{creative_id}",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives/{creative_id}",
+        Method::DELETE,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/creatives/{creative_id}/previews",
+        Method::GET,
         ADVERTISING_ENTITLEMENTS,
     ),
 ];

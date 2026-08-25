@@ -51,46 +51,110 @@ impl FakeAdPlatform {
                 "google_ads",
                 "Google Ads",
                 "advertising.google_ads",
-                &["sales", "leads"],
+                &["app_promotion", "awareness", "leads", "sales", "traffic"],
                 &[BudgetType::Daily, BudgetType::Lifetime],
-                &["geo", "keywords"],
+                &[
+                    "audiences",
+                    "demographics",
+                    "devices",
+                    "geo",
+                    "keywords",
+                    "topics",
+                ],
                 (30, 30),
-                vec![CreativePlacement {
-                    key: "feed".to_string(),
-                    asset_spec: CreativeAssetSpec {
-                        image_required: true,
-                        video_allowed: true,
-                        aspect_ratios: vec!["1:1".to_string(), "4:5".to_string()],
-                        min_width_px: Some(300),
-                        min_height_px: Some(300),
-                        max_file_size_bytes: Some(5_242_880),
-                        min_duration_seconds: Some(5),
-                        max_duration_seconds: Some(180),
+                vec![
+                    CreativePlacement {
+                        key: "feed".to_string(),
+                        asset_spec: CreativeAssetSpec {
+                            image_required: true,
+                            video_allowed: true,
+                            aspect_ratios: vec!["1:1".to_string(), "4:5".to_string()],
+                            min_width_px: Some(300),
+                            min_height_px: Some(300),
+                            max_file_size_bytes: Some(5_242_880),
+                            min_duration_seconds: Some(5),
+                            max_duration_seconds: Some(180),
+                        },
                     },
-                }],
+                    CreativePlacement {
+                        key: "stories".to_string(),
+                        asset_spec: CreativeAssetSpec {
+                            image_required: true,
+                            video_allowed: true,
+                            aspect_ratios: vec!["9:16".to_string()],
+                            min_width_px: Some(480),
+                            min_height_px: Some(854),
+                            max_file_size_bytes: Some(5_242_880),
+                            min_duration_seconds: Some(5),
+                            max_duration_seconds: Some(60),
+                        },
+                    },
+                ],
             ),
             descriptor(
                 "meta",
                 "Meta Ads",
                 "advertising.meta_ads",
-                &["awareness", "sales"],
-                &[BudgetType::Daily],
-                &["geo", "interests"],
+                &[
+                    "app_promotion",
+                    "awareness",
+                    "engagement",
+                    "leads",
+                    "sales",
+                    "traffic",
+                ],
+                &[BudgetType::Daily, BudgetType::Lifetime],
+                &[
+                    "age",
+                    "custom_audiences",
+                    "gender",
+                    "geo",
+                    "interests",
+                    "languages",
+                ],
                 (40, 25),
-                vec![CreativePlacement {
-                    key: "feed".to_string(),
-                    asset_spec: CreativeAssetSpec {
-                        image_required: true,
-                        video_allowed: true,
-                        aspect_ratios: vec!["1:1".to_string(), "4:5".to_string()],
-                        min_width_px: Some(600),
-                        min_height_px: Some(600),
-                        max_file_size_bytes: Some(31_457_280),
-                        min_duration_seconds: Some(1),
-                        // 241 minutes = 14,460 seconds
-                        max_duration_seconds: Some(14460),
+                vec![
+                    CreativePlacement {
+                        key: "feed".to_string(),
+                        asset_spec: CreativeAssetSpec {
+                            image_required: true,
+                            video_allowed: true,
+                            aspect_ratios: vec!["1:1".to_string(), "4:5".to_string()],
+                            min_width_px: Some(600),
+                            min_height_px: Some(600),
+                            max_file_size_bytes: Some(31_457_280),
+                            min_duration_seconds: Some(1),
+                            // 241 minutes = 14,460 seconds
+                            max_duration_seconds: Some(14460),
+                        },
                     },
-                }],
+                    CreativePlacement {
+                        key: "stories".to_string(),
+                        asset_spec: CreativeAssetSpec {
+                            image_required: true,
+                            video_allowed: true,
+                            aspect_ratios: vec!["9:16".to_string()],
+                            min_width_px: Some(500),
+                            min_height_px: Some(888),
+                            max_file_size_bytes: Some(31_457_280),
+                            min_duration_seconds: Some(1),
+                            max_duration_seconds: Some(120),
+                        },
+                    },
+                    CreativePlacement {
+                        key: "reels".to_string(),
+                        asset_spec: CreativeAssetSpec {
+                            image_required: false,
+                            video_allowed: true,
+                            aspect_ratios: vec!["9:16".to_string()],
+                            min_width_px: Some(500),
+                            min_height_px: Some(888),
+                            max_file_size_bytes: Some(31_457_280),
+                            min_duration_seconds: Some(3),
+                            max_duration_seconds: Some(900),
+                        },
+                    },
+                ],
             ),
             descriptor(
                 "asymmetric_demo",
@@ -442,11 +506,9 @@ mod tests {
 
     #[test]
     fn forbidden_objective_and_budget_report_field_paths() {
-        let matrix = &FakeAdPlatform::fixtures()[1].capability_matrix;
-        let violations = validate_campaign(
-            matrix,
-            &campaign("leads", BudgetType::Lifetime, "en", "valid"),
-        );
+        let matrix = &FakeAdPlatform::fixtures()[2].capability_matrix;
+        let violations =
+            validate_campaign(matrix, &campaign("sales", BudgetType::Daily, "en", "valid"));
         let paths = violations
             .iter()
             .map(|violation: &ValidationViolation| violation.field_path.as_str())

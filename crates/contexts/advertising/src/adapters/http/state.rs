@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::application::{
-    AddAd, AddAdGroup, CreateCampaign, CreateConnection, DeleteConnection, GetCampaign,
-    HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListPlatformCatalog,
+    AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
+    DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, HandleCallback,
+    ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives, ListPlatformCatalog,
     PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign, ResolveCampaignDrift,
     ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup, ValidateCampaign,
 };
@@ -46,6 +47,13 @@ pub struct AdvertisingState {
     pub create_connection: Arc<CreateConnection>,
     pub list_connections: Arc<ListConnections>,
     pub delete_connection: Arc<DeleteConnection>,
+
+    /// Creative management (TASK-013, 10.4).
+    pub create_creative: Arc<CreateCreative>,
+    pub get_creative: Arc<GetCreative>,
+    pub list_creatives: Arc<ListCreatives>,
+    pub delete_creative: Arc<DeleteCreative>,
+    pub get_creative_previews: Arc<GetCreativePreviews>,
 
     /// Conversion capture & the directive gate (TASK-014, 10.5).
     pub tracking_ip_limiter: Arc<crate::adapters::rate_limit::QuotaLimiter>,

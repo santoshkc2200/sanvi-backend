@@ -1,12 +1,13 @@
 use std::{sync::Arc, time::Duration};
 
 use actix_web::{HttpRequest, HttpResponse, web};
+use chrono::{DateTime, Utc};
 use sanvi_http::{
     ApiError, CurrentSubject, CurrentTenant, FreshAal2Required, PROBLEM_TYPE_BASE, ProblemDetail,
     RequiredAnyFeature, RequiredPermission,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::AdvertisingState;
@@ -14,12 +15,13 @@ use crate::{
     CapabilityMatrix,
     application::{
         AdFields, AdGroupFields, CampaignFields, DriftResolution, NewAdFields, NewAdGroupFields,
-        NewCampaignFields, ResolvedCampaignDrift,
+        NewCampaignFields, NewCreativeFields, PlacementPreview, ResolvedCampaignDrift,
     },
     domain::{
-        AdGroup, AdvertisingConnection, AdvertisingError, BidSettings, Budget, Campaign,
-        CampaignChange, ConnectionHealth, ConnectionState, Creative, Objective, PlatformAccount,
-        PlatformKey, Schedule, StoredCampaign, Targeting, ValidationViolation,
+        AdGroup, AdvertisingConnection, AdvertisingError, AssetMetadata, BidSettings, Budget,
+        Campaign, CampaignChange, ConnectionHealth, ConnectionState, Creative, CreativeAssetSpec,
+        CreativeText, Objective, PlatformAccount, PlatformKey, Schedule, StoredCampaign,
+        StoredCreative, Targeting, ValidationViolation,
     },
 };
 
@@ -200,6 +202,9 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
         },
         AdvertisingError::AdNotFound => ApiError::NotFound {
             resource: "ad".to_string(),
+        },
+        AdvertisingError::CreativeNotFound => ApiError::NotFound {
+            resource: "creative".to_string(),
         },
         // Normally intercepted by `campaign_validation_problem` so the
         // response carries field-addressed violations; the bare mapping
@@ -1648,4 +1653,264 @@ pub async fn delete_connection(
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::NoContent().finish())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreativeView {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub platform: String,
+    pub external_id: Option<String>,
+    pub creative: Creative,
+    #[serde(default)]
+    pub assets: Vec<AssetMetadata>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<StoredCreative> for CreativeView {
+    fn from(stored: StoredCreative) -> Self {
+        Self {
+            id: stored.id,
+            connection_id: stored.connection_id,
+            platform: stored.platform.as_str().to_string(),
+            external_id: stored.external_id,
+            creative: stored.creative,
+            assets: stored.assets,
+            created_at: stored.created_at,
+            updated_at: stored.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CreativesView {
+    pub creatives: Vec<CreativeView>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateCreativeRequest {
+    pub connection_id: Uuid,
+    pub placement: String,
+    pub texts: Vec<CreativeText>,
+    pub asset_references: Vec<String>,
+    #[serde(default)]
+    pub assets: Vec<AssetMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct CreativePreviewsQuery {
+    pub placement: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CreativePreviewView {
+    pub placement: String,
+    pub headline: Option<String>,
+    pub body: Option<String>,
+    pub asset_references: Vec<String>,
+    pub spec: CreativeAssetSpec,
+}
+
+impl From<PlacementPreview> for CreativePreviewView {
+    fn from(preview: PlacementPreview) -> Self {
+        Self {
+            placement: preview.placement,
+            headline: preview.headline,
+            body: preview.body,
+            asset_references: preview.asset_references,
+            spec: preview.spec,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CreativePreviewsView {
+    pub previews: Vec<CreativePreviewView>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/creatives",
+    tag = "advertising",
+    operation_id = "create_creative",
+    request_body = CreateCreativeRequest,
+    params(
+        ("Idempotency-Key" = Uuid, Header, description = "Required. A retry with the same key returns the original creative.")
+    ),
+    responses(
+        (status = 201, description = "Creative created with upload-time matrix validation.", body = CreativeView),
+        (status = 400, description = "Missing/malformed Idempotency-Key or invalid creative fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail),
+        (status = 404, description = "Connection not found", body = ProblemDetail),
+        (status = 409, description = "Connection is not active", body = ProblemDetail)
+    )
+)]
+pub async fn create_creative(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _subject: CurrentSubject,
+    req: HttpRequest,
+    body: web::Json<CreateCreativeRequest>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let mutation_id = idempotency_key(&req)?;
+    let command = body.into_inner();
+    let scope = format!("tenant.{tenant_id}.advertising.creatives.create");
+    let key = mutation_id.to_string();
+    if let Some(view) = claim_idempotent::<CreativeView>(&state, &key, &scope).await? {
+        return Ok(HttpResponse::Created().json(view));
+    }
+
+    let result = state
+        .create_creative
+        .execute(
+            tenant_id,
+            NewCreativeFields {
+                connection_id: command.connection_id,
+                placement: command.placement,
+                texts: command.texts,
+                asset_references: command.asset_references,
+                assets: command.assets,
+            },
+        )
+        .await;
+
+    let stored = match result {
+        Ok(stored) => stored,
+        Err(AdvertisingError::Validation(violations)) => {
+            release_idempotent(&state, &key, &scope).await;
+            return Err(campaign_validation_problem(violations));
+        }
+        Err(error) => {
+            release_idempotent(&state, &key, &scope).await;
+            return Err(api_error(error).into());
+        }
+    };
+    let view = CreativeView::from(stored);
+    resolve_idempotent(&state, &key, &scope, &view).await;
+    Ok(HttpResponse::Created().json(view))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/creatives/{creative_id}",
+    tag = "advertising",
+    operation_id = "get_creative",
+    params(("creative_id" = Uuid, Path, description = "Creative UUID")),
+    responses(
+        (status = 200, description = "Stored creative specification and metadata", body = CreativeView),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 404, description = "Creative not found", body = ProblemDetail)
+    )
+)]
+pub async fn get_creative(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<Uuid>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let creative_id = path.into_inner();
+    let stored = state
+        .get_creative
+        .execute(tenant_id, creative_id)
+        .await
+        .map_err(api_error)?
+        .ok_or(ApiError::NotFound {
+            resource: "creative".to_string(),
+        })?;
+    Ok(HttpResponse::Ok().json(CreativeView::from(stored)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/creatives",
+    tag = "advertising",
+    operation_id = "list_creatives",
+    responses(
+        (status = 200, description = "Every creative owned by the tenant", body = CreativesView),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn list_creatives(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let creatives = state
+        .list_creatives
+        .execute(tenant_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(CreativesView {
+        creatives: creatives.into_iter().map(CreativeView::from).collect(),
+    }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/tenant/ads/creatives/{creative_id}",
+    tag = "advertising",
+    operation_id = "delete_creative",
+    params(("creative_id" = Uuid, Path, description = "Creative UUID")),
+    responses(
+        (status = 204, description = "Creative deleted"),
+        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail),
+        (status = 404, description = "Creative not found", body = ProblemDetail)
+    )
+)]
+pub async fn delete_creative(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<Uuid>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let creative_id = path.into_inner();
+    state
+        .delete_creative
+        .execute(tenant_id, creative_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/creatives/{creative_id}/previews",
+    tag = "advertising",
+    operation_id = "get_creative_previews",
+    params(
+        ("creative_id" = Uuid, Path, description = "Creative UUID"),
+        CreativePreviewsQuery
+    ),
+    responses(
+        (status = 200, description = "Spec-rendered placement previews", body = CreativePreviewsView),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 404, description = "Creative not found", body = ProblemDetail)
+    )
+)]
+pub async fn get_creative_previews(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<Uuid>,
+    query: web::Query<CreativePreviewsQuery>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, actix_web::Error> {
+    let tenant_id = tenant.0.tenant_id;
+    let creative_id = path.into_inner();
+    let previews = state
+        .get_creative_previews
+        .execute(tenant_id, creative_id, query.into_inner().placement)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(CreativePreviewsView {
+        previews: previews
+            .into_iter()
+            .map(CreativePreviewView::from)
+            .collect(),
+    }))
 }

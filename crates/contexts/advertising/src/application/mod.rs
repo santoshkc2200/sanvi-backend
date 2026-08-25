@@ -3,6 +3,7 @@
 pub mod campaigns;
 pub mod catalog;
 pub mod connections;
+pub mod creatives;
 pub mod drift_resolution;
 pub mod reconciliation;
 pub mod reconciliation_sweep;
@@ -18,6 +19,10 @@ pub use campaigns::{
 pub use catalog::ListPlatformCatalog;
 pub use connections::{
     CreateConnection, DeleteConnection, HandleCallback, ListConnections, StartAuthorization,
+};
+pub use creatives::{
+    CreateCreative, DeleteCreative, GetCreative, GetCreativePreviews, ListCreatives,
+    NewCreativeFields, PlacementPreview,
 };
 pub use drift_resolution::{DriftResolution, ResolveCampaignDrift, ResolvedCampaignDrift};
 pub use reconciliation::ReconcileCampaign;

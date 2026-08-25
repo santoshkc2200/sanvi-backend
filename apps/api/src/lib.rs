@@ -44,11 +44,12 @@ use sanvi_advertising::{
     adapters::{
         FakeAdPlatform, OutboxEventPublisher as AdvertisingEvents,
         SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
-        SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
+        SqlxCreativeRepository, SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
     },
     application::{
-        AddAd, AddAdGroup, CreateCampaign, CreateConnection, DeleteConnection, GetCampaign,
-        HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListPlatformCatalog,
+        AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
+        DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, HandleCallback,
+        ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives, ListPlatformCatalog,
         PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign, ResolveCampaignDrift,
         ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup, ValidateCampaign,
     },
@@ -2800,8 +2801,13 @@ pub async fn build_advertising_state(
     let token_kek = config.token_kek_bytes()?;
     let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
         &FakeAdPlatform::registered_catalog(),
-        config.quota_platform_wide_permits,
-        config.quota_per_connection_permits,
+        |platform| match platform.as_str() {
+            "meta" => (10, 2),
+            _ => (
+                config.quota_platform_wide_permits,
+                config.quota_per_connection_permits,
+            ),
+        },
     ));
     let tx = sanvi_persistence::TxManager::new(pool);
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
@@ -2816,6 +2822,8 @@ pub async fn build_advertising_state(
     ));
     let campaigns: std::sync::Arc<dyn sanvi_advertising::domain::CampaignRepository> =
         std::sync::Arc::new(SqlxCampaignRepository::new());
+    let creatives: std::sync::Arc<dyn sanvi_advertising::domain::CreativeRepository> =
+        std::sync::Arc::new(SqlxCreativeRepository::new());
     let connections: std::sync::Arc<dyn sanvi_advertising::AdvertisingConnectionRepository> =
         std::sync::Arc::new(SqlxAdvertisingConnectionRepository::new());
     let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> =
@@ -2972,9 +2980,24 @@ pub async fn build_advertising_state(
         list_connections: std::sync::Arc::new(ListConnections::new(
             tx.clone(),
             connections.clone(),
-            registry,
+            registry.clone(),
         )),
-        delete_connection: std::sync::Arc::new(DeleteConnection::new(tx, connections)),
+        delete_connection: std::sync::Arc::new(DeleteConnection::new(
+            tx.clone(),
+            connections.clone(),
+        )),
+        create_creative: std::sync::Arc::new(CreateCreative::new(
+            tx.clone(),
+            creatives.clone(),
+            connections,
+            registry.clone(),
+        )),
+        get_creative: std::sync::Arc::new(GetCreative::new(tx.clone(), creatives.clone())),
+        list_creatives: std::sync::Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),
+        delete_creative: std::sync::Arc::new(DeleteCreative::new(tx.clone(), creatives.clone())),
+        get_creative_previews: std::sync::Arc::new(GetCreativePreviews::new(
+            tx, creatives, registry,
+        )),
         oauth_state,
         // Concurrency caps on the public track beacon: a coarse abuse
         // control (see `tracking_handlers` module doc), not a
