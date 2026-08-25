@@ -110,6 +110,14 @@ impl QuotaLimiter {
             .expect("advertising platform-wide quota semaphore is never closed");
         (platform_permit, connection_permit)
     }
+
+    pub fn platform_wide_permits(&self) -> usize {
+        self.platform_wide.available_permits()
+    }
+
+    pub fn per_connection_permits(&self) -> usize {
+        self.per_connection_permits
+    }
 }
 
 /// Transparent [`AdPlatformPort`] decorator: every call queues on the
@@ -123,6 +131,10 @@ pub struct RateLimitedAdapter {
 impl RateLimitedAdapter {
     pub fn new(inner: Arc<dyn AdPlatformPort>, limiter: Arc<QuotaLimiter>) -> Self {
         Self { inner, limiter }
+    }
+
+    pub fn limiter(&self) -> &Arc<QuotaLimiter> {
+        &self.limiter
     }
 }
 
@@ -250,13 +262,17 @@ impl AdPlatformPort for RateLimitedAdapter {
 /// Wrap every adapter in `registry` with its own [`QuotaLimiter`] — one
 /// budget per platform, matching one developer token per platform — and
 /// return a fresh registry of the wrapped adapters.
-pub fn rate_limited_registry(
+pub fn rate_limited_registry<F>(
     registry: &crate::application::PlatformRegistry,
-    platform_wide_permits: usize,
-    per_connection_permits: usize,
-) -> crate::application::PlatformRegistry {
+    limits_for: F,
+) -> crate::application::PlatformRegistry
+where
+    F: Fn(&crate::domain::PlatformKey) -> (usize, usize),
+{
     let mut limited = crate::application::PlatformRegistry::new();
     for adapter in registry.adapters() {
+        let key = &adapter.descriptor().key;
+        let (platform_wide_permits, per_connection_permits) = limits_for(key);
         let limiter = Arc::new(QuotaLimiter::new(
             platform_wide_permits,
             per_connection_permits,
@@ -552,12 +568,92 @@ mod tests {
             .iter()
             .map(|adapter| adapter.descriptor().key)
             .collect();
-        let limited = rate_limited_registry(&registry, 10, 5);
+        let limited = rate_limited_registry(&registry, |_| (10, 5));
         let actual: std::collections::BTreeSet<_> = limited
             .adapters()
             .iter()
             .map(|adapter| adapter.descriptor().key)
             .collect();
         assert_eq!(expected, actual);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn rate_limited_registry_assigns_distinct_budgets_per_platform() {
+        let google_key = crate::domain::PlatformKey::parse("google_ads").unwrap();
+        let meta_key = crate::domain::PlatformKey::parse("meta").unwrap();
+
+        let google_probe = Arc::new(ConcurrencyProbe {
+            in_flight: AtomicUsize::new(0),
+            max_observed: AtomicUsize::new(0),
+            descriptor: FakeAdPlatform::fixtures().remove(0),
+        });
+        let meta_probe = Arc::new(ConcurrencyProbe {
+            in_flight: AtomicUsize::new(0),
+            max_observed: AtomicUsize::new(0),
+            descriptor: FakeAdPlatform::fixtures().remove(1),
+        });
+
+        let mut raw_registry = crate::application::PlatformRegistry::new();
+        raw_registry.register(google_probe.clone()).unwrap();
+        raw_registry.register(meta_probe.clone()).unwrap();
+
+        let limited = rate_limited_registry(&raw_registry, |platform| {
+            if platform == &google_key {
+                (20, 5)
+            } else if platform == &meta_key {
+                (10, 2)
+            } else {
+                (1, 1)
+            }
+        });
+
+        let google_adapter = limited.adapter(&google_key).unwrap();
+        let meta_adapter = limited.adapter(&meta_key).unwrap();
+
+        // Exercise Meta with 10 concurrent requests on connection-1 -> capped at 2
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let meta_adapter = meta_adapter.clone();
+            handles.push(tokio::spawn(async move {
+                let connection = ConnectionHandle {
+                    id: "connection-meta-1".to_string(),
+                };
+                meta_adapter
+                    .create_campaign(
+                        &connection,
+                        draft_campaign(&format!("m{i}")),
+                        Uuid::now_v7(),
+                    )
+                    .await
+                    .unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        assert_eq!(meta_probe.max_observed.load(Ordering::SeqCst), 2);
+
+        // Exercise Google with 10 concurrent requests on connection-1 -> capped at 5
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let google_adapter = google_adapter.clone();
+            handles.push(tokio::spawn(async move {
+                let connection = ConnectionHandle {
+                    id: "connection-google-1".to_string(),
+                };
+                google_adapter
+                    .create_campaign(
+                        &connection,
+                        draft_campaign(&format!("g{i}")),
+                        Uuid::now_v7(),
+                    )
+                    .await
+                    .unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        assert_eq!(google_probe.max_observed.load(Ordering::SeqCst), 5);
     }
 }
