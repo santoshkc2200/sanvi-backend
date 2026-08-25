@@ -1,0 +1,90 @@
+name: coverage
+
+# Not a PR gate. The `test` and `integration` jobs in pr.yml already run every
+# test in the workspace; running them a third time under llvm-cov instrumentation
+# doubled PR runner time (and, because instrumentation changes RUSTFLAGS, got a
+# cold build even though `test` had just compiled the same crates). The ratchet
+# is a trend guard, so it runs after merge and nightly instead.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 03:17 UTC — off the hour, so this does not pile onto the top-of-hour
+    # scheduling spike that delays cron-triggered runs.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: "true"
+  # Incremental compilation only pays off across edits to the same tree. A
+  # runner gets a fresh checkout every time, so the artifacts are never
+  # reused — they just make the build slower to write and the cache that
+  # `Swatinem/rust-cache` saves and restores much larger.
+  CARGO_INCREMENTAL: "0"
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  # Unlike the PR gate, do not cancel in progress: each run publishes a report
+  # for one main commit, and a cancelled run leaves a gap in the trend.
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    name: coverage (ratchets upward)
+    runs-on: ubuntu-latest
+    services:
+      # One server for the whole job. The suites clone a private database per
+      # test from a pre-migrated template instead of starting a container
+      # each — `nextest` runs a process per test, so a container each would
+      # mean hundreds of them.
+      postgres:
+        image: postgres:11-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      SANVI_TEST_PG_PORT: 5432
+      SANVI_TEST_REDIS_PORT: 6379
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
+      # Not part of rust-toolchain.toml's components (that file is shared
+      # with every dev machine; llvm-tools is only needed for coverage), so
+      # add it to whichever toolchain the step above just activated.
+      - name: add llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: test with coverage
+        run: |
+          cargo llvm-cov nextest --workspace \
+            --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy \
+            --ignore-filename-regex 'apps/.*/src/main\.rs' \
+            --fail-under-lines 70 \
+            --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
