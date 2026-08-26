@@ -63,10 +63,10 @@ audit-list:
 approval-list:
     cargo run -p sanvi-cli -- approval list
 
-membership-grant:
+membership-grant email role tenant:
     cargo run -p sanvi-cli -- membership grant --email {{email}} --role {{role}} --tenant {{tenant}}
 
-platform-grant:
+platform-grant email role:
     cargo run -p sanvi-cli -- membership grant --email {{email}} --role {{role}} --platform
 
 api:
@@ -90,7 +90,7 @@ billing-reconcile:
 billing-webhooks:
     cargo run -p sanvi-cli -- billing webhooks
 
-tenant-create:
+tenant-create slug display_name region:
     cargo run -p sanvi-cli -- tenant create --slug {{slug}} --display-name "{{display_name}}" --region {{region}} --activate
 
 tenant-list:
