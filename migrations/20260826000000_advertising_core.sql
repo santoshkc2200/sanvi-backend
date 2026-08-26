@@ -125,7 +125,13 @@ CREATE TABLE advertising.conversion_events (
   upload_state  jsonb       NOT NULL DEFAULT '{}',
   created_at    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (id, occurred_at),
-  FOREIGN KEY (tenant_id, event_id) REFERENCES advertising.conversion_event_dedup(tenant_id, event_id)
+  -- Named explicitly: PostgreSQL 11 derives a foreign-key constraint name from
+  -- the *first* key column only, so an auto-named composite key here would
+  -- collide with `conversion_events_tenant_id_fkey` above and land as
+  -- `…_fkey1`, while 12+ would name it `…_tenant_id_event_id_fkey`. Later
+  -- migrations have to drop this by name; the name cannot be server-dependent.
+  CONSTRAINT conversion_events_tenant_id_event_id_fkey
+    FOREIGN KEY (tenant_id, event_id) REFERENCES advertising.conversion_event_dedup(tenant_id, event_id)
 ) PARTITION BY RANGE (occurred_at);
 SELECT platform.enable_tenant_rls('advertising', 'conversion_events');
 
