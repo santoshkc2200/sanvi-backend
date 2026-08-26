@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use sanvi_persistence::{DatabaseConfig, Migrator, PgPool, build_pool};
+use sha2::{Digest, Sha256};
 use sqlx::AssertSqlSafe;
 use testcontainers::{ImageExt, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
@@ -14,7 +15,13 @@ const APP_ROLE: &str = "sanvi_app";
 const APP_PASSWORD: &str = "app";
 
 /// Migrated once, never connected to, cloned by every test.
-const TEMPLATE_DB: &str = "sanvi_template";
+///
+/// The name carries a fingerprint of the migration set it was built from. A
+/// bare `sanvi_template` made "does it exist?" the only question asked, so a
+/// server that had one kept handing it out after the migrations on disk had
+/// moved on — the suite then passed against a schema the repository could no
+/// longer produce. Keying by fingerprint turns that into a miss.
+const TEMPLATE_PREFIX: &str = "sanvi_template_";
 
 /// Guards template creation across the *processes* that share one server —
 /// `cargo nextest` runs each test in its own process, so a per-process
@@ -26,7 +33,7 @@ const BOOTSTRAP_LOCK: i64 = 0x5AE7_1DB0;
 const POOL_MAX_CONNECTIONS: u32 = 8;
 
 static PG_PORT: OnceCell<u16> = OnceCell::const_new();
-static BOOTSTRAPPED: OnceCell<()> = OnceCell::const_new();
+static BOOTSTRAPPED: OnceCell<String> = OnceCell::const_new();
 static DB_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Absolute path to the workspace `migrations/` directory.
@@ -112,10 +119,49 @@ async fn admin_pool(port: u16) -> PgPool {
         .expect("admin pool")
 }
 
+/// Name of the template for the migrations currently on disk.
+///
+/// Built from the same per-file checksums sqlx itself validates with, so the
+/// fingerprint moves exactly when sqlx would start rejecting an already-applied
+/// migration as modified.
+async fn template_name() -> String {
+    let migrations = sqlx::migrate::Migrator::new(std::path::Path::new(&migrations_dir()))
+        .await
+        .expect("load migrations");
+    let mut fingerprint = Sha256::new();
+    for migration in migrations.iter() {
+        fingerprint.update(migration.version.to_le_bytes());
+        fingerprint.update(&migration.checksum);
+    }
+    format!(
+        "{TEMPLATE_PREFIX}{}",
+        hex::encode(&fingerprint.finalize()[..8])
+    )
+}
+
+/// Drop a database that may be flagged as a template.
+///
+/// `DROP DATABASE` refuses a `datistemplate` database, so the flag has to come
+/// off first. Errors are ignored throughout: losing a race to another process
+/// that is reaping the same leftover is not a failure.
+async fn drop_template(lock: &mut sqlx::PgConnection, name: &str) {
+    let _ = sqlx::query("UPDATE pg_database SET datistemplate = false WHERE datname = $1")
+        .bind(name)
+        .execute(&mut *lock)
+        .await;
+    let statement = format!("DROP DATABASE IF EXISTS {name}");
+    let _ = sqlx::raw_sql(AssertSqlSafe(statement))
+        .execute(&mut *lock)
+        .await;
+}
+
 /// Create the two roles and the migrated template database, once per server.
-async fn bootstrap(port: u16) {
+///
+/// Returns the template's name, which depends on the migrations on disk.
+async fn bootstrap(port: u16) -> String {
     BOOTSTRAPPED
         .get_or_init(|| async {
+            let template = template_name().await;
             let admin = admin_pool(port).await;
             // Advisory locks are session-scoped, so lock and unlock must run
             // on one connection — not on whichever the pool hands out next.
@@ -144,22 +190,33 @@ async fn bootstrap(port: u16) {
                     .expect("create role");
             }
 
-            let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)")
-                    .bind(TEMPLATE_DB)
-                    .fetch_one(&mut *lock)
-                    .await
-                    .expect("template lookup");
+            // `datistemplate` is set below only once the migrations have
+            // succeeded, so it — not the database's existence — is what marks a
+            // template as finished. A previous run that panicked part-way
+            // through the migrations leaves an unflagged database behind; it
+            // has to be rebuilt rather than cloned, or every test in every
+            // later run inherits its half-applied schema.
+            let ready: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                   SELECT 1 FROM pg_database WHERE datname = $1 AND datistemplate
+                 )",
+            )
+            .bind(&template)
+            .fetch_one(&mut *lock)
+            .await
+            .expect("template lookup");
 
-            if !exists {
-                let create = format!("CREATE DATABASE {TEMPLATE_DB} OWNER {MIGRATOR_ROLE}");
+            if !ready {
+                drop_template(&mut lock, &template).await;
+
+                let create = format!("CREATE DATABASE {template} OWNER {MIGRATOR_ROLE}");
                 sqlx::raw_sql(AssertSqlSafe(create))
                     .execute(&mut *lock)
                     .await
                     .expect("create template database");
 
                 let migrator =
-                    build_pool(&config(port, TEMPLATE_DB, MIGRATOR_ROLE, MIGRATOR_PASSWORD))
+                    build_pool(&config(port, &template, MIGRATOR_ROLE, MIGRATOR_PASSWORD))
                         .await
                         .expect("template migrator pool");
                 Migrator::new(migrations_dir())
@@ -174,12 +231,30 @@ async fn bootstrap(port: u16) {
                 // can connect to the template, only clone it.
                 let mark = format!(
                     "UPDATE pg_database SET datistemplate = true, datallowconn = false
-                     WHERE datname = '{TEMPLATE_DB}'"
+                     WHERE datname = '{template}'"
                 );
                 sqlx::raw_sql(AssertSqlSafe(mark))
                     .execute(&mut *lock)
                     .await
                     .expect("mark template");
+            }
+
+            // Templates for migration sets this checkout has moved past are
+            // 12 MB each on a 2 GB tmpfs. Editing a migration would otherwise
+            // strand one per edit. The pattern escapes its underscores — they
+            // are single-character wildcards to `LIKE` — and is deliberately
+            // wider than `TEMPLATE_PREFIX` so the unfingerprinted
+            // `sanvi_template` earlier revisions left behind is reaped too.
+            let stale: Vec<String> = sqlx::query_scalar(
+                r"SELECT datname FROM pg_database
+                  WHERE datname LIKE 'sanvi\_template%' AND datname <> $1",
+            )
+            .bind(&template)
+            .fetch_all(&mut *lock)
+            .await
+            .unwrap_or_default();
+            for name in &stale {
+                drop_template(&mut lock, name).await;
             }
 
             sqlx::query("SELECT pg_advisory_unlock($1)")
@@ -189,12 +264,17 @@ async fn bootstrap(port: u16) {
                 .expect("bootstrap unlock");
             drop(lock);
             admin.close().await;
+            template
         })
-        .await;
+        .await
+        .clone()
 }
 
-/// A database private to one test, dropped by `scripts/test-db.sh` between
-/// runs (a container-backed server takes them with it).
+/// A database private to one test, dropped when the handle is.
+///
+/// Anything holding a pool from this handle — `app_pool()` and friends hand out
+/// clones that outlive it — has to keep the handle alive for as long as it uses
+/// them, or it will be querying a database that no longer exists.
 pub struct TestDb {
     port: u16,
     name: String,
@@ -255,6 +335,56 @@ impl TestDb {
     }
 }
 
+impl Drop for TestDb {
+    fn drop(&mut self) {
+        // A clone of the template costs ~12 MB and the shared server keeps its
+        // data directory on a 2 GB tmpfs, so a run that reclaims nothing until
+        // it ends fills the disk part-way through the suite — the workspace
+        // makes 164 of these. Reclaiming here bounds the server by how many
+        // tests are in flight at once rather than how many run at all, and
+        // leaves `scripts/test-db.sh` a handful of strays instead of all of
+        // them.
+        //
+        // `Drop` cannot await, and the test's own runtime is being torn down
+        // around it, so the work borrows a thread with a runtime of its own.
+        let port = self.port;
+        let name = std::mem::take(&mut self.name);
+        let _ = std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            runtime.block_on(async move {
+                let Ok(admin) = build_pool(&config(port, "postgres", "postgres", "postgres")).await
+                else {
+                    // The server is already gone — a container-per-process run
+                    // taking its databases with it. Nothing left to reclaim.
+                    return;
+                };
+                // This process still holds pools on the database — the fields
+                // below are dropped only after this body returns — and
+                // PostgreSQL 11 has no `DROP DATABASE ... WITH (FORCE)`, so
+                // those sessions have to be closed from the server side first.
+                let _ = sqlx::query(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                     WHERE datname = $1 AND pid <> pg_backend_pid()",
+                )
+                .bind(&name)
+                .execute(&admin)
+                .await;
+                let statement = format!("DROP DATABASE IF EXISTS {name}");
+                let _ = sqlx::raw_sql(AssertSqlSafe(statement))
+                    .execute(&admin)
+                    .await;
+                admin.close().await;
+            });
+        })
+        .join();
+    }
+}
+
 fn next_db_name(prefix: &str) -> String {
     // Unique within a process (counter) and across every process that ever
     // used this server (random) — a pid alone repeats across runs, and a
@@ -268,16 +398,19 @@ fn next_db_name(prefix: &str) -> String {
 
 /// Create a database, hand back a handle with the application pool open.
 ///
-/// `template` is the pre-migrated database to copy; `None` leaves it empty.
-async fn create_db(prefix: &str, template: Option<&str>) -> TestDb {
+/// `migrated` copies the pre-migrated template; otherwise the database starts
+/// empty.
+async fn create_db(prefix: &str, migrated: bool) -> TestDb {
     let port = pg_port().await;
-    bootstrap(port).await;
+    let template = bootstrap(port).await;
 
     let name = next_db_name(prefix);
     let admin = admin_pool(port).await;
-    let from = template
-        .map(|t| format!(" TEMPLATE {t}"))
-        .unwrap_or_default();
+    let from = if migrated {
+        format!(" TEMPLATE {template}")
+    } else {
+        String::new()
+    };
     let create = format!("CREATE DATABASE {name}{from} OWNER {MIGRATOR_ROLE}");
     sqlx::raw_sql(AssertSqlSafe(create))
         .execute(&admin)
@@ -308,7 +441,7 @@ async fn create_db(prefix: &str, template: Option<&str>) -> TestDb {
 /// Cloned from the template, so the cost is a file copy in the server rather
 /// than a migration run — and no container start at all after the first.
 pub async fn test_db() -> TestDb {
-    create_db("sanvi_t_", Some(TEMPLATE_DB)).await
+    create_db("sanvi_t_", true).await
 }
 
 /// A private database with the roles in place but **no** migrations applied.
@@ -316,5 +449,5 @@ pub async fn test_db() -> TestDb {
 /// For the suite that exercises `Migrator` itself, which needs to run the
 /// migrations up and back down on an empty database.
 pub async fn blank_db() -> TestDb {
-    create_db("sanvi_b_", None).await
+    create_db("sanvi_b_", false).await
 }

@@ -8,7 +8,9 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+hex.workspace = true
 sanvi-persistence.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 testcontainers.workspace = true
 testcontainers-modules.workspace = true

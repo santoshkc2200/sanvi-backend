@@ -24,12 +24,6 @@ use sanvi_identity::domain::{
 
 use sanvi_persistence::{PlatformScope, ScopedTx, TxManager};
 
-async fn test_pool() -> sanvi_persistence::PgPool {
-    // The pool is a handle in its own right; the `TestDb` wrapper is only
-    // needed for the extra roles, which this suite does not use.
-    sanvi_testsupport::test_db().await.app_pool()
-}
-
 // ---------------------------------------------------------------------------
 // In-memory fakes
 // ---------------------------------------------------------------------------
@@ -677,10 +671,13 @@ struct Fixture {
     roles: FakeRoleCatalog,
     tenant_id: uuid::Uuid,
     tx: TxManager,
+    // The pool below borrows this database. Dropping the handle drops the
+    // database with it, so the fixture has to outlive every query it serves.
+    _db: sanvi_testsupport::TestDb,
 }
 
 impl Fixture {
-    fn new(pool: sanvi_persistence::PgPool) -> Self {
+    fn new(db: sanvi_testsupport::TestDb) -> Self {
         Self {
             world: World::new(),
             roles: FakeRoleCatalog {
@@ -688,7 +685,8 @@ impl Fixture {
                 tenant_member: uuid::Uuid::now_v7(),
             },
             tenant_id: uuid::Uuid::now_v7(),
-            tx: TxManager::new(pool),
+            tx: TxManager::new(db.app_pool()),
+            _db: db,
         }
     }
 
@@ -821,7 +819,7 @@ impl Fixture {
 
 #[tokio::test]
 async fn registration_creates_the_projection_and_is_replay_safe() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let input = SyncIdentityInput {
         flow: Flow::Registration,
         kratos_identity_id: uuid::Uuid::now_v7(),
@@ -854,7 +852,7 @@ async fn registration_creates_the_projection_and_is_replay_safe() {
 
 #[tokio::test]
 async fn registration_with_oidc_links_via_registration() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let input = SyncIdentityInput {
         flow: Flow::Registration,
         kratos_identity_id: uuid::Uuid::now_v7(),
@@ -874,7 +872,7 @@ async fn registration_with_oidc_links_via_registration() {
 
 #[tokio::test]
 async fn auto_link_only_when_both_sides_are_verified_and_provider_trusted() {
-    let mut fixture = Fixture::new(test_pool().await);
+    let mut fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let alice = fixture.seed_user_async("alice@example.com", true).await;
 
     // Trusted provider + verified email + verified local user → auto-link.
@@ -966,7 +964,7 @@ async fn auto_link_only_when_both_sides_are_verified_and_provider_trusted() {
 
 #[tokio::test]
 async fn colliding_registration_never_binds() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     fixture.seed_user_async("alice@example.com", true).await;
 
     // A *different* Kratos identity carries the same email (Kratos already
@@ -998,7 +996,7 @@ async fn colliding_registration_never_binds() {
 
 #[tokio::test]
 async fn challenge_roundtrip_links_and_is_single_use() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let alice = fixture.seed_user_async("alice@example.com", false).await;
     let email = Email::parse("alice@example.com").unwrap();
 
@@ -1049,7 +1047,7 @@ async fn challenge_roundtrip_links_and_is_single_use() {
 
 #[tokio::test]
 async fn expired_challenge_is_unavailable() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let alice = fixture.seed_user_async("alice@example.com", true).await;
     let email = Email::parse("alice@example.com").unwrap();
     let start = StartLinkChallengeCommand {
@@ -1079,7 +1077,7 @@ async fn expired_challenge_is_unavailable() {
 
 #[tokio::test]
 async fn invitation_lifecycle_grant_accept_and_guard() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let alice = fixture.seed_user_async("alice@example.com", true).await;
     let bob = fixture.seed_user_async("bob@example.com", true).await;
     let bob_email = Email::parse("bob@example.com").unwrap();
@@ -1209,7 +1207,7 @@ async fn invitation_lifecycle_grant_accept_and_guard() {
 
 #[tokio::test]
 async fn role_updates_emit_delta_events() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let alice = fixture.seed_user_async("alice@example.com", true).await;
     fixture
         .grant_member()
@@ -1245,7 +1243,7 @@ async fn role_updates_emit_delta_events() {
 
 #[tokio::test]
 async fn logout_webhook_emits_revocation() {
-    let fixture = Fixture::new(test_pool().await);
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
     let alice = fixture.seed_user_async("alice@example.com", true).await;
     let kratos_id = fixture.world.memory.lock().unwrap().users[0].kratos_identity_id();
     fixture
