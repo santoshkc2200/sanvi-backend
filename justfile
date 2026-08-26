@@ -145,6 +145,25 @@ test:
         cargo test --workspace
     fi
 
+# Same suite, failures only. A passing run of 822 tests prints 822 lines under
+# the default profile; the `agent` nextest profile prints none of them and the
+# full captured output of anything that fails. For CI logs, and for coding
+# agents, where every passing line is paid for and read by nobody.
+test-quiet:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run --workspace --profile agent
+
+# Type-check only, one line per diagnostic. The cheapest gate that catches most
+# mistakes — run this before `test`, which has to link every test binary.
+check:
+    cargo c
+
+# `clippy` with one line per diagnostic instead of a rendered snippet.
+clippy-quiet:
+    cargo k
+
 openapi:
     cargo run -p sanvi-cli -- openapi --check
 
@@ -158,3 +177,6 @@ i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
 ci: fmt clippy layering connect-invariants ads-invariants test openapi i18n
+
+# `ci` with the low-noise variants of the two chattiest gates.
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants test-quiet openapi i18n

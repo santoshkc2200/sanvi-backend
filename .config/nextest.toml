@@ -31,3 +31,15 @@ retries = { backoff = "exponential", count = 2, delay = "2s", jitter = true }
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# Profile for coding agents and any non-interactive run that pipes output into
+# a context window. 822 tests emit 822 PASS lines under `default`, which is
+# noise an agent pays for on every run; `status-level = "fail"` prints nothing
+# for a passing test and the full captured output for a failing one, so the
+# signal is unchanged and only the bulk is gone. `fail-fast = false` is kept
+# for the same reason as `default`: a partial result costs a second full run.
+[profile.agent]
+fail-fast = false
+status-level = "fail"
+final-status-level = "fail"
+failure-output = "immediate-final"

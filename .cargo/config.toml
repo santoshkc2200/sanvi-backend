@@ -1,0 +1,13 @@
+# Workspace cargo configuration.
+#
+# Debuginfo/profile tuning lives in Cargo.toml's `[profile.*]` tables — this
+# file only adds aliases for the machine-readable variants of the gates.
+
+[alias]
+# `--message-format short` collapses each diagnostic from a rendered multi-line
+# snippet (source context, carets, notes) to one `file:line: message` line.
+# Same set of errors, a fraction of the bytes — for CI log greps and for
+# coding agents, which read compiler output as text rather than looking at it.
+# `just clippy` remains the human-facing form with full rendering.
+c = "check --workspace --all-targets --message-format short"
+k = "clippy --workspace --all-targets --all-features --message-format short -- -D warnings"
