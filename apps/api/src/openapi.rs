@@ -1,7 +1,8 @@
 use sanvi_advertising::adapters::http::handlers::{
     AccountView, AdvertisingProblemType, CampaignChangesView, CampaignView, CampaignsView,
     ConnectionHealthView, ConnectionView, ConnectionsView, CreateAdGroupRequest, CreateAdRequest,
-    CreateCampaignRequest, CreateConnectionRequest, MetricPoint, MoneyView, OAuthCallbackQuery,
+    CreateCampaignRequest, CreateConnectionRequest, CreateCreativeRequest, CreativePreviewView,
+    CreativePreviewsView, CreativeView, CreativesView, MetricPoint, MoneyView, OAuthCallbackQuery,
     PatchAdGroupRequest, PatchAdRequest, PatchCampaignRequest, PendingConnectionView,
     RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView, StartOAuthRequest,
     StartOAuthResponse, ValidationResultView,
@@ -198,6 +199,11 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::handlers::create_connection,
         sanvi_advertising::adapters::http::handlers::list_connections,
         sanvi_advertising::adapters::http::handlers::delete_connection,
+        sanvi_advertising::adapters::http::handlers::create_creative,
+        sanvi_advertising::adapters::http::handlers::get_creative,
+        sanvi_advertising::adapters::http::handlers::list_creatives,
+        sanvi_advertising::adapters::http::handlers::delete_creative,
+        sanvi_advertising::adapters::http::handlers::get_creative_previews,
         sanvi_advertising::adapters::http::tracking_handlers::public_track_conversion,
         sanvi_advertising::adapters::http::tracking_handlers::get_tracking_settings,
         sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
@@ -212,6 +218,7 @@ use utoipa::OpenApi;
         CreateAdRequest, PatchAdRequest, StartOAuthRequest, StartOAuthResponse,
         OAuthCallbackQuery, AccountView, PendingConnectionView, CreateConnectionRequest,
         ConnectionHealthView, ConnectionView, ConnectionsView,
+        CreateCreativeRequest, CreativeView, CreativesView, CreativePreviewView, CreativePreviewsView,
         TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, ConversionEvent,
         ConsentSnapshot, ClickIds, ValueSource, SuppressedByDirective, UploadState,
         AdvertisingMoney, HashedIdentifier
@@ -418,8 +425,37 @@ mod tests {
                 .get("/api/v1/tenant/ads/campaigns/{campaign_id}/drift")
                 .is_some()
         );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/creatives")
+                .is_some()
+        );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/creatives/{creative_id}")
+                .is_some()
+        );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/creatives/{creative_id}/previews")
+                .is_some()
+        );
+        let preview_parameters = document["paths"]
+            ["/api/v1/tenant/ads/creatives/{creative_id}/previews"]["get"]["parameters"]
+            .as_array()
+            .expect("creative previews declares parameters");
+        let placement = preview_parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "placement")
+            .expect("creative previews declares placement");
+        assert_eq!(placement["in"], "query");
+        assert_ne!(placement["required"], true);
         let schemas = &document["components"]["schemas"];
         assert!(schemas.get("PlatformsView").is_some());
+        assert!(schemas.get("CreativeView").is_some());
+        assert!(schemas.get("CreativesView").is_some());
+        assert!(schemas.get("CreateCreativeRequest").is_some());
+        assert!(schemas.get("CreativePreviewsView").is_some());
         for schema in [
             "AdvertisingProblemType",
             "MetricPoint",

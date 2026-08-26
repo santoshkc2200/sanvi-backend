@@ -1,7 +1,7 @@
 # TASK-013: 10.4 Meta adapter & creatives
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress
 **Requirement(s):** FR-1007, NFR-1008
 **Depends on:** TASK-012
 **Created:** 2026-08-20
@@ -26,7 +26,7 @@ Runs in parallel with TASK-014 once TASK-012 is on staging.
 
 ## What to do
 
-- [ ] **Contract** — no new campaign endpoints; TASK-012's surface is platform-agnostic and Meta
+- [x] **Contract** — no new campaign endpoints; TASK-012's surface is platform-agnostic and Meta
       arrives as data. New here: `GET/POST /creatives`, `GET/DELETE /creatives/{id}`,
       `GET /creatives/{id}/previews?placement=`. The capability matrix gains its creative half for
       **both** platforms: placements, asset specs (dimensions, aspect ratios, file size, duration),
@@ -34,37 +34,53 @@ Runs in parallel with TASK-014 once TASK-012 is on staging.
       per-placement render metadata — proxied where a platform offers a native preview, rendered from
       the spec where it does not.
 - [ ] **Meta adapter** — Marketing API campaign/ad-set/ad CRUD against the pinned version, implementing
-      the same `AdPlatformPort` and passing the same contract suite as the fake and Google.
-- [ ] **Meta capability matrix** — objectives, budget types including campaign budget optimization,
-      ad-set-level scheduling, targeting dimensions, placements, and per-locale text limits. Where Meta
-      expresses something Google cannot (and vice versa), the matrix carries it and the domain does not
-      branch.
-- [ ] **Creative model** — `Creative` persisted with assets, per-locale copy, and placement links.
-      Asset storage reuses the `course-media` upload path rather than a second uploader.
-- [ ] **Spec validation** — an asset is checked against the target placements' specs **at upload time**,
-      not at publish time. Discovering a wrong aspect ratio after a failed publish is the worst possible
-      moment to discover it.
-- [ ] **Publish & review** — creatives publish with their ads; Meta's review status and rejection
-      reasons flow through TASK-012's review pipeline verbatim.
-- [ ] **Drift for Meta** — TASK-012's reconciliation engine runs **unchanged** against the Meta adapter.
-      This is the assertion that drift detection is platform-agnostic, not Google-shaped.
-- [ ] **Rate limiting** — Meta's per-app and per-account limits differ in kind from Google's quota; the
-      request queue gains a Meta-specific budget rather than inheriting a shared assumption.
+      the same `AdPlatformPort` and passing the same contract suite as the fake and Google. Still blocked
+      on Meta app review, same as TASK-011/012's real Google adapter; the fake adapter's `meta` matrix
+      covers the interim.
+- [x] **Meta capability matrix** — broadened from 2 objectives/1 budget type/1 placement to 6 objectives,
+      2 budget types (`daily`, `lifetime`), 6 targeting dimensions, and 3 placements
+      (`feed`/`stories`/`reels`), each with its own asset spec. **Not done:** a dedicated
+      campaign-budget-optimization `BudgetType` variant and explicit ad-set-level scheduling — `BudgetType`
+      still has only `Daily`/`Lifetime`; adding CBO is a domain-model decision left for whoever picks up
+      the real Meta adapter, not rushed in here.
+- [x] **Creative model** — `Creative`/`StoredCreative` persisted via `CreativeRepository` (new port +
+      Postgres impl), with assets, per-locale copy, and a placement link. Asset storage reuses
+      `course-media` references (`asset_references: Vec<String>`) rather than a second uploader.
+- [x] **Spec validation** — `CreativeAssetSpec::validate_asset` / `CapabilityMatrix::validate_creative_text`
+      (shipped earlier in 4d59e4b/add5edf) now run inside `CreateCreative::execute`, at creative-create
+      time — before persistence, not at ad publish time.
+- [ ] **Publish & review** — `Ad.creative_id` already references `advertising.creatives`, so a creative
+      rides along with its ad's existing publish/review path structurally, but `add_ad`/`update_ad` do
+      **not yet validate** that a referenced `creative_id` exists and fits the ad's platform/placement.
+      Left open — needs a follow-up pass on `application/campaigns.rs`.
+- [x] **Drift for Meta** — added
+      `reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift` running the existing engine
+      against the Meta fixture; `reconciliation.rs`/`reconciliation_sweep.rs` are untouched by this task's
+      diff (verified via `git diff --stat`).
+- [x] **Rate limiting** — `rate_limited_registry` now takes `Fn(&PlatformKey) -> (usize, usize)` instead
+      of one shared pair; new test proves Google and Meta get independently-enforced concurrency caps.
 
 ## Acceptance criteria
 
 - [ ] A campaign created in Sanvi appears live in a Meta test account with matching budget, schedule,
-      and objective.
+      and objective. **Blocked** — no live Meta test account access.
 - [ ] The adapter contract suite is green against recorded Meta fixtures and a Meta test account, with
-      **no** suite exceptions added for Meta.
-- [ ] The reconciliation engine detects a natively paused Meta ad set as drift with **no engine
-      changes** (diff the engine's source in the PR to prove it).
-- [ ] An asset failing one placement's spec is rejected for that placement only, at upload.
-- [ ] Identical copy passes in English and fails in Japanese where Meta's limit is shorter, per field.
-- [ ] `just layering` and the platform-literal grep gate stay green — no Meta branch entered the domain
-      or application layers.
-- [ ] The fake adapter's third matrix still validates unchanged, proving the abstraction absorbed a
-      second real platform.
+      **no** suite exceptions added for Meta. **Blocked** — same reason; the fake-adapter contract suite
+      is green, but that is not this criterion.
+- [x] The reconciliation engine detects a natively paused Meta ad set as drift with **no engine
+      changes** — verified: the new test passes and `reconciliation.rs`/`reconciliation_sweep.rs` have
+      zero diff in this task's commits.
+- [x] An asset failing one placement's spec is rejected for that placement only, at upload — covered by
+      existing `domain::matrix::tests` (shipped in 4d59e4b) plus the new
+      `creative_crud_and_matrix_validation_lifecycle` integration test.
+- [x] Identical copy passes in English and fails in Japanese where Meta's limit is shorter, per field —
+      `domain::matrix::tests::identical_headline_passes_english_and_fails_shorter_japanese_limit`.
+- [x] `just layering` and the platform-literal grep gate stay green — verified locally
+      (`./scripts/check-layering.sh`, `./scripts/check-ads-invariants.sh`; the latter's frontend-bundle
+      scan still needs `ADVERTISING_FRONTEND_BUNDLE`, which only CI can supply — see Notes).
+- [x] The fake adapter's third matrix (`asymmetric_demo`) still validates unchanged — covered by
+      `adapters::stubs::tests::every_validator_capability_has_complete_matrix_data` and
+      `third_fixture_registers_through_the_same_catalog_path`.
 
 ## Verification
 
@@ -99,6 +115,15 @@ campaign tree and creatives only.
 - If this task needs a domain change to fit Meta, that change belongs in the matrix — reopen TASK-010's
   design rather than branching here.
 - Reuse `course-media`; a second uploader in this context is a maintenance liability and a CSP surprise.
+- Verification run locally on 2026-08-26 (no docker frontend bundle available): `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `./scripts/check-layering.sh`,
+  `cargo test -p sanvi-advertising` (all green, 92 tests), `cargo run -p sanvi-cli -- openapi --check`
+  all pass. `./scripts/check-ads-invariants.sh` passes every check except `scan_frontend_bundle`, which
+  is intentionally fail-closed without a CI-built `sanvi-frontend` artifact — not something this task can
+  satisfy outside CI. `cargo nextest run --workspace` had 15 unrelated failures, all
+  `sanvi-privacy::privacy_integration` docker `WaitContainer(StartupTimeout)` — confirmed environmental:
+  `cargo nextest run -p sanvi-privacy` alone passes 57/57. No `sanvi-advertising` test failed in either
+  run.
 
 ---
 *On completion: satisfy every acceptance criterion, run the verification commands, then

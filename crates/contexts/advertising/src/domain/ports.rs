@@ -33,6 +33,8 @@ pub enum AdvertisingError {
     AdGroupNotFound,
     #[error("ad not found")]
     AdNotFound,
+    #[error("creative not found")]
+    CreativeNotFound,
     #[error("advertising token encryption is not configured")]
     EncryptionUnconfigured,
     #[error("advertising token encryption failure: {0}")]
@@ -290,4 +292,46 @@ pub trait VendorRolePort: Send + Sync {
         &self,
         platform: &super::PlatformKey,
     ) -> Result<VendorRole, super::AdvertisingError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredCreative {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub connection_id: Uuid,
+    pub platform: PlatformKey,
+    pub external_id: Option<String>,
+    pub creative: super::Creative,
+    pub assets: Vec<super::AssetMetadata>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[async_trait]
+pub trait CreativeRepository: Send + Sync {
+    async fn insert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        creative: &StoredCreative,
+    ) -> Result<(), AdvertisingError>;
+
+    async fn find(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        creative_id: Uuid,
+    ) -> Result<Option<StoredCreative>, AdvertisingError>;
+
+    async fn list_by_tenant(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+    ) -> Result<Vec<StoredCreative>, AdvertisingError>;
+
+    async fn delete(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        creative_id: Uuid,
+    ) -> Result<bool, AdvertisingError>;
 }

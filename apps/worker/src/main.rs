@@ -1485,8 +1485,13 @@ async fn main() -> ExitCode {
     let advertising_events: Arc<dyn AdvertisingEvents> = Arc::new(AdvertisingEventPublisher::new());
     let advertising_platforms = Arc::new(sanvi_advertising::adapters::rate_limited_registry(
         &FakeAdPlatform::registered_catalog(),
-        config.advertising.quota_platform_wide_permits,
-        config.advertising.quota_per_connection_permits,
+        |platform| match platform.as_str() {
+            "meta" => (10, 2),
+            _ => (
+                config.advertising.quota_platform_wide_permits,
+                config.advertising.quota_per_connection_permits,
+            ),
+        },
     ));
     let advertising_reconcile_campaign = Arc::new(ReconcileCampaign::new(
         tx_manager.clone(),

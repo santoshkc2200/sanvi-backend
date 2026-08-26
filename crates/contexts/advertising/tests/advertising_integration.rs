@@ -11,17 +11,19 @@ use sanvi_advertising::{
     OAuthStateManager, OAuthStateStore, PlatformKey, SecretRef, SyncError,
     adapters::{
         FakeAdPlatform, OutboxEventPublisher, SqlxAdvertisingConnectionRepository,
-        SqlxCampaignRepository, SqlxOAuthStateStore,
+        SqlxCampaignRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
     },
     application::{
         AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, CreateConnection,
-        GetCampaign, ListCampaignChanges, ListCampaigns, NewAdFields, NewAdGroupFields,
-        NewCampaignFields, PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign,
-        ReconcileDueCampaigns, ResumeCampaign, UpdateAdGroup, ValidateCampaign,
+        CreateCreative, DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews,
+        ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields,
+        NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign,
+        ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, UpdateAdGroup, ValidateCampaign,
     },
     domain::{
-        BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative, CreativeText,
-        Money, Objective, PlatformAccount, Targeting, TenantEnvelopeCrypto,
+        AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
+        CreativeText, Money, Objective, PlatformAccount, Targeting, TargetingDimension,
+        TenantEnvelopeCrypto,
     },
 };
 use sanvi_persistence::{Migrator, TxManager};
@@ -1107,4 +1109,366 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
         missing,
         Err(sanvi_advertising::domain::AdvertisingError::AdGroupNotFound)
     ));
+}
+
+#[tokio::test]
+async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "meta-drift-sweep").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let meta_key = PlatformKey::parse("meta").unwrap();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        meta_key.clone(),
+        "act_9988776655",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-meta-sweep"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let publish = PublishCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let add_ad_group = AddAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let reconcile = Arc::new(ReconcileCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events,
+    ));
+    let sweep = ReconcileDueCampaigns::new(
+        manager.clone(),
+        campaigns.clone(),
+        registry.clone(),
+        reconcile,
+    );
+
+    // Create a Meta campaign
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Meta Retargeting".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(5000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Add an Ad Set (ad group)
+    let _with_group = add_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdGroupFields {
+                name: "Audience 18-35".to_string(),
+                targeting: Targeting {
+                    dimensions: std::collections::BTreeMap::from([(
+                        TargetingDimension::parse("age").unwrap(),
+                        vec!["18-35".to_string()],
+                    )]),
+                    extension_fields: std::collections::BTreeMap::new(),
+                },
+                bid: BidSettings {
+                    strategy: "cpc".to_string(),
+                    maximum_bid: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+    let published = publish
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
+        .await
+        .unwrap();
+    assert_eq!(published.intent.status, CampaignStatus::Active);
+
+    // Simulate drift on Meta: the ad set was natively paused or removed in Meta Ads Manager
+    let adapter = registry.adapter(&meta_key).unwrap();
+    let conn_handle = sanvi_advertising::domain::ConnectionHandle {
+        id: format!("act_{connection_id}"),
+    };
+    let mut remote = adapter
+        .get_campaign(&conn_handle, published.external_id.as_deref().unwrap())
+        .await
+        .unwrap()
+        .expect("published campaign exists in fake adapter");
+
+    // Ad set removed on remote Meta platform
+    remote.ad_groups.clear();
+    adapter
+        .update_campaign(&conn_handle, remote, Uuid::now_v7())
+        .await
+        .unwrap();
+
+    // Run reconciliation sweep
+    let report = sweep.execute(50).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.drifted, 1);
+
+    // Verify stored state is drifted on ad_groups
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let stored = campaigns
+        .find(&mut scope, tenant_id, draft.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.intent.drift.drifted);
+    assert!(
+        stored
+            .intent
+            .drift
+            .changed_fields
+            .contains(&"ad_groups".to_string())
+    );
+}
+
+#[tokio::test]
+async fn creative_crud_and_matrix_validation_lifecycle() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "creative-lifecycle").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let creative_repo = Arc::new(SqlxCreativeRepository::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let meta_key = PlatformKey::parse("meta").unwrap();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        meta_key,
+        "act_creative_test",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-creative"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let create_creative = CreateCreative::new(
+        manager.clone(),
+        creative_repo.clone(),
+        connection_repo.clone(),
+        registry.clone(),
+    );
+    assert_eq!(
+        create_creative
+            .platform_for_connection(tenant_id, connection_id)
+            .await
+            .unwrap(),
+        PlatformKey::parse("meta").unwrap()
+    );
+    let get_creative = GetCreative::new(manager.clone(), creative_repo.clone());
+    let list_creatives = ListCreatives::new(manager.clone(), creative_repo.clone());
+    let delete_creative = DeleteCreative::new(manager.clone(), creative_repo.clone());
+    let get_previews =
+        GetCreativePreviews::new(manager.clone(), creative_repo.clone(), registry.clone());
+
+    // 1. Validation error: unsupported placement
+    let err = create_creative
+        .execute(
+            tenant_id,
+            NewCreativeFields {
+                connection_id,
+                placement: "unsupported_placement".to_string(),
+                texts: vec![CreativeText {
+                    locale: "en".to_string(),
+                    headline: "Test".to_string(),
+                    body: "Body".to_string(),
+                }],
+                asset_references: Vec::new(),
+                assets: vec![AssetMetadata {
+                    width_px: 1080,
+                    height_px: 1080,
+                    aspect_ratio: "1:1".to_string(),
+                    file_size_bytes: 1_000_000,
+                    duration_seconds: None,
+                    is_video: false,
+                }],
+            },
+        )
+        .await;
+    assert!(matches!(
+        err,
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(_))
+    ));
+
+    // 2. Validation error: text length exceeding Meta limit
+    let err_text = create_creative
+        .execute(
+            tenant_id,
+            NewCreativeFields {
+                connection_id,
+                placement: "feed".to_string(),
+                texts: vec![CreativeText {
+                    locale: "en".to_string(),
+                    headline: "A".repeat(50), // limit is 40
+                    body: "Valid body".to_string(),
+                }],
+                asset_references: Vec::new(),
+                assets: vec![AssetMetadata {
+                    width_px: 1080,
+                    height_px: 1080,
+                    aspect_ratio: "1:1".to_string(),
+                    file_size_bytes: 1_000_000,
+                    duration_seconds: None,
+                    is_video: false,
+                }],
+            },
+        )
+        .await;
+    assert!(matches!(
+        err_text,
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(_))
+    ));
+
+    // 3. Validation error: invalid asset (below min dimension of 600px on Meta feed)
+    let err_asset = create_creative
+        .execute(
+            tenant_id,
+            NewCreativeFields {
+                connection_id,
+                placement: "feed".to_string(),
+                texts: vec![CreativeText {
+                    locale: "en".to_string(),
+                    headline: "Valid Headline".to_string(),
+                    body: "Valid body".to_string(),
+                }],
+                asset_references: Vec::new(),
+                assets: vec![AssetMetadata {
+                    width_px: 400, // min is 600
+                    height_px: 400,
+                    aspect_ratio: "1:1".to_string(),
+                    file_size_bytes: 1_000_000,
+                    duration_seconds: None,
+                    is_video: false,
+                }],
+            },
+        )
+        .await;
+    assert!(matches!(
+        err_asset,
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(_))
+    ));
+
+    // 4. Success: valid creative creation
+    let valid_stored = create_creative
+        .execute(
+            tenant_id,
+            NewCreativeFields {
+                connection_id,
+                placement: "feed".to_string(),
+                texts: vec![CreativeText {
+                    locale: "en".to_string(),
+                    headline: "Summer Launch".to_string(),
+                    body: "Explore our collection today.".to_string(),
+                }],
+                asset_references: vec!["media/feed_hero.jpg".to_string()],
+                assets: vec![AssetMetadata {
+                    width_px: 1080,
+                    height_px: 1080,
+                    aspect_ratio: "1:1".to_string(),
+                    file_size_bytes: 2_000_000,
+                    duration_seconds: None,
+                    is_video: false,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(valid_stored.creative.placement, "feed");
+
+    // 5. Get Creative
+    let retrieved = get_creative
+        .execute(tenant_id, valid_stored.id)
+        .await
+        .unwrap()
+        .expect("creative exists");
+    assert_eq!(retrieved.id, valid_stored.id);
+    assert_eq!(retrieved.creative.texts[0].headline, "Summer Launch");
+
+    // 6. List Creatives
+    let all = list_creatives.execute(tenant_id).await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].id, valid_stored.id);
+
+    // 7. Get Previews
+    let previews = get_previews
+        .execute(tenant_id, valid_stored.id, None)
+        .await
+        .unwrap();
+    assert_eq!(previews.len(), 1);
+    assert_eq!(previews[0].placement, "feed");
+    assert_eq!(previews[0].headline.as_deref(), Some("Summer Launch"));
+    assert_eq!(previews[0].spec.min_width_px, Some(600));
+
+    // 8. Delete Creative
+    delete_creative
+        .execute(tenant_id, valid_stored.id)
+        .await
+        .unwrap();
+
+    let missing = get_creative
+        .execute(tenant_id, valid_stored.id)
+        .await
+        .unwrap();
+    assert!(missing.is_none());
 }

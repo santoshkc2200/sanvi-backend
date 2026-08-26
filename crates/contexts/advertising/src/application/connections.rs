@@ -320,7 +320,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        AdvertisingConnection, PlatformKey, SecretRef,
+        AdvertisingConnection, SecretRef,
         adapters::{FakeAdPlatform, SqlxAdvertisingConnectionRepository},
     };
 
@@ -333,10 +333,11 @@ mod tests {
             .unwrap();
         let registry = Arc::new(FakeAdPlatform::registered_catalog());
         let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
-        let list = ListConnections::new(TxManager::new(pool), connections, registry);
+        let list = ListConnections::new(TxManager::new(pool), connections, registry.clone());
+        let key = registry.adapters().first().unwrap().descriptor().key;
         let mut connection = AdvertisingConnection::new(
             Uuid::now_v7(),
-            PlatformKey::parse("google_ads").unwrap(),
+            key,
             "123-456-7890",
             "JPY",
             "Asia/Tokyo",

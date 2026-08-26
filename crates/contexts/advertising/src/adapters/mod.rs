@@ -19,7 +19,8 @@ pub use payment_lookup::CheckoutPaymentLookup;
 pub use privacy_provider::AdvertisingPrivacyProvider;
 pub use rate_limit::{QuotaLimiter, RateLimitedAdapter, rate_limited_registry};
 pub use repos::{
-    SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxTrackingSettingsRepository,
+    SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxCreativeRepository,
+    SqlxTrackingSettingsRepository,
 };
 pub use stubs::FakeAdPlatform;
 pub use token_vault::{

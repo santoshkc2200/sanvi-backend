@@ -5,12 +5,15 @@
     "entitlement_key": "advertising.google_ads",
     "capability_matrix": {
       "matrix_version": "2026-08-24",
-      "objectives": ["leads", "sales"],
+      "objectives": ["app_promotion", "awareness", "leads", "sales", "traffic"],
       "budget_types": ["daily", "lifetime"],
       "minimum_budgets_minor": {"JPY": {"daily": 100, "lifetime": 100}},
       "schedule_granularity": "daily",
-      "targeting_dimensions": ["geo", "keywords"],
-      "creative_placements": [{"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"], "min_width_px": 300, "min_height_px": 300, "max_file_size_bytes": 5242880, "min_duration_seconds": 5, "max_duration_seconds": 180}}],
+      "targeting_dimensions": ["audiences", "demographics", "devices", "geo", "keywords", "topics"],
+      "creative_placements": [
+        {"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"], "min_width_px": 300, "min_height_px": 300, "max_file_size_bytes": 5242880, "min_duration_seconds": 5, "max_duration_seconds": 180}},
+        {"key": "stories", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["9:16"], "min_width_px": 480, "min_height_px": 854, "max_file_size_bytes": 5242880, "min_duration_seconds": 5, "max_duration_seconds": 60}}
+      ],
       "text_limits": {"en": {"headline": 30, "body": 90}, "ja": {"headline": 30, "body": 45}}
     }
   },
@@ -20,12 +23,16 @@
     "entitlement_key": "advertising.meta_ads",
     "capability_matrix": {
       "matrix_version": "2026-08-24",
-      "objectives": ["awareness", "sales"],
-      "budget_types": ["daily"],
-      "minimum_budgets_minor": {"JPY": {"daily": 100}},
+      "objectives": ["app_promotion", "awareness", "engagement", "leads", "sales", "traffic"],
+      "budget_types": ["daily", "lifetime"],
+      "minimum_budgets_minor": {"JPY": {"daily": 100, "lifetime": 100}},
       "schedule_granularity": "daily",
-      "targeting_dimensions": ["geo", "interests"],
-      "creative_placements": [{"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"], "min_width_px": 600, "min_height_px": 600, "max_file_size_bytes": 31457280, "min_duration_seconds": 1, "max_duration_seconds": 14460}}],
+      "targeting_dimensions": ["age", "custom_audiences", "gender", "geo", "interests", "languages"],
+      "creative_placements": [
+        {"key": "feed", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["1:1", "4:5"], "min_width_px": 600, "min_height_px": 600, "max_file_size_bytes": 31457280, "min_duration_seconds": 1, "max_duration_seconds": 14460}},
+        {"key": "stories", "asset_spec": {"image_required": true, "video_allowed": true, "aspect_ratios": ["9:16"], "min_width_px": 500, "min_height_px": 888, "max_file_size_bytes": 31457280, "min_duration_seconds": 1, "max_duration_seconds": 120}},
+        {"key": "reels", "asset_spec": {"image_required": false, "video_allowed": true, "aspect_ratios": ["9:16"], "min_width_px": 500, "min_height_px": 888, "max_file_size_bytes": 31457280, "min_duration_seconds": 3, "max_duration_seconds": 900}}
+      ],
       "text_limits": {"en": {"headline": 40, "body": 90}, "ja": {"headline": 25, "body": 45}}
     }
   },
