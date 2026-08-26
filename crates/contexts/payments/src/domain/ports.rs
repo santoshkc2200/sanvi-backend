@@ -570,6 +570,18 @@ pub trait CheckoutRepository: Send + Sync {
         key: Uuid,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
+    /// The newest checkout for a merchant order reference regardless of its
+    /// asynchronously-updated lifecycle state. Cross-context consumers use
+    /// this only to locate the attached payment record; conversion dedupe
+    /// must never depend on whether a webhook has marked the checkout
+    /// complete yet.
+    async fn find_by_reference(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        reference: &str,
+    ) -> Result<Option<Checkout>, PaymentsError>;
+
     /// The most recently completed checkout for a merchant order reference —
     /// the trustworthy conversion value phase 10's tracking gate joins by
     /// order reference (NFR-1010: a client-supplied value is only a hint).

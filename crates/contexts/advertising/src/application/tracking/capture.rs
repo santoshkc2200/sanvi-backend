@@ -28,6 +28,30 @@ use crate::domain::{
 /// rules decided it.
 const CONSENT_GATE_VERSION: &str = "v1";
 
+const CONVERSION_DEDUPE_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x49, 0x06, 0xc6, 0xa4, 0x6a, 0x82, 0x45, 0x05, 0xa3, 0xab, 0x3c, 0x9f, 0x6a, 0x61, 0x1e, 0x02,
+]);
+
+/// Identity used for database idempotency. An order reference is immutable
+/// across checkout lifecycle transitions, unlike the presence of a completed
+/// payment record; event name keeps independent lifecycle events distinct.
+fn conversion_dedupe_key(
+    tenant_id: Uuid,
+    order_ref: Option<&str>,
+    event_name: &str,
+    event_id: &str,
+) -> String {
+    let (kind, identity) = match order_ref {
+        Some(order_ref) => ("order", order_ref),
+        None => ("client_event", event_id),
+    };
+    Uuid::new_v5(
+        &CONVERSION_DEDUPE_NAMESPACE,
+        format!("{tenant_id}:{kind}:{identity}:event:{event_name}").as_bytes(),
+    )
+    .to_string()
+}
+
 pub struct CaptureConversion {
     tx: TxManager,
     conversion_repo: Arc<dyn ConversionEventRepository>,
@@ -133,12 +157,20 @@ impl CaptureConversion {
             hashed_identifiers.insert("phone".to_string(), hash_phone(phone));
         }
 
-        let (value, value_source) = self.resolve_value(scope, &command).await?;
+        let (value, value_source, payment_event_id) = self.resolve_value(scope, &command).await?;
+        let event_id = payment_event_id.unwrap_or(command.event_id);
+        let dedupe_key = conversion_dedupe_key(
+            command.tenant_id,
+            command.order_ref.as_deref(),
+            &command.event_name,
+            &event_id,
+        );
 
         Ok(ConversionEvent {
             id: Uuid::now_v7(),
             tenant_id: command.tenant_id,
-            event_id: command.event_id,
+            event_id,
+            dedupe_key,
             name: command.event_name,
             occurred_at: Utc::now(),
             value,
@@ -158,7 +190,7 @@ impl CaptureConversion {
         &self,
         scope: &mut ScopedTx<'_>,
         command: &TrackConversionCommand,
-    ) -> Result<(Option<Money>, Option<ValueSource>), AdvertisingError> {
+    ) -> Result<(Option<Money>, Option<ValueSource>, Option<String>), AdvertisingError> {
         if let Some(order_ref) = command.order_ref.as_deref() {
             // A failed lookup is not "no payment record". Falling through
             // to the client's hint here would label an untrusted value as
@@ -166,21 +198,25 @@ impl CaptureConversion {
             // the substitution NFR-1010 forbids — and the failed statement
             // has already aborted this transaction, so the insert that
             // follows could not have succeeded anyway.
-            if let Some(payment_value) = self
+            if let Some(payment) = self
                 .payment_lookup
                 .lookup_payment_value(scope, command.tenant_id, order_ref)
                 .await?
             {
-                return Ok((Some(payment_value), Some(ValueSource::PaymentRecord)));
+                return Ok((
+                    Some(payment.value),
+                    Some(ValueSource::PaymentRecord),
+                    Some(payment.conversion_event_id),
+                ));
             }
         }
 
         Ok(match (command.value, command.currency.as_deref()) {
             (Some(amount_minor), Some(currency)) => match Money::new(amount_minor, currency) {
-                Ok(money) => (Some(money), Some(ValueSource::ClientReported)),
-                Err(_) => (None, None),
+                Ok(money) => (Some(money), Some(ValueSource::ClientReported), None),
+                Err(_) => (None, None, None),
             },
-            _ => (None, None),
+            _ => (None, None, None),
         })
     }
 

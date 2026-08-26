@@ -663,6 +663,7 @@ struct ConversionEventRow {
     id: Uuid,
     tenant_id: Uuid,
     event_id: String,
+    dedupe_key: String,
     name: String,
     occurred_at: chrono::DateTime<chrono::Utc>,
     value_minor: Option<i64>,
@@ -681,6 +682,7 @@ fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, A
         id: row.id,
         tenant_id: row.tenant_id,
         event_id: row.event_id,
+        dedupe_key: row.dedupe_key,
         name: row.name,
         occurred_at: row.occurred_at,
         value: match (row.value_minor, row.currency) {
@@ -719,16 +721,19 @@ impl ConversionEventRepository for SqlxCampaignRepository {
     ) -> Result<(), AdvertisingError> {
         let map_err = |e: sqlx::Error| AdvertisingError::Storage(e.to_string());
 
-        // The dedup row owns the (tenant_id, event_id) unique key that
+        // The dedup row owns the immutable (tenant_id, dedupe_key) unique
+        // key that
         // `conversion_events` foreign-keys against; a retried or duplicated
-        // beacon loses the race here and never reaches the insert below —
-        // that's the whole idempotency guarantee, in one INSERT.
+        // beacon, including one on either side of a payment webhook, loses
+        // the race here and never reaches the insert below.
         let dedup_result = sqlx::query(
-            "INSERT INTO advertising.conversion_event_dedup (tenant_id, event_id, occurred_at)
-             VALUES ($1, $2, $3) ON CONFLICT (tenant_id, event_id) DO NOTHING",
+            "INSERT INTO advertising.conversion_event_dedup
+               (tenant_id, event_id, dedupe_key, occurred_at)
+             VALUES ($1, $2, $3, $4) ON CONFLICT (tenant_id, dedupe_key) DO NOTHING",
         )
         .bind(event.tenant_id)
         .bind(&event.event_id)
+        .bind(&event.dedupe_key)
         .bind(event.occurred_at)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -755,13 +760,14 @@ impl ConversionEventRepository for SqlxCampaignRepository {
 
         sqlx::query(
             "INSERT INTO advertising.conversion_events
-               (id, tenant_id, event_id, name, occurred_at, value_minor, currency,
+               (id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
                 value_source, order_ref, click_ids, hashed_ids, consent, upload_state)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(event.id)
         .bind(event.tenant_id)
         .bind(&event.event_id)
+        .bind(&event.dedupe_key)
         .bind(&event.name)
         .bind(event.occurred_at)
         .bind(value_minor)
@@ -785,7 +791,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         tenant_id: Uuid,
     ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
         let rows = sqlx::query_as::<_, ConversionEventRow>(
-            "SELECT id, tenant_id, event_id, name, occurred_at, value_minor, currency,
+            "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
                     value_source, order_ref, click_ids, hashed_ids, consent, upload_state
              FROM advertising.conversion_events
              WHERE tenant_id = $1

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use sanvi_payments::domain::CheckoutRepository;
 use uuid::Uuid;
 
-use crate::domain::{AdvertisingError, Money, PaymentLookupPort};
+use crate::domain::{AdvertisingError, Money, PaymentLookup, PaymentLookupPort};
 
 pub struct CheckoutPaymentLookup {
     checkouts: Arc<dyn CheckoutRepository>,
@@ -28,18 +28,38 @@ impl PaymentLookupPort for CheckoutPaymentLookup {
         scope: &mut sanvi_persistence::ScopedTx<'_>,
         tenant_id: Uuid,
         order_ref: &str,
-    ) -> Result<Option<Money>, AdvertisingError> {
+    ) -> Result<Option<PaymentLookup>, AdvertisingError> {
         let checkout = self
             .checkouts
-            .find_completed_by_reference(scope, tenant_id, order_ref)
+            .find_by_reference(scope, tenant_id, order_ref)
             .await
             .map_err(|err| AdvertisingError::Storage(err.to_string()))?;
 
+        let Some(checkout) = checkout else {
+            return Ok(None);
+        };
+        let Some(payment) = self
+            .checkouts
+            .latest_payment_for_checkout(scope, tenant_id, checkout.id)
+            .await
+            .map_err(|err| AdvertisingError::Storage(err.to_string()))?
+        else {
+            return Ok(None);
+        };
+
         // A straight field copy — no decimal arithmetic — so a
-        // zero-decimal currency like JPY carries through unchanged.
-        Ok(checkout.map(|checkout| Money {
-            amount_minor: checkout.amount.amount_minor,
-            currency: checkout.amount.currency.as_str().to_string(),
+        // zero-decimal currency like JPY carries through unchanged. The
+        // conversion id is deliberately derived at this adapter boundary
+        // from PaymentRecord.id, never from the checkout row.
+        Ok(Some(PaymentLookup {
+            conversion_event_id: sanvi_payments::application::conversion_event_id(
+                tenant_id, payment.id,
+            )
+            .to_string(),
+            value: Money {
+                amount_minor: payment.amount.amount_minor,
+                currency: payment.amount.currency.as_str().to_string(),
+            },
         }))
     }
 }

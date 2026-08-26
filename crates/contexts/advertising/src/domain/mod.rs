@@ -47,8 +47,8 @@ pub mod hashing;
 
 pub use model::{ClickIds, ConversionEvent, SuppressedByDirective, UploadState, ValueSource};
 pub use ports::{
-    ConversionEventRepository, PaymentLookupPort, TrackingSettings, TrackingSettingsRepository,
-    VendorRole, VendorRolePort,
+    ConversionEventRepository, PaymentLookup, PaymentLookupPort, TrackingSettings,
+    TrackingSettingsRepository, VendorRole, VendorRolePort,
 };
 
 pub use hashing::HashedIdentifier;
