@@ -1699,6 +1699,7 @@ pub struct CreateCreativeRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct CreativePreviewsQuery {
     pub placement: Option<String>,
 }
@@ -1741,7 +1742,7 @@ pub struct CreativePreviewsView {
     responses(
         (status = 201, description = "Creative created with upload-time matrix validation.", body = CreativeView),
         (status = 400, description = "Missing/malformed Idempotency-Key or invalid creative fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
-        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.campaign.write permission or platform entitlement", body = ProblemDetail),
         (status = 404, description = "Connection not found", body = ProblemDetail),
         (status = 409, description = "Connection is not active", body = ProblemDetail)
     )
@@ -1753,10 +1754,18 @@ pub async fn create_creative(
     req: HttpRequest,
     body: web::Json<CreateCreativeRequest>,
     _permission: RequiredPermission,
+    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let mutation_id = idempotency_key(&req)?;
     let command = body.into_inner();
+    let platform = state
+        .create_creative
+        .platform_for_connection(tenant_id, command.connection_id)
+        .await
+        .map_err(api_error)?;
+    require_platform_entitlement(&state, tenant_id, &platform, feature_gate.get_ref()).await?;
     let scope = format!("tenant.{tenant_id}.advertising.creatives.create");
     let key = mutation_id.to_string();
     if let Some(view) = claim_idempotent::<CreativeView>(&state, &key, &scope).await? {
@@ -1801,7 +1810,7 @@ pub async fn create_creative(
     params(("creative_id" = Uuid, Path, description = "Creative UUID")),
     responses(
         (status = 200, description = "Stored creative specification and metadata", body = CreativeView),
-        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission or platform entitlement", body = ProblemDetail),
         (status = 404, description = "Creative not found", body = ProblemDetail)
     )
 )]
@@ -1810,6 +1819,8 @@ pub async fn get_creative(
     tenant: CurrentTenant,
     path: web::Path<Uuid>,
     _permission: RequiredPermission,
+    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let creative_id = path.into_inner();
@@ -1821,6 +1832,8 @@ pub async fn get_creative(
         .ok_or(ApiError::NotFound {
             resource: "creative".to_string(),
         })?;
+    require_platform_entitlement(&state, tenant_id, &stored.platform, feature_gate.get_ref())
+        .await?;
     Ok(HttpResponse::Ok().json(CreativeView::from(stored)))
 }
 
@@ -1830,14 +1843,16 @@ pub async fn get_creative(
     tag = "advertising",
     operation_id = "list_creatives",
     responses(
-        (status = 200, description = "Every creative owned by the tenant", body = CreativesView),
-        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+        (status = 200, description = "Every creative on an entitled platform", body = CreativesView),
+        (status = 403, description = "Missing advertising.read permission or advertising platform entitlement", body = ProblemDetail)
     )
 )]
 pub async fn list_creatives(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     _permission: RequiredPermission,
+    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let creatives = state
@@ -1845,9 +1860,24 @@ pub async fn list_creatives(
         .execute(tenant_id)
         .await
         .map_err(api_error)?;
-    Ok(HttpResponse::Ok().json(CreativesView {
-        creatives: creatives.into_iter().map(CreativeView::from).collect(),
-    }))
+    let mut visible = Vec::new();
+    for creative in creatives {
+        let descriptor = state
+            .catalog
+            .execute()
+            .into_iter()
+            .find(|descriptor| descriptor.key == creative.platform)
+            .ok_or_else(|| ApiError::ServiceUnavailable {
+                detail: "advertising platform is unavailable".to_string(),
+            })?;
+        if feature_gate
+            .check(tenant_id, &descriptor.entitlement_key)
+            .await?
+        {
+            visible.push(CreativeView::from(creative));
+        }
+    }
+    Ok(HttpResponse::Ok().json(CreativesView { creatives: visible }))
 }
 
 #[utoipa::path(
@@ -1858,7 +1888,7 @@ pub async fn list_creatives(
     params(("creative_id" = Uuid, Path, description = "Creative UUID")),
     responses(
         (status = 204, description = "Creative deleted"),
-        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.campaign.write permission or platform entitlement", body = ProblemDetail),
         (status = 404, description = "Creative not found", body = ProblemDetail)
     )
 )]
@@ -1867,9 +1897,21 @@ pub async fn delete_creative(
     tenant: CurrentTenant,
     path: web::Path<Uuid>,
     _permission: RequiredPermission,
+    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let creative_id = path.into_inner();
+    let stored = state
+        .get_creative
+        .execute(tenant_id, creative_id)
+        .await
+        .map_err(api_error)?
+        .ok_or(ApiError::NotFound {
+            resource: "creative".to_string(),
+        })?;
+    require_platform_entitlement(&state, tenant_id, &stored.platform, feature_gate.get_ref())
+        .await?;
     state
         .delete_creative
         .execute(tenant_id, creative_id)
@@ -1889,7 +1931,7 @@ pub async fn delete_creative(
     ),
     responses(
         (status = 200, description = "Spec-rendered placement previews", body = CreativePreviewsView),
-        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission or platform entitlement", body = ProblemDetail),
         (status = 404, description = "Creative not found", body = ProblemDetail)
     )
 )]
@@ -1899,9 +1941,21 @@ pub async fn get_creative_previews(
     path: web::Path<Uuid>,
     query: web::Query<CreativePreviewsQuery>,
     _permission: RequiredPermission,
+    _entitlement: RequiredAnyFeature,
+    feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
     let creative_id = path.into_inner();
+    let stored = state
+        .get_creative
+        .execute(tenant_id, creative_id)
+        .await
+        .map_err(api_error)?
+        .ok_or(ApiError::NotFound {
+            resource: "creative".to_string(),
+        })?;
+    require_platform_entitlement(&state, tenant_id, &stored.platform, feature_gate.get_ref())
+        .await?;
     let previews = state
         .get_creative_previews
         .execute(tenant_id, creative_id, query.into_inner().placement)

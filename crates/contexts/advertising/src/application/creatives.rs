@@ -34,6 +34,26 @@ pub struct CreateCreative {
     platforms: Arc<PlatformRegistry>,
 }
 
+fn validate_assets(spec: &CreativeAssetSpec, assets: &[AssetMetadata]) -> Vec<ValidationViolation> {
+    let mut violations = Vec::new();
+    if spec.image_required && !assets.iter().any(|asset| !asset.is_video) {
+        violations.push(ValidationViolation::invalid(
+            "assets",
+            "at least one image asset is required for this placement",
+        ));
+    }
+    for (index, asset) in assets.iter().enumerate() {
+        for violation in spec.validate_asset(asset) {
+            violations.push(ValidationViolation {
+                field_path: format!("assets[{index}].{}", violation.field_path),
+                code: violation.code,
+                message: violation.message,
+            });
+        }
+    }
+    violations
+}
+
 impl CreateCreative {
     pub fn new(
         tx: TxManager,
@@ -85,22 +105,7 @@ impl CreateCreative {
         violations.extend(matrix.validate_creative_text(&fields.texts));
 
         if let Some(placement) = placement_spec {
-            if placement.asset_spec.image_required && fields.assets.is_empty() {
-                violations.push(ValidationViolation::invalid(
-                    "assets",
-                    "at least one asset is required for this placement",
-                ));
-            }
-            for (index, asset) in fields.assets.iter().enumerate() {
-                let asset_violations = placement.asset_spec.validate_asset(asset);
-                for violation in asset_violations {
-                    violations.push(ValidationViolation {
-                        field_path: format!("assets[{index}].{}", violation.field_path),
-                        code: violation.code,
-                        message: violation.message,
-                    });
-                }
-            }
+            violations.extend(validate_assets(&placement.asset_spec, &fields.assets));
         }
 
         if !violations.is_empty() {
@@ -131,6 +136,32 @@ impl CreateCreative {
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         Ok(stored)
+    }
+
+    pub async fn platform_for_connection(
+        &self,
+        tenant_id: Uuid,
+        connection_id: Uuid,
+    ) -> Result<crate::domain::PlatformKey, AdvertisingError> {
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id)
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        let connection = self
+            .connections
+            .find_by_id(&mut scope, tenant_id, connection_id)
+            .await?
+            .ok_or(AdvertisingError::ConnectionNotFound)?;
+        if connection.status() != ConnectionStatus::Active {
+            return Err(AdvertisingError::ConnectionNotActive);
+        }
+        let platform = connection.platform().clone();
+        scope
+            .rollback()
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        Ok(platform)
     }
 }
 
@@ -295,5 +326,40 @@ impl GetCreativePreviews {
             .collect();
 
         Ok(previews)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_required_placement_rejects_video_only_assets() {
+        let spec = CreativeAssetSpec {
+            image_required: true,
+            video_allowed: true,
+            aspect_ratios: vec!["1:1".to_string()],
+            min_width_px: Some(600),
+            min_height_px: Some(600),
+            max_file_size_bytes: Some(30_000_000),
+            min_duration_seconds: Some(1),
+            max_duration_seconds: Some(60),
+        };
+        let video = AssetMetadata {
+            width_px: 1080,
+            height_px: 1080,
+            file_size_bytes: 2_000_000,
+            is_video: true,
+            duration_seconds: Some(30),
+            aspect_ratio: "1:1".to_string(),
+        };
+
+        let violations = validate_assets(&spec, &[video]);
+
+        assert!(violations.iter().any(|violation| {
+            violation.field_path == "assets"
+                && violation.code == "invalid"
+                && violation.message.contains("image")
+        }));
     }
 }

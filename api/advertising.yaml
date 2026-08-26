@@ -999,13 +999,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreativesView'
-          description: Every creative owned by the tenant
+          description: Every creative on an entitled platform
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.read permission
+          description: Missing advertising.read permission or advertising platform entitlement
       tags:
       - advertising
     post:
@@ -1042,7 +1042,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.campaign.write permission
+          description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
             application/json:
@@ -1076,7 +1076,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.campaign.write permission
+          description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
             application/json:
@@ -1107,7 +1107,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.read permission
+          description: Missing advertising.read permission or platform entitlement
         '404':
           content:
             application/json:
@@ -1127,13 +1127,11 @@ paths:
         schema:
           format: uuid
           type: string
-      - in: path
+      - in: query
         name: placement
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       responses:
         '200':
           content:
@@ -1146,7 +1144,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing advertising.read permission
+          description: Missing advertising.read permission or platform entitlement
         '404':
           content:
             application/json:

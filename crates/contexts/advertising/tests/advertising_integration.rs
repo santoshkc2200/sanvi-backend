@@ -1308,6 +1308,13 @@ async fn creative_crud_and_matrix_validation_lifecycle() {
         connection_repo.clone(),
         registry.clone(),
     );
+    assert_eq!(
+        create_creative
+            .platform_for_connection(tenant_id, connection_id)
+            .await
+            .unwrap(),
+        PlatformKey::parse("meta").unwrap()
+    );
     let get_creative = GetCreative::new(manager.clone(), creative_repo.clone());
     let list_creatives = ListCreatives::new(manager.clone(), creative_repo.clone());
     let delete_creative = DeleteCreative::new(manager.clone(), creative_repo.clone());

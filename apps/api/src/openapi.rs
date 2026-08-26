@@ -440,6 +440,16 @@ mod tests {
                 .get("/api/v1/tenant/ads/creatives/{creative_id}/previews")
                 .is_some()
         );
+        let preview_parameters = document["paths"]
+            ["/api/v1/tenant/ads/creatives/{creative_id}/previews"]["get"]["parameters"]
+            .as_array()
+            .expect("creative previews declares parameters");
+        let placement = preview_parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "placement")
+            .expect("creative previews declares placement");
+        assert_eq!(placement["in"], "query");
+        assert_ne!(placement["required"], true);
         let schemas = &document["components"]["schemas"];
         assert!(schemas.get("PlatformsView").is_some());
         assert!(schemas.get("CreativeView").is_some());

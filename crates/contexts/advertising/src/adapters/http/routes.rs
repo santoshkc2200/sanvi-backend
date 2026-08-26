@@ -123,6 +123,7 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
                 (Method::GET, read),
                 (Method::POST, write),
             ]))
+            .app_data(feature_gate())
             .route(web::get().to(list_creatives))
             .route(web::post().to(create_creative)),
     );
@@ -132,12 +133,14 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
                 (Method::GET, read),
                 (Method::DELETE, write),
             ]))
+            .app_data(feature_gate())
             .route(web::get().to(get_creative))
             .route(web::delete().to(delete_creative)),
     );
     cfg.service(
         web::resource("/ads/creatives/{creative_id}/previews")
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(feature_gate())
             .route(web::get().to(get_creative_previews)),
     );
 }

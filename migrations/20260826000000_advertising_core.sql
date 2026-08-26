@@ -203,7 +203,7 @@ SELECT advertising.ensure_monthly_partitions(current_date);
 SELECT advertising.ensure_monthly_partitions((current_date + interval '1 month')::date);
 
 GRANT USAGE ON SCHEMA advertising TO sanvi_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON advertising.connections, advertising.campaigns,
+GRANT SELECT, INSERT, UPDATE ON advertising.connections, advertising.campaigns,
   advertising.ad_groups, advertising.ads, advertising.creatives,
   advertising.conversion_event_dedup, advertising.conversion_events,
   advertising.metrics_daily TO sanvi_app;
