@@ -232,7 +232,8 @@ pub trait AdPlatformPort: Send + Sync {
 
 #[async_trait]
 pub trait ConversionEventRepository: Send + Sync {
-    /// Idempotent insert respecting the existing UNIQUE (tenant_id, event_id)
+    /// Idempotent insert respecting the immutable `(tenant_id, dedupe_key)`
+    /// identity owned by the conversion event.
     async fn insert_idempotent(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -246,6 +247,15 @@ pub trait ConversionEventRepository: Send + Sync {
     ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaymentLookup {
+    /// Payment-context adapter derives this from the actual payment record.
+    /// Advertising never receives a raw payment id, so it cannot accidentally
+    /// derive a checkout-based conversion id.
+    pub conversion_event_id: String,
+    pub value: super::model::Money,
+}
+
 #[async_trait]
 pub trait PaymentLookupPort: Send + Sync {
     async fn lookup_payment_value(
@@ -253,7 +263,7 @@ pub trait PaymentLookupPort: Send + Sync {
         scope: &mut ScopedTx<'_>,
         tenant_id: Uuid,
         order_ref: &str,
-    ) -> Result<Option<super::model::Money>, AdvertisingError>;
+    ) -> Result<Option<PaymentLookup>, AdvertisingError>;
 }
 
 use std::collections::BTreeMap;

@@ -12,14 +12,32 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use actix_web::{App, http::StatusCode, test, web};
 use async_trait::async_trait;
 use chrono::Utc;
-use sanvi_advertising::adapters::{CheckoutPaymentLookup, SqlxCampaignRepository};
-use sanvi_advertising::application::tracking::capture::{
-    CaptureConversion, TrackConversionCommand,
+use sanvi_advertising::AdvertisingConfig;
+use sanvi_advertising::adapters::{
+    CheckoutPaymentLookup, OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
+    SqlxCampaignRepository, SqlxConnectionTokenRepository, SqlxCreativeRepository,
+    SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository, http::AdvertisingState,
+};
+use sanvi_advertising::application::tracking::{
+    capture::{CaptureConversion, TrackConversionCommand},
+    conversions::ListConversions,
+    settings::ManageTrackingSettings,
+    site_key::generate_site_key,
+};
+use sanvi_advertising::application::{
+    AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
+    DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, HandleCallback,
+    ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives, ListPlatformCatalog,
+    PatchCampaign, PauseCampaign, PlatformRegistry, PublishCampaign, ReconcileCampaign,
+    ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup,
+    ValidateCampaign,
 };
 use sanvi_advertising::domain::{
-    ClickIds, Money, PaymentLookupPort, PlatformKey, VendorRole, VendorRolePort,
+    ClickIds, Money, OAuthStateManager, PaymentLookup, PaymentLookupPort, PlatformKey, TokenVault,
+    VendorRole, VendorRolePort,
 };
 use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
 use sanvi_privacy::domain::{
@@ -131,7 +149,7 @@ impl DirectiveResolver for PoolTakingResolver {
     }
 }
 
-struct FixedPaymentLookup(Option<Money>);
+struct FixedPaymentLookup(Option<PaymentLookup>);
 
 #[async_trait]
 impl PaymentLookupPort for FixedPaymentLookup {
@@ -140,7 +158,7 @@ impl PaymentLookupPort for FixedPaymentLookup {
         _scope: &mut ScopedTx<'_>,
         _tenant_id: Uuid,
         _order_ref: &str,
-    ) -> Result<Option<Money>, sanvi_advertising::domain::AdvertisingError> {
+    ) -> Result<Option<PaymentLookup>, sanvi_advertising::domain::AdvertisingError> {
         Ok(self.0.clone())
     }
 }
@@ -160,7 +178,7 @@ impl VendorRolePort for FixedVendorRole {
 fn capture_with(
     tx: TxManager,
     resolver: FakeDirectiveResolver,
-    payment: Option<Money>,
+    payment: Option<PaymentLookup>,
     vendor_role: VendorRole,
 ) -> CaptureConversion {
     CaptureConversion::new(
@@ -209,6 +227,7 @@ async fn fetch_row(
     .unwrap();
     serde_json::json!({
         "id": row.get::<Uuid, _>("id").to_string(),
+        "event_id": row.get::<String, _>("event_id"),
         "value_minor": row.get::<Option<i64>, _>("value_minor"),
         "currency": row.get::<Option<String>, _>("currency"),
         "value_source": row.get::<Option<String>, _>("value_source"),
@@ -227,6 +246,27 @@ async fn row_count(pool: &sanvi_persistence::PgPool, tenant_id: Uuid, event_id: 
     )
     .bind(tenant_id)
     .bind(event_id)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap()
+}
+
+async fn order_event_count(
+    pool: &sanvi_persistence::PgPool,
+    tenant_id: Uuid,
+    order_ref: &str,
+    event_name: Option<&str>,
+) -> i64 {
+    let manager = TxManager::new(pool.clone());
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM advertising.conversion_events
+         WHERE tenant_id = $1 AND order_ref = $2
+           AND ($3::text IS NULL OR name = $3)",
+    )
+    .bind(tenant_id)
+    .bind(order_ref)
+    .bind(event_name)
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap()
@@ -387,18 +427,37 @@ async fn no_raw_email_or_phone_is_ever_persisted() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "pii-scan").await;
-    let tx = TxManager::new(pool.clone());
+    let secret = "test-signing-secret-of-at-least-32-bytes";
+    let origin = "https://shop.example.test";
+    let site_key = generate_site_key(secret, tenant_id, origin).unwrap();
+    let state = create_test_advertising_state(pool.clone(), secret, 50, 50);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(sanvi_advertising::routes::tracking_public_routes),
+    )
+    .await;
 
-    let capture = capture_with(
-        tx,
-        FakeDirectiveResolver::allow_all(),
-        None,
-        VendorRole::ThirdParty,
-    );
-    capture
-        .execute(base_command(tenant_id, "evt-pii-scan"))
-        .await
-        .unwrap();
+    let request = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "Referer",
+            "https://store.example.test/thank-you?order=123&email=a.user@example.com&phone=4155550100",
+        ))
+        .insert_header(("User-Agent", "Mozilla/5.0"))
+        .peer_addr("198.51.100.9:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-pii-scan",
+            "email": "A.User+tag@Example.COM",
+            "phone": "+1 (415) 555-0100",
+            "click_ids": {}
+        }))
+        .to_request();
+    let response = test::call_service(&app, request).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
 
     let row = fetch_row(&pool, tenant_id, "evt-pii-scan").await;
     let serialized = row.to_string();
@@ -406,6 +465,7 @@ async fn no_raw_email_or_phone_is_ever_persisted() {
     assert!(!serialized.contains("Example.COM"));
     assert!(!serialized.contains("4155550100"));
     assert!(!serialized.contains("555-0100"));
+    assert!(!serialized.contains("order=123"));
 
     // The normalization equivalence itself, proven end to end through the
     // stored hash rather than just the unit-level hashing function. Only
@@ -428,7 +488,14 @@ async fn client_value_is_overridden_by_the_payment_record_and_marked() {
     let tenant_id = seed_tenant(&pool, "value-override").await;
     let tx = TxManager::new(pool.clone());
 
-    let real_payment = Money::new(4_980, "JPY").unwrap();
+    let payment_id = Uuid::now_v7();
+    let real_payment = PaymentLookup {
+        conversion_event_id: sanvi_payments::application::conversion_event_id(
+            tenant_id, payment_id,
+        )
+        .to_string(),
+        value: Money::new(4_980, "JPY").unwrap(),
+    };
     let capture = capture_with(
         tx,
         FakeDirectiveResolver::allow_all(),
@@ -442,10 +509,145 @@ async fn client_value_is_overridden_by_the_payment_record_and_marked() {
     command.currency = Some("JPY".to_string());
     capture.execute(command).await.unwrap();
 
-    let row = fetch_row(&pool, tenant_id, "evt-value-override").await;
+    let expected_event_id =
+        sanvi_payments::application::conversion_event_id(tenant_id, payment_id).to_string();
+
+    let row = fetch_row(&pool, tenant_id, &expected_event_id).await;
     assert_eq!(row["value_minor"], 4_980);
     assert_eq!(row["currency"], "JPY");
     assert_eq!(row["value_source"], "payment_record");
+    assert_eq!(row["event_id"], expected_event_id);
+}
+
+#[tokio::test]
+async fn server_derived_event_id_deduplicates_different_client_event_ids_for_same_order() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "server-event-id").await;
+    let tx = TxManager::new(pool.clone());
+
+    let payment_id = Uuid::now_v7();
+    let real_payment = PaymentLookup {
+        conversion_event_id: sanvi_payments::application::conversion_event_id(
+            tenant_id, payment_id,
+        )
+        .to_string(),
+        value: Money::new(4_980, "JPY").unwrap(),
+    };
+    let capture = capture_with(
+        tx,
+        FakeDirectiveResolver::allow_all(),
+        Some(real_payment),
+        VendorRole::ThirdParty,
+    );
+
+    let mut command1 = base_command(tenant_id, "client-evt-1");
+    command1.order_ref = Some("order-dedupe-1".to_string());
+    capture.execute(command1).await.unwrap();
+
+    let mut command2 = base_command(tenant_id, "client-evt-2");
+    command2.order_ref = Some("order-dedupe-1".to_string());
+    capture.execute(command2).await.unwrap();
+
+    let expected_event_id =
+        sanvi_payments::application::conversion_event_id(tenant_id, payment_id).to_string();
+
+    let row = fetch_row(&pool, tenant_id, &expected_event_id).await;
+    assert_eq!(row["event_id"], expected_event_id);
+    assert_eq!(row["value_minor"], 4_980);
+    assert_eq!(row_count(&pool, tenant_id, &expected_event_id).await, 1);
+    assert_eq!(row_count(&pool, tenant_id, "client-evt-1").await, 0);
+    assert_eq!(row_count(&pool, tenant_id, "client-evt-2").await, 0);
+}
+
+#[tokio::test]
+async fn order_dedupe_survives_the_payment_webhook_race() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "webhook-race-dedupe").await;
+    let tx = TxManager::new(pool.clone());
+
+    let before_webhook = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let mut first = base_command(tenant_id, "client-before-webhook");
+    first.order_ref = Some("order-webhook-race".to_string());
+    before_webhook.execute(first).await.unwrap();
+
+    let payment_id = Uuid::now_v7();
+    let after_webhook = capture_with(
+        tx,
+        FakeDirectiveResolver::allow_all(),
+        Some(PaymentLookup {
+            conversion_event_id: sanvi_payments::application::conversion_event_id(
+                tenant_id, payment_id,
+            )
+            .to_string(),
+            value: Money::new(4_980, "JPY").unwrap(),
+        }),
+        VendorRole::ThirdParty,
+    );
+    let mut retry = base_command(tenant_id, "server-after-webhook");
+    retry.order_ref = Some("order-webhook-race".to_string());
+    after_webhook.execute(retry).await.unwrap();
+
+    assert_eq!(
+        order_event_count(&pool, tenant_id, "order-webhook-race", Some("purchase")).await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn server_derived_event_id_keeps_distinct_event_names() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "event-name-dedupe").await;
+    let tx = TxManager::new(pool.clone());
+    let payment_id = Uuid::now_v7();
+    let payment = PaymentLookup {
+        conversion_event_id: sanvi_payments::application::conversion_event_id(
+            tenant_id, payment_id,
+        )
+        .to_string(),
+        value: Money::new(4_980, "JPY").unwrap(),
+    };
+    let capture = capture_with(
+        tx,
+        FakeDirectiveResolver::allow_all(),
+        Some(payment),
+        VendorRole::ThirdParty,
+    );
+
+    let mut purchase = base_command(tenant_id, "client-purchase");
+    purchase.order_ref = Some("order-multiple-events".to_string());
+    capture.execute(purchase).await.unwrap();
+
+    let mut start_trial = base_command(tenant_id, "client-start-trial");
+    start_trial.event_name = "start_trial".to_string();
+    start_trial.order_ref = Some("order-multiple-events".to_string());
+    capture.execute(start_trial).await.unwrap();
+
+    assert_eq!(
+        order_event_count(&pool, tenant_id, "order-multiple-events", Some("purchase")).await,
+        1
+    );
+    assert_eq!(
+        order_event_count(
+            &pool,
+            tenant_id,
+            "order-multiple-events",
+            Some("start_trial")
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        order_event_count(&pool, tenant_id, "order-multiple-events", None).await,
+        2
+    );
 }
 
 #[tokio::test]
@@ -486,6 +688,8 @@ async fn click_ids_present_partial_and_absent_are_distinguishable() {
                 wbraid: Some("wb1".to_string()),
                 fbc: Some("fbc1".to_string()),
                 fbp: Some("fbp1".to_string()),
+                capture_time: None,
+                landing_url: None,
             },
         ),
         (
@@ -524,10 +728,10 @@ async fn click_ids_present_partial_and_absent_are_distinguishable() {
     assert!(absent["click_ids"]["fbp"].is_null());
 }
 
-/// Verifies the real cross-context join: `CheckoutPaymentLookup` reading
-/// an actual `payments.checkouts` row, with no decimal arithmetic in the
-/// path — the property that makes a zero-decimal currency like JPY carry
-/// through correctly is "never touched", not "handled specially".
+/// Verifies the real cross-context join: `CheckoutPaymentLookup` reads the
+/// actual `payments.payments` row even before the asynchronously-updated
+/// checkout status reaches `complete`. Its conversion id must therefore use
+/// `PaymentRecord.id`, never the distinct checkout id.
 #[tokio::test]
 async fn checkout_payment_lookup_joins_the_real_payments_schema() {
     let db = sanvi_testsupport::test_db().await;
@@ -552,12 +756,25 @@ async fn checkout_payment_lookup_joins_the_real_payments_schema() {
     let checkout_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO payments.checkouts
-           (id, tenant_id, connection_id, reference, amount_minor, currency, status, completed_at, created_at)
-         VALUES ($1, $2, $3, 'order-jpy-1', 4980, 'JPY', 'complete', now(), now())",
+           (id, tenant_id, connection_id, reference, amount_minor, currency, status, created_at)
+         VALUES ($1, $2, $3, 'order-jpy-1', 4980, 'JPY', 'open', now())",
     )
     .bind(checkout_id)
     .bind(tenant_id)
     .bind(connection_id)
+    .execute(&mut **seed_scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+
+    let payment_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO payments.payments
+           (id, tenant_id, checkout_id, external_payment_id, status, amount_minor, currency)
+         VALUES ($1, $2, $3, 'pi_jpy_1', 'processing', 4980, 'JPY')",
+    )
+    .bind(payment_id)
+    .bind(tenant_id)
+    .bind(checkout_id)
     .execute(&mut **seed_scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -569,14 +786,18 @@ async fn checkout_payment_lookup_joins_the_real_payments_schema() {
 
     let tx = TxManager::new(pool.clone());
     let mut scope = tx.begin_for(tenant_id).await.unwrap();
-    let value = lookup
+    let payment = lookup
         .lookup_payment_value(&mut scope, tenant_id, "order-jpy-1")
         .await
         .unwrap()
         .unwrap();
 
-    assert_eq!(value.amount_minor, 4_980);
-    assert_eq!(value.currency, "JPY");
+    assert_eq!(
+        payment.conversion_event_id,
+        sanvi_payments::application::conversion_event_id(tenant_id, payment_id).to_string()
+    );
+    assert_eq!(payment.value.amount_minor, 4_980);
+    assert_eq!(payment.value.currency, "JPY");
 }
 
 /// Capture must resolve the gate *before* opening its own transaction. If
@@ -628,4 +849,652 @@ async fn concurrent_captures_never_hold_a_connection_while_the_gate_needs_one() 
         let outcome = handle.await.unwrap();
         outcome.expect("a capture failed to acquire a connection");
     }
+}
+
+fn create_test_advertising_state(
+    pool: sanvi_persistence::PgPool,
+    secret: &str,
+    ip_permits: usize,
+    domain_permits: usize,
+) -> AdvertisingState {
+    let tx = TxManager::new(pool.clone());
+    let campaign_repo = Arc::new(SqlxCampaignRepository::new());
+    let payment_lookup = Arc::new(FixedPaymentLookup(None));
+    let vendor_role = Arc::new(FixedVendorRole(VendorRole::ThirdParty));
+    let directive_resolver = Arc::new(FakeDirectiveResolver::allow_all());
+
+    let capture = Arc::new(CaptureConversion::new(
+        tx.clone(),
+        campaign_repo.clone(),
+        payment_lookup,
+        vendor_role,
+        directive_resolver,
+    ));
+
+    let settings_repo = Arc::new(SqlxTrackingSettingsRepository::new());
+    let settings_mgr = Arc::new(ManageTrackingSettings::new(tx.clone(), settings_repo));
+    let list_conversions = Arc::new(ListConversions::new(tx.clone(), campaign_repo.clone()));
+
+    let config = AdvertisingConfig {
+        tracking_site_key_signing_secret: secret.to_string(),
+        ..Default::default()
+    };
+
+    let oauth_state = OAuthStateManager::new("test-oauth-secret-of-at-least-32-bytes");
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let registry = Arc::new(PlatformRegistry::new());
+    let events = Arc::new(OutboxEventPublisher::new());
+    let campaigns = campaign_repo.clone();
+    let token_vault = Arc::new(TokenVault::new(
+        Arc::new(SqlxTenantEnvelopeCrypto::new(
+            [0u8; 32],
+            "test-kek".to_string(),
+        )),
+        Arc::new(SqlxConnectionTokenRepository::new()),
+    ));
+    let creatives = Arc::new(SqlxCreativeRepository::new());
+
+    AdvertisingState {
+        config,
+        idempotency: sanvi_persistence::IdempotencyStore::new(pool),
+        catalog: Arc::new(ListPlatformCatalog::new(registry.clone())),
+        reconcile_campaign: Arc::new(ReconcileCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+        )),
+        resolve_campaign_drift: Arc::new(ResolveCampaignDrift::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        create_campaign: Arc::new(CreateCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            connections.clone(),
+            registry.clone(),
+            events.clone(),
+        )),
+        get_campaign: Arc::new(GetCampaign::new(tx.clone(), campaigns.clone())),
+        list_campaigns: Arc::new(ListCampaigns::new(tx.clone(), campaigns.clone())),
+        validate_campaign: Arc::new(ValidateCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            registry.clone(),
+        )),
+        patch_campaign: Arc::new(PatchCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        publish_campaign: Arc::new(PublishCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        pause_campaign: Arc::new(PauseCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        resume_campaign: Arc::new(ResumeCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        list_campaign_changes: Arc::new(ListCampaignChanges::new(tx.clone(), campaigns.clone())),
+        add_ad_group: Arc::new(AddAdGroup::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        update_ad_group: Arc::new(UpdateAdGroup::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        add_ad: Arc::new(AddAd::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        update_ad: Arc::new(UpdateAd::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+        )),
+        start_authorization: Arc::new(StartAuthorization::new(
+            registry.clone(),
+            oauth_state.clone(),
+        )),
+        handle_callback: Arc::new(HandleCallback::new(
+            tx.clone(),
+            connections.clone(),
+            registry.clone(),
+            oauth_state.clone(),
+            token_vault,
+        )),
+        create_connection: Arc::new(CreateConnection::new(tx.clone(), connections.clone())),
+        list_connections: Arc::new(ListConnections::new(
+            tx.clone(),
+            connections.clone(),
+            registry.clone(),
+        )),
+        delete_connection: Arc::new(DeleteConnection::new(tx.clone(), connections.clone())),
+        create_creative: Arc::new(CreateCreative::new(
+            tx.clone(),
+            creatives.clone(),
+            connections,
+            registry.clone(),
+        )),
+        get_creative: Arc::new(GetCreative::new(tx.clone(), creatives.clone())),
+        list_creatives: Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),
+        delete_creative: Arc::new(DeleteCreative::new(tx.clone(), creatives.clone())),
+        get_creative_previews: Arc::new(GetCreativePreviews::new(tx, creatives, registry)),
+        oauth_state,
+        tracking_ip_limiter: Arc::new(QuotaLimiter::new(100, ip_permits)),
+        tracking_domain_limiter: Arc::new(QuotaLimiter::new(100, domain_permits)),
+        capture,
+        settings_mgr,
+        list_conversions,
+    }
+}
+
+#[tokio::test]
+async fn http_click_ids_capture_extraction_and_merging() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "click-ids-http").await;
+    let secret = "test-signing-secret-of-at-least-32-bytes";
+    let origin = "https://store.example.test";
+    let site_key = generate_site_key(secret, tenant_id, origin).unwrap();
+
+    let state = create_test_advertising_state(pool.clone(), secret, 50, 50);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(sanvi_advertising::routes::tracking_public_routes),
+    )
+    .await;
+
+    // 1. Body only
+    let req1 = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.10:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-body-only",
+            "click_ids": {
+                "gclid": "g_body",
+                "gbraid": "gb_body",
+                "wbraid": "wb_body",
+                "fbc": "fbc_body",
+                "fbp": "fbp_body",
+                "capture_time": "2026-08-26T00:00:00Z",
+                "landing_url": "https://store.example.test/landing?email=a.user@example.com"
+            }
+        }))
+        .to_request();
+    let res1 = test::call_service(&app, req1).await;
+    assert_eq!(res1.status(), StatusCode::ACCEPTED);
+    let body1 = test::read_body(res1).await;
+    assert_eq!(body1, "{}");
+
+    let row1 = fetch_row(&pool, tenant_id, "evt-body-only").await;
+    assert_eq!(row1["click_ids"]["gclid"], "g_body");
+    assert_eq!(row1["click_ids"]["gbraid"], "gb_body");
+    assert_eq!(row1["click_ids"]["wbraid"], "wb_body");
+    assert_eq!(row1["click_ids"]["fbc"], "fbc_body");
+    assert_eq!(row1["click_ids"]["fbp"], "fbp_body");
+    assert_eq!(row1["click_ids"]["capture_time"], "2026-08-26T00:00:00Z");
+    assert_eq!(
+        row1["click_ids"]["landing_url"],
+        "https://store.example.test/landing"
+    );
+
+    // 2. Referer + cookies only
+    let referer2 = "https://store.example.test/checkout?gclid=EAIaIQobCh%3D%3D&gbraid=gb+ref&wbraid=wb_ref#details";
+    let req2 = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header(("Referer", referer2))
+        .insert_header(("Cookie", "_fbc=fbc_cookie; _fbp=fbp_cookie"))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.11:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-server-only",
+            "click_ids": {}
+        }))
+        .to_request();
+    let res2 = test::call_service(&app, req2).await;
+    assert_eq!(res2.status(), StatusCode::ACCEPTED);
+    let body2 = test::read_body(res2).await;
+    assert_eq!(body2, "{}");
+
+    let row2 = fetch_row(&pool, tenant_id, "evt-server-only").await;
+    assert_eq!(row2["click_ids"]["gclid"], "EAIaIQobCh==");
+    assert_eq!(row2["click_ids"]["gbraid"], "gb ref");
+    assert_eq!(row2["click_ids"]["wbraid"], "wb_ref");
+    assert_eq!(row2["click_ids"]["fbc"], "fbc_cookie");
+    assert_eq!(row2["click_ids"]["fbp"], "fbp_cookie");
+    assert!(!row2["click_ids"]["capture_time"].is_null());
+    assert_eq!(
+        row2["click_ids"]["landing_url"],
+        "https://store.example.test/checkout"
+    );
+
+    // 3. Mixed: server values win over conflicting body values; fallback to body where server missing
+    let referer3 = "https://store.example.test/cart?gclid=g_server_win&gbraid=gb_server_win";
+    let req3 = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header(("Referer", referer3))
+        .insert_header(("Cookie", "_fbc=fbc_server_win"))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.12:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-mixed",
+            "click_ids": {
+                "gclid": "g_body_lose",
+                "wbraid": "wb_body_fallback",
+                "fbc": "fbc_body_lose",
+                "fbp": "fbp_body_fallback"
+            }
+        }))
+        .to_request();
+    let res3 = test::call_service(&app, req3).await;
+    assert_eq!(res3.status(), StatusCode::ACCEPTED);
+    let body3 = test::read_body(res3).await;
+    assert_eq!(body3, "{}");
+
+    let row3 = fetch_row(&pool, tenant_id, "evt-mixed").await;
+    assert_eq!(row3["click_ids"]["gclid"], "g_server_win");
+    assert_eq!(row3["click_ids"]["gbraid"], "gb_server_win");
+    assert_eq!(row3["click_ids"]["wbraid"], "wb_body_fallback");
+    assert_eq!(row3["click_ids"]["fbc"], "fbc_server_win");
+    assert_eq!(row3["click_ids"]["fbp"], "fbp_body_fallback");
+    assert!(!row3["click_ids"]["capture_time"].is_null());
+    assert_eq!(
+        row3["click_ids"]["landing_url"],
+        "https://store.example.test/cart"
+    );
+
+    // 4. Wholly absent
+    let req4 = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.13:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-wholly-absent",
+            "click_ids": {}
+        }))
+        .to_request();
+    let res4 = test::call_service(&app, req4).await;
+    assert_eq!(res4.status(), StatusCode::ACCEPTED);
+    let body4 = test::read_body(res4).await;
+    assert_eq!(body4, "{}");
+
+    let row4 = fetch_row(&pool, tenant_id, "evt-wholly-absent").await;
+    assert!(row4["click_ids"]["gclid"].is_null());
+    assert!(row4["click_ids"]["gbraid"].is_null());
+    assert!(row4["click_ids"]["wbraid"].is_null());
+    assert!(row4["click_ids"]["fbc"].is_null());
+    assert!(row4["click_ids"]["fbp"].is_null());
+    assert!(row4["click_ids"]["landing_url"].is_null());
+    assert!(!row4["click_ids"]["capture_time"].is_null());
+}
+
+#[tokio::test]
+async fn dry_run_test_event_does_not_populate_server_click_ids() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "dry-run-click-ids").await;
+    let tx = TxManager::new(pool.clone());
+
+    let capture = capture_with(
+        tx,
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+
+    let command = base_command(tenant_id, "evt-dry-run");
+    let dry_run_event = capture.dry_run(command).await.unwrap();
+
+    assert_eq!(dry_run_event.click_ids.capture_time, None);
+    assert_eq!(dry_run_event.click_ids.landing_url, None);
+    assert_eq!(dry_run_event.click_ids.gclid, None);
+}
+
+#[tokio::test]
+async fn http_abuse_control_payload_over_limit_returns_202_and_stores_nothing() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "abuse-oversized").await;
+    let secret = "test-signing-secret-of-at-least-32-bytes";
+    let origin = "https://shop.example.test";
+    let site_key = generate_site_key(secret, tenant_id, origin).unwrap();
+
+    let state = create_test_advertising_state(pool.clone(), secret, 50, 50);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(sanvi_advertising::routes::tracking_public_routes),
+    )
+    .await;
+
+    // >16KiB payload
+    let large_event_name = "x".repeat(17 * 1024);
+    let payload = serde_json::json!({
+        "event_name": large_event_name,
+        "event_id": "evt-oversized"
+    });
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .insert_header(("Content-Type", "application/json"))
+        .peer_addr("198.51.100.20:1234".parse().unwrap())
+        .set_payload(payload.to_string())
+        .to_request();
+
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let body = test::read_body(res).await;
+    assert_eq!(body, "{}");
+
+    assert_eq!(row_count(&pool, tenant_id, "evt-oversized").await, 0);
+}
+
+#[tokio::test]
+async fn http_abuse_control_missing_or_mismatched_origin_returns_202_and_stores_nothing() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "abuse-origin").await;
+    let secret = "test-signing-secret-of-at-least-32-bytes";
+    let origin = "https://shop.example.test";
+    let site_key = generate_site_key(secret, tenant_id, origin).unwrap();
+
+    let state = create_test_advertising_state(pool.clone(), secret, 50, 50);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(sanvi_advertising::routes::tracking_public_routes),
+    )
+    .await;
+
+    // 1. Missing Origin
+    let req_missing = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.21:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-missing-origin"
+        }))
+        .to_request();
+
+    let res_missing = test::call_service(&app, req_missing).await;
+    assert_eq!(res_missing.status(), StatusCode::ACCEPTED);
+    let body_missing = test::read_body(res_missing).await;
+    assert_eq!(body_missing, "{}");
+    assert_eq!(row_count(&pool, tenant_id, "evt-missing-origin").await, 0);
+
+    // 2. Mismatched Origin
+    let req_mismatched = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", "https://evil.example.test"))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.22:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-mismatched-origin"
+        }))
+        .to_request();
+
+    let res_mismatched = test::call_service(&app, req_mismatched).await;
+    assert_eq!(res_mismatched.status(), StatusCode::ACCEPTED);
+    let body_mismatched = test::read_body(res_mismatched).await;
+    assert_eq!(body_mismatched, "{}");
+    assert_eq!(
+        row_count(&pool, tenant_id, "evt-mismatched-origin").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn http_abuse_control_invalid_or_forged_site_key_returns_202_and_stores_nothing() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "abuse-site-key").await;
+    let secret = "test-signing-secret-of-at-least-32-bytes";
+    let origin = "https://shop.example.test";
+
+    let state = create_test_advertising_state(pool.clone(), secret, 50, 50);
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .configure(sanvi_advertising::routes::tracking_public_routes),
+    )
+    .await;
+
+    // 1. Completely bogus site key
+    let req_bogus = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", "not-a-valid-key"))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.23:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-bogus-key"
+        }))
+        .to_request();
+
+    let res_bogus = test::call_service(&app, req_bogus).await;
+    assert_eq!(res_bogus.status(), StatusCode::ACCEPTED);
+    let body_bogus = test::read_body(res_bogus).await;
+    assert_eq!(body_bogus, "{}");
+    assert_eq!(row_count(&pool, tenant_id, "evt-bogus-key").await, 0);
+
+    // 2. Forged signature minted with wrong secret
+    let forged_key = generate_site_key(
+        "wrong-secret-signing-secret-at-least-32-bytes",
+        tenant_id,
+        origin,
+    )
+    .unwrap();
+    let req_forged = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", forged_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.24:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-forged-key"
+        }))
+        .to_request();
+
+    let res_forged = test::call_service(&app, req_forged).await;
+    assert_eq!(res_forged.status(), StatusCode::ACCEPTED);
+    let body_forged = test::read_body(res_forged).await;
+    assert_eq!(body_forged, "{}");
+    assert_eq!(row_count(&pool, tenant_id, "evt-forged-key").await, 0);
+}
+
+#[tokio::test]
+async fn http_abuse_control_rate_limit_breach_returns_202_and_stores_nothing() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "abuse-ratelimit").await;
+    let secret = "test-signing-secret-of-at-least-32-bytes";
+    let origin = "https://shop.example.test";
+    let site_key = generate_site_key(secret, tenant_id, origin).unwrap();
+
+    // 1 per-IP permit, 10 per-domain permits
+    let state = create_test_advertising_state(pool.clone(), secret, 1, 10);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(sanvi_advertising::routes::tracking_public_routes),
+    )
+    .await;
+
+    // 1. IP rate limiter: Hold the single permit for IP 198.51.100.99
+    let ip_permit = state.tracking_ip_limiter.try_acquire("198.51.100.99");
+    assert!(ip_permit.is_some());
+
+    // Request from 198.51.100.99 trips the rate limit
+    let req_ip_limited = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.99:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-ip-limited"
+        }))
+        .to_request();
+
+    let res_ip_limited = test::call_service(&app, req_ip_limited).await;
+    assert_eq!(res_ip_limited.status(), StatusCode::ACCEPTED);
+    let body_ip_limited = test::read_body(res_ip_limited).await;
+    assert_eq!(body_ip_limited, "{}");
+    assert_eq!(row_count(&pool, tenant_id, "evt-ip-limited").await, 0);
+
+    // Release the permit
+    drop(ip_permit);
+
+    // Request from 198.51.100.99 now succeeds and stores the row
+    let req_ip_ok = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.99:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-ip-ok"
+        }))
+        .to_request();
+
+    let res_ip_ok = test::call_service(&app, req_ip_ok).await;
+    assert_eq!(res_ip_ok.status(), StatusCode::ACCEPTED);
+    let body_ip_ok = test::read_body(res_ip_ok).await;
+    assert_eq!(body_ip_ok, "{}");
+    assert_eq!(row_count(&pool, tenant_id, "evt-ip-ok").await, 1);
+
+    // 2. Domain rate limiter: Hold all permits for origin
+    let mut domain_permits = Vec::new();
+    while let Some(permit) = state.tracking_domain_limiter.try_acquire(origin) {
+        domain_permits.push(permit);
+    }
+    assert!(!domain_permits.is_empty());
+
+    // Request with origin trips domain limit
+    let req_domain_limited = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.100:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-domain-limited"
+        }))
+        .to_request();
+
+    let res_domain_limited = test::call_service(&app, req_domain_limited).await;
+    assert_eq!(res_domain_limited.status(), StatusCode::ACCEPTED);
+    let body_domain_limited = test::read_body(res_domain_limited).await;
+    assert_eq!(body_domain_limited, "{}");
+    assert_eq!(row_count(&pool, tenant_id, "evt-domain-limited").await, 0);
+
+    // Release domain permits
+    drop(domain_permits);
+
+    // Request now succeeds and stores the row
+    let req_domain_ok = test::TestRequest::post()
+        .uri("/api/v1/public/track")
+        .insert_header(("Origin", origin))
+        .insert_header(("X-Site-Key", site_key.as_str()))
+        .insert_header((
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        ))
+        .peer_addr("198.51.100.100:1234".parse().unwrap())
+        .set_json(serde_json::json!({
+            "event_name": "purchase",
+            "event_id": "evt-domain-ok"
+        }))
+        .to_request();
+
+    let res_domain_ok = test::call_service(&app, req_domain_ok).await;
+    assert_eq!(res_domain_ok.status(), StatusCode::ACCEPTED);
+    let body_domain_ok = test::read_body(res_domain_ok).await;
+    assert_eq!(body_domain_ok, "{}");
+    assert_eq!(row_count(&pool, tenant_id, "evt-domain-ok").await, 1);
 }

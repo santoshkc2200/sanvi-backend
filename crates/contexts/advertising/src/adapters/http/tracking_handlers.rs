@@ -8,7 +8,10 @@
 //! didn't take effect would hand a prober exactly the oracle this
 //! endpoint exists to deny.
 
+use std::collections::BTreeMap;
+
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
+use chrono::Utc;
 use sanvi_http::{ApiError, CurrentTenant, ProblemDetail, RequiredPermission};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -78,7 +81,7 @@ fn looks_like_bot(user_agent: Option<&str>) -> bool {
 /// isn't: the gate must then ask for the third-party purposes anyway.
 /// Dropping an unparseable key silently would defeat
 /// `SnapshotVendorRoleLookup`'s protective `ThirdParty` default for
-/// exactly the keys it exists to cover.
+/// unknown platforms.
 fn resolve_platforms(settings: &TrackingSettings, event_name: &str) -> (Vec<PlatformKey>, bool) {
     let Some(platform_actions) = settings.mappings.get(event_name) else {
         return (Vec::new(), true);
@@ -95,9 +98,103 @@ fn resolve_platforms(settings: &TrackingSettings, event_name: &str) -> (Vec<Plat
     (platforms, incomplete)
 }
 
+const MAX_LANDING_URL_BYTES: usize = 2_048;
+
+fn extract_query_param(query: &str, key: &str) -> Option<String> {
+    serde_urlencoded::from_str::<BTreeMap<String, String>>(query)
+        .ok()?
+        .remove(key)
+        .filter(|value| !value.is_empty())
+}
+
+/// Referers may contain order numbers, email addresses and other private
+/// browser state in their query, fragment or user-info components. Keep the
+/// navigable path for attribution, but never persist those components. Header
+/// length is capped independently of the JSON request-body limit.
+fn sanitize_landing_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > MAX_LANDING_URL_BYTES {
+        return None;
+    }
+
+    let without_query_or_fragment = raw.split(['?', '#']).next()?.trim();
+    let Some(scheme_end) = without_query_or_fragment.find("://") else {
+        return Some(without_query_or_fragment.to_string());
+    };
+    let authority_start = scheme_end + 3;
+    let authority_and_path = &without_query_or_fragment[authority_start..];
+    let authority_end = authority_and_path
+        .find('/')
+        .unwrap_or(authority_and_path.len());
+    let authority = &authority_and_path[..authority_end];
+    let host = authority.rsplit('@').next()?;
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}{}{}",
+        &without_query_or_fragment[..authority_start],
+        host,
+        &authority_and_path[authority_end..]
+    ))
+}
+
+fn extract_server_click_ids(req: &HttpRequest, body_click_ids: &ClickIds) -> ClickIds {
+    let referer = req
+        .headers()
+        .get("Referer")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.trim().is_empty());
+
+    let referer_query = referer.and_then(|url| {
+        url.split_once('?')
+            .map(|(_, q)| q.split_once('#').map(|(q_clean, _)| q_clean).unwrap_or(q))
+    });
+
+    let gclid = referer_query
+        .and_then(|q| extract_query_param(q, "gclid"))
+        .or_else(|| body_click_ids.gclid.clone());
+
+    let gbraid = referer_query
+        .and_then(|q| extract_query_param(q, "gbraid"))
+        .or_else(|| body_click_ids.gbraid.clone());
+
+    let wbraid = referer_query
+        .and_then(|q| extract_query_param(q, "wbraid"))
+        .or_else(|| body_click_ids.wbraid.clone());
+
+    let fbc = req
+        .cookie("_fbc")
+        .map(|c| c.value().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| body_click_ids.fbc.clone());
+
+    let fbp = req
+        .cookie("_fbp")
+        .map(|c| c.value().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| body_click_ids.fbp.clone());
+
+    ClickIds {
+        gclid,
+        gbraid,
+        wbraid,
+        fbc,
+        fbp,
+        capture_time: body_click_ids.capture_time.or_else(|| Some(Utc::now())),
+        landing_url: referer.and_then(sanitize_landing_url).or_else(|| {
+            body_click_ids
+                .landing_url
+                .as_deref()
+                .and_then(sanitize_landing_url)
+        }),
+    }
+}
+
 fn build_command(
     tenant_id: Uuid,
     body: &TrackConversionRequest,
+    click_ids: ClickIds,
     (platforms, platforms_incomplete): (Vec<PlatformKey>, bool),
 ) -> TrackConversionCommand {
     // An email identifies a `Contact` (`email:{lowercased}`) — the key the
@@ -118,7 +215,7 @@ fn build_command(
         event_name: body.event_name.clone(),
         event_id: body.event_id.clone(),
         order_ref: body.order_ref.clone(),
-        click_ids: body.click_ids.clone(),
+        click_ids,
         value: body.value,
         currency: body.currency.clone(),
         email: body.email.clone(),
@@ -205,7 +302,8 @@ pub async fn public_track_conversion(
         Err(_) => return accepted(),
     };
     let platforms = resolve_platforms(&settings, &body.event_name);
-    let command = build_command(tenant_id, &body, platforms);
+    let click_ids = extract_server_click_ids(&req, &body.click_ids);
+    let command = build_command(tenant_id, &body, click_ids, platforms);
 
     // Errors here are swallowed by design (see the module doc): the
     // response never reveals whether capture succeeded, and the storage
@@ -292,7 +390,7 @@ pub async fn test_tracking_event(
         .await
         .map_err(api_error)?;
     let platforms = resolve_platforms(&settings, &body.event_name);
-    let command = build_command(tenant.0.tenant_id, &body, platforms);
+    let command = build_command(tenant.0.tenant_id, &body, body.click_ids.clone(), platforms);
 
     let captured = state.capture.dry_run(command).await.map_err(api_error)?;
 
@@ -323,4 +421,35 @@ pub async fn list_conversions(
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(events))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_LANDING_URL_BYTES, extract_query_param, sanitize_landing_url};
+
+    #[test]
+    fn query_values_are_form_url_decoded() {
+        assert_eq!(
+            extract_query_param("gclid=EAIaIQobCh%3D%3D&gbraid=gb+ref", "gclid"),
+            Some("EAIaIQobCh==".to_string())
+        );
+        assert_eq!(
+            extract_query_param("gclid=EAIaIQobCh%3D%3D&gbraid=gb+ref", "gbraid"),
+            Some("gb ref".to_string())
+        );
+    }
+
+    #[test]
+    fn landing_url_drops_pii_bearing_referer_components_and_caps_length() {
+        assert_eq!(
+            sanitize_landing_url(
+                "https://user:secret@store.example.test/thank-you?email=a.user@example.com#receipt"
+            ),
+            Some("https://store.example.test/thank-you".to_string())
+        );
+        assert_eq!(
+            sanitize_landing_url(&"x".repeat(MAX_LANDING_URL_BYTES + 1)),
+            None
+        );
+    }
 }

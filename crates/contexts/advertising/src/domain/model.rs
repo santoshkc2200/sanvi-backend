@@ -239,11 +239,20 @@ pub struct ConsentSnapshot {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClickIds {
+    #[serde(default)]
     pub gclid: Option<String>,
+    #[serde(default)]
     pub gbraid: Option<String>,
+    #[serde(default)]
     pub wbraid: Option<String>,
+    #[serde(default)]
     pub fbc: Option<String>,
+    #[serde(default)]
     pub fbp: Option<String>,
+    #[serde(default)]
+    pub capture_time: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub landing_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -276,6 +285,11 @@ pub struct ConversionEvent {
     pub id: uuid::Uuid,
     pub tenant_id: uuid::Uuid,
     pub event_id: String,
+    /// Immutable storage identity. For order-backed events this is derived
+    /// from the order reference and event name, so a webhook state change
+    /// cannot turn one purchase into two captured rows.
+    #[serde(skip)]
+    pub dedupe_key: String,
     pub name: String,
     pub occurred_at: DateTime<Utc>,
     pub value: Option<Money>,

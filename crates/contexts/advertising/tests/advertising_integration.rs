@@ -88,8 +88,9 @@ async fn insert_conversion_event(
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO advertising.conversion_event_dedup (tenant_id, event_id, occurred_at)
-         VALUES ($1, $2, $3)",
+        "INSERT INTO advertising.conversion_event_dedup
+           (tenant_id, event_id, dedupe_key, occurred_at)
+         VALUES ($1, $2, $2, $3)",
     )
     .bind(tenant_id)
     .bind(&event_id)
@@ -99,8 +100,8 @@ async fn insert_conversion_event(
     .unwrap();
     sqlx::query(
         "INSERT INTO advertising.conversion_events
-         (id, tenant_id, event_id, name, occurred_at, consent)
-         VALUES ($1, $2, $3, 'purchase', $4, '{}'::jsonb)",
+         (id, tenant_id, event_id, dedupe_key, name, occurred_at, consent)
+         VALUES ($1, $2, $3, $3, 'purchase', $4, '{}'::jsonb)",
     )
     .bind(Uuid::now_v7())
     .bind(tenant_id)
