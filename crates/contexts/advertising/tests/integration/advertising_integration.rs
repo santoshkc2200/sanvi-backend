@@ -14,11 +14,12 @@ use sanvi_advertising::{
         SqlxCampaignRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
     },
     application::{
-        AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, CreateConnection,
-        CreateCreative, DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews,
-        ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields,
-        NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign,
-        ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, UpdateAdGroup, ValidateCampaign,
+        AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign,
+        CreateConnection, CreateCreative, DeleteCreative, GetCampaign, GetCreative,
+        GetCreativePreviews, ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields,
+        NewAdGroupFields, NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign,
+        PublishCampaign, ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, UpdateAd,
+        UpdateAdGroup, ValidateCampaign,
     },
     domain::{
         AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
@@ -684,16 +685,24 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     );
     let get = GetCampaign::new(manager.clone(), campaigns.clone());
     let list = ListCampaigns::new(manager.clone(), campaigns.clone());
-    let validate = ValidateCampaign::new(manager.clone(), campaigns.clone(), registry.clone());
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let validate = ValidateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        creatives.clone(),
+        registry.clone(),
+    );
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        creatives.clone(),
         events.clone(),
         registry.clone(),
     );
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        creatives.clone(),
         events.clone(),
         registry.clone(),
     );
@@ -886,6 +895,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
     );
@@ -1193,6 +1203,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
     );
@@ -1758,12 +1769,14 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     let ad_group_id = with_group.intent.ad_groups[0].id.clone();
 
     // 1. Creative has placement "reels", which Google Ads does not support (only feed and stories).
+    //    The creative sits on the campaign's own platform so this exercises the placement
+    //    check rather than the platform-mismatch check, which runs first.
     let reels_creative_id = Uuid::now_v7();
     let reels_creative = StoredCreative {
         id: reels_creative_id,
         tenant_id,
         connection_id,
-        platform: PlatformKey::parse("meta").unwrap(),
+        platform: PlatformKey::parse("google_ads").unwrap(),
         external_id: None,
         creative: Creative {
             id: reels_creative_id.to_string(),
@@ -1812,7 +1825,8 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
             assert!(
                 violations
                     .iter()
-                    .any(|v| v.field_path == "creative.placement")
+                    .any(|v| v.field_path == "ad_groups[0].ads[0].creative.placement"
+                        && v.code == "capability_unsupported")
             );
         }
         other => panic!("expected Validation error, got {other:?}"),
@@ -1873,9 +1887,1254 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
             assert!(
                 violations
                     .iter()
-                    .any(|v| v.field_path == "creative.placement")
+                    .any(|v| v.field_path == "ad_groups[0].ads[0].creative.placement"
+                        && v.code == "invalid")
             );
         }
         other => panic!("expected Validation error, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_overlaps() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "ad-platform-overlap").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "777-000-5555",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-platform-overlap"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let add_ad_group = AddAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let add_ad = AddAd::new(
+        manager.clone(),
+        campaigns,
+        creatives.clone(),
+        events,
+        registry,
+    );
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Platform mismatch test".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(4_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let with_group = add_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdGroupFields {
+                name: "Group 1".to_string(),
+                targeting: Targeting::default(),
+                bid: BidSettings {
+                    strategy: "manual_cpc".to_string(),
+                    maximum_bid: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let ad_group_id = with_group.intent.ad_groups[0].id.clone();
+
+    // Construct a Meta creative with placement "feed" (valid placement in both meta and google_ads).
+    let meta_creative_id = Uuid::now_v7();
+    let meta_creative = StoredCreative {
+        id: meta_creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("meta").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: meta_creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Meta feed headline".to_string(),
+                body: "Meta feed body".to_string(),
+            }],
+            asset_references: Vec::new(),
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &meta_creative).await.unwrap();
+    scope.commit().await.unwrap();
+
+    // Attach Meta creative to Google Ads campaign -> must be rejected naming both platforms.
+    let err = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id,
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: meta_creative_id.to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Meta feed headline".to_string(),
+                        body: "Meta feed body".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                },
+                landing_url: "https://example.com/meta-feed".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await;
+
+    match err {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert_eq!(violations.len(), 1);
+            // The mismatch is about which creative was referenced, not its placement —
+            // the placement itself is valid on both platforms here.
+            assert_eq!(violations[0].field_path, "ad_groups[0].ads[0].creative.id");
+            assert_eq!(violations[0].code, "capability_unsupported");
+            assert!(
+                violations[0].message.contains("meta")
+                    && violations[0].message.contains("google_ads"),
+                "Violation message must name both platforms: {}",
+                violations[0].message
+            );
+        }
+        other => panic!("expected Validation error with platform mismatch, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "ad-authoritative-copy").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "777-000-6666",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-auth-copy"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let add_ad_group = AddAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let add_ad = AddAd::new(
+        manager.clone(),
+        campaigns.clone(),
+        creatives.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let update_ad = UpdateAd::new(
+        manager.clone(),
+        campaigns,
+        creatives.clone(),
+        events,
+        registry,
+    );
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Authoritative copy test".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(4_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let with_group = add_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdGroupFields {
+                name: "Group 1".to_string(),
+                targeting: Targeting::default(),
+                bid: BidSettings {
+                    strategy: "manual_cpc".to_string(),
+                    maximum_bid: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let ad_group_id = with_group.intent.ad_groups[0].id.clone();
+
+    // 1. Insert stored creative 1.
+    let creative1_id = Uuid::now_v7();
+    let stored1 = StoredCreative {
+        id: creative1_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: creative1_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Authoritative Headline 1".to_string(),
+                body: "Authoritative Body 1".to_string(),
+            }],
+            asset_references: vec!["ref-auth-1".to_string()],
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &stored1).await.unwrap();
+    scope.commit().await.unwrap();
+
+    // Add ad with spoofed payload copy -> stored copy must be persisted.
+    let with_ad = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id.clone(),
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: creative1_id.to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Spoofed Client Headline".to_string(),
+                        body: "Spoofed Client Body".to_string(),
+                    }],
+                    asset_references: vec!["spoofed-ref".to_string()],
+                },
+                landing_url: "https://example.com".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let persisted_ad = &with_ad.intent.ad_groups[0].ads[0];
+    assert_eq!(
+        persisted_ad.creative.texts[0].headline,
+        "Authoritative Headline 1"
+    );
+    assert_eq!(persisted_ad.creative.texts[0].body, "Authoritative Body 1");
+    assert_eq!(
+        persisted_ad.creative.asset_references,
+        vec!["ref-auth-1".to_string()]
+    );
+    let ad_id = persisted_ad.id.clone();
+
+    // 2. Insert stored creative 2.
+    let creative2_id = Uuid::now_v7();
+    let stored2 = StoredCreative {
+        id: creative2_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: creative2_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Authoritative Headline 2".to_string(),
+                body: "Authoritative Body 2".to_string(),
+            }],
+            asset_references: vec!["ref-auth-2".to_string()],
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &stored2).await.unwrap();
+    scope.commit().await.unwrap();
+
+    // Update ad with spoofed payload copy -> stored copy 2 must be persisted.
+    let updated = update_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id,
+            ad_id,
+            with_ad.revision,
+            Uuid::now_v7(),
+            actor_id,
+            AdFields {
+                creative: Some(Creative {
+                    id: creative2_id.to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Another Spoofed Headline".to_string(),
+                        body: "Another Spoofed Body".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                }),
+                landing_url: None,
+                tracking_template: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let updated_ad = &updated.intent.ad_groups[0].ads[0];
+    assert_eq!(
+        updated_ad.creative.texts[0].headline,
+        "Authoritative Headline 2"
+    );
+    assert_eq!(updated_ad.creative.texts[0].body, "Authoritative Body 2");
+    assert_eq!(
+        updated_ad.creative.asset_references,
+        vec!["ref-auth-2".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "patch-campaign-creatives").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "777-000-7777",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-patch-creatives"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let patch = PatchCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        creatives.clone(),
+        events,
+        registry.clone(),
+    );
+    let validate = ValidateCampaign::new(manager.clone(), campaigns, creatives.clone(), registry);
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Patch creative validation test".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(4_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // 1. Non-UUID creative id in PATCH ad_groups -> InvalidInput.
+    let err_invalid_uuid = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+                    id: Uuid::now_v7().to_string(),
+                    name: "Group 1".to_string(),
+                    targeting: Targeting::default(),
+                    bid: BidSettings {
+                        strategy: "manual_cpc".to_string(),
+                        maximum_bid: None,
+                    },
+                    ads: vec![sanvi_advertising::domain::Ad {
+                        id: Uuid::now_v7().to_string(),
+                        creative: Creative {
+                            id: "not-a-uuid".to_string(),
+                            placement: "feed".to_string(),
+                            texts: vec![],
+                            asset_references: vec![],
+                        },
+                        landing_url: "https://example.com".to_string(),
+                        tracking_template: None,
+                    }],
+                }]),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(matches!(
+        err_invalid_uuid,
+        Err(sanvi_advertising::domain::AdvertisingError::InvalidInput(_))
+    ));
+
+    // 2. Unpersisted UUID creative id -> CreativeNotFound.
+    let missing_uuid = Uuid::now_v7();
+    let err_missing = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+                    id: Uuid::now_v7().to_string(),
+                    name: "Group 1".to_string(),
+                    targeting: Targeting::default(),
+                    bid: BidSettings {
+                        strategy: "manual_cpc".to_string(),
+                        maximum_bid: None,
+                    },
+                    ads: vec![sanvi_advertising::domain::Ad {
+                        id: Uuid::now_v7().to_string(),
+                        creative: Creative {
+                            id: missing_uuid.to_string(),
+                            placement: "feed".to_string(),
+                            texts: vec![],
+                            asset_references: vec![],
+                        },
+                        landing_url: "https://example.com".to_string(),
+                        tracking_template: None,
+                    }],
+                }]),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(matches!(
+        err_missing,
+        Err(sanvi_advertising::domain::AdvertisingError::CreativeNotFound)
+    ));
+
+    // 3. Platform mismatch in PATCH ad_groups -> Validation error with indexed path.
+    let meta_creative_id = Uuid::now_v7();
+    let meta_creative = StoredCreative {
+        id: meta_creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("meta").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: meta_creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Meta headline".to_string(),
+                body: "Meta body".to_string(),
+            }],
+            asset_references: Vec::new(),
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &meta_creative).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let err_platform_mismatch = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+                    id: Uuid::now_v7().to_string(),
+                    name: "Group 1".to_string(),
+                    targeting: Targeting::default(),
+                    bid: BidSettings {
+                        strategy: "manual_cpc".to_string(),
+                        maximum_bid: None,
+                    },
+                    ads: vec![sanvi_advertising::domain::Ad {
+                        id: Uuid::now_v7().to_string(),
+                        creative: Creative {
+                            id: meta_creative_id.to_string(),
+                            placement: "feed".to_string(),
+                            texts: vec![],
+                            asset_references: vec![],
+                        },
+                        landing_url: "https://example.com".to_string(),
+                        tracking_template: None,
+                    }],
+                }]),
+                ..Default::default()
+            },
+        )
+        .await;
+    match err_platform_mismatch {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert_eq!(violations.len(), 1);
+            assert_eq!(violations[0].field_path, "ad_groups[0].ads[0].creative.id");
+            assert!(
+                violations[0].message.contains("meta")
+                    && violations[0].message.contains("google_ads")
+            );
+        }
+        other => panic!("expected Validation error for platform mismatch, got {other:?}"),
+    }
+
+    // 4. Valid creative attached via PATCH is validated and authoritatively hydrated.
+    let google_creative_id = Uuid::now_v7();
+    let google_creative = StoredCreative {
+        id: google_creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: google_creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Authoritative Google Headline".to_string(),
+                body: "Authoritative Google Body".to_string(),
+            }],
+            asset_references: vec!["ref-google".to_string()],
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives
+        .insert(&mut scope, &google_creative)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let patched = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+                    id: Uuid::now_v7().to_string(),
+                    name: "Group 1".to_string(),
+                    targeting: Targeting::default(),
+                    bid: BidSettings {
+                        strategy: "manual_cpc".to_string(),
+                        maximum_bid: None,
+                    },
+                    ads: vec![sanvi_advertising::domain::Ad {
+                        id: Uuid::now_v7().to_string(),
+                        creative: Creative {
+                            id: google_creative_id.to_string(),
+                            placement: "feed".to_string(),
+                            texts: vec![CreativeText {
+                                locale: "en".to_string(),
+                                headline: "Spoofed Client Headline".to_string(),
+                                body: "Spoofed Client Body".to_string(),
+                            }],
+                            asset_references: Vec::new(),
+                        },
+                        landing_url: "https://example.com".to_string(),
+                        tracking_template: None,
+                    }],
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let ad = &patched.intent.ad_groups[0].ads[0];
+    assert_eq!(
+        ad.creative.texts[0].headline,
+        "Authoritative Google Headline"
+    );
+    assert_eq!(ad.creative.texts[0].body, "Authoritative Google Body");
+    assert_eq!(ad.creative.asset_references, vec!["ref-google".to_string()]);
+
+    // 5. The dry run makes the same creative trip, so it cannot call a tree
+    //    valid that the patch above would reject. An unknown creative and a
+    //    cross-platform one are both reported as violations rather than as the
+    //    404/400 the write path raises.
+    let unknown_creative_id = Uuid::now_v7();
+    let dry_run_violations = validate
+        .execute(
+            tenant_id,
+            draft.id,
+            CampaignFields {
+                ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+                    id: Uuid::now_v7().to_string(),
+                    name: "Group 1".to_string(),
+                    targeting: Targeting::default(),
+                    bid: BidSettings {
+                        strategy: "manual_cpc".to_string(),
+                        maximum_bid: None,
+                    },
+                    ads: vec![
+                        sanvi_advertising::domain::Ad {
+                            id: Uuid::now_v7().to_string(),
+                            creative: Creative {
+                                id: unknown_creative_id.to_string(),
+                                placement: "feed".to_string(),
+                                texts: vec![],
+                                asset_references: vec![],
+                            },
+                            landing_url: "https://example.com".to_string(),
+                            tracking_template: None,
+                        },
+                        sanvi_advertising::domain::Ad {
+                            id: Uuid::now_v7().to_string(),
+                            creative: Creative {
+                                id: meta_creative_id.to_string(),
+                                placement: "feed".to_string(),
+                                texts: vec![],
+                                asset_references: vec![],
+                            },
+                            landing_url: "https://example.com".to_string(),
+                            tracking_template: None,
+                        },
+                    ],
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        dry_run_violations
+            .iter()
+            .any(|v| v.field_path == "ad_groups[0].ads[0].creative.id"
+                && v.message.contains("does not exist")),
+        "expected a violation for the unknown creative, got {dry_run_violations:?}"
+    );
+    assert!(
+        dry_run_violations
+            .iter()
+            .any(|v| v.field_path == "ad_groups[0].ads[1].creative.id"
+                && v.message.contains("meta")
+                && v.message.contains("google_ads")),
+        "expected a violation for the cross-platform creative, got {dry_run_violations:?}"
+    );
+
+    // A dry run writes nothing.
+    let get = GetCampaign::new(
+        manager.clone(),
+        Arc::new(SqlxCampaignRepository::new())
+            as Arc<dyn sanvi_advertising::domain::CampaignRepository>,
+    );
+    assert_eq!(
+        get.execute(tenant_id, draft.id).await.unwrap().revision,
+        patched.revision
+    );
+}
+
+#[tokio::test]
+async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "dry-run-patch-agreement").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "888-000-8888",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-dry-run-agree"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let patch = PatchCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        creatives.clone(),
+        events,
+        registry.clone(),
+    );
+    let validate = ValidateCampaign::new(manager.clone(), campaigns, creatives.clone(), registry);
+
+    // Seed 1: A valid stored creative with a headline well within limits (<= 30 chars for Google Ads).
+    let valid_creative_id = Uuid::now_v7();
+    let valid_creative = StoredCreative {
+        id: valid_creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: valid_creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Valid Short Headline".to_string(),
+                body: "Valid Google Ads Body".to_string(),
+            }],
+            asset_references: vec!["asset-1".to_string()],
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+
+    // Seed 2: An invalid stored creative whose headline exceeds Google Ads limit (> 30 chars).
+    let invalid_creative_id = Uuid::now_v7();
+    let invalid_creative = StoredCreative {
+        id: invalid_creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: invalid_creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "This stored headline is way too long for google ads limit".to_string(),
+                body: "Valid Google Ads Body".to_string(),
+            }],
+            asset_references: vec!["asset-2".to_string()],
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &valid_creative).await.unwrap();
+    creatives
+        .insert(&mut scope, &invalid_creative)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Agreement test campaign".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(5_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // CASE 1: Client sends INVALID inline text (>30 chars), but references VALID stored creative.
+    // Dry run must hydrate the stored creative and report 0 violations.
+    // PATCH must hydrate the stored creative and succeed.
+    let spoofed_bad_text_fields = CampaignFields {
+        ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+            id: Uuid::now_v7().to_string(),
+            name: "Group 1".to_string(),
+            targeting: Targeting::default(),
+            bid: BidSettings {
+                strategy: "manual_cpc".to_string(),
+                maximum_bid: None,
+            },
+            ads: vec![sanvi_advertising::domain::Ad {
+                id: Uuid::now_v7().to_string(),
+                creative: Creative {
+                    id: valid_creative_id.to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "This client-supplied headline exceeds thirty chars limit"
+                            .to_string(),
+                        body: "Spoofed Body".to_string(),
+                    }],
+                    asset_references: vec![],
+                },
+                landing_url: "https://example.com".to_string(),
+                tracking_template: None,
+            }],
+        }]),
+        ..Default::default()
+    };
+
+    let dry_run_violations = validate
+        .execute(tenant_id, draft.id, spoofed_bad_text_fields.clone())
+        .await
+        .unwrap();
+    assert!(
+        dry_run_violations.is_empty(),
+        "dry-run should use stored valid creative and report 0 violations, got {dry_run_violations:?}"
+    );
+
+    let patched = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            spoofed_bad_text_fields,
+        )
+        .await
+        .expect("PATCH should succeed with stored authoritative creative");
+    assert_eq!(
+        patched.intent.ad_groups[0].ads[0].creative.texts[0].headline,
+        "Valid Short Headline"
+    );
+
+    // CASE 2: Client sends VALID inline text (<=30 chars), but references INVALID stored creative.
+    // Dry run must hydrate the stored creative and report validation violation.
+    // PATCH must hydrate the stored creative and reject with validation error.
+    let spoofed_good_text_fields = CampaignFields {
+        ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+            id: Uuid::now_v7().to_string(),
+            name: "Group 1".to_string(),
+            targeting: Targeting::default(),
+            bid: BidSettings {
+                strategy: "manual_cpc".to_string(),
+                maximum_bid: None,
+            },
+            ads: vec![sanvi_advertising::domain::Ad {
+                id: Uuid::now_v7().to_string(),
+                creative: Creative {
+                    id: invalid_creative_id.to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Short Valid".to_string(),
+                        body: "Valid Body".to_string(),
+                    }],
+                    asset_references: vec![],
+                },
+                landing_url: "https://example.com".to_string(),
+                tracking_template: None,
+            }],
+        }]),
+        ..Default::default()
+    };
+
+    let dry_run_violations_invalid_stored = validate
+        .execute(tenant_id, draft.id, spoofed_good_text_fields.clone())
+        .await
+        .unwrap();
+    assert!(
+        dry_run_violations_invalid_stored.iter().any(|v| {
+            v.field_path == "ad_groups[0].ads[0].creative.texts[0].headline"
+                && v.message.contains("exceeds the 30-character en limit")
+        }),
+        "dry-run should report violation from stored creative text, got {dry_run_violations_invalid_stored:?}"
+    );
+
+    let patch_result = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            patched.revision,
+            Uuid::now_v7(),
+            actor_id,
+            spoofed_good_text_fields,
+        )
+        .await;
+    match patch_result {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert!(
+                violations.iter().any(|v| {
+                    v.field_path == "ad_groups[0].ads[0].creative.texts[0].headline"
+                        && v.message.contains("exceeds the 30-character en limit")
+                }),
+                "PATCH should fail on stored creative text limit, got {violations:?}"
+            );
+        }
+        other => panic!("expected Validation error from stored creative text, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn deleting_referenced_creative_fails_publish() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "delete-creative-publish-fail").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "999-000-9999",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-del-creative"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let patch = PatchCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        creatives.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let publish = PublishCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        creatives.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let delete_creative = DeleteCreative::new(manager.clone(), creatives.clone());
+    let update_ad = UpdateAd::new(
+        manager.clone(),
+        campaigns.clone(),
+        creatives.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+
+    // 1. Create creative and campaign draft.
+    let creative_id = Uuid::now_v7();
+    let stored_creative = StoredCreative {
+        id: creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Valid Headline".to_string(),
+                body: "Valid Body".to_string(),
+            }],
+            asset_references: vec!["ref-1".to_string()],
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &stored_creative).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Delete creative publish test".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(3_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let ad_group_id = Uuid::now_v7().to_string();
+    let ad_id = Uuid::now_v7().to_string();
+    let patched_draft = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                ad_groups: Some(vec![sanvi_advertising::domain::AdGroup {
+                    id: ad_group_id.clone(),
+                    name: "Group 1".to_string(),
+                    targeting: Targeting::default(),
+                    bid: BidSettings {
+                        strategy: "manual_cpc".to_string(),
+                        maximum_bid: None,
+                    },
+                    ads: vec![sanvi_advertising::domain::Ad {
+                        id: ad_id.clone(),
+                        creative: Creative {
+                            id: creative_id.to_string(),
+                            placement: "feed".to_string(),
+                            texts: vec![],
+                            asset_references: vec![],
+                        },
+                        landing_url: "https://example.com".to_string(),
+                        tracking_template: None,
+                    }],
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // 2. Delete the referenced creative while the campaign draft references it.
+    delete_creative
+        .execute(tenant_id, creative_id)
+        .await
+        .unwrap();
+
+    // 3. Attempting to publish now must fail with CreativeNotFound.
+    let publish_err = publish
+        .execute(
+            tenant_id,
+            draft.id,
+            Uuid::now_v7(),
+            actor_id,
+        )
+        .await;
+    assert!(
+        matches!(
+            publish_err,
+            Err(sanvi_advertising::domain::AdvertisingError::CreativeNotFound)
+        ),
+        "expected CreativeNotFound when publishing campaign with deleted creative, got {publish_err:?}"
+    );
+
+    // 4. Verify campaign remains unpublished.
+    let get = GetCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+    );
+    let stored_after_fail = get.execute(tenant_id, draft.id).await.unwrap();
+    assert!(stored_after_fail.external_id.is_none());
+    assert_eq!(stored_after_fail.intent.status, CampaignStatus::Draft);
+
+    // 5. Attempting to update the ad (without re-supplying creative) must also fail with CreativeNotFound.
+    let update_ad_err = update_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id,
+            ad_id,
+            patched_draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            AdFields {
+                landing_url: Some("https://new-url.com".to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            update_ad_err,
+            Err(sanvi_advertising::domain::AdvertisingError::CreativeNotFound)
+        ),
+        "expected CreativeNotFound on UpdateAd with deleted creative, got {update_ad_err:?}"
+    );
+
+    // 6. Attempting to patch campaign fields (e.g. name only, leaving ad_groups unchanged) must also fail with CreativeNotFound.
+    let patch_name_err = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            patched_draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                name: Some("Renamed Campaign".to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            patch_name_err,
+            Err(sanvi_advertising::domain::AdvertisingError::CreativeNotFound)
+        ),
+        "expected CreativeNotFound on PatchCampaign with deleted creative, got {patch_name_err:?}"
+    );
 }

@@ -2908,17 +2908,20 @@ pub async fn build_advertising_state(
         validate_campaign: std::sync::Arc::new(ValidateCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             registry.clone(),
         )),
         patch_campaign: std::sync::Arc::new(PatchCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),
         publish_campaign: std::sync::Arc::new(PublishCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),

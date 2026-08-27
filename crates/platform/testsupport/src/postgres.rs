@@ -78,6 +78,12 @@ async fn pg_port() -> u16 {
                     .expect("SANVI_TEST_PG_PORT must be a port number");
             }
             let node = Postgres::default()
+                // Pinned to the same image `scripts/test-db.sh` starts. The
+                // module default is `postgres:11-alpine`, which predates the
+                // `STRATEGY` option `create_database` relies on, so leaving it
+                // unpinned fails every test with `option "strategy" not
+                // recognized` — after starting a container per test.
+                .with_tag("18-alpine")
                 // Durability buys nothing for a database that is discarded at
                 // the end of the run, and the connection ceiling has to clear
                 // every pool the workspace opens at once.

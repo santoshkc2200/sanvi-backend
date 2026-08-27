@@ -713,9 +713,9 @@ pub async fn get_campaign(
     ),
     responses(
         (status = 200, description = "Intent updated; if published, the edit was also pushed to the platform", body = CampaignView),
-        (status = 400, description = "Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
+        (status = 400, description = "Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
         (status = 403, description = "Missing advertising.campaign.write permission or platform entitlement", body = ProblemDetail),
-        (status = 404, description = "Campaign not found", body = ProblemDetail),
+        (status = 404, description = "Campaign or creative not found", body = ProblemDetail),
         (status = 409, description = "Stale revision or idempotency conflict", body = ProblemDetail),
         (status = 503, description = "Platform adapter unavailable", body = ProblemDetail)
     )
@@ -1208,9 +1208,9 @@ pub async fn update_ad_group(
     ),
     responses(
         (status = 200, description = "Ad appended; if published, pushed to the platform", body = CampaignView),
-        (status = 400, description = "Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
+        (status = 400, description = "Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
         (status = 403, description = "Missing advertising.campaign.write permission or platform entitlement", body = ProblemDetail),
-        (status = 404, description = "Campaign or ad group not found", body = ProblemDetail),
+        (status = 404, description = "Campaign, ad group or creative not found", body = ProblemDetail),
         (status = 409, description = "Stale revision or idempotency conflict", body = ProblemDetail),
         (status = 503, description = "Platform adapter unavailable", body = ProblemDetail)
     )
@@ -1287,9 +1287,9 @@ pub async fn add_ad(
     ),
     responses(
         (status = 200, description = "Ad updated; if published, pushed to the platform", body = CampaignView),
-        (status = 400, description = "Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
+        (status = 400, description = "Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)", body = ProblemDetail),
         (status = 403, description = "Missing advertising.campaign.write permission or platform entitlement", body = ProblemDetail),
-        (status = 404, description = "Campaign, ad group or ad not found", body = ProblemDetail),
+        (status = 404, description = "Campaign, ad group, ad or creative not found", body = ProblemDetail),
         (status = 409, description = "Stale revision or idempotency conflict", body = ProblemDetail),
         (status = 503, description = "Platform adapter unavailable", body = ProblemDetail)
     )
