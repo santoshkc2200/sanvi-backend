@@ -165,7 +165,7 @@ clippy-quiet:
     cargo k
 
 openapi:
-    cargo run -p sanvi-cli -- openapi --check
+    ./scripts/check-openapi.sh
 
 i18n:
     cargo run -p sanvi-cli -- i18n check
