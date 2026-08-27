@@ -10,6 +10,28 @@ use crate::error::{IdGenerationError, KernelError};
 
 pub const SNOWFLAKE_EPOCH_MS: u64 = id_forge::snowflake::DEFAULT_EPOCH_MS;
 
+/// Process-level Snowflake node configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct IdsConfig {
+    pub node_id: Option<u16>,
+}
+
+impl IdsConfig {
+    /// Resolve an explicit node outside local development, or reserve the
+    /// binary's local-development node when no override is configured.
+    pub fn resolve(&self, environment: &str, local_default: u16) -> anyhow::Result<NodeId> {
+        let node_id = match self.node_id {
+            Some(node_id) => node_id,
+            None if environment == "local" => local_default,
+            None => anyhow::bail!(
+                "ids.node_id must be configured for {environment}; each replica needs a unique node id"
+            ),
+        };
+
+        NodeId::new(node_id).map_err(anyhow::Error::from)
+    }
+}
+
 /// Shared first-party identifier tags used across bounded contexts.
 pub enum TenantTag {}
 pub enum UserTag {}
@@ -314,5 +336,19 @@ mod tests {
 
         assert_eq!(ids.len(), 16_000);
         assert!(ids.iter().all(|id| id.node_id() == 17));
+    }
+
+    #[test]
+    fn ids_config_requires_non_local_nodes_and_reserves_local_defaults() {
+        assert_eq!(IdsConfig::default().resolve("local", 3).unwrap().get(), 3);
+        assert!(IdsConfig::default().resolve("staging", 2).is_err());
+        assert!(IdsConfig { node_id: Some(0) }.resolve("local", 1).is_err());
+        assert!(
+            IdsConfig {
+                node_id: Some(1024)
+            }
+            .resolve("production", 1)
+            .is_err()
+        );
     }
 }

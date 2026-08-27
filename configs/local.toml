@@ -1,5 +1,6 @@
 # Local development overlay: everything points at docker-compose hostnames.
 # No secrets: local passwords come from .env (see .env.example).
+# `ids.node_id` stays unset: API/worker/CLI reserve nodes 1/2/3 respectively.
 
 [server.cors]
 allowed_origins = ["http://localhost:5173", "http://localhost:4173"]

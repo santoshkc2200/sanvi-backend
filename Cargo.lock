@@ -3431,6 +3431,7 @@ dependencies = [
  "sanvi-domains",
  "sanvi-http",
  "sanvi-identity",
+ "sanvi-kernel",
  "sanvi-localization",
  "sanvi-payments",
  "sanvi-persistence",
@@ -3549,6 +3550,7 @@ dependencies = [
 name = "sanvi-kernel"
 version = "0.10.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "id-forge",
  "proptest",
@@ -3650,6 +3652,7 @@ name = "sanvi-persistence"
 version = "0.10.0"
 dependencies = [
  "anyhow",
+ "sanvi-kernel",
  "sanvi-testsupport",
  "serde",
  "serde_json",
@@ -3810,6 +3813,7 @@ name = "sanvi-testsupport"
 version = "0.10.0"
 dependencies = [
  "hex",
+ "sanvi-kernel",
  "sanvi-persistence",
  "sha2 0.10.9",
  "sqlx",
@@ -3873,6 +3877,7 @@ dependencies = [
  "sanvi-domains",
  "sanvi-http",
  "sanvi-identity",
+ "sanvi-kernel",
  "sanvi-localization",
  "sanvi-messaging",
  "sanvi-payments",

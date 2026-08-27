@@ -2,6 +2,10 @@
 # process as SANVI__* environment variables. Reviewed by the platform team on
 # every change.
 
+[ids]
+# One replica's node. Every concurrently running replica needs its own value.
+node_id = 201
+
 [server.cors]
 allowed_origins = ["https://app.sanvi.dev", "https://admin.sanvi.dev"]
 

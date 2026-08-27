@@ -15,7 +15,7 @@ pub use clock::{Clock, SystemClock};
 pub use error::{IdGenerationError, KernelError};
 pub use events::{EventEnvelope, EventId, EventTag};
 pub use ids::{
-    Id, NodeId, RawIdGenerator, RoleId, RoleTag, SNOWFLAKE_EPOCH_MS, SnowflakeGenerator,
+    Id, IdsConfig, NodeId, RawIdGenerator, RoleId, RoleTag, SNOWFLAKE_EPOCH_MS, SnowflakeGenerator,
     SnowflakeId, TenantId, TenantTag, UserId, UserTag,
 };
 pub use pagination::{Page, PageRequest};

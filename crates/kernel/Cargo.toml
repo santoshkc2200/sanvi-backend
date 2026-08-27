@@ -8,6 +8,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 chrono.workspace = true
 id-forge.workspace = true
 serde.workspace = true

@@ -65,6 +65,7 @@ use sanvi_billing::{
     },
 };
 use sanvi_domains::{DomainsConfig, adapters::events::domains_event_handler};
+use sanvi_kernel::{IdsConfig, RawIdGenerator, SnowflakeGenerator};
 use sanvi_localization::{
     LocalizationConfig,
     adapters::{
@@ -621,6 +622,8 @@ impl Default for OryConfig {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct WorkerConfig {
+    #[serde(default)]
+    pub ids: IdsConfig,
     pub database: DatabaseConfig,
     pub redis: RedisConfig,
     pub telemetry: TelemetryConfig,
@@ -682,7 +685,27 @@ fn load_config() -> anyhow::Result<WorkerConfig> {
         .extract()
         .context("failed to load configuration")?;
     config.validate()?;
+    config.ids.resolve(&config.telemetry.environment, 2)?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod config_tests {
+    use sanvi_kernel::IdsConfig;
+
+    #[test]
+    fn staging_requires_an_explicit_node_id() {
+        let err = IdsConfig::default().resolve("staging", 2).unwrap_err();
+
+        assert!(err.to_string().contains("staging"));
+    }
+
+    #[test]
+    fn local_worker_uses_reserved_node_two_when_unset() {
+        let node = IdsConfig::default().resolve("local", 2).unwrap();
+
+        assert_eq!(node.get(), 2);
+    }
 }
 
 #[tokio::main]
@@ -694,6 +717,15 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    let node_id = match config.ids.resolve(&config.telemetry.environment, 2) {
+        Ok(node_id) => node_id,
+        Err(err) => {
+            eprintln!("configuration error:\n{err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    let _ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     let (metrics, mut telemetry_guard) = match sanvi_telemetry::init(config.telemetry.clone()) {
         Ok(guard) => guard,

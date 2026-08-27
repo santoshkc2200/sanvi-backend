@@ -24,6 +24,7 @@ use sanvi_api::{
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
+use sanvi_kernel::{RawIdGenerator, SnowflakeGenerator};
 use sanvi_messaging::connect_redis;
 use sanvi_persistence::build_pool;
 use sanvi_privacy::adapters::PrivacyContextProvider;
@@ -49,6 +50,7 @@ fn load_config() -> anyhow::Result<AppConfig> {
         .context("failed to load configuration")?;
 
     config.validate()?;
+    config.ids.resolve(&config.telemetry.environment, 1)?;
     Ok(config)
 }
 
@@ -73,6 +75,15 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    let node_id = match config.ids.resolve(&config.telemetry.environment, 1) {
+        Ok(node_id) => node_id,
+        Err(err) => {
+            eprintln!("configuration error:\n{err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    let _ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     let (metrics, mut telemetry_guard) = match sanvi_telemetry::init(config.telemetry.clone()) {
         Ok(guard) => guard,

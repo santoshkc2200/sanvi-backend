@@ -1,6 +1,11 @@
 # Staging overlay. Secrets via the platform secret manager, exposed to the
 # process as SANVI__* environment variables.
 
+[ids]
+# One replica's node. Each additional API or worker replica must override
+# SANVI__IDS__NODE_ID with a distinct value.
+node_id = 101
+
 [server.cors]
 allowed_origins = ["https://app.staging.sanvi.dev", "https://admin.staging.sanvi.dev"]
 

@@ -5,6 +5,7 @@ use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
+use sanvi_kernel::IdsConfig;
 use sanvi_persistence::DatabaseConfig;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +30,8 @@ impl Default for CliOryConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CliConfig {
+    #[serde(default)]
+    pub ids: IdsConfig,
     pub database: DatabaseConfig,
     #[serde(default)]
     pub ory: CliOryConfig,
@@ -60,6 +63,7 @@ pub fn load(environment: &str) -> anyhow::Result<CliConfig> {
     config.theming.validate()?;
     config.domains.validate()?;
     config.payments.validate()?;
+    config.ids.resolve(environment, 3)?;
     Ok(config)
 }
 
@@ -69,4 +73,23 @@ pub fn check(environment: &str) -> anyhow::Result<()> {
     println!("configuration OK (environment: {environment})");
     println!("{config:#?}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use sanvi_kernel::IdsConfig;
+
+    #[test]
+    fn production_requires_an_explicit_node_id() {
+        let err = IdsConfig::default().resolve("production", 3).unwrap_err();
+
+        assert!(err.to_string().contains("production"));
+    }
+
+    #[test]
+    fn local_cli_uses_reserved_node_three_when_unset() {
+        let node = IdsConfig::default().resolve("local", 3).unwrap();
+
+        assert_eq!(node.get(), 3);
+    }
 }

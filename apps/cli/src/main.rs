@@ -20,9 +20,10 @@ mod payments;
 mod tenant;
 mod theme;
 
-use std::process::ExitCode;
+use std::{process::ExitCode, sync::Arc};
 
 use clap::{Args, Parser, Subcommand};
+use sanvi_kernel::{RawIdGenerator, SnowflakeGenerator};
 
 #[derive(Parser)]
 #[command(name = "sanvi", version, about = "Sanvi operator CLI")]
@@ -399,6 +400,21 @@ enum MigrateAction {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let config = match config::load(&cli.env) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("configuration error:\n{err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    let node_id = match config.ids.resolve(&cli.env, 3) {
+        Ok(node_id) => node_id,
+        Err(err) => {
+            eprintln!("configuration error:\n{err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    let _ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     match cli.command {
         Command::Migrate {

@@ -7,6 +7,7 @@ use sanvi_billing::BillingConfig;
 use sanvi_domains::DomainsConfig;
 use sanvi_http::ServerConfig;
 use sanvi_identity::IdentityConfig;
+use sanvi_kernel::IdsConfig;
 use sanvi_localization::LocalizationConfig;
 use sanvi_messaging::RedisConfig;
 use sanvi_payments::PaymentsConfig;
@@ -104,6 +105,8 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AppConfig {
+    #[serde(default)]
+    pub ids: IdsConfig,
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub redis: RedisConfig,
@@ -129,6 +132,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            ids: IdsConfig::default(),
             server: ServerConfig::default(),
             database: DatabaseConfig::default(),
             redis: RedisConfig::default(),
@@ -230,6 +234,27 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sanvi_kernel::IdsConfig;
+
+    #[test]
+    fn ids_reject_reserved_and_out_of_range_nodes() {
+        for node_id in [0, 1024] {
+            let err = IdsConfig {
+                node_id: Some(node_id),
+            }
+            .resolve("local", 1)
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains(&node_id.to_string()));
+        }
+    }
+
+    #[test]
+    fn local_api_uses_reserved_node_one_when_unset() {
+        let node = IdsConfig::default().resolve("local", 1).unwrap();
+
+        assert_eq!(node.get(), 1);
+    }
 
     #[test]
     fn defaults_are_valid() {
