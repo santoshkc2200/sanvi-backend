@@ -725,7 +725,7 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let _ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
+    let ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     let (metrics, mut telemetry_guard) = match sanvi_telemetry::init(config.telemetry.clone()) {
         Ok(guard) => guard,
@@ -770,7 +770,7 @@ async fn main() -> ExitCode {
     .with_metrics(outbox_metrics.clone());
 
     // --- tenancy consumer: keeps resolution caches coherent -----------------
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let tenants: Arc<dyn sanvi_tenancy::domain::TenantRepository> =
         Arc::new(SqlxTenantRepository::new());
     let resolution_cache = Arc::new(RedisTenantResolutionCache::new(
@@ -861,7 +861,7 @@ async fn main() -> ExitCode {
         }
     };
     let access_roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
-    let access_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let access_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let role_key_resolver = {
         let roles = access_roles.clone();
         let tx = access_tx.clone();
@@ -933,7 +933,7 @@ async fn main() -> ExitCode {
     );
 
     // --- billing context: Stripe webhooks, dunning, reconciliation -----------
-    let billing_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let billing_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let billing_tenancy_events = Arc::new(TenancyEventPublisher::new());
     let billing_plans: std::sync::Arc<dyn PlanRepository> =
         std::sync::Arc::new(SqlxPlanRepository::new());
@@ -1018,7 +1018,7 @@ async fn main() -> ExitCode {
     // reconciliation and gauges. The registry mirrors the API's: the fake
     // provider joins in non-production environments, the Stripe Connect
     // adapter when a restricted key is configured.
-    let payments_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let payments_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let payments_connections_repo = std::sync::Arc::new(SqlxProviderConnectionRepository::new());
     let payments_lifecycle: std::sync::Arc<dyn ConnectionLifecycleStore> =
         payments_connections_repo.clone();
@@ -1123,7 +1123,7 @@ async fn main() -> ExitCode {
 
     // --- domains context (phase 08): verification, issuance, renewal,
     // health and order-advancement sweeps + the resolution-cache consumer.
-    let domains_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let domains_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let domains_repo: std::sync::Arc<dyn sanvi_domains::domain::CustomDomainRepository> =
         std::sync::Arc::new(sanvi_domains::adapters::SqlxCustomDomainRepository::new());
     let domains_orders: std::sync::Arc<dyn sanvi_domains::domain::DomainOrderRepository> =
@@ -1253,7 +1253,7 @@ async fn main() -> ExitCode {
     ));
 
     // --- privacy context (phase 05): DSR saga + compliance jobs --------------
-    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let privacy_subjects: std::sync::Arc<dyn SubjectRepository> =
         std::sync::Arc::new(SqlxSubjectRepository::new());
     let privacy_jurisdictions: std::sync::Arc<dyn JurisdictionRepository> =

@@ -83,7 +83,7 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let _ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
+    let ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     let (metrics, mut telemetry_guard) = match sanvi_telemetry::init(config.telemetry.clone()) {
         Ok(guard) => guard,
@@ -156,7 +156,7 @@ async fn main() -> ExitCode {
 
     // The role catalog bridges identity → access in-process; it needs only
     // a TxManager and the role repository, so there is no wiring cycle.
-    let catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let catalog_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let role_repository: Arc<dyn sanvi_access::domain::RoleRepository> =
         Arc::new(sanvi_access::adapters::SqlxRoleRepository::new());
     let role_catalog: Arc<dyn RoleCatalog> =
@@ -165,7 +165,7 @@ async fn main() -> ExitCode {
     // Same bridging shape as `role_catalog` above, one context over: `GET
     // /api/v1/me` needs each membership's tenant slug/display name, and
     // identity has no `sanvi-tenancy` dependency of its own.
-    let tenant_catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tenant_catalog_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let tenant_repository_for_catalog: Arc<dyn sanvi_tenancy::domain::TenantRepository> =
         Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new());
     let tenant_catalog: Arc<dyn TenantCatalog> = Arc::new(TenantCatalogAdapter::new(
@@ -216,7 +216,7 @@ async fn main() -> ExitCode {
 
     // Phase 05: the privacy lock is built first because the impersonation
     // flow consumes it; with the privacy feature off it stays a no-op.
-    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let privacy_requests: Arc<dyn sanvi_privacy::domain::DsrRepository> =
         Arc::new(SqlxDsrRepository::new());
     let privacy_lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock> =
