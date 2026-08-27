@@ -149,6 +149,11 @@ clean-stale:
         echo 'cargo-sweep not installed; run: cargo install cargo-sweep'; \
     fi
 
+# Unit + application tests only: no Docker, no database, no container start.
+# The inner loop. `just test` remains the full gate.
+test-fast:
+    cargo nextest run --workspace -E 'kind(lib) or kind(bin)'
+
 test:
     #!/usr/bin/env bash
     set -euo pipefail

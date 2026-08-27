@@ -52,7 +52,9 @@
 | Unit | `#[cfg(test)]` in crate | `cargo test -p <crate>` |
 | Application | fakes in test modules | `cargo test -p <crate>` |
 | Integration | `tests/` against a real Postgres (Docker required) | `just test` |
-| Contract | `apps/api/tests/http_contract.rs` | `cargo test -p sanvi-api` |
+| Contract | `apps/api/tests/http_contract.rs` | `cargo test -p sanvi-api --test integration` |
+
+Each crate's integration tests now compile into a single `integration` target, so `--test integration` is how you scope to them.
 
 `sanvi_testsupport::test_db()` hands back a private, fully migrated database.
 It is cloned from a template the harness migrates once, and every test in the

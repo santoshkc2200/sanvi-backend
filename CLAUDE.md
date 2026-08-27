@@ -30,6 +30,7 @@ the portable form; `just --list` shows the full recipe set where it is.
 | Type-check | `cargo c` | alias: `check --all-targets --message-format short` |
 | Lint | `cargo k` | alias: clippy, `-D warnings`, short diagnostics |
 | Format | `cargo fmt --check` | |
+| Fast test | `just test-fast` | unit + application only, no Docker |
 | Test | `scripts/test.sh --quiet` | failures only; drop `--quiet` to see every test |
 | One crate | `cargo test -p <crate>` | no Docker needed unless it has `tests/` |
 | Gates | `just ci-quiet` | fmt, clippy, layering, invariants, test, openapi, i18n |

@@ -42,7 +42,7 @@ jobs:
       # each — `nextest` runs a process per test, so a container each would
       # mean hundreds of them.
       postgres:
-        image: postgres:11-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
