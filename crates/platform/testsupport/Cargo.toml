@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 hex.workspace = true
+sanvi-kernel.workspace = true
 sanvi-persistence.workspace = true
 sha2.workspace = true
 sqlx.workspace = true

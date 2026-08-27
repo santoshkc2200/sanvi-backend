@@ -3,7 +3,8 @@
 
 use std::time::Duration;
 
-use sanvi_persistence::{DatabaseConfig, Migrator, build_pool, check_database};
+use sanvi_kernel::SnowflakeId;
+use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool, check_database};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
@@ -110,6 +111,27 @@ async fn migrations_run_and_revert_cleanly() {
     assert!(!exists.0, "platform schema must be gone after undo");
 
     pool.close().await;
+}
+
+#[tokio::test]
+async fn platform_scope_writes_a_snowflake_audit_id() {
+    let db = sanvi_testsupport::test_db().await;
+    let manager = TxManager::new(db.app_pool(), sanvi_testsupport::test_ids());
+
+    manager
+        .begin_unscoped("test", "tester")
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
+
+    let admin = db.admin_pool().await;
+    let id: i64 = sqlx::query_scalar("SELECT id FROM platform.audit_log LIMIT 1")
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+    assert!(SnowflakeId::try_from(id).is_ok());
 }
 
 #[tokio::test]

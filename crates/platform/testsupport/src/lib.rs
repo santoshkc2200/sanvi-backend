@@ -20,3 +20,37 @@ mod redis;
 
 pub use postgres::{TestDb, blank_db, migrations_dir, test_db};
 pub use redis::{redis_url, test_stream};
+
+use std::{
+    sync::Arc,
+    sync::atomic::{AtomicI64, Ordering},
+};
+
+use sanvi_kernel::{IdGenerationError, RawIdGenerator, SnowflakeId};
+
+/// Deterministic Snowflake-compatible IDs for tests. Production processes
+/// construct their generator from the configured Snowflake node.
+#[derive(Debug)]
+struct TestIdGenerator {
+    next: AtomicI64,
+}
+
+impl TestIdGenerator {
+    const fn new(first: i64) -> Self {
+        Self {
+            next: AtomicI64::new(first),
+        }
+    }
+}
+
+impl RawIdGenerator for TestIdGenerator {
+    fn next_id(&self) -> Result<SnowflakeId, IdGenerationError> {
+        let value = self.next.fetch_add(1, Ordering::Relaxed);
+        SnowflakeId::try_from(value).map_err(|_| IdGenerationError::OutOfRange)
+    }
+}
+
+/// Fresh deterministic ID source for each test fixture.
+pub fn test_ids() -> Arc<dyn RawIdGenerator> {
+    Arc::new(TestIdGenerator::new(1_000_000))
+}
