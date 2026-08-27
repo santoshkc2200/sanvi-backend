@@ -48,4 +48,6 @@ its own container.
   `-p <crate>` while iterating and run the full suite once at the end.
 - `target/` reaches tens of GB. `just clean-incremental` drops the unbounded
   `target/debug/incremental` cache without forcing a full dependency rebuild.
+- `just clean-stale` sweeps the whole `target/` tree of artifacts untouched
+  for 14 days, release artifacts included.
 - Query changes need `cargo sqlx prepare --workspace`, else offline builds fail.

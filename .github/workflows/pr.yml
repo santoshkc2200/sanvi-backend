@@ -43,7 +43,8 @@ jobs:
       - name: install pinned toolchain (rust-toolchain.toml)
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # No crate defines [features] (check with: rg -n '^\[features\]' -g '**/Cargo.toml' before re-adding it); --all-features omitted to save resolver overhead.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   layering:
     name: architecture lint (+ self-test)

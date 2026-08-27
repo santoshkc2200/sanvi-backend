@@ -163,7 +163,7 @@ by `scripts/check-layering.sh` in CI, not by convention.
 
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/check-layering.sh            # + --self-test
 eval "$(./scripts/test-db.sh up)"       # one Postgres + Redis for the whole run
 cargo nextest run --workspace          # or `just test`, which does both

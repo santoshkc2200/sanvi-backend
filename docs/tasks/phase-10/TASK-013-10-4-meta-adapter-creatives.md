@@ -124,6 +124,11 @@ campaign tree and creatives only.
   `sanvi-privacy::privacy_integration` docker `WaitContainer(StartupTimeout)` — confirmed environmental:
   `cargo nextest run -p sanvi-privacy` alone passes 57/57. No `sanvi-advertising` test failed in either
   run.
+  - Superseded 2026-08-27: the clippy gate no longer passes `--all-features`. No crate in the workspace
+    defines a `[features]` table, so the flag only added resolver overhead and split the build cache
+    between invocations that passed it and ones that did not. The command above is left as-run for the
+    record; the current gate is `cargo clippy --workspace --all-targets -- -D warnings`, defined in
+    `justfile` and `.github/workflows/pr.yml`.
 
 ---
 *On completion: satisfy every acceptance criterion, run the verification commands, then
