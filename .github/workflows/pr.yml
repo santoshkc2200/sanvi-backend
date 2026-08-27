@@ -185,7 +185,7 @@ jobs:
       - name: install pinned toolchain (rust-toolchain.toml)
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
-      - run: cargo run -p sanvi-cli -- openapi --check
+      - run: ./scripts/check-openapi.sh
 
   i18n:
     name: i18n catalog gate (100 % ja coverage)
