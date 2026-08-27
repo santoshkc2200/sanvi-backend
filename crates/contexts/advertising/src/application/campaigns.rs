@@ -328,30 +328,29 @@ impl ValidateCampaign {
         let adapter = self.platforms.adapter(&stored.platform)?;
         let matrix = &adapter.descriptor().capability_matrix;
         let platform = stored.platform.clone();
-        let candidate = apply_fields(stored.intent, &fields);
-        let mut violations = validate_campaign(matrix, &candidate);
+        let mut candidate = apply_fields(stored.intent, &fields);
+        let mut violations = Vec::new();
         // A patch carrying an ad_groups tree is checked against the creative
         // store on the write path, so the dry run has to make the same trip or
         // it reports a step as valid that PatchCampaign would reject.
-        if fields.ad_groups.is_some() {
-            for (group_index, group) in candidate.ad_groups.iter().enumerate() {
-                for (ad_index, ad) in group.ads.iter().enumerate() {
-                    violations.extend(
-                        creative_dry_run_violations(
-                            &mut scope,
-                            self.creatives.as_ref(),
-                            matrix,
-                            &platform,
-                            tenant_id,
-                            group_index,
-                            ad_index,
-                            ad,
-                        )
-                        .await?,
-                    );
-                }
+        for (group_index, group) in candidate.ad_groups.iter_mut().enumerate() {
+            for (ad_index, ad) in group.ads.iter_mut().enumerate() {
+                violations.extend(
+                    creative_dry_run_violations(
+                        &mut scope,
+                        self.creatives.as_ref(),
+                        matrix,
+                        &platform,
+                        tenant_id,
+                        group_index,
+                        ad_index,
+                        ad,
+                    )
+                    .await?,
+                );
             }
         }
+        violations.extend(validate_campaign(matrix, &candidate));
         scope
             .rollback()
             .await
@@ -361,8 +360,9 @@ impl ValidateCampaign {
 }
 
 /// Dry-run counterpart of [`validate_and_hydrate_ad_creative`]: same checks,
-/// reported as field-addressed violations instead of errors, and the ad is left
-/// untouched.
+/// reported as field-addressed violations instead of errors. The candidate ad
+/// is authoritatively hydrated in-place so downstream capability matrix validation
+/// inspects stored creative content.
 ///
 /// A reference the write path rejects with `CreativeNotFound` (404) or
 /// `InvalidInput` (400) comes back here as a violation, because the dry run's
@@ -377,9 +377,8 @@ async fn creative_dry_run_violations(
     tenant_id: Uuid,
     group_index: usize,
     ad_index: usize,
-    ad: &Ad,
+    ad: &mut Ad,
 ) -> Result<Vec<ValidationViolation>, AdvertisingError> {
-    let mut probe = ad.clone();
     match validate_and_hydrate_ad_creative(
         scope,
         creatives,
@@ -388,7 +387,7 @@ async fn creative_dry_run_violations(
         tenant_id,
         group_index,
         ad_index,
-        &mut probe,
+        ad,
     )
     .await
     {
@@ -581,11 +580,6 @@ impl PatchCampaign {
             move |campaign, scope, matrix, platform| {
                 Box::pin(async move {
                     *campaign = apply_fields(campaign.clone(), &fields);
-                    // Only a patch that carries an ad_groups tree needs the creative
-                    // check: apply_fields has just replaced the tree wholesale, so the
-                    // ads iterated here are exactly the incoming ones. Ads already
-                    // stored are left alone — a patch of `name` must not fail because
-                    // some unrelated creative was deleted since.
                     if fields.ad_groups.is_some() {
                         for (group_index, group) in campaign.ad_groups.iter_mut().enumerate() {
                             for (ad_index, ad) in group.ads.iter_mut().enumerate() {
@@ -602,6 +596,14 @@ impl PatchCampaign {
                                 .await?;
                             }
                         }
+                    } else {
+                        verify_ad_creatives_exist(
+                            scope,
+                            creatives.as_ref(),
+                            tenant_id,
+                            campaign,
+                        )
+                        .await?;
                     }
                     Ok(())
                 })
@@ -850,6 +852,38 @@ async fn validate_and_hydrate_ad_creative(
     Ok(())
 }
 
+async fn verify_ad_creatives_exist(
+    scope: &mut sanvi_persistence::ScopedTx<'_>,
+    creatives: &dyn CreativeRepository,
+    tenant_id: Uuid,
+    campaign: &Campaign,
+) -> Result<(), AdvertisingError> {
+    for group in &campaign.ad_groups {
+        for ad in &group.ads {
+            verify_ad_creative_exists(scope, creatives, tenant_id, &ad.creative.id).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn verify_ad_creative_exists(
+    scope: &mut sanvi_persistence::ScopedTx<'_>,
+    creatives: &dyn CreativeRepository,
+    tenant_id: Uuid,
+    creative_id_str: &str,
+) -> Result<(), AdvertisingError> {
+    let creative_uuid = Uuid::parse_str(creative_id_str)
+        .map_err(|error| AdvertisingError::InvalidInput(format!("invalid creative id: {error}")))?;
+    if creatives
+        .find(scope, tenant_id, creative_uuid)
+        .await?
+        .is_none()
+    {
+        return Err(AdvertisingError::CreativeNotFound);
+    }
+    Ok(())
+}
+
 /// `POST /campaigns/{id}/ad-groups/{ad_group_id}/ads`.
 pub struct AddAd {
     tx: TxManager,
@@ -1017,6 +1051,14 @@ impl UpdateAd {
                         )
                         .await?;
                         ad.creative = temp_ad.creative;
+                    } else {
+                        verify_ad_creative_exists(
+                            scope,
+                            creatives.as_ref(),
+                            tenant_id,
+                            &ad.creative.id,
+                        )
+                        .await?;
                     }
                     if let Some(landing_url) = fields.landing_url {
                         ad.landing_url = landing_url;
@@ -1040,6 +1082,7 @@ impl UpdateAd {
 pub struct PublishCampaign {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
 }
@@ -1048,12 +1091,14 @@ impl PublishCampaign {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
     ) -> Self {
         Self {
             tx,
             campaigns,
+            creatives,
             events,
             platforms,
         }
@@ -1090,6 +1135,13 @@ impl PublishCampaign {
         if !violations.is_empty() {
             return Err(AdvertisingError::Validation(violations));
         }
+        verify_ad_creatives_exist(
+            &mut scope,
+            self.creatives.as_ref(),
+            tenant_id,
+            &stored.intent,
+        )
+        .await?;
         let before = stored.intent.clone();
         let mut published = stored.intent.clone();
         published.status = crate::domain::CampaignStatus::Active;

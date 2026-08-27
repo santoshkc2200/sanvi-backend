@@ -935,6 +935,7 @@ fn create_test_advertising_state(
         publish_campaign: Arc::new(PublishCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),

@@ -2921,6 +2921,7 @@ pub async fn build_advertising_state(
         publish_campaign: std::sync::Arc::new(PublishCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),
