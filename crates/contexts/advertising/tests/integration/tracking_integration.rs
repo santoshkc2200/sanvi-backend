@@ -964,12 +964,14 @@ fn create_test_advertising_state(
         add_ad: Arc::new(AddAd::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),
         update_ad: Arc::new(UpdateAd::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),

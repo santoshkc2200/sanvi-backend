@@ -49,10 +49,14 @@ Runs in parallel with TASK-014 once TASK-012 is on staging.
 - [x] **Spec validation** — `CreativeAssetSpec::validate_asset` / `CapabilityMatrix::validate_creative_text`
       (shipped earlier in 4d59e4b/add5edf) now run inside `CreateCreative::execute`, at creative-create
       time — before persistence, not at ad publish time.
-- [ ] **Publish & review** — `Ad.creative_id` already references `advertising.creatives`, so a creative
-      rides along with its ad's existing publish/review path structurally, but `add_ad`/`update_ad` do
-      **not yet validate** that a referenced `creative_id` exists and fits the ad's platform/placement.
-      Left open — needs a follow-up pass on `application/campaigns.rs`.
+- [x] **Publish & review** — `add_ad`/`update_ad` now validate, before `apply_mutation`, that
+      `fields.creative.id` parses as a UUID, resolves via `CreativeRepository::find`, and fits the
+      campaign's platform: its placement must exist in that platform's `CapabilityMatrix` and match the
+      stored creative's own placement (a payload cannot claim a different placement than the creative it
+      references). Missing/unparseable id → `AdvertisingError::CreativeNotFound` /
+      `InvalidInput`; placement mismatch or unsupported placement → `AdvertisingError::Validation`. Review
+      *state* (per-ad rejection reasons surfaced from the platform) is still unimplemented — that has no
+      meaning until a real adapter exists, same blocker as TASK-012's Google adapter.
 - [x] **Drift for Meta** — added
       `reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift` running the existing engine
       against the Meta fixture; `reconciliation.rs`/`reconciliation_sweep.rs` are untouched by this task's
@@ -129,6 +133,14 @@ campaign tree and creatives only.
     between invocations that passed it and ones that did not. The command above is left as-run for the
     record; the current gate is `cargo clippy --workspace --all-targets -- -D warnings`, defined in
     `justfile` and `.github/workflows/pr.yml`.
+- **Publish & review (creative_id validation), verified 2026-08-27**: `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `./scripts/check-layering.sh`,
+  `cargo test -p sanvi-advertising` (106 tests: 70 lib + 36 integration, all green — integration run
+  against the shared `scripts/test-db.sh` Postgres/Redis pair, not per-test testcontainers; the default
+  testcontainers Postgres image is too old for the `CREATE DATABASE ... STRATEGY` clause `testsupport`
+  uses, an unrelated pre-existing environment gap, not a regression), and
+  `cargo run -p sanvi-cli -- openapi --check` all pass. `./scripts/check-ads-invariants.sh` still fails
+  only `scan_frontend_bundle` for the same CI-only-artifact reason as the 2026-08-26 run above.
 
 ---
 *On completion: satisfy every acceptance criterion, run the verification commands, then

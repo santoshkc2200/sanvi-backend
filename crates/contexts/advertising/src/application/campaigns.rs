@@ -17,8 +17,9 @@ use crate::{
     domain::{
         Ad, AdEvent, AdGroup, AdvertisingConnectionRepository, AdvertisingError, BidSettings,
         Budget, Campaign, CampaignChange, CampaignReconciliationState, CampaignRepository,
-        ChangeSource, ConnectionHandle, ConnectionStatus, Creative, DriftState, EventPublisher,
-        Objective, Schedule, StoredCampaign, Targeting, ValidationViolation, validate_campaign,
+        ChangeSource, ConnectionHandle, ConnectionStatus, Creative, CreativeRepository, DriftState,
+        EventPublisher, Objective, Schedule, StoredCampaign, Targeting, ValidationViolation,
+        validate_campaign,
     },
 };
 
@@ -679,10 +680,57 @@ pub struct AdFields {
     pub tracking_template: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn validate_ad_creative(
+    tx: &TxManager,
+    campaigns: &dyn CampaignRepository,
+    creatives: &dyn CreativeRepository,
+    platforms: &PlatformRegistry,
+    tenant_id: Uuid,
+    campaign_id: Uuid,
+    creative: &Creative,
+) -> Result<(), AdvertisingError> {
+    let mut scope = tx
+        .begin_for(tenant_id)
+        .await
+        .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+    let campaign = campaigns
+        .find(&mut scope, tenant_id, campaign_id)
+        .await?
+        .ok_or(AdvertisingError::CampaignNotFound)?;
+    let creative_uuid = Uuid::parse_str(&creative.id)
+        .map_err(|error| AdvertisingError::InvalidInput(format!("invalid creative id: {error}")))?;
+    let stored_creative = creatives
+        .find(&mut scope, tenant_id, creative_uuid)
+        .await?
+        .ok_or(AdvertisingError::CreativeNotFound)?;
+    let adapter = platforms.adapter(&campaign.platform)?;
+    if adapter
+        .descriptor()
+        .capability_matrix
+        .placement(&stored_creative.creative.placement)
+        .is_none()
+        || creative.placement != stored_creative.creative.placement
+    {
+        return Err(AdvertisingError::Validation(vec![
+            ValidationViolation::unsupported(
+                "creative.placement",
+                "creative placement is unavailable for this platform or does not match stored creative",
+            ),
+        ]));
+    }
+    scope
+        .rollback()
+        .await
+        .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+    Ok(())
+}
+
 /// `POST /campaigns/{id}/ad-groups/{ad_group_id}/ads`.
 pub struct AddAd {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
 }
@@ -691,12 +739,14 @@ impl AddAd {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
     ) -> Self {
         Self {
             tx,
             campaigns,
+            creatives,
             events,
             platforms,
         }
@@ -713,6 +763,16 @@ impl AddAd {
         actor_id: Uuid,
         fields: NewAdFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
+        validate_ad_creative(
+            &self.tx,
+            self.campaigns.as_ref(),
+            self.creatives.as_ref(),
+            &self.platforms,
+            tenant_id,
+            campaign_id,
+            &fields.creative,
+        )
+        .await?;
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
@@ -747,6 +807,7 @@ impl AddAd {
 pub struct UpdateAd {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
 }
@@ -755,12 +816,14 @@ impl UpdateAd {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
     ) -> Self {
         Self {
             tx,
             campaigns,
+            creatives,
             events,
             platforms,
         }
@@ -778,6 +841,18 @@ impl UpdateAd {
         actor_id: Uuid,
         fields: AdFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
+        if let Some(creative) = &fields.creative {
+            validate_ad_creative(
+                &self.tx,
+                self.campaigns.as_ref(),
+                self.creatives.as_ref(),
+                &self.platforms,
+                tenant_id,
+                campaign_id,
+                creative,
+            )
+            .await?;
+        }
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),

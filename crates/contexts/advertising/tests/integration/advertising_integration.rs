@@ -22,8 +22,8 @@ use sanvi_advertising::{
     },
     domain::{
         AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
-        CreativeText, Money, Objective, PlatformAccount, Targeting, TargetingDimension,
-        TenantEnvelopeCrypto,
+        CreativeRepository, CreativeText, Money, Objective, PlatformAccount, StoredCreative,
+        Targeting, TargetingDimension, TenantEnvelopeCrypto,
     },
 };
 use sanvi_persistence::{Migrator, TxManager};
@@ -979,6 +979,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
         Arc::new(SqlxCampaignRepository::new());
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
         Arc::new(OutboxEventPublisher::new());
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
@@ -1002,7 +1003,13 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
         events.clone(),
         registry.clone(),
     );
-    let add_ad = AddAd::new(manager, campaigns, events, registry);
+    let add_ad = AddAd::new(
+        manager.clone(),
+        campaigns,
+        creatives.clone(),
+        events,
+        registry,
+    );
 
     let draft = create
         .execute(
@@ -1046,6 +1053,34 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     assert_eq!(with_group.revision, draft.revision + 1);
     let ad_group_id = with_group.intent.ad_groups[0].id.clone();
 
+    let creative_id = Uuid::now_v7();
+    let stored_creative = StoredCreative {
+        id: creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Sale".to_string(),
+                body: "Shop now".to_string(),
+            }],
+            asset_references: Vec::new(),
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives
+        .insert(&mut scope, &stored_creative)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
     let with_ad = add_ad
         .execute(
             tenant_id,
@@ -1056,7 +1091,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
             actor_id,
             NewAdFields {
                 creative: Creative {
-                    id: "creative-1".to_string(),
+                    id: creative_id.to_string(),
                     placement: "feed".to_string(),
                     texts: vec![CreativeText {
                         locale: "en".to_string(),
@@ -1472,4 +1507,375 @@ async fn creative_crud_and_matrix_validation_lifecycle() {
         .await
         .unwrap();
     assert!(missing.is_none());
+}
+
+#[tokio::test]
+async fn add_ad_rejects_missing_creative_id() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "ad-missing-creative").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "777-000-3333",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-missing-creative"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let add_ad_group = AddAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let add_ad = AddAd::new(manager.clone(), campaigns, creatives, events, registry);
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Missing creative test".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(4_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let with_group = add_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdGroupFields {
+                name: "Group 1".to_string(),
+                targeting: Targeting::default(),
+                bid: BidSettings {
+                    strategy: "manual_cpc".to_string(),
+                    maximum_bid: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let ad_group_id = with_group.intent.ad_groups[0].id.clone();
+
+    // 1. Non-existent UUID creative id -> CreativeNotFound
+    let unpersisted_creative_id = Uuid::now_v7();
+    let err = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id.clone(),
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: unpersisted_creative_id.to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Sale".to_string(),
+                        body: "Shop now".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                },
+                landing_url: "https://example.com/sale".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        err,
+        Err(sanvi_advertising::domain::AdvertisingError::CreativeNotFound)
+    ));
+
+    // 2. Non-UUID string -> InvalidInput
+    let err_invalid = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id,
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: "not-a-uuid".to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Sale".to_string(),
+                        body: "Shop now".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                },
+                landing_url: "https://example.com/sale".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        err_invalid,
+        Err(sanvi_advertising::domain::AdvertisingError::InvalidInput(_))
+    ));
+}
+
+#[tokio::test]
+async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "ad-creative-fit").await;
+    let manager = TxManager::new(pool);
+    let actor_id = Uuid::now_v7();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "777-000-4444",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-creative-fit"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+    );
+    let add_ad_group = AddAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry.clone(),
+    );
+    let add_ad = AddAd::new(
+        manager.clone(),
+        campaigns,
+        creatives.clone(),
+        events,
+        registry,
+    );
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Placement fit test".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(4_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let with_group = add_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdGroupFields {
+                name: "Group 1".to_string(),
+                targeting: Targeting::default(),
+                bid: BidSettings {
+                    strategy: "manual_cpc".to_string(),
+                    maximum_bid: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let ad_group_id = with_group.intent.ad_groups[0].id.clone();
+
+    // 1. Creative has placement "reels", which Google Ads does not support (only feed and stories).
+    let reels_creative_id = Uuid::now_v7();
+    let reels_creative = StoredCreative {
+        id: reels_creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("meta").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: reels_creative_id.to_string(),
+            placement: "reels".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Reels headline".to_string(),
+                body: "Reels body".to_string(),
+            }],
+            asset_references: Vec::new(),
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &reels_creative).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let err_unsupported = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id.clone(),
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: reels_creative_id.to_string(),
+                    placement: "reels".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Reels headline".to_string(),
+                        body: "Reels body".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                },
+                landing_url: "https://example.com/reels".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await;
+    match err_unsupported {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| v.field_path == "creative.placement")
+            );
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // 2. Creative has stored placement "feed", but payload spoofs "stories" (placement mismatch).
+    let feed_creative_id = Uuid::now_v7();
+    let feed_creative = StoredCreative {
+        id: feed_creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: feed_creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Feed headline".to_string(),
+                body: "Feed body".to_string(),
+            }],
+            asset_references: Vec::new(),
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    creatives.insert(&mut scope, &feed_creative).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let err_mismatch = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id,
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: feed_creative_id.to_string(),
+                    placement: "stories".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Feed headline".to_string(),
+                        body: "Feed body".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                },
+                landing_url: "https://example.com/feed".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await;
+    match err_mismatch {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| v.field_path == "creative.placement")
+            );
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
 }

@@ -2953,12 +2953,14 @@ pub async fn build_advertising_state(
         add_ad: std::sync::Arc::new(AddAd::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),
         update_ad: std::sync::Arc::new(UpdateAd::new(
             tx.clone(),
             campaigns,
+            creatives.clone(),
             events,
             registry.clone(),
         )),
