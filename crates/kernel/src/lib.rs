@@ -12,7 +12,7 @@ pub mod ids;
 pub mod pagination;
 
 pub use clock::{Clock, SystemClock};
-pub use error::KernelError;
+pub use error::{IdGenerationError, KernelError};
 pub use events::EventEnvelope;
-pub use ids::Id;
+pub use ids::{Id, NodeId, RawIdGenerator, SNOWFLAKE_EPOCH_MS, SnowflakeGenerator, SnowflakeId};
 pub use pagination::{Page, PageRequest};

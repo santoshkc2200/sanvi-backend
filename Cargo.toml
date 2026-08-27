@@ -79,6 +79,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"
+id-forge = { version = "=1.0.0", default-features = false, features = ["snowflake"] }
 idna = "1"
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "metrics"] }

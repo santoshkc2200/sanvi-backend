@@ -1864,6 +1864,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "id-forge"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a063290257f1ad185ba381a000cd6b958b6a784582329a8115ffa0b1a309b9f4"
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3544,6 +3550,7 @@ name = "sanvi-kernel"
 version = "0.10.0"
 dependencies = [
  "chrono",
+ "id-forge",
  "proptest",
  "serde",
  "serde_json",
