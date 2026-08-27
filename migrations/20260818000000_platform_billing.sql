@@ -32,7 +32,7 @@ CREATE SCHEMA IF NOT EXISTS billing;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE billing.plans (
-  id                uuid        PRIMARY KEY,
+  id                bigint        PRIMARY KEY,
   key               text        NOT NULL UNIQUE,
   name              text        NOT NULL,
   tier              text        NOT NULL,
@@ -53,7 +53,7 @@ CREATE TABLE billing.plans (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE billing.plan_entitlements (
-  plan_id     uuid    NOT NULL REFERENCES billing.plans(id) ON DELETE CASCADE,
+  plan_id     bigint    NOT NULL REFERENCES billing.plans(id) ON DELETE CASCADE,
   feature_key text    NOT NULL,
   enabled     boolean NOT NULL,
   "limit"     bigint,
@@ -67,8 +67,8 @@ CREATE TABLE billing.plan_entitlements (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE billing.plan_prices (
-  id                 uuid   PRIMARY KEY,
-  plan_id            uuid   NOT NULL REFERENCES billing.plans(id) ON DELETE CASCADE,
+  id                 bigint   PRIMARY KEY,
+  plan_id            bigint   NOT NULL REFERENCES billing.plans(id) ON DELETE CASCADE,
   stripe_price_id    text   NOT NULL UNIQUE,
   currency           text   NOT NULL,
   interval           text   NOT NULL,
@@ -93,10 +93,10 @@ CREATE INDEX plan_prices_plan_idx ON billing.plan_prices (plan_id) WHERE active;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE billing.subscriptions (
-  id                     uuid        PRIMARY KEY,
-  tenant_id              uuid        NOT NULL UNIQUE REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  plan_id                uuid        NOT NULL REFERENCES billing.plans(id),
-  price_id               uuid        REFERENCES billing.plan_prices(id),
+  id                     bigint        PRIMARY KEY,
+  tenant_id              bigint        NOT NULL UNIQUE REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  plan_id                bigint        NOT NULL REFERENCES billing.plans(id),
+  price_id               bigint        REFERENCES billing.plan_prices(id),
   source                 text        NOT NULL DEFAULT 'stripe',
   stripe_customer_id     text,
   stripe_subscription_id text        UNIQUE,
@@ -146,8 +146,8 @@ SELECT platform.enable_tenant_rls('billing', 'subscriptions');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE billing.invoices (
-  id                uuid        PRIMARY KEY,
-  tenant_id         uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id                bigint        PRIMARY KEY,
+  tenant_id         bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   stripe_invoice_id text        NOT NULL UNIQUE,
   number            text,
   status            text        NOT NULL,
@@ -210,34 +210,34 @@ GRANT SELECT, INSERT, UPDATE ON billing.webhook_events TO sanvi_app;
 -- ---------------------------------------------------------------------------
 
 INSERT INTO billing.plans (id, key, name, tier, stripe_product_id, visibility, sort_order) VALUES
-  ('00000000-0000-4000-8000-000000000001', 'starter',       'Starter',       'starter',       'prod_starter_placeholder',       'public', 1),
-  ('00000000-0000-4000-8000-000000000002', 'professional',  'Professional',  'professional',  'prod_professional_placeholder',  'public', 2),
-  ('00000000-0000-4000-8000-000000000003', 'enterprise',    'Enterprise',    'enterprise',    'prod_enterprise_placeholder',    'public', 3);
+  ('1', 'starter',       'Starter',       'starter',       'prod_starter_placeholder',       'public', 1),
+  ('2', 'professional',  'Professional',  'professional',  'prod_professional_placeholder',  'public', 2),
+  ('3', 'enterprise',    'Enterprise',    'enterprise',    'prod_enterprise_placeholder',    'public', 3);
 
 -- Starter: platform basics only.
 INSERT INTO billing.plan_entitlements (plan_id, feature_key, enabled, "limit") VALUES
-  ('00000000-0000-4000-8000-000000000001', 'tenancy.member_limit',      true, 5),
-  ('00000000-0000-4000-8000-000000000001', 'advertising.campaign_limit', true, 1);
+  ('1', 'tenancy.member_limit',      true, 5),
+  ('1', 'advertising.campaign_limit', true, 1);
 
 -- Professional: ads + custom domains + theming.
 INSERT INTO billing.plan_entitlements (plan_id, feature_key, enabled, "limit") VALUES
-  ('00000000-0000-4000-8000-000000000002', 'tenancy.member_limit',      true, 25),
-  ('00000000-0000-4000-8000-000000000002', 'advertising.campaign_limit', true, 10),
-  ('00000000-0000-4000-8000-000000000002', 'advertising.google_ads',    true, NULL),
-  ('00000000-0000-4000-8000-000000000002', 'advertising.meta_ads',      true, NULL),
-  ('00000000-0000-4000-8000-000000000002', 'domains.custom',            true, NULL),
-  ('00000000-0000-4000-8000-000000000002', 'theming.custom_css',        true, NULL),
-  ('00000000-0000-4000-8000-000000000002', 'localization.custom_locales', true, NULL);
+  ('2', 'tenancy.member_limit',      true, 25),
+  ('2', 'advertising.campaign_limit', true, 10),
+  ('2', 'advertising.google_ads',    true, NULL),
+  ('2', 'advertising.meta_ads',      true, NULL),
+  ('2', 'domains.custom',            true, NULL),
+  ('2', 'theming.custom_css',        true, NULL),
+  ('2', 'localization.custom_locales', true, NULL);
 
 -- Enterprise: everything professional has plus connect + purchase + templates.
 INSERT INTO billing.plan_entitlements (plan_id, feature_key, enabled, "limit") VALUES
-  ('00000000-0000-4000-8000-000000000003', 'tenancy.member_limit',      true, 250),
-  ('00000000-0000-4000-8000-000000000003', 'advertising.campaign_limit', true, 100),
-  ('00000000-0000-4000-8000-000000000003', 'advertising.google_ads',    true, NULL),
-  ('00000000-0000-4000-8000-000000000003', 'advertising.meta_ads',      true, NULL),
-  ('00000000-0000-4000-8000-000000000003', 'domains.custom',            true, NULL),
-  ('00000000-0000-4000-8000-000000000003', 'domains.purchase',          true, NULL),
-  ('00000000-0000-4000-8000-000000000003', 'theming.custom_css',        true, NULL),
-  ('00000000-0000-4000-8000-000000000003', 'theming.custom_templates',  true, NULL),
-  ('00000000-0000-4000-8000-000000000003', 'localization.custom_locales', true, NULL),
-  ('00000000-0000-4000-8000-000000000003', 'payments.stripe_connect',   true, NULL);
+  ('3', 'tenancy.member_limit',      true, 250),
+  ('3', 'advertising.campaign_limit', true, 100),
+  ('3', 'advertising.google_ads',    true, NULL),
+  ('3', 'advertising.meta_ads',      true, NULL),
+  ('3', 'domains.custom',            true, NULL),
+  ('3', 'domains.purchase',          true, NULL),
+  ('3', 'theming.custom_css',        true, NULL),
+  ('3', 'theming.custom_templates',  true, NULL),
+  ('3', 'localization.custom_locales', true, NULL),
+  ('3', 'payments.stripe_connect',   true, NULL);

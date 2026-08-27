@@ -25,9 +25,9 @@
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE payments.payouts (
-  id                  uuid        PRIMARY KEY,
-  tenant_id           uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  connection_id       uuid        REFERENCES payments.provider_connections(id) ON DELETE SET NULL,
+  id                  bigint        PRIMARY KEY,
+  tenant_id           bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  connection_id       bigint        REFERENCES payments.provider_connections(id) ON DELETE SET NULL,
   external_payout_id  text        NOT NULL,
   amount_minor        bigint      NOT NULL CHECK (amount_minor >= 0),
   currency            text        NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
@@ -64,7 +64,7 @@ ALTER TABLE payments.payments ADD CONSTRAINT payments_payout_status_check
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE payments.tax_settings (
-  tenant_id           uuid        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id           bigint        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   enabled             boolean     NOT NULL DEFAULT false,
   liability_account   text        NOT NULL DEFAULT '',
   provider_status     text        NOT NULL DEFAULT 'unknown',
@@ -86,13 +86,13 @@ SELECT platform.enable_tenant_rls('payments', 'tax_settings');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE platform_admin.application_fees (
-  tenant_id           uuid        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id           bigint        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   basis_points        integer     CHECK (basis_points IS NULL OR (basis_points > 0 AND basis_points <= 10000)),
   fixed_amount_minor  bigint      CHECK (fixed_amount_minor IS NULL OR fixed_amount_minor >= 0),
   fixed_currency      text        CHECK (fixed_currency IS NULL OR fixed_currency ~ '^[A-Z]{3}$'),
   minimum_minor       bigint      NOT NULL DEFAULT 0 CHECK (minimum_minor >= 0),
   enabled             boolean     NOT NULL DEFAULT false,
-  set_by              uuid,
+  set_by              bigint,
   reason              text,
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()

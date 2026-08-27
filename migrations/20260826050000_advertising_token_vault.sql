@@ -6,7 +6,7 @@
 -- same envelope pattern as `privacy.subject_keys`, keyed by tenant instead of
 -- data subject so a subject erasure can never reach a live ad-account token.
 CREATE TABLE advertising.tenant_secret_keys (
-  tenant_id    uuid        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id    bigint        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   wrapped_dek  bytea       NOT NULL,
   kek_id       text        NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now()
@@ -15,8 +15,8 @@ SELECT platform.enable_tenant_rls('advertising', 'tenant_secret_keys');
 GRANT SELECT, INSERT, UPDATE ON advertising.tenant_secret_keys TO sanvi_app;
 
 CREATE TABLE advertising.connection_tokens (
-  connection_id uuid        PRIMARY KEY REFERENCES advertising.connections(id) ON DELETE CASCADE,
-  tenant_id     uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  connection_id bigint        PRIMARY KEY REFERENCES advertising.connections(id) ON DELETE CASCADE,
+  tenant_id     bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   ciphertext    bytea       NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()

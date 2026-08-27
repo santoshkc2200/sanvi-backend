@@ -53,7 +53,7 @@ CREATE TABLE privacy.jurisdiction_profiles (
   authority                       jsonb       NOT NULL DEFAULT '{}',
   effective_from                  date        NOT NULL,
   source_note                     text,
-  updated_by                      uuid,
+  updated_by                      bigint,
   updated_at                      timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT jurisdiction_profiles_regime_check
     CHECK (regime IN ('gdpr', 'uk_gdpr', 'appi', 'us_state')),
@@ -133,8 +133,8 @@ ON CONFLICT (code) DO NOTHING;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE privacy.data_subjects (
-  id                     uuid        PRIMARY KEY,
-  tenant_id              uuid,
+  id                     bigint        PRIMARY KEY,
+  tenant_id              bigint,
   kind                   text        NOT NULL,
   canonical_key          text        NOT NULL,
   identifiers            jsonb       NOT NULL DEFAULT '[]',
@@ -159,9 +159,9 @@ SELECT platform.enable_tenant_rls('privacy', 'data_subjects');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE privacy.data_subject_requests (
-  id                 uuid        PRIMARY KEY,
-  tenant_id          uuid,
-  subject_id         uuid        NOT NULL REFERENCES privacy.data_subjects(id),
+  id                 bigint        PRIMARY KEY,
+  tenant_id          bigint,
+  subject_id         bigint        NOT NULL REFERENCES privacy.data_subjects(id),
   subject_ref        jsonb       NOT NULL,
   kind               text        NOT NULL,
   status             text        NOT NULL,
@@ -173,12 +173,12 @@ CREATE TABLE privacy.data_subject_requests (
   completed_at       timestamptz,
   jurisdiction       text        NOT NULL REFERENCES privacy.jurisdiction_profiles(code),
   submitted_by       text        NOT NULL DEFAULT 'subject',
-  agent_id           uuid,
+  agent_id           bigint,
   requester_ip       inet,
   requester_note     text,
   rejection_reason   text,
-  appeal_id          uuid,
-  export_artifact_id uuid,
+  appeal_id          bigint,
+  export_artifact_id bigint,
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT dsr_kind_check CHECK (kind IN (
@@ -202,13 +202,13 @@ SELECT platform.enable_tenant_rls('privacy', 'data_subject_requests');
 -- (signed permission with checksum) and the separately-recorded consumer
 -- verification. Disclosure requires BOTH.
 CREATE TABLE privacy.authorized_agents (
-  id                     uuid        PRIMARY KEY,
-  request_id             uuid        NOT NULL REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
+  id                     bigint        PRIMARY KEY,
+  request_id             bigint        NOT NULL REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
   agent_name             text        NOT NULL,
   agent_contact          jsonb,
   authorization_evidence jsonb       NOT NULL,
   consumer_verified_at   timestamptz,
-  verified_by            uuid,
+  verified_by            bigint,
   created_at             timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT authorized_agents_name_nonempty CHECK (length(btrim(agent_name)) > 0)
 );
@@ -216,14 +216,14 @@ CREATE TABLE privacy.authorized_agents (
 -- Appeals (US states with an appeal right): first-class aggregate with its
 -- own clock; the outcome records the state authority's complaint route.
 CREATE TABLE privacy.request_appeals (
-  id                 uuid        PRIMARY KEY,
-  request_id         uuid        NOT NULL UNIQUE REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
+  id                 bigint        PRIMARY KEY,
+  request_id         bigint        NOT NULL UNIQUE REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
   reason             text        NOT NULL,
   received_at        timestamptz NOT NULL DEFAULT now(),
   due_at             timestamptz NOT NULL,
   outcome            text,
   decided_at         timestamptz,
-  decided_by         uuid,
+  decided_by         bigint,
   decision_reason    text,
   authority_notice   jsonb,
   CONSTRAINT request_appeals_outcome_check
@@ -233,7 +233,7 @@ CREATE TABLE privacy.request_appeals (
 -- Saga participants: one row per registered provider per request. Partial
 -- completion is a first-class outcome, never a silent success.
 CREATE TABLE privacy.request_participants (
-  request_id  uuid        NOT NULL REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
+  request_id  bigint        NOT NULL REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
   context     text        NOT NULL,
   status      text        NOT NULL DEFAULT 'pending',
   report      jsonb,
@@ -248,8 +248,8 @@ CREATE TABLE privacy.request_participants (
 -- Verification challenges for unauthenticated requesters: one-time code over
 -- a signed email link, rate-limited, hashed at rest.
 CREATE TABLE privacy.verification_challenges (
-  id           uuid        PRIMARY KEY,
-  request_id   uuid        NOT NULL UNIQUE REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
+  id           bigint        PRIMARY KEY,
+  request_id   bigint        NOT NULL UNIQUE REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
   method       text        NOT NULL DEFAULT 'email_otp',
   token_hash   text        NOT NULL,
   code_hash    text        NOT NULL,
@@ -268,9 +268,9 @@ CREATE TABLE privacy.verification_challenges (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE privacy.consents (
-  id             uuid        PRIMARY KEY,
-  tenant_id      uuid,
-  subject_id     uuid        REFERENCES privacy.data_subjects(id),
+  id             bigint        PRIMARY KEY,
+  tenant_id      bigint,
+  subject_id     bigint        REFERENCES privacy.data_subjects(id),
   subject_ref    jsonb       NOT NULL,
   purpose        text        NOT NULL,
   granted        boolean     NOT NULL,
@@ -301,11 +301,11 @@ SELECT platform.enable_tenant_rls('privacy', 'consents');
 -- Preference signals (GPC/UOOM): observed before identification, bound to a
 -- subject on the next authenticated request; binding never unbinds.
 CREATE TABLE privacy.preference_signals (
-  id           uuid        PRIMARY KEY,
-  tenant_id    uuid,
+  id           bigint        PRIMARY KEY,
+  tenant_id    bigint,
   signal       text        NOT NULL,
   device_ref   text        NOT NULL,
-  subject_id   uuid        REFERENCES privacy.data_subjects(id),
+  subject_id   bigint        REFERENCES privacy.data_subjects(id),
   jurisdiction text        REFERENCES privacy.jurisdiction_profiles(code),
   purposes     text[]      NOT NULL,
   observed_at  timestamptz NOT NULL DEFAULT now(),
@@ -325,7 +325,7 @@ SELECT platform.enable_tenant_rls('privacy', 'preference_signals');
 -- from the ledger by the directive engine; state/source/jurisdiction are
 -- exactly what the privacy centre UI renders.
 CREATE TABLE privacy.purpose_directives (
-  subject_id     uuid,
+  subject_id     bigint,
   subject_ref    jsonb       NOT NULL,
   purpose        text        NOT NULL,
   state          text        NOT NULL,
@@ -334,7 +334,7 @@ CREATE TABLE privacy.purpose_directives (
   notice_version text,
   effective_at   timestamptz NOT NULL DEFAULT now(),
   superseded_at  timestamptz,
-  tenant_id      uuid,
+  tenant_id      bigint,
   PRIMARY KEY (subject_ref, purpose),
   CONSTRAINT purpose_directives_state_check CHECK (state IN ('allowed', 'denied')),
   CONSTRAINT purpose_directives_source_check
@@ -358,7 +358,7 @@ CREATE TABLE privacy.retention_rules (
   period                interval    NOT NULL,
   action                text        NOT NULL,
   disclosed_in_notice   boolean     NOT NULL DEFAULT true,
-  updated_by            uuid,
+  updated_by            bigint,
   updated_at            timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT retention_rules_sensitivity_check
     CHECK (sensitivity IN ('standard', 'sensitive', 'special', 'flagged_health', 'minors')),
@@ -392,13 +392,13 @@ ON CONFLICT (data_class) DO NOTHING;
 -- Legal holds: block erasure for named subjects/records; each hold is
 -- audited and has an explicit release.
 CREATE TABLE privacy.legal_holds (
-  id           uuid        PRIMARY KEY,
+  id           bigint        PRIMARY KEY,
   scope        jsonb       NOT NULL,
   reason       text        NOT NULL,
-  created_by   uuid        NOT NULL,
+  created_by   bigint        NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),
   released_at  timestamptz,
-  released_by  uuid,
+  released_by  bigint,
   CONSTRAINT legal_holds_reason_nonempty CHECK (length(btrim(reason)) > 0)
 );
 
@@ -409,16 +409,16 @@ CREATE TABLE privacy.legal_holds (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE privacy.processing_activities (
-  id            uuid        PRIMARY KEY,
+  id            bigint        PRIMARY KEY,
   name          text        NOT NULL,
   purpose       text        NOT NULL,
   data_classes  text[]      NOT NULL,
   controller_role text      NOT NULL DEFAULT 'controller',
   basis         text,
   version       int         NOT NULL DEFAULT 1,
-  supersedes    uuid,
+  supersedes    bigint,
   active        boolean     NOT NULL DEFAULT true,
-  created_by    uuid,
+  created_by    bigint,
   created_at    timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT processing_activities_name_nonempty CHECK (length(btrim(name)) > 0),
   CONSTRAINT processing_activities_role_check
@@ -426,14 +426,14 @@ CREATE TABLE privacy.processing_activities (
 );
 
 CREATE TABLE privacy.risk_assessments (
-  id            uuid        PRIMARY KEY,
-  activity_id   uuid        NOT NULL REFERENCES privacy.processing_activities(id) ON DELETE CASCADE,
+  id            bigint        PRIMARY KEY,
+  activity_id   bigint        NOT NULL REFERENCES privacy.processing_activities(id) ON DELETE CASCADE,
   jurisdictions text[]      NOT NULL,
   trigger       text        NOT NULL,
   status        text        NOT NULL DEFAULT 'open',
   findings      jsonb,
   mitigations   jsonb,
-  reviewed_by   uuid,
+  reviewed_by   bigint,
   reviewed_at   timestamptz,
   next_review_at timestamptz,
   created_at    timestamptz NOT NULL DEFAULT now(),
@@ -463,7 +463,7 @@ CREATE TABLE privacy.subprocessors (
 -- Per-subject envelope-encryption keys: the DEK is wrapped by a KEK held
 -- outside the database. Erasure destroys the row (crypto-shred).
 CREATE TABLE privacy.subject_keys (
-  subject_id   uuid        PRIMARY KEY REFERENCES privacy.data_subjects(id) ON DELETE CASCADE,
+  subject_id   bigint        PRIMARY KEY REFERENCES privacy.data_subjects(id) ON DELETE CASCADE,
   wrapped_dek  bytea       NOT NULL,
   kek_id       text        NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),
@@ -473,9 +473,9 @@ CREATE TABLE privacy.subject_keys (
 -- Packaged exports: encrypted in the tenant's region, one-time passphrase
 -- delivered out of band, download-link TTL and a download cap.
 CREATE TABLE privacy.export_artifacts (
-  id              uuid        PRIMARY KEY,
-  request_id      uuid        NOT NULL REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
-  subject_id      uuid        NOT NULL REFERENCES privacy.data_subjects(id),
+  id              bigint        PRIMARY KEY,
+  request_id      bigint        NOT NULL REFERENCES privacy.data_subject_requests(id) ON DELETE CASCADE,
+  subject_id      bigint        NOT NULL REFERENCES privacy.data_subjects(id),
   download_token_hash text     NOT NULL,
   passphrase_verifier  text    NOT NULL,
   manifest_sha256 text        NOT NULL,
@@ -493,20 +493,20 @@ CREATE TABLE privacy.export_artifacts (
 -- Breach incidents: one aggregate; obligations are computed per jurisdiction
 -- from the profile's breach_rules at record time and re-evaluated on edits.
 CREATE TABLE privacy.breach_incidents (
-  id                uuid        PRIMARY KEY,
+  id                bigint        PRIMARY KEY,
   discovered_at     timestamptz NOT NULL,
   contained_at      timestamptz,
   affected          jsonb       NOT NULL,
   data_classes      text[]      NOT NULL,
   encrypted_at_rest boolean     NOT NULL DEFAULT false,
   notes             text,
-  created_by        uuid,
+  created_by        bigint,
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE privacy.breach_obligations (
-  incident_id  uuid        NOT NULL REFERENCES privacy.breach_incidents(id) ON DELETE CASCADE,
+  incident_id  bigint        NOT NULL REFERENCES privacy.breach_incidents(id) ON DELETE CASCADE,
   jurisdiction text        NOT NULL REFERENCES privacy.jurisdiction_profiles(code),
   audience     text        NOT NULL,
   due_at       timestamptz NOT NULL,

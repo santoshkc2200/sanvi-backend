@@ -3,4 +3,4 @@
 -- must survive a rollback.
 DELETE FROM privacy.retention_rules
 WHERE data_class = 'transaction_record'
-  AND updated_by = '00000000-0000-0000-0000-000000000097';
+  AND updated_by = '97';

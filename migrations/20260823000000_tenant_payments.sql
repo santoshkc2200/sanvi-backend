@@ -27,8 +27,8 @@ CREATE SCHEMA IF NOT EXISTS payments;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE payments.provider_connections (
-  id                   uuid        PRIMARY KEY,
-  tenant_id            uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id                   bigint        PRIMARY KEY,
+  tenant_id            bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   provider             text        NOT NULL,
   external_account_id  text        NOT NULL,
   status               text        NOT NULL,
@@ -70,9 +70,9 @@ SELECT platform.enable_tenant_rls('payments', 'provider_connections');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE payments.checkouts (
-  id                    uuid        PRIMARY KEY,
-  tenant_id             uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  connection_id         uuid        NOT NULL REFERENCES payments.provider_connections(id) ON DELETE CASCADE,
+  id                    bigint        PRIMARY KEY,
+  tenant_id             bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  connection_id         bigint        NOT NULL REFERENCES payments.provider_connections(id) ON DELETE CASCADE,
   reference             text        NOT NULL,
   customer_ref          jsonb,
   amount_minor          bigint      NOT NULL CHECK (amount_minor >= 0),
@@ -105,9 +105,9 @@ SELECT platform.enable_tenant_rls('payments', 'checkouts');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE payments.payments (
-  id                    uuid        PRIMARY KEY,
-  tenant_id             uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  checkout_id           uuid        REFERENCES payments.checkouts(id) ON DELETE SET NULL,
+  id                    bigint        PRIMARY KEY,
+  tenant_id             bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  checkout_id           bigint        REFERENCES payments.checkouts(id) ON DELETE SET NULL,
   external_payment_id   text        NOT NULL,
   status                text        NOT NULL,
   amount_minor          bigint      NOT NULL CHECK (amount_minor >= 0),
@@ -137,15 +137,15 @@ SELECT platform.enable_tenant_rls('payments', 'payments');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE payments.refunds (
-  id                   uuid        PRIMARY KEY,
-  tenant_id            uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  payment_id           uuid        NOT NULL REFERENCES payments.payments(id) ON DELETE CASCADE,
+  id                   bigint        PRIMARY KEY,
+  tenant_id            bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  payment_id           bigint        NOT NULL REFERENCES payments.payments(id) ON DELETE CASCADE,
   external_refund_id   text,
   amount_minor         bigint      NOT NULL CHECK (amount_minor >= 0),
   currency             text        NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
   reason               text,
   status               text        NOT NULL,
-  created_by           uuid,
+  created_by           bigint,
   idempotency_key      uuid,
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),

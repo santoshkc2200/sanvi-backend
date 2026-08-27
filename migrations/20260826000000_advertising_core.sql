@@ -7,8 +7,8 @@
 CREATE SCHEMA IF NOT EXISTS advertising;
 
 CREATE TABLE advertising.connections (
-  id                  uuid        PRIMARY KEY,
-  tenant_id           uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id                  bigint        PRIMARY KEY,
+  tenant_id           bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   platform            text        NOT NULL CHECK (platform IN ('google_ads', 'meta')),
   external_account_id text        NOT NULL,
   account_name        text,
@@ -17,7 +17,7 @@ CREATE TABLE advertising.connections (
   status              text        NOT NULL CHECK (status IN ('active', 'disconnected', 'expired')),
   scopes              text[]      NOT NULL DEFAULT '{}',
   token_ref           text        NOT NULL,
-  connected_by        uuid,
+  connected_by        bigint,
   connected_at        timestamptz NOT NULL DEFAULT now(),
   last_synced_at      timestamptz,
   last_error          jsonb,
@@ -30,9 +30,9 @@ CREATE TABLE advertising.connections (
 SELECT platform.enable_tenant_rls('advertising', 'connections');
 
 CREATE TABLE advertising.campaigns (
-  id            uuid        PRIMARY KEY,
-  tenant_id     uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  connection_id uuid        NOT NULL,
+  id            bigint        PRIMARY KEY,
+  tenant_id     bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  connection_id bigint        NOT NULL,
   platform      text        NOT NULL CHECK (platform IN ('google_ads', 'meta')),
   external_id   text,
   name          text        NOT NULL,
@@ -52,9 +52,9 @@ CREATE TABLE advertising.campaigns (
 SELECT platform.enable_tenant_rls('advertising', 'campaigns');
 
 CREATE TABLE advertising.ad_groups (
-  id          uuid        PRIMARY KEY,
-  tenant_id   uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  campaign_id uuid        NOT NULL,
+  id          bigint        PRIMARY KEY,
+  tenant_id   bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  campaign_id bigint        NOT NULL,
   external_id text,
   name        text        NOT NULL,
   targeting   jsonb       NOT NULL DEFAULT '{}',
@@ -69,8 +69,8 @@ CREATE TABLE advertising.ad_groups (
 SELECT platform.enable_tenant_rls('advertising', 'ad_groups');
 
 CREATE TABLE advertising.creatives (
-  id          uuid        PRIMARY KEY,
-  tenant_id   uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id          bigint        PRIMARY KEY,
+  tenant_id   bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   external_id text,
   specification jsonb     NOT NULL DEFAULT '{}',
   created_at  timestamptz NOT NULL DEFAULT now(),
@@ -80,10 +80,10 @@ CREATE TABLE advertising.creatives (
 SELECT platform.enable_tenant_rls('advertising', 'creatives');
 
 CREATE TABLE advertising.ads (
-  id                uuid        PRIMARY KEY,
-  tenant_id         uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  ad_group_id       uuid        NOT NULL,
-  creative_id       uuid,
+  id                bigint        PRIMARY KEY,
+  tenant_id         bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  ad_group_id       bigint        NOT NULL,
+  creative_id       bigint,
   external_id       text,
   landing_url       text        NOT NULL,
   tracking_template text,
@@ -103,7 +103,7 @@ SELECT platform.enable_tenant_rls('advertising', 'ads');
 -- `(tenant_id, event_id)` deduplication guarantee without weakening monthly
 -- partitioning of the event history.
 CREATE TABLE advertising.conversion_event_dedup (
-  tenant_id   uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id   bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   event_id    text        NOT NULL,
   occurred_at timestamptz NOT NULL,
   PRIMARY KEY (tenant_id, event_id)
@@ -111,8 +111,8 @@ CREATE TABLE advertising.conversion_event_dedup (
 SELECT platform.enable_tenant_rls('advertising', 'conversion_event_dedup');
 
 CREATE TABLE advertising.conversion_events (
-  id            uuid        NOT NULL,
-  tenant_id     uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id            bigint        NOT NULL,
+  tenant_id     bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   event_id      text        NOT NULL,
   name          text        NOT NULL,
   occurred_at   timestamptz NOT NULL,
@@ -136,10 +136,10 @@ CREATE TABLE advertising.conversion_events (
 SELECT platform.enable_tenant_rls('advertising', 'conversion_events');
 
 CREATE TABLE advertising.metrics_daily (
-  tenant_id                uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id                bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   platform                 text        NOT NULL CHECK (platform IN ('google_ads', 'meta')),
-  connection_id            uuid        NOT NULL,
-  campaign_id              uuid        NOT NULL,
+  connection_id            bigint        NOT NULL,
+  campaign_id              bigint        NOT NULL,
   date                     date        NOT NULL,
   impressions              bigint      NOT NULL DEFAULT 0 CHECK (impressions >= 0),
   clicks                   bigint      NOT NULL DEFAULT 0 CHECK (clicks >= 0),
@@ -181,7 +181,7 @@ BEGIN
   EXECUTE format('ALTER TABLE advertising.%I FORCE ROW LEVEL SECURITY', conversion_child);
   EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON advertising.%I', conversion_child);
   EXECUTE format(
-    'CREATE POLICY tenant_isolation ON advertising.%I USING (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::uuid) WITH CHECK (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::uuid)',
+    'CREATE POLICY tenant_isolation ON advertising.%I USING (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::bigint) WITH CHECK (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::bigint)',
     conversion_child
   );
   EXECUTE format('GRANT SELECT, INSERT, UPDATE ON advertising.%I TO sanvi_app', conversion_child);
@@ -194,7 +194,7 @@ BEGIN
   EXECUTE format('ALTER TABLE advertising.%I FORCE ROW LEVEL SECURITY', metrics_child);
   EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON advertising.%I', metrics_child);
   EXECUTE format(
-    'CREATE POLICY tenant_isolation ON advertising.%I USING (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::uuid) WITH CHECK (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::uuid)',
+    'CREATE POLICY tenant_isolation ON advertising.%I USING (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::bigint) WITH CHECK (current_setting(''sanvi.platform_scope'', true) = ''on'' OR tenant_id = NULLIF(current_setting(''sanvi.tenant_id'', true), '''')::bigint)',
     metrics_child
   );
   EXECUTE format('GRANT SELECT, INSERT, UPDATE ON advertising.%I TO sanvi_app', metrics_child);
@@ -221,6 +221,6 @@ GRANT EXECUTE ON FUNCTION advertising.ensure_monthly_partitions(date) TO sanvi_a
 INSERT INTO privacy.retention_rules
   (data_class, sensitivity, basis, period, action, disclosed_in_notice, updated_by)
 VALUES
-  ('advertising_conversion_event', 'sensitive', 'consent', make_interval(days => 730), 'anonymise', true, '00000000-0000-0000-0000-000000000100'),
-  ('advertising_metric', 'standard', 'legitimate_interest', make_interval(days => 1095), 'delete', true, '00000000-0000-0000-0000-000000000100')
+  ('advertising_conversion_event', 'sensitive', 'consent', make_interval(days => 730), 'anonymise', true, '100'),
+  ('advertising_metric', 'standard', 'legitimate_interest', make_interval(days => 1095), 'delete', true, '100')
 ON CONFLICT (data_class) DO NOTHING;

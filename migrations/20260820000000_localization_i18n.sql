@@ -36,7 +36,7 @@ VALUES
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE localization.tenant_locales (
-  tenant_id       uuid        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id       bigint        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   default_locale  text        NOT NULL,
   enabled_locales text[]      NOT NULL,
   timezone        text        NOT NULL DEFAULT 'UTC',
@@ -49,7 +49,7 @@ SELECT platform.enable_tenant_rls('localization', 'tenant_locales');
 -- ---------------------------------------------------------------------------
 -- Runtime-editable copy overrides, merged over the static catalogs.
 --
--- `scope` is 'platform' or a tenant uuid (text). Platform rows are readable
+-- `scope` is 'platform' or a tenant bigint (text). Platform rows are readable
 -- by the application role without a scope (they are public copy); writes
 -- require the audited `sanvi.platform_scope`. Tenant rows are readable and
 -- writable only within their tenant's RLS scope.
@@ -60,7 +60,7 @@ CREATE TABLE localization.translations (
   key        text        NOT NULL,
   locale     text        NOT NULL,
   value      text        NOT NULL,
-  updated_by uuid,
+  updated_by bigint,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (scope, key, locale),
   CONSTRAINT translations_scope_check

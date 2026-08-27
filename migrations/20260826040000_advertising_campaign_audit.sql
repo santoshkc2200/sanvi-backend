@@ -11,12 +11,12 @@ ALTER TABLE advertising.campaigns
   ADD COLUMN remote_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE advertising.campaign_changes (
-  id uuid PRIMARY KEY,
-  tenant_id uuid NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  campaign_id uuid NOT NULL,
+  id bigint PRIMARY KEY,
+  tenant_id bigint NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  campaign_id bigint NOT NULL,
   revision bigint NOT NULL CHECK (revision > 0),
-  mutation_id uuid,
-  actor_id uuid,
+  mutation_id bigint,
+  actor_id bigint,
   source text NOT NULL CHECK (source IN ('sanvi', 'platform')),
   changed_fields jsonb NOT NULL DEFAULT '[]'::jsonb,
   before_state jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -42,5 +42,5 @@ INSERT INTO privacy.retention_rules
 VALUES
   ('advertising_campaign_change', 'standard', 'legitimate_interest',
    make_interval(days => 1095), 'delete', true,
-   '00000000-0000-0000-0000-000000000100')
+   '100')
 ON CONFLICT (data_class) DO NOTHING;

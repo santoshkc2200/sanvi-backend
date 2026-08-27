@@ -2,7 +2,7 @@
 -- row exactly once; retaining redeemed rows makes replay attempts auditable.
 CREATE TABLE advertising.oauth_states (
   nonce      uuid        PRIMARY KEY,
-  tenant_id  uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id  bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   platform   text        NOT NULL CHECK (platform IN ('google_ads', 'meta')),
   expires_at timestamptz NOT NULL,
   redeemed_at timestamptz,

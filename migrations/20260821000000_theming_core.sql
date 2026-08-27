@@ -23,7 +23,7 @@ CREATE SCHEMA IF NOT EXISTS theming;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE theming.themes (
-  id               uuid        PRIMARY KEY,
+  id               bigint        PRIMARY KEY,
   key              text        UNIQUE NOT NULL,
   publisher        text        NOT NULL,
   visibility       text        NOT NULL,
@@ -42,8 +42,8 @@ CREATE TABLE theming.themes (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE theming.theme_versions (
-  id               uuid        PRIMARY KEY,
-  theme_id         uuid        NOT NULL REFERENCES theming.themes(id),
+  id               bigint        PRIMARY KEY,
+  theme_id         bigint        NOT NULL REFERENCES theming.themes(id),
   semver           text        NOT NULL,
   theme_api_range  text        NOT NULL,
   manifest         jsonb       NOT NULL,
@@ -91,16 +91,16 @@ CREATE TRIGGER theme_versions_immutable
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE theming.tenant_themes (
-  tenant_id        uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id        bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   state            text        NOT NULL,
-  theme_id         uuid        NOT NULL REFERENCES theming.themes(id),
+  theme_id         bigint        NOT NULL REFERENCES theming.themes(id),
   semver           text        NOT NULL,
   token_overrides  jsonb       NOT NULL DEFAULT '{}',
   layout_overrides jsonb       NOT NULL DEFAULT '{}',
   assets           jsonb       NOT NULL DEFAULT '{}',
   custom_css       text,
   revision         int         NOT NULL DEFAULT 0,
-  updated_by       uuid,
+  updated_by       bigint,
   updated_at       timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, state),
   CONSTRAINT tenant_themes_state_check CHECK (state IN ('draft', 'live'))
@@ -114,11 +114,11 @@ SELECT platform.enable_tenant_rls('theming', 'tenant_themes');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE theming.tenant_theme_revisions (
-  tenant_id    uuid        NOT NULL,
+  tenant_id    bigint        NOT NULL,
   revision     int         NOT NULL,
   snapshot     jsonb       NOT NULL,
   published_at timestamptz NOT NULL,
-  published_by uuid,
+  published_by bigint,
   PRIMARY KEY (tenant_id, revision),
   CONSTRAINT tenant_theme_revisions_tenant_fk
     FOREIGN KEY (tenant_id) REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
@@ -134,13 +134,13 @@ SELECT platform.enable_tenant_rls('theming', 'tenant_theme_revisions');
 -- ---------------------------------------------------------------------------
 
 INSERT INTO theming.themes (id, key, publisher, visibility, required_feature, status)
-VALUES ('00000000-0000-0000-0000-000000000001', 'base', 'sanvi', 'public', NULL, 'active');
+VALUES ('10', 'base', 'sanvi', 'public', NULL, 'active');
 
 INSERT INTO theming.theme_versions
   (id, theme_id, semver, theme_api_range, manifest, tokens, artifact_uri, artifact_digest)
 VALUES (
-  '00000000-0000-0000-0000-000000000002',
-  '00000000-0000-0000-0000-000000000001',
+  '11',
+  '10',
   '1.0.0',
   '^1.0.0',
   '{

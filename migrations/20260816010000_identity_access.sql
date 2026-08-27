@@ -27,11 +27,11 @@ BEGIN
     CREATE POLICY tenant_isolation ON %1$I.%2$I
       USING (
         current_setting('sanvi.platform_scope', true) = 'on'
-        OR tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::uuid
+        OR tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::bigint
       )
       WITH CHECK (
         current_setting('sanvi.platform_scope', true) = 'on'
-        OR tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::uuid
+        OR tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::bigint
       )
   $policy$, schema_name, table_name);
 END;
@@ -49,9 +49,9 @@ CREATE SCHEMA IF NOT EXISTS access;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE access.roles (
-  id         uuid        PRIMARY KEY,
+  id         bigint      PRIMARY KEY,
   scope      text        NOT NULL,
-  tenant_id  uuid,
+  tenant_id  bigint,
   key        text        NOT NULL,
   name       text        NOT NULL,
   is_system  boolean     NOT NULL DEFAULT false,
@@ -79,7 +79,7 @@ CREATE UNIQUE INDEX roles_tenant_key_unique
 SELECT platform.enable_tenant_rls('access', 'roles');
 
 CREATE TABLE access.role_permissions (
-  role_id    uuid NOT NULL REFERENCES access.roles(id) ON DELETE CASCADE,
+  role_id    bigint NOT NULL REFERENCES access.roles(id) ON DELETE CASCADE,
   permission text NOT NULL,
   PRIMARY KEY (role_id, permission)
 );
@@ -90,7 +90,7 @@ CREATE TABLE access.role_permissions (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE identity.users (
-  id                 uuid        PRIMARY KEY,
+  id                 bigint      PRIMARY KEY,
   kratos_identity_id uuid        NOT NULL UNIQUE,
   primary_email      text        NOT NULL,
   email_verified     boolean     NOT NULL DEFAULT false,
@@ -108,10 +108,10 @@ CREATE UNIQUE INDEX users_primary_email_unique
   ON identity.users (primary_email) WHERE deactivated_at IS NULL;
 
 CREATE TABLE identity.memberships (
-  tenant_id  uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  user_id    uuid        NOT NULL REFERENCES identity.users(id) ON DELETE CASCADE,
+  tenant_id  bigint      NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  user_id    bigint      NOT NULL REFERENCES identity.users(id) ON DELETE CASCADE,
   status     text        NOT NULL DEFAULT 'active',
-  invited_by uuid,
+  invited_by bigint,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, user_id),
   CONSTRAINT memberships_status_check CHECK (status IN ('active', 'suspended'))
@@ -120,9 +120,9 @@ CREATE TABLE identity.memberships (
 SELECT platform.enable_tenant_rls('identity', 'memberships');
 
 CREATE TABLE identity.membership_roles (
-  tenant_id uuid NOT NULL,
-  user_id   uuid NOT NULL,
-  role_id   uuid NOT NULL REFERENCES access.roles(id) ON DELETE CASCADE,
+  tenant_id bigint NOT NULL,
+  user_id   bigint NOT NULL,
+  role_id   bigint NOT NULL REFERENCES access.roles(id) ON DELETE CASCADE,
   PRIMARY KEY (tenant_id, user_id, role_id),
   FOREIGN KEY (tenant_id, user_id)
     REFERENCES identity.memberships(tenant_id, user_id) ON DELETE CASCADE
@@ -131,7 +131,7 @@ CREATE TABLE identity.membership_roles (
 SELECT platform.enable_tenant_rls('identity', 'membership_roles');
 
 CREATE TABLE identity.linked_accounts (
-  user_id    uuid        NOT NULL REFERENCES identity.users(id) ON DELETE CASCADE,
+  user_id    bigint      NOT NULL REFERENCES identity.users(id) ON DELETE CASCADE,
   provider   text        NOT NULL,
   subject    text        NOT NULL,
   linked_via text        NOT NULL,
@@ -142,12 +142,12 @@ CREATE TABLE identity.linked_accounts (
 );
 
 CREATE TABLE identity.invitations (
-  id          uuid        PRIMARY KEY,
-  tenant_id   uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id          bigint      PRIMARY KEY,
+  tenant_id   bigint      NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   email       text        NOT NULL,
-  role_ids    uuid[]      NOT NULL,
+  role_ids    bigint[]    NOT NULL,
   token_hash  text        NOT NULL UNIQUE,
-  invited_by  uuid,
+  invited_by  bigint,
   created_at  timestamptz NOT NULL DEFAULT now(),
   expires_at  timestamptz NOT NULL,
   accepted_at timestamptz,

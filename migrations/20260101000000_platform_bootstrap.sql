@@ -5,9 +5,9 @@
 CREATE SCHEMA IF NOT EXISTS platform;
 
 CREATE TABLE platform.outbox (
-  id            uuid PRIMARY KEY,
+  id            bigint PRIMARY KEY,
   aggregate     text        NOT NULL,
-  aggregate_id  uuid        NOT NULL,
+  aggregate_id  bigint      NOT NULL,
   event_type    text        NOT NULL,
   payload       jsonb       NOT NULL,
   metadata      jsonb       NOT NULL DEFAULT '{}',

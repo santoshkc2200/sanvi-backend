@@ -17,9 +17,9 @@
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE payments.disputes (
-  id                   uuid        PRIMARY KEY,
-  tenant_id            uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  payment_id           uuid        NOT NULL REFERENCES payments.payments(id) ON DELETE CASCADE,
+  id                   bigint        PRIMARY KEY,
+  tenant_id            bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  payment_id           bigint        NOT NULL REFERENCES payments.payments(id) ON DELETE CASCADE,
   external_dispute_id  text        NOT NULL,
   status               text        NOT NULL,
   amount_minor         bigint      NOT NULL CHECK (amount_minor >= 0),

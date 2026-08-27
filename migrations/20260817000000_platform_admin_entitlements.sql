@@ -45,13 +45,13 @@ CREATE TABLE access.features (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE access.entitlements (
-  tenant_id      uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id      bigint      NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   feature_key    text        NOT NULL REFERENCES access.features(key),
   enabled        boolean     NOT NULL,
   "limit"        bigint,
   source         text        NOT NULL,
   expires_at     timestamptz,
-  granted_by     uuid,
+  granted_by     bigint,
   granted_reason text,
   updated_at     timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, feature_key, source),
@@ -72,7 +72,7 @@ SELECT platform.enable_tenant_rls('access', 'entitlements');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE access.quota_usage (
-  tenant_id    uuid   NOT NULL,
+  tenant_id    bigint NOT NULL,
   feature_key  text   NOT NULL REFERENCES access.features(key),
   period_start date   NOT NULL,
   used         bigint NOT NULL DEFAULT 0,
@@ -89,16 +89,16 @@ SELECT platform.enable_tenant_rls('access', 'quota_usage');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE platform_admin.impersonation_grants (
-  id             uuid        PRIMARY KEY,
-  actor_id       uuid        NOT NULL,
-  tenant_id      uuid        NOT NULL,
-  target_user_id uuid        NOT NULL,
+  id             bigint      PRIMARY KEY,
+  actor_id       bigint      NOT NULL,
+  tenant_id      bigint      NOT NULL,
+  target_user_id bigint      NOT NULL,
   reason         text        NOT NULL,
   mode           text        NOT NULL,
   expires_at     timestamptz NOT NULL,
   created_at     timestamptz NOT NULL DEFAULT now(),
   revoked_at     timestamptz,
-  revoked_by     uuid,
+  revoked_by     bigint,
   CONSTRAINT impersonation_mode_check CHECK (mode IN ('read_only', 'read_write')),
   CONSTRAINT impersonation_reason_nonempty CHECK (length(btrim(reason)) > 0),
   CONSTRAINT impersonation_expiry_check CHECK (expires_at > created_at)
@@ -118,13 +118,13 @@ SELECT platform.enable_tenant_rls('platform_admin', 'impersonation_grants');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE platform_admin.pending_approvals (
-  id           uuid        PRIMARY KEY,
-  requested_by uuid        NOT NULL,
+  id           bigint      PRIMARY KEY,
+  requested_by bigint      NOT NULL,
   action_type  text        NOT NULL,
   payload      jsonb       NOT NULL,
   status       text        NOT NULL DEFAULT 'pending',
   requested_at timestamptz NOT NULL DEFAULT now(),
-  decided_by   uuid,
+  decided_by   bigint,
   decided_at   timestamptz,
   CONSTRAINT pending_approvals_status_check
     CHECK (status IN ('pending', 'approved', 'rejected', 'executed')),
@@ -151,12 +151,12 @@ CREATE INDEX pending_approvals_pending_idx
 
 CREATE TABLE audit.entries (
   seq           bigserial   NOT NULL,
-  id            uuid        PRIMARY KEY,
+  id            bigint      PRIMARY KEY,
   occurred_at   timestamptz NOT NULL DEFAULT now(),
   actor_type    text        NOT NULL,
-  actor_id      uuid,
-  on_behalf_of  uuid,
-  tenant_id     uuid,
+  actor_id      bigint,
+  on_behalf_of  bigint,
+  tenant_id     bigint,
   action        text        NOT NULL,
   resource_type text,
   resource_id   text,

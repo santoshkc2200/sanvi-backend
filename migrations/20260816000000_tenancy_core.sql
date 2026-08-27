@@ -16,7 +16,7 @@
 -- The NULLIF is load-bearing: once a pooled connection has ever issued
 -- `SET LOCAL sanvi.tenant_id`, PostgreSQL registers the custom GUC as a
 -- session placeholder whose value reads back as '' (not NULL) after the
--- transaction commits — `''::uuid` would error on every subsequent query.
+-- transaction commits — `''::bigint` would error on every subsequent query.
 -- NULLIF collapses the empty placeholder back to NULL ("no tenant"), which
 -- is exactly the isolation semantics we want on unscoped connections.
 CREATE FUNCTION platform.enable_tenant_rls(schema_name text, table_name text)
@@ -29,8 +29,8 @@ BEGIN
   EXECUTE format('ALTER TABLE %I.%I FORCE ROW LEVEL SECURITY', schema_name, table_name);
   EXECUTE format($policy$
     CREATE POLICY tenant_isolation ON %1$I.%2$I
-      USING (tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::uuid)
-      WITH CHECK (tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::uuid)
+      USING (tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::bigint)
+      WITH CHECK (tenant_id = NULLIF(current_setting('sanvi.tenant_id', true), '')::bigint)
   $policy$, schema_name, table_name);
 END;
 $$;
@@ -40,7 +40,7 @@ CREATE SCHEMA IF NOT EXISTS tenancy;
 -- Tenants are platform-scoped: no tenant_id column, no RLS. Access happens
 -- exclusively through PlatformScope (audited) — see crates/platform/persistence.
 CREATE TABLE tenancy.tenants (
-  id                 uuid        PRIMARY KEY,
+  id                 bigint      PRIMARY KEY,
   slug               text        NOT NULL,
   display_name       text        NOT NULL,
   status             text        NOT NULL,
@@ -63,7 +63,7 @@ CREATE UNIQUE INDEX tenants_slug_unique ON tenancy.tenants (lower(slug));
 
 -- The first tenant-scoped table: RLS FORCE + policy via the shared helper.
 CREATE TABLE tenancy.tenant_settings (
-  tenant_id  uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id  bigint      NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   key        text        NOT NULL,
   value      jsonb       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -154,7 +154,7 @@ ALTER TABLE platform.idempotency_keys ADD PRIMARY KEY (key, scope);
 -- Async backbone: consumer deduplication, outbox dead-letter, platform audit.
 CREATE TABLE platform.processed_events (
   consumer     text        NOT NULL,
-  event_id     uuid        NOT NULL,
+  event_id     bigint      NOT NULL,
   processed_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (consumer, event_id)
 );
@@ -168,7 +168,7 @@ CREATE TABLE platform.outbox_dlq (
 -- Every unscoped (PlatformScope) transaction writes an audit row with its
 -- reason and actor before any statement runs.
 CREATE TABLE platform.audit_log (
-  id     bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  id     bigint      PRIMARY KEY,
   actor  text        NOT NULL,
   action text        NOT NULL,
   reason text,
@@ -191,4 +191,3 @@ GRANT INSERT ON platform.outbox_dlq TO sanvi_app;
 GRANT SELECT, INSERT ON platform.processed_events TO sanvi_app;
 GRANT DELETE ON platform.idempotency_keys TO sanvi_app;
 GRANT INSERT ON platform.audit_log TO sanvi_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA platform TO sanvi_app;
