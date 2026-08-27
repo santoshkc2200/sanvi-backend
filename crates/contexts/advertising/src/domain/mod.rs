@@ -46,8 +46,7 @@ pub use validation::{ValidationViolation, validate_campaign};
 pub mod hashing;
 
 pub use model::{
-    ClickIds, ConversionDiagnostics, ConversionEvent, SuppressedByDirective, UploadReceipt,
-    UploadState, ValueSource,
+    ClickIds, ConversionDiagnostics, ConversionEvent, UploadReceipt, UploadState, ValueSource,
 };
 pub use ports::{
     ConversionEventRepository, ConversionSinkPort, PaymentLookup, PaymentLookupPort,

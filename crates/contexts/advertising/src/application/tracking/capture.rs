@@ -222,9 +222,13 @@ impl CaptureConversion {
     /// Every event asks `ads_measurement`, plus `sale_or_share` and
     /// `targeted_advertising` for any mapped platform whose sub-processor
     /// role is `ThirdParty` rather than `ServiceProvider`. The first
-    /// denial found suppresses the event; the purpose and the directive's
-    /// signal source that caused it are recorded on the event, not just
-    /// logged.
+    /// denial found suppresses the event; the denying purpose is recorded
+    /// in `answers` and its directive's signal source in `signal_source`,
+    /// so the frozen snapshot alone says what suppressed the event and why
+    /// — nothing has to re-ask the resolver to find out.
+    ///
+    /// Where no denial is found, `signal_source` is the *first* asked
+    /// purpose's source (`ads_measurement`), not the last.
     ///
     /// A `platforms_incomplete` command asks for those extra purposes
     /// regardless. The decision is frozen onto the event here and never

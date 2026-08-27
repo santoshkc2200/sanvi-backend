@@ -795,22 +795,25 @@ mod tests {
         let mut event = sample_conversion_event("evt-multi-platform");
         assert!(event.upload_states.is_empty());
 
+        let google_ads = PlatformKey::parse("google_ads").unwrap();
+        let meta = PlatformKey::parse("meta").unwrap();
+
         event
             .upload_states
-            .insert("google_ads".to_string(), UploadState::Uploaded);
+            .insert(google_ads.clone(), UploadState::Uploaded);
         event.upload_states.insert(
-            "meta".to_string(),
+            meta.clone(),
             UploadState::Failed {
                 reason: "invalid access token".to_string(),
             },
         );
 
         assert_eq!(
-            event.upload_states.get("google_ads"),
+            event.upload_states.get(&google_ads),
             Some(&UploadState::Uploaded)
         );
         assert_eq!(
-            event.upload_states.get("meta"),
+            event.upload_states.get(&meta),
             Some(&UploadState::Failed {
                 reason: "invalid access token".to_string(),
             })
@@ -819,14 +822,14 @@ mod tests {
         // Mutating google_ads does not clobber or affect meta
         event
             .upload_states
-            .insert("google_ads".to_string(), UploadState::Pending);
+            .insert(google_ads.clone(), UploadState::Pending);
 
         assert_eq!(
-            event.upload_states.get("google_ads"),
+            event.upload_states.get(&google_ads),
             Some(&UploadState::Pending)
         );
         assert_eq!(
-            event.upload_states.get("meta"),
+            event.upload_states.get(&meta),
             Some(&UploadState::Failed {
                 reason: "invalid access token".to_string(),
             })
@@ -840,13 +843,16 @@ mod tests {
             id: "conn-google".to_string(),
         };
 
+        let google_ads = PlatformKey::parse("google_ads").unwrap();
+        let meta = PlatformKey::parse("meta").unwrap();
+
         let mut event = sample_conversion_event("evt-retract-1");
         event
             .upload_states
-            .insert("google_ads".to_string(), UploadState::Uploaded);
+            .insert(google_ads.clone(), UploadState::Uploaded);
         event
             .upload_states
-            .insert("meta".to_string(), UploadState::Uploaded);
+            .insert(meta.clone(), UploadState::Uploaded);
 
         sink.retract(&connection, &event).await.unwrap();
 
@@ -856,10 +862,10 @@ mod tests {
 
         // Retraction state update on the caller side removes/updates google_ads
         // but does not mutate meta's entry
-        event.upload_states.remove("google_ads");
-        assert_eq!(event.upload_states.get("google_ads"), None);
+        event.upload_states.remove(&google_ads);
+        assert_eq!(event.upload_states.get(&google_ads), None);
         assert_eq!(
-            event.upload_states.get("meta"),
+            event.upload_states.get(&meta),
             Some(&UploadState::Uploaded)
         );
     }

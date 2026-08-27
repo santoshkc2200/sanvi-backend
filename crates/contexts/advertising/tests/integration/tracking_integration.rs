@@ -425,7 +425,40 @@ async fn every_stored_event_carries_a_complete_consent_snapshot() {
     assert!(!consent["jurisdiction"].as_str().unwrap().is_empty());
     assert!(!consent["purposes_asked"].as_array().unwrap().is_empty());
     assert!(!consent["answers"].as_object().unwrap().is_empty());
-    assert!(!consent["signal_source"].as_str().unwrap().is_empty());
+    assert_eq!(consent["signal_source"], "default");
+}
+
+#[tokio::test]
+async fn permitted_event_freezes_the_first_asked_purposes_signal_source() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "first-signal-source").await;
+    let tx = TxManager::new(pool.clone());
+
+    // Every purpose is allowed, but each answer comes from a different
+    // source. `ads_measurement` is asked first, so its source is the one
+    // frozen onto the event — the later purposes must not overwrite it.
+    let resolver = FakeDirectiveResolver::allow_all()
+        .with(
+            ProcessingPurpose::AdsMeasurement,
+            DirectiveState::Allowed,
+            DirectiveSource::Signal,
+        )
+        .with(
+            ProcessingPurpose::TargetedAdvertising,
+            DirectiveState::Allowed,
+            DirectiveSource::Consent,
+        );
+    let capture = capture_with(tx, resolver, None, VendorRole::ThirdParty);
+    capture
+        .execute(base_command(tenant_id, "evt-first-source"))
+        .await
+        .unwrap();
+
+    let row = fetch_row(&pool, tenant_id, "evt-first-source").await;
+    assert_eq!(row["consent"]["answers"]["ads_measurement"], "allowed");
+    assert_eq!(row["consent"]["answers"]["targeted_advertising"], "allowed");
+    assert_eq!(row["consent"]["signal_source"], "signal");
 }
 
 #[tokio::test]

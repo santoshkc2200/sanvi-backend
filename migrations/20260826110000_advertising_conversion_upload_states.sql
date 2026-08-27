@@ -3,5 +3,6 @@
 ALTER TABLE advertising.conversion_events
   RENAME COLUMN upload_state TO upload_states;
 
-ALTER TABLE advertising.conversion_events
-  ALTER COLUMN upload_states SET DEFAULT '{}'::jsonb;
+UPDATE advertising.conversion_events
+  SET upload_states = '{}'::jsonb;
+

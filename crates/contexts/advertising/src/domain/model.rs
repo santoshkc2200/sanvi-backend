@@ -262,18 +262,16 @@ pub enum ValueSource {
     ClientReported,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SuppressedByDirective {
-    pub purpose: String,
-    pub signal_source: String,
-}
-
+/// Per-platform upload progress. Suppression is deliberately absent: a
+/// directive suppresses the whole event, not one platform, and the frozen
+/// `ConsentSnapshot` already carries which purpose was denied and by which
+/// signal source. Duplicating that here would give suppression two homes
+/// that can disagree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UploadState {
     #[default]
     Pending,
-    SuppressedByDirective(SuppressedByDirective),
     Uploaded,
     Failed {
         reason: String,
@@ -306,7 +304,7 @@ pub struct ConversionEvent {
     pub hashed_identifiers: BTreeMap<String, HashedIdentifier>,
     pub consent: ConsentSnapshot,
     #[serde(default)]
-    pub upload_states: BTreeMap<String, UploadState>,
+    pub upload_states: BTreeMap<PlatformKey, UploadState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

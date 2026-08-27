@@ -12,8 +12,7 @@ use sanvi_advertising::adapters::http::tracking_handlers::{
 };
 use sanvi_advertising::domain::{
     ClickIds, ConsentSnapshot, ConversionDiagnostics, ConversionEvent, HashedIdentifier,
-    Money as AdvertisingMoney, SuppressedByDirective, TrackingSettings, UploadReceipt, UploadState,
-    ValueSource,
+    Money as AdvertisingMoney, TrackingSettings, UploadReceipt, UploadState, ValueSource,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -225,7 +224,7 @@ use utoipa::OpenApi;
         ConnectionHealthView, ConnectionView, ConnectionsView,
         CreateCreativeRequest, CreativeView, CreativesView, CreativePreviewView, CreativePreviewsView,
         TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, ConversionEvent,
-        ConversionDiagnostics, ConsentSnapshot, ClickIds, ValueSource, SuppressedByDirective,
+        ConversionDiagnostics, ConsentSnapshot, ClickIds, ValueSource,
         UploadReceipt, UploadState, AdvertisingMoney, HashedIdentifier
     )),
     tags(
