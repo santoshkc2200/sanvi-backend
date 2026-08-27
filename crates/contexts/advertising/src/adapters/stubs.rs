@@ -864,10 +864,7 @@ mod tests {
         // but does not mutate meta's entry
         event.upload_states.remove(&google_ads);
         assert_eq!(event.upload_states.get(&google_ads), None);
-        assert_eq!(
-            event.upload_states.get(&meta),
-            Some(&UploadState::Uploaded)
-        );
+        assert_eq!(event.upload_states.get(&meta), Some(&UploadState::Uploaded));
     }
 
     #[tokio::test]
