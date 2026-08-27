@@ -3002,7 +3002,10 @@ async fn deleting_referenced_creative_fails_publish() {
         updated_at: Utc::now(),
     };
     let mut scope = manager.begin_for(tenant_id).await.unwrap();
-    creatives.insert(&mut scope, &stored_creative).await.unwrap();
+    creatives
+        .insert(&mut scope, &stored_creative)
+        .await
+        .unwrap();
     scope.commit().await.unwrap();
 
     let draft = create
@@ -3068,12 +3071,7 @@ async fn deleting_referenced_creative_fails_publish() {
 
     // 3. Attempting to publish now must fail with CreativeNotFound.
     let publish_err = publish
-        .execute(
-            tenant_id,
-            draft.id,
-            Uuid::now_v7(),
-            actor_id,
-        )
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
         .await;
     assert!(
         matches!(
@@ -3084,10 +3082,7 @@ async fn deleting_referenced_creative_fails_publish() {
     );
 
     // 4. Verify campaign remains unpublished.
-    let get = GetCampaign::new(
-        manager.clone(),
-        campaigns.clone(),
-    );
+    let get = GetCampaign::new(manager.clone(), campaigns.clone());
     let stored_after_fail = get.execute(tenant_id, draft.id).await.unwrap();
     assert!(stored_after_fail.external_id.is_none());
     assert_eq!(stored_after_fail.intent.status, CampaignStatus::Draft);

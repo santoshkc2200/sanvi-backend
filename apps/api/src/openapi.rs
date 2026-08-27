@@ -11,8 +11,8 @@ use sanvi_advertising::adapters::http::tracking_handlers::{
     TestTrackingEventResponse, TrackConversionRequest,
 };
 use sanvi_advertising::domain::{
-    ClickIds, ConsentSnapshot, ConversionEvent, HashedIdentifier, Money as AdvertisingMoney,
-    SuppressedByDirective, TrackingSettings, UploadState, ValueSource,
+    ClickIds, ConsentSnapshot, ConversionDiagnostics, ConversionEvent, HashedIdentifier,
+    Money as AdvertisingMoney, SuppressedByDirective, TrackingSettings, UploadState, ValueSource,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -209,6 +209,10 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
         sanvi_advertising::adapters::http::tracking_handlers::test_tracking_event,
         sanvi_advertising::adapters::http::tracking_handlers::list_conversions,
+        sanvi_advertising::adapters::http::tracking_handlers::get_conversion_diagnostics,
+        sanvi_advertising::adapters::http::tracking_handlers::retry_conversion,
+        sanvi_advertising::adapters::http::tracking_handlers::list_audiences,
+        sanvi_advertising::adapters::http::tracking_handlers::create_audience,
     ),
     components(schemas(
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
@@ -220,8 +224,8 @@ use utoipa::OpenApi;
         ConnectionHealthView, ConnectionView, ConnectionsView,
         CreateCreativeRequest, CreativeView, CreativesView, CreativePreviewView, CreativePreviewsView,
         TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, ConversionEvent,
-        ConsentSnapshot, ClickIds, ValueSource, SuppressedByDirective, UploadState,
-        AdvertisingMoney, HashedIdentifier
+        ConversionDiagnostics, ConsentSnapshot, ClickIds, ValueSource, SuppressedByDirective,
+        UploadState, AdvertisingMoney, HashedIdentifier
     )),
     tags(
         (name = "system", description = "System, health and build information"),
@@ -440,6 +444,21 @@ mod tests {
                 .get("/api/v1/tenant/ads/creatives/{creative_id}/previews")
                 .is_some()
         );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/conversions/{id}/diagnostics")
+                .is_some()
+        );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/conversions/{id}/retry")
+                .is_some()
+        );
+        assert!(
+            document["paths"]
+                .get("/api/v1/tenant/ads/audiences")
+                .is_some()
+        );
         let preview_parameters = document["paths"]
             ["/api/v1/tenant/ads/creatives/{creative_id}/previews"]["get"]["parameters"]
             .as_array()
@@ -456,6 +475,7 @@ mod tests {
         assert!(schemas.get("CreativesView").is_some());
         assert!(schemas.get("CreateCreativeRequest").is_some());
         assert!(schemas.get("CreativePreviewsView").is_some());
+        assert!(schemas.get("ConversionDiagnostics").is_some());
         for schema in [
             "AdvertisingProblemType",
             "MetricPoint",

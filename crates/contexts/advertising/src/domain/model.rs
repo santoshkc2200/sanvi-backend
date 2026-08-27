@@ -300,3 +300,9 @@ pub struct ConversionEvent {
     pub consent: ConsentSnapshot,
     pub upload_state: UploadState,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ConversionDiagnostics {
+    pub event: ConversionEvent,
+    pub captured_at: DateTime<Utc>,
+}

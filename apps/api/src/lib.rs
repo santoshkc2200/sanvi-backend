@@ -2877,6 +2877,12 @@ pub async fn build_advertising_state(
     let list_conversions = std::sync::Arc::new(
         sanvi_advertising::application::tracking::conversions::ListConversions::new(
             tx.clone(),
+            conversion_repo.clone(),
+        ),
+    );
+    let get_conversion_diagnostics = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::conversions::GetConversionDiagnostics::new(
+            tx.clone(),
             conversion_repo,
         ),
     );
@@ -3018,6 +3024,7 @@ pub async fn build_advertising_state(
         capture,
         settings_mgr,
         list_conversions,
+        get_conversion_diagnostics,
     })
 }
 

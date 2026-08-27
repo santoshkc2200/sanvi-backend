@@ -21,6 +21,41 @@ paths:
           description: Always returned, regardless of outcome — see the module doc for why
       tags:
       - advertising
+  /api/v1/tenant/ads/audiences:
+    get:
+      operationId: list_audiences
+      responses:
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Audience sync is not implemented yet
+      tags:
+      - advertising
+    post:
+      operationId: create_audience
+      responses:
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Audience sync is not implemented yet
+      tags:
+      - advertising
   /api/v1/tenant/ads/campaigns:
     get:
       operationId: list_campaigns
@@ -988,6 +1023,64 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
+      tags:
+      - advertising
+  /api/v1/tenant/ads/conversions/{id}/diagnostics:
+    get:
+      operationId: get_conversion_diagnostics
+      parameters:
+      - description: Conversion event UUID
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversionDiagnostics'
+          description: Conversion event diagnostics story
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.metrics.read permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Conversion not found
+      tags:
+      - advertising
+  /api/v1/tenant/ads/conversions/{id}/retry:
+    post:
+      operationId: retry_conversion
+      parameters:
+      - description: Conversion event UUID
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.campaign.write permission
+        '501':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Conversion upload retry is not implemented yet
       tags:
       - advertising
   /api/v1/tenant/ads/creatives:

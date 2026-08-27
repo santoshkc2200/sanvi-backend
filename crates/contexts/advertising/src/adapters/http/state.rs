@@ -61,4 +61,6 @@ pub struct AdvertisingState {
     pub capture: Arc<crate::application::tracking::capture::CaptureConversion>,
     pub settings_mgr: Arc<crate::application::tracking::settings::ManageTrackingSettings>,
     pub list_conversions: Arc<crate::application::tracking::conversions::ListConversions>,
+    pub get_conversion_diagnostics:
+        Arc<crate::application::tracking::conversions::GetConversionDiagnostics>,
 }

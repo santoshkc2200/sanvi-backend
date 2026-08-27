@@ -206,6 +206,9 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
         AdvertisingError::CreativeNotFound => ApiError::NotFound {
             resource: "creative".to_string(),
         },
+        AdvertisingError::ConversionNotFound => ApiError::NotFound {
+            resource: "conversion".to_string(),
+        },
         // Normally intercepted by `campaign_validation_problem` so the
         // response carries field-addressed violations; the bare mapping
         // keeps this match exhaustive.

@@ -21,7 +21,9 @@ use sanvi_privacy::domain::SubjectRef;
 use super::handlers::api_error;
 use crate::adapters::http::AdvertisingState;
 use crate::application::tracking::capture::TrackConversionCommand;
-use crate::domain::{ClickIds, ConversionEvent, PlatformKey, TrackingSettings};
+use crate::domain::{
+    ClickIds, ConversionDiagnostics, ConversionEvent, PlatformKey, TrackingSettings,
+};
 
 #[derive(serde::Deserialize, ToSchema)]
 pub struct TrackConversionRequest {
@@ -421,6 +423,126 @@ pub async fn list_conversions(
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(events))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/conversions/{id}/diagnostics",
+    tag = "advertising",
+    operation_id = "get_conversion_diagnostics",
+    params(
+        ("id" = Uuid, Path, description = "Conversion event UUID")
+    ),
+    responses(
+        (status = 200, description = "Conversion event diagnostics story", body = ConversionDiagnostics),
+        (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail),
+        (status = 404, description = "Conversion not found", body = ProblemDetail)
+    )
+)]
+pub async fn get_conversion_diagnostics(
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    path: web::Path<Uuid>,
+    state: web::Data<AdvertisingState>,
+) -> Result<HttpResponse, ApiError> {
+    let diagnostics = state
+        .get_conversion_diagnostics
+        .execute(tenant.0.tenant_id, path.into_inner())
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(diagnostics))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/conversions/{id}/retry",
+    tag = "advertising",
+    operation_id = "retry_conversion",
+    params(
+        ("id" = Uuid, Path, description = "Conversion event UUID")
+    ),
+    responses(
+        (status = 501, description = "Conversion upload retry is not implemented yet", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail)
+    )
+)]
+pub async fn retry_conversion(
+    _tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    _path: web::Path<Uuid>,
+    _state: web::Data<AdvertisingState>,
+) -> Result<HttpResponse, ApiError> {
+    let problem = ProblemDetail {
+        r#type: format!("{}/not-implemented", sanvi_http::PROBLEM_TYPE_BASE),
+        title: "not_implemented".to_string(),
+        status: 501,
+        detail:
+            "conversion upload retry is not implemented yet; upload retry ships in a later task"
+                .to_string(),
+        instance: None,
+        trace_id: None,
+        reason: None,
+        extensions: None,
+    };
+    Ok(HttpResponse::NotImplemented().json(problem))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/audiences",
+    tag = "advertising",
+    operation_id = "list_audiences",
+    responses(
+        (status = 501, description = "Audience sync is not implemented yet", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn list_audiences(
+    _tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    _state: web::Data<AdvertisingState>,
+) -> Result<HttpResponse, ApiError> {
+    let problem = ProblemDetail {
+        r#type: format!("{}/not-implemented", sanvi_http::PROBLEM_TYPE_BASE),
+        title: "not_implemented".to_string(),
+        status: 501,
+        detail: "audience listing is not implemented yet; audience sync ships in a later task"
+            .to_string(),
+        instance: None,
+        trace_id: None,
+        reason: None,
+        extensions: None,
+    };
+    Ok(HttpResponse::NotImplemented().json(problem))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/audiences",
+    tag = "advertising",
+    operation_id = "create_audience",
+    responses(
+        (status = 501, description = "Audience sync is not implemented yet", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail)
+    )
+)]
+pub async fn create_audience(
+    _tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    _state: web::Data<AdvertisingState>,
+) -> Result<HttpResponse, ApiError> {
+    let problem = ProblemDetail {
+        r#type: format!("{}/not-implemented", sanvi_http::PROBLEM_TYPE_BASE),
+        title: "not_implemented".to_string(),
+        status: 501,
+        detail: "audience creation is not implemented yet; audience sync ships in a later task"
+            .to_string(),
+        instance: None,
+        trace_id: None,
+        reason: None,
+        extensions: None,
+    };
+    Ok(HttpResponse::NotImplemented().json(problem))
 }
 
 #[cfg(test)]

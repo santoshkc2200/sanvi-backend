@@ -597,13 +597,8 @@ impl PatchCampaign {
                             }
                         }
                     } else {
-                        verify_ad_creatives_exist(
-                            scope,
-                            creatives.as_ref(),
-                            tenant_id,
-                            campaign,
-                        )
-                        .await?;
+                        verify_ad_creatives_exist(scope, creatives.as_ref(), tenant_id, campaign)
+                            .await?;
                     }
                     Ok(())
                 })

@@ -439,6 +439,9 @@ pub fn tracking_public_routes(cfg: &mut web::ServiceConfig) {
 pub fn tracking_tenant_routes(cfg: &mut web::ServiceConfig) {
     let connect = require_permission!("advertising.connect", tenant);
     let metrics_read = require_permission!("advertising.metrics.read", tenant);
+    let read = require_permission!("advertising.read", tenant);
+    let write = require_permission!("advertising.campaign.write", tenant);
+    let feature_gate = || sanvi_http::RequiredAnyFeature::declared(ADVERTISING_ENTITLEMENTS);
 
     cfg.service(
         web::resource("/ads/tracking/settings")
@@ -458,5 +461,27 @@ pub fn tracking_tenant_routes(cfg: &mut web::ServiceConfig) {
         web::resource("/ads/conversions")
             .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
             .route(web::get().to(super::tracking_handlers::list_conversions)),
+    );
+    cfg.service(
+        web::resource("/ads/conversions/{id}/diagnostics")
+            .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
+            .app_data(feature_gate())
+            .route(web::get().to(super::tracking_handlers::get_conversion_diagnostics)),
+    );
+    cfg.service(
+        web::resource("/ads/conversions/{id}/retry")
+            .app_data(PermissionMap::new(vec![(Method::POST, write)]))
+            .app_data(feature_gate())
+            .route(web::post().to(super::tracking_handlers::retry_conversion)),
+    );
+    cfg.service(
+        web::resource("/ads/audiences")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, read),
+                (Method::POST, write),
+            ]))
+            .app_data(feature_gate())
+            .route(web::get().to(super::tracking_handlers::list_audiences))
+            .route(web::post().to(super::tracking_handlers::create_audience)),
     );
 }

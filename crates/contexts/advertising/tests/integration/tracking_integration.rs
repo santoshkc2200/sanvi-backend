@@ -23,7 +23,7 @@ use sanvi_advertising::adapters::{
 };
 use sanvi_advertising::application::tracking::{
     capture::{CaptureConversion, TrackConversionCommand},
-    conversions::ListConversions,
+    conversions::{GetConversionDiagnostics, ListConversions},
     settings::ManageTrackingSettings,
     site_key::generate_site_key,
 };
@@ -874,6 +874,10 @@ fn create_test_advertising_state(
     let settings_repo = Arc::new(SqlxTrackingSettingsRepository::new());
     let settings_mgr = Arc::new(ManageTrackingSettings::new(tx.clone(), settings_repo));
     let list_conversions = Arc::new(ListConversions::new(tx.clone(), campaign_repo.clone()));
+    let get_conversion_diagnostics = Arc::new(GetConversionDiagnostics::new(
+        tx.clone(),
+        campaign_repo.clone(),
+    ));
 
     let config = AdvertisingConfig {
         tracking_site_key_signing_secret: secret.to_string(),
@@ -1012,6 +1016,7 @@ fn create_test_advertising_state(
         capture,
         settings_mgr,
         list_conversions,
+        get_conversion_diagnostics,
     }
 }
 

@@ -805,6 +805,27 @@ impl ConversionEventRepository for SqlxCampaignRepository {
 
         rows.into_iter().map(row_to_conversion_event).collect()
     }
+
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<ConversionEvent>, AdvertisingError> {
+        let row = sqlx::query_as::<_, ConversionEventRow>(
+            "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_state
+             FROM advertising.conversion_events
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        row.map(row_to_conversion_event).transpose()
+    }
 }
 
 #[derive(Default)]
