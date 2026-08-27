@@ -99,7 +99,7 @@ runtime, non-root user, no shell in the final image, `HEALTHCHECK`, OCI labels w
 
 Pipeline `pr.yml`:
 1. `cargo fmt --check`
-2. `cargo clippy --all-targets --all-features -- -D warnings`
+2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. Architecture lint — `cargo-deny` + a custom `scripts/check-layering.sh` asserting no
    `sqlx|actix|reqwest` import inside any `src/domain/**`
 4. `cargo test --workspace` (SQLx offline; testcontainers for integration job)

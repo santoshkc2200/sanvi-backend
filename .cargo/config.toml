@@ -10,4 +10,4 @@
 # coding agents, which read compiler output as text rather than looking at it.
 # `just clippy` remains the human-facing form with full rendering.
 c = "check --workspace --all-targets --message-format short"
-k = "clippy --workspace --all-targets --all-features --message-format short -- -D warnings"
+k = "clippy --workspace --all-targets --message-format short -- -D warnings"

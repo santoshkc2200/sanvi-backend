@@ -101,8 +101,9 @@ tenant-list:
 fmt:
     cargo fmt --check
 
+# No crate defines [features] (check with: rg -n '^\[features\]' -g '**/Cargo.toml' before re-adding it); --all-features omitted to save resolver overhead.
 clippy:
-    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 layering:
     ./scripts/check-layering.sh
@@ -134,6 +135,19 @@ test-db-down:
 # Deleting it only costs one full rebuild.
 clean-incremental:
     rm -rf target/debug/incremental
+
+# `deps` and `.fingerprint` accumulate one distinct compiled copy of every
+# crate per toolchain/profile/tool combination (plain rustc vs clippy-driver
+# are cached separately by design) and cargo never deletes old ones as code
+# changes over days of work. `cargo sweep` walks the whole `target/` tree —
+# release and doc artifacts included, not just debug — and removes every copy
+# untouched for 14+ days.
+clean-stale:
+    if command -v cargo-sweep >/dev/null 2>&1; then \
+        cargo sweep --time 14; \
+    else \
+        echo 'cargo-sweep not installed; run: cargo install cargo-sweep'; \
+    fi
 
 test:
     #!/usr/bin/env bash
