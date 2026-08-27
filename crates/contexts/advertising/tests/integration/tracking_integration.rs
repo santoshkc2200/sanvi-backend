@@ -217,7 +217,7 @@ async fn fetch_row(
     let mut scope = manager.begin_for(tenant_id).await.unwrap();
     let row = sqlx::query(
         "SELECT id, event_id, value_minor, currency, value_source, click_ids, hashed_ids,
-                consent, upload_state
+                consent, upload_states
          FROM advertising.conversion_events WHERE tenant_id = $1 AND event_id = $2",
     )
     .bind(tenant_id)
@@ -234,7 +234,7 @@ async fn fetch_row(
         "click_ids": row.get::<serde_json::Value, _>("click_ids"),
         "hashed_ids": row.get::<serde_json::Value, _>("hashed_ids"),
         "consent": row.get::<serde_json::Value, _>("consent"),
-        "upload_state": row.get::<serde_json::Value, _>("upload_state"),
+        "upload_states": row.get::<serde_json::Value, _>("upload_states"),
     })
 }
 
@@ -289,8 +289,9 @@ async fn eu_subject_with_no_consent_is_suppressed() {
     capture.execute(command).await.unwrap();
 
     let row = fetch_row(&pool, tenant_id, "evt-eu-no-consent").await;
-    assert_eq!(row["upload_state"]["status"], "suppressed_by_directive");
-    assert_eq!(row["upload_state"]["purpose"], "ads_measurement");
+    assert_eq!(row["consent"]["answers"]["ads_measurement"], "denied");
+    assert_eq!(row["consent"]["signal_source"], "default");
+    assert_eq!(row["upload_states"], serde_json::json!({}));
 }
 
 #[tokio::test]
@@ -308,7 +309,8 @@ async fn us_subject_with_no_signal_is_permitted() {
     capture.execute(command).await.unwrap();
 
     let row = fetch_row(&pool, tenant_id, "evt-us-no-signal").await;
-    assert_eq!(row["upload_state"]["status"], "pending");
+    assert_eq!(row["consent"]["answers"]["ads_measurement"], "allowed");
+    assert_eq!(row["upload_states"], serde_json::json!({}));
 }
 
 #[tokio::test]
@@ -328,9 +330,9 @@ async fn us_subject_opted_out_is_suppressed() {
     capture.execute(command).await.unwrap();
 
     let row = fetch_row(&pool, tenant_id, "evt-us-opt-out").await;
-    assert_eq!(row["upload_state"]["status"], "suppressed_by_directive");
-    assert_eq!(row["upload_state"]["purpose"], "sale_or_share");
-    assert_eq!(row["upload_state"]["signal_source"], "opt_out");
+    assert_eq!(row["consent"]["answers"]["sale_or_share"], "denied");
+    assert_eq!(row["consent"]["signal_source"], "opt_out");
+    assert_eq!(row["upload_states"], serde_json::json!({}));
 }
 
 #[tokio::test]
@@ -350,8 +352,9 @@ async fn gpc_signal_is_suppressed() {
     capture.execute(command).await.unwrap();
 
     let row = fetch_row(&pool, tenant_id, "evt-gpc").await;
-    assert_eq!(row["upload_state"]["status"], "suppressed_by_directive");
-    assert_eq!(row["upload_state"]["signal_source"], "signal");
+    assert_eq!(row["consent"]["answers"]["targeted_advertising"], "denied");
+    assert_eq!(row["consent"]["signal_source"], "signal");
+    assert_eq!(row["upload_states"], serde_json::json!({}));
 }
 
 #[tokio::test]
@@ -382,7 +385,9 @@ async fn vendor_role_changes_the_gate_outcome_for_the_same_event() {
         .await
         .unwrap();
     let row = fetch_row(&pool, tenant_id, "evt-service-provider").await;
-    assert_eq!(row["upload_state"]["status"], "pending");
+    assert_eq!(row["consent"]["answers"]["ads_measurement"], "allowed");
+    assert_eq!(row["consent"]["answers"].get("sale_or_share"), None);
+    assert_eq!(row["upload_states"], serde_json::json!({}));
 
     // Third party: the same denial now applies and suppresses the event.
     let tx = TxManager::new(pool.clone());
@@ -392,7 +397,8 @@ async fn vendor_role_changes_the_gate_outcome_for_the_same_event() {
         .await
         .unwrap();
     let row = fetch_row(&pool, tenant_id, "evt-third-party").await;
-    assert_eq!(row["upload_state"]["status"], "suppressed_by_directive");
+    assert_eq!(row["consent"]["answers"]["sale_or_share"], "denied");
+    assert_eq!(row["upload_states"], serde_json::json!({}));
 }
 
 #[tokio::test]

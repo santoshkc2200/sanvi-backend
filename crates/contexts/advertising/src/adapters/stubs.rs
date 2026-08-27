@@ -13,10 +13,10 @@ use crate::{
     application::PlatformRegistry,
     domain::{
         AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
-        AuthorizationStart, BudgetType, Campaign, CampaignStatus, CreativeAssetSpec,
-        CreativePlacement, ExchangedAuthorization, MetricPoint, MetricQuery, Money,
-        PlatformAccount, PlatformDescriptor, ScheduleGranularity, TargetingDimension,
-        UploadedConversion,
+        AuthorizationStart, BudgetType, Campaign, CampaignStatus, ConversionEvent,
+        ConversionSinkPort, CreativeAssetSpec, CreativePlacement, ExchangedAuthorization,
+        MetricPoint, MetricQuery, Money, PlatformAccount, PlatformDescriptor, ScheduleGranularity,
+        TargetingDimension, UploadReceipt, UploadedConversion,
     },
 };
 
@@ -439,12 +439,147 @@ impl AdPlatformPort for FakeAdPlatform {
     }
 }
 
+#[derive(Clone)]
+pub struct FakeConversionSink {
+    descriptor: PlatformDescriptor,
+    receipts: Arc<Mutex<Vec<UploadReceipt>>>,
+    uploaded_events: Arc<Mutex<Vec<(ConnectionHandle, ConversionEvent)>>>,
+    retracted_events: Arc<Mutex<Vec<(ConnectionHandle, ConversionEvent)>>>,
+    upload_error: Arc<Mutex<Option<AdvertisingError>>>,
+    retract_error: Arc<Mutex<Option<AdvertisingError>>>,
+}
+
+impl FakeConversionSink {
+    pub fn new(descriptor: PlatformDescriptor) -> Self {
+        Self {
+            descriptor,
+            receipts: Arc::new(Mutex::new(Vec::new())),
+            uploaded_events: Arc::new(Mutex::new(Vec::new())),
+            retracted_events: Arc::new(Mutex::new(Vec::new())),
+            upload_error: Arc::new(Mutex::new(None)),
+            retract_error: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn with_upload_error(self, error: AdvertisingError) -> Self {
+        *self.upload_error.lock().unwrap() = Some(error);
+        self
+    }
+
+    pub fn with_retract_error(self, error: AdvertisingError) -> Self {
+        *self.retract_error.lock().unwrap() = Some(error);
+        self
+    }
+
+    pub fn set_upload_error(&self, error: Option<AdvertisingError>) {
+        *self.upload_error.lock().unwrap() = error;
+    }
+
+    pub fn set_retract_error(&self, error: Option<AdvertisingError>) {
+        *self.retract_error.lock().unwrap() = error;
+    }
+
+    pub fn uploaded_events(&self) -> Vec<ConversionEvent> {
+        self.uploaded_events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect()
+    }
+
+    pub fn uploaded_records(&self) -> Vec<(ConnectionHandle, ConversionEvent)> {
+        self.uploaded_events.lock().unwrap().clone()
+    }
+
+    pub fn receipts(&self) -> Vec<UploadReceipt> {
+        self.receipts.lock().unwrap().clone()
+    }
+
+    pub fn retracted_events(&self) -> Vec<ConversionEvent> {
+        self.retracted_events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect()
+    }
+
+    pub fn retracted_records(&self) -> Vec<(ConnectionHandle, ConversionEvent)> {
+        self.retracted_events.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl ConversionSinkPort for FakeConversionSink {
+    fn descriptor(&self) -> PlatformDescriptor {
+        self.descriptor.clone()
+    }
+
+    async fn upload(
+        &self,
+        connection: &ConnectionHandle,
+        event: &ConversionEvent,
+    ) -> Result<UploadReceipt, AdvertisingError> {
+        if let Some(err) = self.upload_error.lock().unwrap().clone() {
+            return Err(err);
+        }
+
+        if event.event_id.trim().is_empty() {
+            return Err(AdvertisingError::InvalidInput(
+                "conversion upload requires a valid event_id".to_string(),
+            ));
+        }
+
+        let receipt = UploadReceipt {
+            platform: self.descriptor.key.clone(),
+            external_id: format!(
+                "receipt-{}-{}",
+                self.descriptor.key.as_str(),
+                event.event_id
+            ),
+            uploaded_at: chrono::Utc::now(),
+        };
+
+        self.uploaded_events
+            .lock()
+            .unwrap()
+            .push((connection.clone(), event.clone()));
+        self.receipts.lock().unwrap().push(receipt.clone());
+
+        Ok(receipt)
+    }
+
+    async fn retract(
+        &self,
+        connection: &ConnectionHandle,
+        event: &ConversionEvent,
+    ) -> Result<(), AdvertisingError> {
+        if let Some(err) = self.retract_error.lock().unwrap().clone() {
+            return Err(err);
+        }
+
+        if event.event_id.trim().is_empty() {
+            return Err(AdvertisingError::InvalidInput(
+                "conversion retraction requires a valid event_id".to_string(),
+            ));
+        }
+
+        self.retracted_events
+            .lock()
+            .unwrap()
+            .push((connection.clone(), event.clone()));
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::{
         Ad, AdGroup, BidSettings, Budget, Creative, CreativeText, DriftState, Schedule, Targeting,
-        ValidationViolation, validate_campaign,
+        UploadState, ValidationViolation, validate_campaign,
     };
 
     fn campaign(objective: &str, kind: BudgetType, locale: &str, headline: &str) -> Campaign {
@@ -584,5 +719,166 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(registry.adapters().len(), 3);
+    }
+
+    fn sample_conversion_event(event_id: &str) -> ConversionEvent {
+        ConversionEvent {
+            id: uuid::Uuid::now_v7(),
+            tenant_id: uuid::Uuid::now_v7(),
+            event_id: event_id.to_string(),
+            dedupe_key: format!("test:{}", event_id),
+            name: "purchase".to_string(),
+            occurred_at: chrono::Utc::now(),
+            value: Some(Money::new(1000, "USD").unwrap()),
+            value_source: Some(crate::domain::ValueSource::PaymentRecord),
+            order_ref: Some("order-123".to_string()),
+            click_ids: crate::domain::ClickIds::default(),
+            hashed_identifiers: BTreeMap::new(),
+            consent: ConsentSnapshot {
+                resolver_version: "v1".to_string(),
+                jurisdiction: "us".to_string(),
+                purposes_asked: vec!["ads_measurement".to_string()],
+                answers: BTreeMap::from([("ads_measurement".to_string(), "allowed".to_string())]),
+                signal_source: "default".to_string(),
+            },
+            upload_states: BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_conversion_sink_upload_succeeds_and_records_receipt() {
+        let sink = FakeConversionSink::new(FakeAdPlatform::fixtures()[0].clone());
+        let connection = ConnectionHandle {
+            id: "conn-1".to_string(),
+        };
+        let event = sample_conversion_event("evt-upload-1");
+
+        let receipt = sink.upload(&connection, &event).await.unwrap();
+
+        assert_eq!(receipt.platform, sink.descriptor().key);
+        assert_eq!(receipt.external_id, "receipt-google_ads-evt-upload-1");
+
+        let uploaded = sink.uploaded_events();
+        assert_eq!(uploaded.len(), 1);
+        assert_eq!(uploaded[0].event_id, "evt-upload-1");
+
+        let records = sink.uploaded_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0.id, "conn-1");
+        assert_eq!(records[0].1.event_id, "evt-upload-1");
+
+        let receipts = sink.receipts();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0], receipt);
+    }
+
+    #[tokio::test]
+    async fn fake_conversion_sink_upload_error_configuration() {
+        let sink = FakeConversionSink::new(FakeAdPlatform::fixtures()[0].clone())
+            .with_upload_error(AdvertisingError::PlatformUnavailable(
+                "provider down".to_string(),
+            ));
+        let connection = ConnectionHandle {
+            id: "conn-1".to_string(),
+        };
+        let event = sample_conversion_event("evt-err-1");
+
+        let result = sink.upload(&connection, &event).await;
+        assert!(matches!(
+            result,
+            Err(AdvertisingError::PlatformUnavailable(_))
+        ));
+    }
+
+    #[test]
+    fn upload_states_map_carries_independent_state_for_different_platforms() {
+        let mut event = sample_conversion_event("evt-multi-platform");
+        assert!(event.upload_states.is_empty());
+
+        event
+            .upload_states
+            .insert("google_ads".to_string(), UploadState::Uploaded);
+        event.upload_states.insert(
+            "meta".to_string(),
+            UploadState::Failed {
+                reason: "invalid access token".to_string(),
+            },
+        );
+
+        assert_eq!(
+            event.upload_states.get("google_ads"),
+            Some(&UploadState::Uploaded)
+        );
+        assert_eq!(
+            event.upload_states.get("meta"),
+            Some(&UploadState::Failed {
+                reason: "invalid access token".to_string(),
+            })
+        );
+
+        // Mutating google_ads does not clobber or affect meta
+        event
+            .upload_states
+            .insert("google_ads".to_string(), UploadState::Pending);
+
+        assert_eq!(
+            event.upload_states.get("google_ads"),
+            Some(&UploadState::Pending)
+        );
+        assert_eq!(
+            event.upload_states.get("meta"),
+            Some(&UploadState::Failed {
+                reason: "invalid access token".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn retract_calls_fake_conversion_sink_and_does_not_mutate_unrelated_platforms() {
+        let sink = FakeConversionSink::new(FakeAdPlatform::fixtures()[0].clone());
+        let connection = ConnectionHandle {
+            id: "conn-google".to_string(),
+        };
+
+        let mut event = sample_conversion_event("evt-retract-1");
+        event
+            .upload_states
+            .insert("google_ads".to_string(), UploadState::Uploaded);
+        event
+            .upload_states
+            .insert("meta".to_string(), UploadState::Uploaded);
+
+        sink.retract(&connection, &event).await.unwrap();
+
+        let retracted = sink.retracted_events();
+        assert_eq!(retracted.len(), 1);
+        assert_eq!(retracted[0].event_id, "evt-retract-1");
+
+        // Retraction state update on the caller side removes/updates google_ads
+        // but does not mutate meta's entry
+        event.upload_states.remove("google_ads");
+        assert_eq!(event.upload_states.get("google_ads"), None);
+        assert_eq!(
+            event.upload_states.get("meta"),
+            Some(&UploadState::Uploaded)
+        );
+    }
+
+    #[tokio::test]
+    async fn fake_conversion_sink_retract_error_configuration() {
+        let sink = FakeConversionSink::new(FakeAdPlatform::fixtures()[0].clone())
+            .with_retract_error(AdvertisingError::PlatformUnavailable(
+                "service unavailable".to_string(),
+            ));
+        let connection = ConnectionHandle {
+            id: "conn-1".to_string(),
+        };
+        let event = sample_conversion_event("evt-retract-err");
+
+        let result = sink.retract(&connection, &event).await;
+        assert!(matches!(
+            result,
+            Err(AdvertisingError::PlatformUnavailable(_))
+        ));
     }
 }

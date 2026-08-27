@@ -281,6 +281,13 @@ pub enum UploadState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UploadReceipt {
+    pub platform: PlatformKey,
+    pub external_id: String,
+    pub uploaded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConversionEvent {
     pub id: uuid::Uuid,
     pub tenant_id: uuid::Uuid,
@@ -298,7 +305,8 @@ pub struct ConversionEvent {
     pub click_ids: ClickIds,
     pub hashed_identifiers: BTreeMap<String, HashedIdentifier>,
     pub consent: ConsentSnapshot,
-    pub upload_state: UploadState,
+    #[serde(default)]
+    pub upload_states: BTreeMap<String, UploadState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

@@ -46,12 +46,12 @@ pub use validation::{ValidationViolation, validate_campaign};
 pub mod hashing;
 
 pub use model::{
-    ClickIds, ConversionDiagnostics, ConversionEvent, SuppressedByDirective, UploadState,
-    ValueSource,
+    ClickIds, ConversionDiagnostics, ConversionEvent, SuppressedByDirective, UploadReceipt,
+    UploadState, ValueSource,
 };
 pub use ports::{
-    ConversionEventRepository, PaymentLookup, PaymentLookupPort, TrackingSettings,
-    TrackingSettingsRepository, VendorRole, VendorRolePort,
+    ConversionEventRepository, ConversionSinkPort, PaymentLookup, PaymentLookupPort,
+    TrackingSettings, TrackingSettingsRepository, VendorRole, VendorRolePort,
 };
 
 pub use hashing::HashedIdentifier;

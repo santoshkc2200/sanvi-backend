@@ -673,7 +673,7 @@ struct ConversionEventRow {
     click_ids: serde_json::Value,
     hashed_ids: serde_json::Value,
     consent: serde_json::Value,
-    upload_state: serde_json::Value,
+    upload_states: serde_json::Value,
 }
 
 fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, AdvertisingError> {
@@ -708,7 +708,7 @@ fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, A
         click_ids: serde_json::from_value(row.click_ids).map_err(map_json_err)?,
         hashed_identifiers: serde_json::from_value(row.hashed_ids).map_err(map_json_err)?,
         consent: serde_json::from_value(row.consent).map_err(map_json_err)?,
-        upload_state: serde_json::from_value(row.upload_state).map_err(map_json_err)?,
+        upload_states: serde_json::from_value(row.upload_states).map_err(map_json_err)?,
     })
 }
 
@@ -755,13 +755,13 @@ impl ConversionEventRepository for SqlxCampaignRepository {
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
         let consent = serde_json::to_value(&event.consent)
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
-        let upload_state = serde_json::to_value(&event.upload_state)
+        let upload_states = serde_json::to_value(&event.upload_states)
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
         sqlx::query(
             "INSERT INTO advertising.conversion_events
                (id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
-                value_source, order_ref, click_ids, hashed_ids, consent, upload_state)
+                value_source, order_ref, click_ids, hashed_ids, consent, upload_states)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(event.id)
@@ -777,7 +777,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         .bind(click_ids)
         .bind(hashed_ids)
         .bind(consent)
-        .bind(upload_state)
+        .bind(upload_states)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_err)?;
@@ -792,7 +792,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
     ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
         let rows = sqlx::query_as::<_, ConversionEventRow>(
             "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
-                    value_source, order_ref, click_ids, hashed_ids, consent, upload_state
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states
              FROM advertising.conversion_events
              WHERE tenant_id = $1
              ORDER BY occurred_at DESC
@@ -814,7 +814,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
     ) -> Result<Option<ConversionEvent>, AdvertisingError> {
         let row = sqlx::query_as::<_, ConversionEventRow>(
             "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
-                    value_source, order_ref, click_ids, hashed_ids, consent, upload_state
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states
              FROM advertising.conversion_events
              WHERE tenant_id = $1 AND id = $2",
         )

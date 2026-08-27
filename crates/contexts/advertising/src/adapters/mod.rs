@@ -22,7 +22,7 @@ pub use repos::{
     SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxCreativeRepository,
     SqlxTrackingSettingsRepository,
 };
-pub use stubs::FakeAdPlatform;
+pub use stubs::{FakeAdPlatform, FakeConversionSink};
 pub use token_vault::{
     SqlxConnectionTokenRepository, SqlxTenantEnvelopeCrypto, SqlxTenantKeyRepository,
 };

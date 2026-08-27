@@ -2,14 +2,14 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdvertisingConnection, Campaign, CapabilityMatrix, ConnectionHandle, HashedIds, PlatformKey,
-    ValidationViolation,
+    AdvertisingConnection, Campaign, CapabilityMatrix, ConnectionHandle, ConversionEvent,
+    HashedIds, PlatformKey, UploadReceipt, ValidationViolation,
 };
 use crate::domain::model::ConsentSnapshot;
 use sanvi_persistence::ScopedTx;
 use uuid::Uuid;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AdvertisingError {
     #[error("invalid advertising input: {0}")]
     InvalidInput(String),
@@ -229,6 +229,21 @@ pub trait AdPlatformPort: Send + Sync {
         conversion: UploadedConversion,
         ids: HashedIds,
         consent: ConsentSnapshot,
+    ) -> Result<(), AdvertisingError>;
+}
+
+#[async_trait]
+pub trait ConversionSinkPort: Send + Sync {
+    fn descriptor(&self) -> PlatformDescriptor;
+    async fn upload(
+        &self,
+        connection: &ConnectionHandle,
+        event: &ConversionEvent,
+    ) -> Result<UploadReceipt, AdvertisingError>;
+    async fn retract(
+        &self,
+        connection: &ConnectionHandle,
+        event: &ConversionEvent,
     ) -> Result<(), AdvertisingError>;
 }
 

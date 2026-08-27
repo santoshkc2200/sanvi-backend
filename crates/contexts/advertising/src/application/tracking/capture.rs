@@ -16,8 +16,7 @@ use sanvi_privacy::domain::{DirectiveResolver, DirectiveState, ProcessingPurpose
 
 use crate::domain::{
     AdvertisingError, ClickIds, ConsentSnapshot, ConversionEvent, ConversionEventRepository, Money,
-    PaymentLookupPort, PlatformKey, SuppressedByDirective, UploadState, ValueSource, VendorRole,
-    VendorRolePort,
+    PaymentLookupPort, PlatformKey, ValueSource, VendorRole, VendorRolePort,
     hashing::{hash_email, hash_phone},
 };
 
@@ -108,14 +107,14 @@ impl CaptureConversion {
         // lets a burst of concurrent beacons occupy every connection
         // waiting for a connection, and the pool deadlocks until acquire
         // timeouts unwind it.
-        let gate = self.resolve_gate(&command).await?;
+        let consent = self.resolve_gate(&command).await?;
 
         let mut scope = self
             .tx
             .begin_for(command.tenant_id)
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let event = self.build_event(&mut scope, command, gate).await?;
+        let event = self.build_event(&mut scope, command, consent).await?;
         self.conversion_repo
             .insert_idempotent(&mut scope, &event)
             .await?;
@@ -134,20 +133,20 @@ impl CaptureConversion {
         &self,
         command: TrackConversionCommand,
     ) -> Result<ConversionEvent, AdvertisingError> {
-        let gate = self.resolve_gate(&command).await?;
+        let consent = self.resolve_gate(&command).await?;
         let mut scope = self
             .tx
             .begin_for(command.tenant_id)
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        self.build_event(&mut scope, command, gate).await
+        self.build_event(&mut scope, command, consent).await
     }
 
     async fn build_event(
         &self,
         scope: &mut ScopedTx<'_>,
         command: TrackConversionCommand,
-        (consent, upload_state): (ConsentSnapshot, UploadState),
+        consent: ConsentSnapshot,
     ) -> Result<ConversionEvent, AdvertisingError> {
         let mut hashed_identifiers = BTreeMap::new();
         if let Some(ref email) = command.email {
@@ -179,7 +178,7 @@ impl CaptureConversion {
             click_ids: command.click_ids,
             hashed_identifiers,
             consent,
-            upload_state,
+            upload_states: BTreeMap::new(),
         })
     }
 
@@ -235,7 +234,7 @@ impl CaptureConversion {
     async fn resolve_gate(
         &self,
         command: &TrackConversionCommand,
-    ) -> Result<(ConsentSnapshot, UploadState), AdvertisingError> {
+    ) -> Result<ConsentSnapshot, AdvertisingError> {
         let mut required_purposes = vec![ProcessingPurpose::AdsMeasurement];
         let mut reaches_third_party = command.platforms_incomplete;
         for platform in &command.platforms {
@@ -251,7 +250,8 @@ impl CaptureConversion {
         let mut answers = BTreeMap::new();
         let mut jurisdiction = String::new();
         let mut signal_source = String::new();
-        let mut suppressed: Option<SuppressedByDirective> = None;
+        let mut first_source = true;
+        let mut denied_found = false;
 
         for purpose in &required_purposes {
             let directive = self
@@ -268,16 +268,15 @@ impl CaptureConversion {
             );
             jurisdiction = directive.jurisdiction.as_str().to_string();
 
-            if suppressed.is_none() {
-                // The baseline signal source, overwritten below the moment a
-                // denial is found — the suppressing directive's source wins.
-                signal_source = directive.source.as_str().to_string();
-            }
-            if suppressed.is_none() && directive.state == DirectiveState::Denied {
-                suppressed = Some(SuppressedByDirective {
-                    purpose: purpose.as_str().to_string(),
-                    signal_source: directive.source.as_str().to_string(),
-                });
+            if !denied_found {
+                if first_source {
+                    signal_source = directive.source.as_str().to_string();
+                    first_source = false;
+                }
+                if directive.state == DirectiveState::Denied {
+                    signal_source = directive.source.as_str().to_string();
+                    denied_found = true;
+                }
             }
         }
 
@@ -292,11 +291,6 @@ impl CaptureConversion {
             signal_source,
         };
 
-        let upload_state = match suppressed {
-            Some(reason) => UploadState::SuppressedByDirective(reason),
-            None => UploadState::Pending,
-        };
-
-        Ok((consent, upload_state))
+        Ok(consent)
     }
 }
