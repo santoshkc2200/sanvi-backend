@@ -43,3 +43,21 @@ fail-fast = false
 status-level = "fail"
 final-status-level = "fail"
 failure-output = "immediate-final"
+
+# Integration targets clone a database from one shared template and contend on
+# it, so their concurrency is capped independently of the thread count.
+[test-groups.database]
+max-threads = 4
+
+[[profile.default.overrides]]
+filter = 'kind(test)'
+test-group = "database"
+
+[[profile.ci.overrides]]
+filter = 'kind(test)'
+test-group = "database"
+
+[[profile.agent.overrides]]
+filter = 'kind(test)'
+test-group = "database"
+

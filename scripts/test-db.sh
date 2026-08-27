@@ -17,7 +17,7 @@ set -euo pipefail
 
 PG_NAME=sanvi-test-postgres
 REDIS_NAME=sanvi-test-redis
-PG_IMAGE=postgres:11-alpine
+PG_IMAGE=postgres:18-alpine
 REDIS_IMAGE=redis:8-alpine
 
 port_of() {
@@ -35,7 +35,7 @@ start_postgres() {
             -e POSTGRES_USER=postgres \
             -e POSTGRES_DB=postgres \
             -e PGDATA=/var/lib/postgresql/tmpfs \
-            --tmpfs /var/lib/postgresql/tmpfs:rw,size=2g \
+            --tmpfs /var/lib/postgresql/tmpfs:rw,size=4g \
             -p 127.0.0.1::5432 \
             "$PG_IMAGE" \
             -c fsync=off \

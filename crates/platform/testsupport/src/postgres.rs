@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sanvi_persistence::{DatabaseConfig, Migrator, PgPool, build_pool};
 use sha2::{Digest, Sha256};
-use sqlx::AssertSqlSafe;
+use sqlx::{AssertSqlSafe, Connection, PgConnection, postgres::PgConnectOptions};
 use testcontainers::{ImageExt, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::OnceCell;
@@ -106,17 +106,30 @@ async fn pg_port() -> u16 {
         .await
 }
 
-/// A superuser pool on the `postgres` database, for issuing `CREATE DATABASE`.
+/// A superuser connection to the `postgres` database, for issuing
+/// `CREATE DATABASE` and `DROP DATABASE`.
 ///
-/// Deliberately **not** cached in a `static`: a sqlx pool binds its background
-/// tasks to the runtime that created it, and every `#[tokio::test]` builds and
-/// then tears down its own. A shared pool starts failing with "a Tokio 1.x
+/// Deliberately **not** cached in a `static`: sqlx binds a handle's background
+/// work to the runtime that created it, and every `#[tokio::test]` builds and
+/// then tears down its own. A shared handle starts failing with "a Tokio 1.x
 /// context ... is being shutdown" the moment the first test finishes. Opening
-/// one connection per test is the price of that.
-async fn admin_pool(port: u16) -> PgPool {
-    build_pool(&config(port, "postgres", "postgres", "postgres"))
-        .await
-        .expect("admin pool")
+/// one per test is the price of that.
+///
+/// One bare connection rather than a pool: every caller issues a couple of
+/// statements and hangs up, so a pool's spare connections and background
+/// reaper were setup cost with nothing to amortise it over — paid twice per
+/// test, once creating the database and once dropping it.
+async fn admin_conn(port: u16) -> Result<PgConnection, sqlx::Error> {
+    PgConnection::connect_with(
+        &PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port)
+            .database("postgres")
+            .username("postgres")
+            .password("postgres")
+            .application_name("sanvi-testsupport"),
+    )
+    .await
 }
 
 /// Name of the template for the migrations currently on disk.
@@ -149,7 +162,7 @@ async fn drop_template(lock: &mut sqlx::PgConnection, name: &str) {
         .bind(name)
         .execute(&mut *lock)
         .await;
-    let statement = format!("DROP DATABASE IF EXISTS {name}");
+    let statement = format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
     let _ = sqlx::raw_sql(AssertSqlSafe(statement))
         .execute(&mut *lock)
         .await;
@@ -162,13 +175,13 @@ async fn bootstrap(port: u16) -> String {
     BOOTSTRAPPED
         .get_or_init(|| async {
             let template = template_name().await;
-            let admin = admin_pool(port).await;
             // Advisory locks are session-scoped, so lock and unlock must run
-            // on one connection — not on whichever the pool hands out next.
-            let mut lock = admin.acquire().await.expect("bootstrap connection");
+            // on one connection — which a bare connection guarantees for free,
+            // where a pool could hand the unlock a different one.
+            let mut lock = admin_conn(port).await.expect("bootstrap connection");
             sqlx::query("SELECT pg_advisory_lock($1)")
                 .bind(BOOTSTRAP_LOCK)
-                .execute(&mut *lock)
+                .execute(&mut lock)
                 .await
                 .expect("bootstrap lock");
 
@@ -185,7 +198,7 @@ async fn bootstrap(port: u16) -> String {
                      END $$;"
                 );
                 sqlx::raw_sql(AssertSqlSafe(statement))
-                    .execute(&mut *lock)
+                    .execute(&mut lock)
                     .await
                     .expect("create role");
             }
@@ -202,7 +215,7 @@ async fn bootstrap(port: u16) -> String {
                  )",
             )
             .bind(&template)
-            .fetch_one(&mut *lock)
+            .fetch_one(&mut lock)
             .await
             .expect("template lookup");
 
@@ -211,7 +224,7 @@ async fn bootstrap(port: u16) -> String {
 
                 let create = format!("CREATE DATABASE {template} OWNER {MIGRATOR_ROLE}");
                 sqlx::raw_sql(AssertSqlSafe(create))
-                    .execute(&mut *lock)
+                    .execute(&mut lock)
                     .await
                     .expect("create template database");
 
@@ -234,7 +247,7 @@ async fn bootstrap(port: u16) -> String {
                      WHERE datname = '{template}'"
                 );
                 sqlx::raw_sql(AssertSqlSafe(mark))
-                    .execute(&mut *lock)
+                    .execute(&mut lock)
                     .await
                     .expect("mark template");
             }
@@ -250,7 +263,7 @@ async fn bootstrap(port: u16) -> String {
                   WHERE datname LIKE 'sanvi\_template%' AND datname <> $1",
             )
             .bind(&template)
-            .fetch_all(&mut *lock)
+            .fetch_all(&mut lock)
             .await
             .unwrap_or_default();
             for name in &stale {
@@ -259,11 +272,10 @@ async fn bootstrap(port: u16) -> String {
 
             sqlx::query("SELECT pg_advisory_unlock($1)")
                 .bind(BOOTSTRAP_LOCK)
-                .execute(&mut *lock)
+                .execute(&mut lock)
                 .await
                 .expect("bootstrap unlock");
-            drop(lock);
-            admin.close().await;
+            let _ = lock.close().await;
             template
         })
         .await
@@ -338,7 +350,7 @@ impl TestDb {
 impl Drop for TestDb {
     fn drop(&mut self) {
         // A clone of the template costs ~12 MB and the shared server keeps its
-        // data directory on a 2 GB tmpfs, so a run that reclaims nothing until
+        // data directory on a 4 GB tmpfs, so a run that reclaims nothing until
         // it ends fills the disk part-way through the suite — the workspace
         // makes 164 of these. Reclaiming here bounds the server by how many
         // tests are in flight at once rather than how many run at all, and
@@ -357,28 +369,20 @@ impl Drop for TestDb {
                 return;
             };
             runtime.block_on(async move {
-                let Ok(admin) = build_pool(&config(port, "postgres", "postgres", "postgres")).await
-                else {
+                let Ok(mut admin) = admin_conn(port).await else {
                     // The server is already gone — a container-per-process run
                     // taking its databases with it. Nothing left to reclaim.
                     return;
                 };
                 // This process still holds pools on the database — the fields
-                // below are dropped only after this body returns — and
-                // PostgreSQL 11 has no `DROP DATABASE ... WITH (FORCE)`, so
-                // those sessions have to be closed from the server side first.
-                let _ = sqlx::query(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-                     WHERE datname = $1 AND pid <> pg_backend_pid()",
-                )
-                .bind(&name)
-                .execute(&admin)
-                .await;
-                let statement = format!("DROP DATABASE IF EXISTS {name}");
+                // below are dropped only after this body returns — and FORCE
+                // closes those sessions server-side rather than making us
+                // terminate them by hand first.
+                let statement = format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
                 let _ = sqlx::raw_sql(AssertSqlSafe(statement))
-                    .execute(&admin)
+                    .execute(&mut admin)
                     .await;
-                admin.close().await;
+                let _ = admin.close().await;
             });
         })
         .join();
@@ -405,23 +409,23 @@ async fn create_db(prefix: &str, migrated: bool) -> TestDb {
     let template = bootstrap(port).await;
 
     let name = next_db_name(prefix);
-    let admin = admin_pool(port).await;
+    let mut admin = admin_conn(port).await.expect("admin connection");
     let from = if migrated {
-        format!(" TEMPLATE {template}")
+        format!(" TEMPLATE {template} STRATEGY = wal_log")
     } else {
         String::new()
     };
     let create = format!("CREATE DATABASE {name}{from} OWNER {MIGRATOR_ROLE}");
     sqlx::raw_sql(AssertSqlSafe(create))
-        .execute(&admin)
+        .execute(&mut admin)
         .await
         .expect("create database");
     let grant = format!("GRANT CONNECT ON DATABASE {name} TO {APP_ROLE}");
     sqlx::raw_sql(AssertSqlSafe(grant))
-        .execute(&admin)
+        .execute(&mut admin)
         .await
         .expect("grant connect");
-    admin.close().await;
+    let _ = admin.close().await;
 
     let app = build_pool(&config(port, &name, APP_ROLE, APP_PASSWORD))
         .await
@@ -438,8 +442,8 @@ async fn create_db(prefix: &str, migrated: bool) -> TestDb {
 
 /// A private, fully migrated database.
 ///
-/// Cloned from the template, so the cost is a file copy in the server rather
-/// than a migration run — and no container start at all after the first.
+/// Cloned from the template, so the clone is WAL-logged rather than a file copy
+/// — and no container start at all after the first.
 pub async fn test_db() -> TestDb {
     create_db("sanvi_t_", true).await
 }
