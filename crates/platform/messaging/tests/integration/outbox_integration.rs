@@ -23,13 +23,13 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
     );
 
     // Insert an unpublished domain event.
-    let event_id = uuid::Uuid::now_v7();
+    let event_id = sanvi_kernel::EventId::try_from(101_i64).unwrap();
     sqlx::query(
         "INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload)
          VALUES ($1, 'test.aggregate', $2, 'test.something_happened', $3::jsonb)",
     )
-    .bind(event_id)
-    .bind(uuid::Uuid::now_v7())
+    .bind(event_id.as_i64())
+    .bind(202_i64)
     .bind(r#"{"k":"v"}"#)
     .execute(&pool)
     .await
@@ -44,7 +44,7 @@ async fn dispatcher_relays_outbox_rows_to_the_stream() {
     // The row is marked published…
     let published_at: Option<chrono::DateTime<chrono::Utc>> =
         sqlx::query_scalar("SELECT published_at FROM platform.outbox WHERE id = $1")
-            .bind(event_id)
+            .bind(event_id.as_i64())
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -93,13 +93,13 @@ async fn concurrent_dispatchers_never_double_claim_the_same_row() {
     const ROWS: usize = 20;
     let mut event_ids = Vec::with_capacity(ROWS);
     for _ in 0..ROWS {
-        let event_id = uuid::Uuid::now_v7();
+        let event_id = sanvi_kernel::EventId::try_from(1_000_i64 + event_ids.len() as i64).unwrap();
         sqlx::query(
             "INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload)
              VALUES ($1, 'test.aggregate', $2, 'test.something_happened', $3::jsonb)",
         )
-        .bind(event_id)
-        .bind(uuid::Uuid::now_v7())
+        .bind(event_id.as_i64())
+        .bind(2_000_i64 + event_ids.len() as i64)
         .bind(r#"{"k":"v"}"#)
         .execute(&pool)
         .await
@@ -130,7 +130,7 @@ async fn concurrent_dispatchers_never_double_claim_the_same_row() {
         "the stream must contain exactly one entry per row, no duplicates"
     );
 
-    let published_ids: std::collections::HashSet<uuid::Uuid> = entries
+    let published_ids: std::collections::HashSet<sanvi_kernel::EventId> = entries
         .iter()
         .map(|(_, fields)| {
             let event_json = fields

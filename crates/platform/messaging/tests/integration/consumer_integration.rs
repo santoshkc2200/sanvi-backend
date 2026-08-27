@@ -36,8 +36,9 @@ async fn consumer_processes_each_event_exactly_once_across_redelivery() {
     let stream = sanvi_testsupport::test_stream("tenancy");
 
     let envelope = sanvi_kernel::EventEnvelope::new(
+        sanvi_kernel::EventId::try_from(101_i64).unwrap(),
         "tenancy.tenant",
-        uuid::Uuid::now_v7(),
+        sanvi_kernel::SnowflakeId::try_from(201_i64).unwrap(),
         "tenancy.tenant_activated",
         serde_json::json!({ "slug": "acme" }),
     );
@@ -109,8 +110,9 @@ async fn failing_handler_dead_letters_the_event_and_unblocks_the_group() {
     let stream = sanvi_testsupport::test_stream("broken");
 
     let envelope = sanvi_kernel::EventEnvelope::new(
+        sanvi_kernel::EventId::try_from(102_i64).unwrap(),
         "tenancy.tenant",
-        uuid::Uuid::now_v7(),
+        sanvi_kernel::SnowflakeId::try_from(202_i64).unwrap(),
         "tenancy.tenant_archived",
         serde_json::json!({ "slug": "doomed" }),
     );
@@ -155,8 +157,9 @@ async fn failing_handler_dead_letters_the_event_and_unblocks_the_group() {
 
     // A follow-up good event must still be processable.
     let good = sanvi_kernel::EventEnvelope::new(
+        sanvi_kernel::EventId::try_from(103_i64).unwrap(),
         "tenancy.tenant",
-        uuid::Uuid::now_v7(),
+        sanvi_kernel::SnowflakeId::try_from(203_i64).unwrap(),
         "tenancy.tenant_resumed",
         serde_json::json!({ "slug": "fine" }),
     );
@@ -230,8 +233,9 @@ async fn crashed_consumers_stale_entries_are_reclaimed_and_processed() {
     streams.ensure_consumer_group(&stream, group).await.unwrap();
 
     let envelope = sanvi_kernel::EventEnvelope::new(
+        sanvi_kernel::EventId::try_from(104_i64).unwrap(),
         "tenancy.tenant",
-        uuid::Uuid::now_v7(),
+        sanvi_kernel::SnowflakeId::try_from(204_i64).unwrap(),
         "tenancy.tenant_suspended",
         serde_json::json!({ "slug": "crashed" }),
     );

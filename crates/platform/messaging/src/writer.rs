@@ -16,18 +16,18 @@ pub struct OutboxWriter;
 impl OutboxWriter {
     /// Append one event to the outbox within the given transaction.
     pub async fn append(&self, tx: &mut Tx<'_>, envelope: &EventEnvelope) -> Result<()> {
-        sqlx::query!(
+        sqlx::query(
             "INSERT INTO platform.outbox
                (id, aggregate, aggregate_id, event_type, payload, metadata, occurred_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            envelope.id,
-            envelope.aggregate,
-            envelope.aggregate_id,
-            envelope.event_type,
-            envelope.payload,
-            envelope.metadata,
-            envelope.occurred_at
         )
+        .bind(envelope.id.as_i64())
+        .bind(&envelope.aggregate)
+        .bind(envelope.aggregate_id.as_i64())
+        .bind(&envelope.event_type)
+        .bind(&envelope.payload)
+        .bind(&envelope.metadata)
+        .bind(envelope.occurred_at)
         .execute(&mut **tx.as_inner())
         .await
         .context("failed to append event to outbox")?;

@@ -2,11 +2,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId, SnowflakeId};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool};
 use tracing::{error, info};
-use uuid::Uuid;
 
 use crate::{OutboxMetrics, redis::StreamsClient};
 
@@ -37,15 +36,48 @@ impl StreamName {
 /// Row shape of `platform.outbox`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboxRecord {
-    pub id: Uuid,
+    pub id: EventId,
     pub aggregate: String,
-    pub aggregate_id: Uuid,
+    pub aggregate_id: SnowflakeId,
     pub event_type: String,
     pub payload: serde_json::Value,
     pub metadata: serde_json::Value,
     pub occurred_at: DateTime<Utc>,
     pub published_at: Option<DateTime<Utc>>,
     pub attempts: i32,
+}
+
+#[derive(Debug, FromRow)]
+struct OutboxRow {
+    id: i64,
+    aggregate: String,
+    aggregate_id: i64,
+    event_type: String,
+    payload: serde_json::Value,
+    metadata: serde_json::Value,
+    occurred_at: DateTime<Utc>,
+    published_at: Option<DateTime<Utc>>,
+    attempts: i32,
+}
+
+impl TryFrom<OutboxRow> for OutboxRecord {
+    type Error = anyhow::Error;
+
+    fn try_from(row: OutboxRow) -> Result<Self> {
+        Ok(Self {
+            id: EventId::try_from(row.id)
+                .map_err(|error| anyhow::anyhow!("invalid outbox event id: {error}"))?,
+            aggregate: row.aggregate,
+            aggregate_id: SnowflakeId::try_from(row.aggregate_id)
+                .map_err(|error| anyhow::anyhow!("invalid outbox aggregate id: {error}"))?,
+            event_type: row.event_type,
+            payload: row.payload,
+            metadata: row.metadata,
+            occurred_at: row.occurred_at,
+            published_at: row.published_at,
+            attempts: row.attempts,
+        })
+    }
 }
 
 impl OutboxRecord {
@@ -121,8 +153,7 @@ impl OutboxDispatcher {
             .begin()
             .await
             .context("failed to start outbox claim transaction")?;
-        let rows = sqlx::query_as!(
-            OutboxRecord,
+        let rows = sqlx::query_as::<_, OutboxRow>(
             r#"SELECT id, aggregate, aggregate_id, event_type, payload, metadata,
                       occurred_at, published_at, attempts
                FROM platform.outbox
@@ -131,40 +162,40 @@ impl OutboxDispatcher {
                ORDER BY occurred_at
                LIMIT $2
                FOR UPDATE SKIP LOCKED"#,
-            self.max_attempts,
-            self.batch_size as i64
         )
+        .bind(self.max_attempts)
+        .bind(self.batch_size as i64)
         .fetch_all(&mut *tx)
         .await
         .context("failed to claim outbox batch")?;
+        let rows = rows
+            .into_iter()
+            .map(OutboxRecord::try_from)
+            .collect::<Result<Vec<_>>>()?;
         Ok((tx, rows))
     }
 
     async fn mark_published(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        id: Uuid,
+        id: EventId,
     ) -> Result<()> {
-        sqlx::query!(
-            "UPDATE platform.outbox SET published_at = now() WHERE id = $1",
-            id
-        )
-        .execute(&mut **tx)
-        .await
-        .context("failed to mark outbox row published")?;
+        sqlx::query("UPDATE platform.outbox SET published_at = now() WHERE id = $1")
+            .bind(id.as_i64())
+            .execute(&mut **tx)
+            .await
+            .context("failed to mark outbox row published")?;
         Ok(())
     }
 
     async fn record_failure(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        id: Uuid,
+        id: EventId,
     ) -> Result<()> {
-        sqlx::query!(
-            "UPDATE platform.outbox SET attempts = attempts + 1 WHERE id = $1",
-            id
-        )
-        .execute(&mut **tx)
-        .await
-        .context("failed to record outbox failure")?;
+        sqlx::query("UPDATE platform.outbox SET attempts = attempts + 1 WHERE id = $1")
+            .bind(id.as_i64())
+            .execute(&mut **tx)
+            .await
+            .context("failed to record outbox failure")?;
         Ok(())
     }
 
@@ -187,7 +218,7 @@ impl OutboxDispatcher {
                     occurred_at, published_at, attempts, $2
              FROM moved",
         )
-        .bind(record.id)
+        .bind(record.id.as_i64())
         .bind(failure)
         .execute(&mut **tx)
         .await

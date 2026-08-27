@@ -10,6 +10,11 @@ use crate::error::{IdGenerationError, KernelError};
 
 pub const SNOWFLAKE_EPOCH_MS: u64 = id_forge::snowflake::DEFAULT_EPOCH_MS;
 
+/// Shared first-party identifier tags used across bounded contexts.
+pub enum TenantTag {}
+pub enum UserTag {}
+pub enum RoleTag {}
+
 /// Valid, positive, signed-64-bit Snowflake storage value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SnowflakeId(NonZeroI64);
@@ -151,6 +156,10 @@ pub struct Id<Tag> {
     raw: SnowflakeId,
     _tag: PhantomData<fn() -> Tag>,
 }
+
+pub type TenantId = Id<TenantTag>;
+pub type UserId = Id<UserTag>;
+pub type RoleId = Id<RoleTag>;
 
 impl<Tag> Id<Tag> {
     pub const fn from_snowflake(raw: SnowflakeId) -> Self {

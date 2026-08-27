@@ -292,7 +292,7 @@ impl StreamConsumer {
             "SELECT EXISTS(SELECT 1 FROM platform.processed_events WHERE consumer = $1 AND event_id = $2)",
         )
         .bind(group)
-        .bind(envelope.id)
+        .bind(envelope.id.as_i64())
         .fetch_one(&self.pool)
         .await
         {
@@ -318,7 +318,7 @@ impl StreamConsumer {
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(group)
-                .bind(envelope.id)
+                .bind(envelope.id.as_i64())
                 .execute(&self.pool)
                 .await
                 {
