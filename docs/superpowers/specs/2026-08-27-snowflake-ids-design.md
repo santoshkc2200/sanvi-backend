@@ -99,7 +99,8 @@ and the persistence transaction manager.
 - parsing from a decimal string;
 - `as_i64()` at persistence boundaries;
 - `Display`, ordering, hashing, and copy semantics; and
-- string-based Serde and OpenAPI schema behavior.
+- string-based Serde behavior. HTTP transport adapters apply the shared
+  Snowflake OpenAPI schema without adding `utoipa` to the kernel.
 
 Remove `Id::new()`, `Id::from_uuid()`, and `Id::as_uuid()`. ID creation must
 flow through an injected generator, and UUID conversion must not remain as a
@@ -239,6 +240,10 @@ UUID exceptions continue to use `type: string, format: uuid`. Generated API
 documents must contain no first-party identifier marked as UUID. Keeping the
 wire type as `string` prevents JavaScript precision loss and preserves the
 frontend's existing TypeScript types.
+
+The reusable schema helper lives in `sanvi-http`. Context transport adapters
+reference it through field and parameter annotations; `sanvi-kernel` remains
+independent of `utoipa` and every HTTP framework.
 
 ## 9. Cross-cutting consumers
 
