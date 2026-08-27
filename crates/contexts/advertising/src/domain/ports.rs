@@ -35,6 +35,8 @@ pub enum AdvertisingError {
     AdNotFound,
     #[error("creative not found")]
     CreativeNotFound,
+    #[error("conversion not found")]
+    ConversionNotFound,
     #[error("advertising token encryption is not configured")]
     EncryptionUnconfigured,
     #[error("advertising token encryption failure: {0}")]
@@ -245,6 +247,13 @@ pub trait ConversionEventRepository: Send + Sync {
         scope: &mut ScopedTx<'_>,
         tenant_id: Uuid,
     ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
+
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<super::model::ConversionEvent>, AdvertisingError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

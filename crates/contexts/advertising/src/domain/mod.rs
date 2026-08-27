@@ -45,7 +45,10 @@ pub use token_vault::{
 pub use validation::{ValidationViolation, validate_campaign};
 pub mod hashing;
 
-pub use model::{ClickIds, ConversionEvent, SuppressedByDirective, UploadState, ValueSource};
+pub use model::{
+    ClickIds, ConversionDiagnostics, ConversionEvent, SuppressedByDirective, UploadState,
+    ValueSource,
+};
 pub use ports::{
     ConversionEventRepository, PaymentLookup, PaymentLookupPort, TrackingSettings,
     TrackingSettingsRepository, VendorRole, VendorRolePort,
