@@ -6,7 +6,7 @@
 //! adapter first — remote state is the truth about what is running, ours is
 //! the truth about what the tenant asked for (see [`crate::domain::reconciliation`]).
 
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use chrono::Utc;
 use sanvi_persistence::TxManager;
@@ -290,6 +290,7 @@ impl ListCampaigns {
 pub struct ValidateCampaign {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    creatives: Arc<dyn CreativeRepository>,
     platforms: Arc<PlatformRegistry>,
 }
 
@@ -297,11 +298,13 @@ impl ValidateCampaign {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        creatives: Arc<dyn CreativeRepository>,
         platforms: Arc<PlatformRegistry>,
     ) -> Self {
         Self {
             tx,
             campaigns,
+            creatives,
             platforms,
         }
     }
@@ -322,16 +325,84 @@ impl ValidateCampaign {
             .find(&mut scope, tenant_id, campaign_id)
             .await?
             .ok_or(AdvertisingError::CampaignNotFound)?;
+        let adapter = self.platforms.adapter(&stored.platform)?;
+        let matrix = &adapter.descriptor().capability_matrix;
+        let platform = stored.platform.clone();
+        let candidate = apply_fields(stored.intent, &fields);
+        let mut violations = validate_campaign(matrix, &candidate);
+        // A patch carrying an ad_groups tree is checked against the creative
+        // store on the write path, so the dry run has to make the same trip or
+        // it reports a step as valid that PatchCampaign would reject.
+        if fields.ad_groups.is_some() {
+            for (group_index, group) in candidate.ad_groups.iter().enumerate() {
+                for (ad_index, ad) in group.ads.iter().enumerate() {
+                    violations.extend(
+                        creative_dry_run_violations(
+                            &mut scope,
+                            self.creatives.as_ref(),
+                            matrix,
+                            &platform,
+                            tenant_id,
+                            group_index,
+                            ad_index,
+                            ad,
+                        )
+                        .await?,
+                    );
+                }
+            }
+        }
         scope
             .rollback()
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let adapter = self.platforms.adapter(&stored.platform)?;
-        let candidate = apply_fields(stored.intent, &fields);
-        Ok(validate_campaign(
-            &adapter.descriptor().capability_matrix,
-            &candidate,
-        ))
+        Ok(violations)
+    }
+}
+
+/// Dry-run counterpart of [`validate_and_hydrate_ad_creative`]: same checks,
+/// reported as field-addressed violations instead of errors, and the ad is left
+/// untouched.
+///
+/// A reference the write path rejects with `CreativeNotFound` (404) or
+/// `InvalidInput` (400) comes back here as a violation, because the dry run's
+/// contract is to describe every problem in the step rather than fail on the
+/// first bad one.
+#[allow(clippy::too_many_arguments)]
+async fn creative_dry_run_violations(
+    scope: &mut sanvi_persistence::ScopedTx<'_>,
+    creatives: &dyn CreativeRepository,
+    matrix: &crate::domain::CapabilityMatrix,
+    campaign_platform: &crate::domain::PlatformKey,
+    tenant_id: Uuid,
+    group_index: usize,
+    ad_index: usize,
+    ad: &Ad,
+) -> Result<Vec<ValidationViolation>, AdvertisingError> {
+    let mut probe = ad.clone();
+    match validate_and_hydrate_ad_creative(
+        scope,
+        creatives,
+        matrix,
+        campaign_platform,
+        tenant_id,
+        group_index,
+        ad_index,
+        &mut probe,
+    )
+    .await
+    {
+        Ok(()) => Ok(Vec::new()),
+        Err(AdvertisingError::Validation(violations)) => Ok(violations),
+        Err(AdvertisingError::CreativeNotFound) => Ok(vec![ValidationViolation::invalid(
+            format!("ad_groups[{group_index}].ads[{ad_index}].creative.id"),
+            "creative does not exist",
+        )]),
+        Err(AdvertisingError::InvalidInput(message)) => Ok(vec![ValidationViolation::invalid(
+            format!("ad_groups[{group_index}].ads[{ad_index}].creative.id"),
+            message,
+        )]),
+        Err(other) => Err(other),
     }
 }
 
@@ -347,7 +418,7 @@ impl ValidateCampaign {
 /// clamped budget or rejected field survives into the stored intent instead
 /// of silently reporting our request as truth.
 #[allow(clippy::too_many_arguments)]
-async fn apply_mutation(
+async fn apply_mutation<F>(
     tx: &TxManager,
     campaigns: &dyn CampaignRepository,
     events: &dyn EventPublisher,
@@ -358,8 +429,17 @@ async fn apply_mutation(
     mutation_id: Uuid,
     actor_id: Uuid,
     changed_fields: Vec<String>,
-    mutate: impl FnOnce(&mut Campaign) -> Result<(), AdvertisingError>,
-) -> Result<StoredCampaign, AdvertisingError> {
+    mutate: F,
+) -> Result<StoredCampaign, AdvertisingError>
+where
+    F: for<'a> FnOnce(
+        &'a mut Campaign,
+        &'a mut sanvi_persistence::ScopedTx<'_>,
+        &'a crate::domain::CapabilityMatrix,
+        &'a crate::domain::PlatformKey,
+    )
+        -> Pin<Box<dyn Future<Output = Result<(), AdvertisingError>> + Send + 'a>>,
+{
     let mut scope = tx
         .begin_for(tenant_id)
         .await
@@ -374,7 +454,13 @@ async fn apply_mutation(
     let adapter = platforms.adapter(&stored.platform)?;
     let before = stored.intent.clone();
     let mut candidate = stored.intent.clone();
-    mutate(&mut candidate)?;
+    mutate(
+        &mut candidate,
+        &mut scope,
+        &adapter.descriptor().capability_matrix,
+        &stored.platform,
+    )
+    .await?;
     let violations = validate_campaign(&adapter.descriptor().capability_matrix, &candidate);
     if !violations.is_empty() {
         return Err(AdvertisingError::Validation(violations));
@@ -448,6 +534,7 @@ async fn apply_mutation(
 pub struct PatchCampaign {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
 }
@@ -456,12 +543,14 @@ impl PatchCampaign {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
     ) -> Self {
         Self {
             tx,
             campaigns,
+            creatives,
             events,
             platforms,
         }
@@ -476,6 +565,7 @@ impl PatchCampaign {
         actor_id: Uuid,
         fields: CampaignFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
+        let creatives = self.creatives.clone();
         let changed_fields = changed_field_names(&fields);
         apply_mutation(
             &self.tx,
@@ -488,9 +578,33 @@ impl PatchCampaign {
             mutation_id,
             actor_id,
             changed_fields,
-            move |campaign| {
-                *campaign = apply_fields(campaign.clone(), &fields);
-                Ok(())
+            move |campaign, scope, matrix, platform| {
+                Box::pin(async move {
+                    *campaign = apply_fields(campaign.clone(), &fields);
+                    // Only a patch that carries an ad_groups tree needs the creative
+                    // check: apply_fields has just replaced the tree wholesale, so the
+                    // ads iterated here are exactly the incoming ones. Ads already
+                    // stored are left alone — a patch of `name` must not fail because
+                    // some unrelated creative was deleted since.
+                    if fields.ad_groups.is_some() {
+                        for (group_index, group) in campaign.ad_groups.iter_mut().enumerate() {
+                            for (ad_index, ad) in group.ads.iter_mut().enumerate() {
+                                validate_and_hydrate_ad_creative(
+                                    scope,
+                                    creatives.as_ref(),
+                                    matrix,
+                                    platform,
+                                    tenant_id,
+                                    group_index,
+                                    ad_index,
+                                    ad,
+                                )
+                                .await?;
+                            }
+                        }
+                    }
+                    Ok(())
+                })
             },
         )
         .await
@@ -580,15 +694,17 @@ impl AddAdGroup {
             mutation_id,
             actor_id,
             vec!["ad_groups".to_string()],
-            move |campaign| {
-                campaign.ad_groups.push(AdGroup {
-                    id: Uuid::now_v7().to_string(),
-                    name: fields.name,
-                    targeting: fields.targeting,
-                    bid: fields.bid,
-                    ads: Vec::new(),
-                });
-                Ok(())
+            move |campaign, _scope, _matrix, _platform| {
+                Box::pin(async move {
+                    campaign.ad_groups.push(AdGroup {
+                        id: Uuid::now_v7().to_string(),
+                        name: fields.name,
+                        targeting: fields.targeting,
+                        bid: fields.bid,
+                        ads: Vec::new(),
+                    });
+                    Ok(())
+                })
             },
         )
         .await
@@ -640,22 +756,24 @@ impl UpdateAdGroup {
             mutation_id,
             actor_id,
             vec!["ad_groups".to_string()],
-            move |campaign| {
-                let group = campaign
-                    .ad_groups
-                    .iter_mut()
-                    .find(|group| group.id == ad_group_id)
-                    .ok_or(AdvertisingError::AdGroupNotFound)?;
-                if let Some(name) = fields.name {
-                    group.name = name;
-                }
-                if let Some(targeting) = fields.targeting {
-                    group.targeting = targeting;
-                }
-                if let Some(bid) = fields.bid {
-                    group.bid = bid;
-                }
-                Ok(())
+            move |campaign, _scope, _matrix, _platform| {
+                Box::pin(async move {
+                    let group = campaign
+                        .ad_groups
+                        .iter_mut()
+                        .find(|group| group.id == ad_group_id)
+                        .ok_or(AdvertisingError::AdGroupNotFound)?;
+                    if let Some(name) = fields.name {
+                        group.name = name;
+                    }
+                    if let Some(targeting) = fields.targeting {
+                        group.targeting = targeting;
+                    }
+                    if let Some(bid) = fields.bid {
+                        group.bid = bid;
+                    }
+                    Ok(())
+                })
             },
         )
         .await
@@ -681,48 +799,54 @@ pub struct AdFields {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn validate_ad_creative(
-    tx: &TxManager,
-    campaigns: &dyn CampaignRepository,
+async fn validate_and_hydrate_ad_creative(
+    scope: &mut sanvi_persistence::ScopedTx<'_>,
     creatives: &dyn CreativeRepository,
-    platforms: &PlatformRegistry,
+    matrix: &crate::domain::CapabilityMatrix,
+    campaign_platform: &crate::domain::PlatformKey,
     tenant_id: Uuid,
-    campaign_id: Uuid,
-    creative: &Creative,
+    group_index: usize,
+    ad_index: usize,
+    ad: &mut Ad,
 ) -> Result<(), AdvertisingError> {
-    let mut scope = tx
-        .begin_for(tenant_id)
-        .await
-        .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-    let campaign = campaigns
-        .find(&mut scope, tenant_id, campaign_id)
-        .await?
-        .ok_or(AdvertisingError::CampaignNotFound)?;
-    let creative_uuid = Uuid::parse_str(&creative.id)
+    let creative_uuid = Uuid::parse_str(&ad.creative.id)
         .map_err(|error| AdvertisingError::InvalidInput(format!("invalid creative id: {error}")))?;
     let stored_creative = creatives
-        .find(&mut scope, tenant_id, creative_uuid)
+        .find(scope, tenant_id, creative_uuid)
         .await?
         .ok_or(AdvertisingError::CreativeNotFound)?;
-    let adapter = platforms.adapter(&campaign.platform)?;
-    if adapter
-        .descriptor()
-        .capability_matrix
-        .placement(&stored_creative.creative.placement)
-        .is_none()
-        || creative.placement != stored_creative.creative.placement
-    {
+    if &stored_creative.platform != campaign_platform {
         return Err(AdvertisingError::Validation(vec![
             ValidationViolation::unsupported(
-                "creative.placement",
-                "creative placement is unavailable for this platform or does not match stored creative",
+                format!("ad_groups[{group_index}].ads[{ad_index}].creative.id"),
+                format!(
+                    "creative belongs to platform '{}' but campaign is on platform '{}'",
+                    stored_creative.platform.as_str(),
+                    campaign_platform.as_str()
+                ),
             ),
         ]));
     }
-    scope
-        .rollback()
-        .await
-        .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+    if matrix
+        .placement(&stored_creative.creative.placement)
+        .is_none()
+    {
+        return Err(AdvertisingError::Validation(vec![
+            ValidationViolation::unsupported(
+                format!("ad_groups[{group_index}].ads[{ad_index}].creative.placement"),
+                "creative placement is unavailable for this platform",
+            ),
+        ]));
+    }
+    if ad.creative.placement != stored_creative.creative.placement {
+        return Err(AdvertisingError::Validation(vec![
+            ValidationViolation::invalid(
+                format!("ad_groups[{group_index}].ads[{ad_index}].creative.placement"),
+                "creative placement does not match stored creative",
+            ),
+        ]));
+    }
+    ad.creative = stored_creative.creative;
     Ok(())
 }
 
@@ -763,16 +887,7 @@ impl AddAd {
         actor_id: Uuid,
         fields: NewAdFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
-        validate_ad_creative(
-            &self.tx,
-            self.campaigns.as_ref(),
-            self.creatives.as_ref(),
-            &self.platforms,
-            tenant_id,
-            campaign_id,
-            &fields.creative,
-        )
-        .await?;
+        let creatives = self.creatives.clone();
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
@@ -784,19 +899,35 @@ impl AddAd {
             mutation_id,
             actor_id,
             vec!["ad_groups".to_string()],
-            move |campaign| {
-                let group = campaign
-                    .ad_groups
-                    .iter_mut()
-                    .find(|group| group.id == ad_group_id)
-                    .ok_or(AdvertisingError::AdGroupNotFound)?;
-                group.ads.push(Ad {
-                    id: Uuid::now_v7().to_string(),
-                    creative: fields.creative,
-                    landing_url: fields.landing_url,
-                    tracking_template: fields.tracking_template,
-                });
-                Ok(())
+            move |campaign, scope, matrix, platform| {
+                Box::pin(async move {
+                    let (group_index, group) = campaign
+                        .ad_groups
+                        .iter_mut()
+                        .enumerate()
+                        .find(|(_, group)| group.id == ad_group_id)
+                        .ok_or(AdvertisingError::AdGroupNotFound)?;
+                    let ad_index = group.ads.len();
+                    let mut ad = Ad {
+                        id: Uuid::now_v7().to_string(),
+                        creative: fields.creative,
+                        landing_url: fields.landing_url,
+                        tracking_template: fields.tracking_template,
+                    };
+                    validate_and_hydrate_ad_creative(
+                        scope,
+                        creatives.as_ref(),
+                        matrix,
+                        platform,
+                        tenant_id,
+                        group_index,
+                        ad_index,
+                        &mut ad,
+                    )
+                    .await?;
+                    group.ads.push(ad);
+                    Ok(())
+                })
             },
         )
         .await
@@ -841,18 +972,7 @@ impl UpdateAd {
         actor_id: Uuid,
         fields: AdFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
-        if let Some(creative) = &fields.creative {
-            validate_ad_creative(
-                &self.tx,
-                self.campaigns.as_ref(),
-                self.creatives.as_ref(),
-                &self.platforms,
-                tenant_id,
-                campaign_id,
-                creative,
-            )
-            .await?;
-        }
+        let creatives = self.creatives.clone();
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
@@ -864,27 +984,48 @@ impl UpdateAd {
             mutation_id,
             actor_id,
             vec!["ad_groups".to_string()],
-            move |campaign| {
-                let group = campaign
-                    .ad_groups
-                    .iter_mut()
-                    .find(|group| group.id == ad_group_id)
-                    .ok_or(AdvertisingError::AdGroupNotFound)?;
-                let ad = group
-                    .ads
-                    .iter_mut()
-                    .find(|ad| ad.id == ad_id)
-                    .ok_or(AdvertisingError::AdNotFound)?;
-                if let Some(creative) = fields.creative {
-                    ad.creative = creative;
-                }
-                if let Some(landing_url) = fields.landing_url {
-                    ad.landing_url = landing_url;
-                }
-                if let Some(tracking_template) = fields.tracking_template {
-                    ad.tracking_template = Some(tracking_template);
-                }
-                Ok(())
+            move |campaign, scope, matrix, platform| {
+                Box::pin(async move {
+                    let (group_index, group) = campaign
+                        .ad_groups
+                        .iter_mut()
+                        .enumerate()
+                        .find(|(_, group)| group.id == ad_group_id)
+                        .ok_or(AdvertisingError::AdGroupNotFound)?;
+                    let (ad_index, ad) = group
+                        .ads
+                        .iter_mut()
+                        .enumerate()
+                        .find(|(_, ad)| ad.id == ad_id)
+                        .ok_or(AdvertisingError::AdNotFound)?;
+                    if let Some(creative) = fields.creative {
+                        let mut temp_ad = Ad {
+                            id: ad.id.clone(),
+                            creative,
+                            landing_url: ad.landing_url.clone(),
+                            tracking_template: ad.tracking_template.clone(),
+                        };
+                        validate_and_hydrate_ad_creative(
+                            scope,
+                            creatives.as_ref(),
+                            matrix,
+                            platform,
+                            tenant_id,
+                            group_index,
+                            ad_index,
+                            &mut temp_ad,
+                        )
+                        .await?;
+                        ad.creative = temp_ad.creative;
+                    }
+                    if let Some(landing_url) = fields.landing_url {
+                        ad.landing_url = landing_url;
+                    }
+                    if let Some(tracking_template) = fields.tracking_template {
+                        ad.tracking_template = Some(tracking_template);
+                    }
+                    Ok(())
+                })
             },
         )
         .await

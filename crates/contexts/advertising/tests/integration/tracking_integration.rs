@@ -922,11 +922,13 @@ fn create_test_advertising_state(
         validate_campaign: Arc::new(ValidateCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             registry.clone(),
         )),
         patch_campaign: Arc::new(PatchCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            creatives.clone(),
             events.clone(),
             registry.clone(),
         )),

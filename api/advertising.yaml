@@ -161,7 +161,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+          description: Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
             application/json:
@@ -173,7 +173,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Campaign not found
+          description: Campaign or creative not found
         '409':
           content:
             application/json:
@@ -380,7 +380,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+          description: Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
             application/json:
@@ -392,7 +392,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Campaign or ad group not found
+          description: Campaign, ad group or creative not found
         '409':
           content:
             application/json:
@@ -461,7 +461,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
+          description: Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
             application/json:
@@ -473,7 +473,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Campaign, ad group or ad not found
+          description: Campaign, ad group, ad or creative not found
         '409':
           content:
             application/json:
