@@ -76,14 +76,7 @@ async fn migrations_run_and_revert_cleanly() {
 
     assert_column_type(&pool, "tenancy", "tenants", "id", "bigint").await;
     assert_column_type(&pool, "identity", "users", "id", "bigint").await;
-    assert_column_type(
-        &pool,
-        "identity",
-        "users",
-        "kratos_identity_id",
-        "uuid",
-    )
-    .await;
+    assert_column_type(&pool, "identity", "users", "kratos_identity_id", "uuid").await;
     assert_column_type(&pool, "platform", "outbox", "id", "bigint").await;
     assert_column_type(&pool, "platform", "processed_events", "event_id", "bigint").await;
     assert_column_type(&pool, "platform", "audit_log", "id", "bigint").await;

@@ -43,6 +43,55 @@ impl fmt::Display for SnowflakeId {
     }
 }
 
+impl FromStr for SnowflakeId {
+    type Err = KernelError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty()
+            || value.starts_with(['+', '-'])
+            || value.starts_with('0')
+            || value.bytes().any(|byte| !byte.is_ascii_digit())
+        {
+            return Err(KernelError::InvalidId {
+                value: value.to_string(),
+            });
+        }
+
+        value
+            .parse::<i64>()
+            .map_err(|_| KernelError::InvalidId {
+                value: value.to_string(),
+            })
+            .and_then(Self::try_from)
+    }
+}
+
+impl Serialize for SnowflakeId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for SnowflakeId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SnowflakeVisitor;
+
+        impl Visitor<'_> for SnowflakeVisitor {
+            type Value = SnowflakeId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a canonical positive decimal Snowflake ID string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(SnowflakeVisitor)
+    }
+}
+
 /// Configured Snowflake node. Zero is reserved for stable seed IDs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeId(u16);
@@ -132,22 +181,7 @@ impl<Tag> FromStr for Id<Tag> {
     type Err = KernelError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if value.is_empty()
-            || value.starts_with(['+', '-'])
-            || value.starts_with('0')
-            || value.bytes().any(|byte| !byte.is_ascii_digit())
-        {
-            return Err(KernelError::InvalidId {
-                value: value.to_string(),
-            });
-        }
-
-        value
-            .parse::<i64>()
-            .map_err(|_| KernelError::InvalidId {
-                value: value.to_string(),
-            })
-            .and_then(Self::try_from)
+        value.parse::<SnowflakeId>().map(Self::from_snowflake)
     }
 }
 

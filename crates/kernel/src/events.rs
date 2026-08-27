@@ -1,6 +1,9 @@
+use crate::{Id, SnowflakeId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+
+pub enum EventTag {}
+pub type EventId = Id<EventTag>;
 
 /// The canonical shape of every domain event that crosses a context boundary.
 ///
@@ -9,12 +12,12 @@ use uuid::Uuid;
 /// Consumers deduplicate on `id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventEnvelope {
-    /// Unique event id (UUIDv7); doubles as the consumer dedup key.
-    pub id: Uuid,
+    /// Unique event id; doubles as the consumer dedup key.
+    pub id: EventId,
     /// Aggregate type, e.g. `"tenancy.tenant"`.
     pub aggregate: String,
     /// Id of the aggregate instance that raised the event.
-    pub aggregate_id: Uuid,
+    pub aggregate_id: SnowflakeId,
     /// Machine-readable event name, e.g. `"tenancy.tenant_created"`.
     pub event_type: String,
     /// Event payload as defined by the publishing context.
@@ -27,13 +30,14 @@ pub struct EventEnvelope {
 
 impl EventEnvelope {
     pub fn new(
+        id: EventId,
         aggregate: impl Into<String>,
-        aggregate_id: Uuid,
+        aggregate_id: SnowflakeId,
         event_type: impl Into<String>,
         payload: serde_json::Value,
     ) -> Self {
         Self {
-            id: Uuid::now_v7(),
+            id,
             aggregate: aggregate.into(),
             aggregate_id,
             event_type: event_type.into(),
@@ -66,10 +70,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn envelope_serializes_event_and_aggregate_ids_as_strings() {
+        let envelope = EventEnvelope::new(
+            EventId::try_from(101_i64).unwrap(),
+            "tenancy.tenant",
+            SnowflakeId::try_from(202_i64).unwrap(),
+            "tenancy.tenant_created",
+            serde_json::json!({}),
+        );
+        let json = serde_json::to_value(envelope).unwrap();
+
+        assert_eq!(json["id"], "101");
+        assert_eq!(json["aggregate_id"], "202");
+    }
+
+    #[test]
     fn new_envelope_carries_all_fields() {
         let envelope = EventEnvelope::new(
+            EventId::try_from(101_i64).unwrap(),
             "tenancy.tenant",
-            Uuid::now_v7(),
+            SnowflakeId::try_from(202_i64).unwrap(),
             "tenancy.tenant_created",
             serde_json::json!({ "slug": "acme" }),
         )
@@ -79,15 +99,16 @@ mod tests {
         assert_eq!(envelope.event_type, "tenancy.tenant_created");
         assert_eq!(envelope.payload, serde_json::json!({ "slug": "acme" }));
         assert_eq!(envelope.metadata["request_id"], "req-123");
-        assert_eq!(envelope.id.get_version_num(), 7);
-        assert!(!envelope.aggregate_id.is_nil());
+        assert_eq!(envelope.id.as_i64(), 101);
+        assert_eq!(envelope.aggregate_id.as_i64(), 202);
     }
 
     #[test]
     fn serde_roundtrip_preserves_content() {
         let envelope = EventEnvelope::new(
+            EventId::try_from(101_i64).unwrap(),
             "billing.invoice",
-            Uuid::now_v7(),
+            SnowflakeId::try_from(202_i64).unwrap(),
             "billing.invoice_paid",
             serde_json::json!({ "total": 4900 }),
         );
@@ -99,8 +120,9 @@ mod tests {
     #[test]
     fn with_locale_records_the_canonical_metadata_key() {
         let envelope = EventEnvelope::new(
+            EventId::try_from(101_i64).unwrap(),
             "privacy.dsr",
-            Uuid::now_v7(),
+            SnowflakeId::try_from(202_i64).unwrap(),
             "privacy.dsr_submitted",
             serde_json::json!({}),
         )
