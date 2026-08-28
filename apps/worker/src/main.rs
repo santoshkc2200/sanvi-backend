@@ -1131,7 +1131,9 @@ async fn main() -> ExitCode {
     let domains_certs: std::sync::Arc<dyn sanvi_domains::domain::CertificateRepository> =
         std::sync::Arc::new(sanvi_domains::adapters::SqlxCertificateRepository::new());
     let domains_records: std::sync::Arc<dyn sanvi_domains::domain::DnsRecordRepository> =
-        std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsRecordRepository::new());
+        std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsRecordRepository::new(
+            ids.clone(),
+        ));
     let domains_provider: std::sync::Arc<dyn sanvi_domains::domain::DnsProviderPort> =
         std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsProvider::new(
             domains_records.clone(),
@@ -1144,6 +1146,7 @@ async fn main() -> ExitCode {
     let domains_ca: std::sync::Arc<dyn sanvi_domains::domain::CertificateAuthorityPort> =
         std::sync::Arc::new(sanvi_domains::adapters::SandboxCertificateAuthority::new(
             config.domains.cert_lifetime_days,
+            ids.clone(),
         ));
     let domains_verifier: std::sync::Arc<dyn sanvi_domains::domain::DnsVerifierPort> =
         std::sync::Arc::new(sanvi_domains::adapters::DohDnsVerifier::new(
@@ -1157,7 +1160,9 @@ async fn main() -> ExitCode {
             config.domains.prober_user_agent.clone(),
         ));
     let domains_events: std::sync::Arc<dyn sanvi_domains::domain::EventPublisher> =
-        std::sync::Arc::new(sanvi_domains::adapters::OutboxEventPublisher::new());
+        std::sync::Arc::new(sanvi_domains::adapters::OutboxEventPublisher::new(
+            ids.clone(),
+        ));
     let domains_clock: std::sync::Arc<dyn sanvi_domains::domain::Clock> =
         std::sync::Arc::new(sanvi_domains::adapters::SystemClock);
     let domains_notifications: std::sync::Arc<dyn sanvi_domains::domain::Notifications> =
@@ -1181,6 +1186,7 @@ async fn main() -> ExitCode {
             std::sync::Arc::new(sanvi_domains::adapters::AlwaysDisabledGate),
             domains_events.clone(),
             domains_clock.clone(),
+            ids.clone(),
             domains_tx.clone(),
             config.domains.platform_domain.clone(),
             config.domains.edge_hostname.clone(),

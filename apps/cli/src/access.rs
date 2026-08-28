@@ -110,7 +110,7 @@ pub async fn membership_grant(environment: &str, args: MembershipGrantArgs) -> a
         store
             .write(&[Tuple::role_membership(
                 &format!("platform:{}", args.role),
-                user.id().as_uuid(),
+                user.id().as_i64(),
             )])
             .await?;
         println!(
@@ -137,7 +137,7 @@ pub async fn membership_grant(environment: &str, args: MembershipGrantArgs) -> a
         .await?
         .ok_or_else(|| anyhow::anyhow!("no tenant with slug {tenant_slug}"))?;
     scope.commit().await?;
-    let tenant_id = tenant.id().as_uuid();
+    let tenant_id = tenant.id().as_i64();
 
     let roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
     let role_catalog: Arc<dyn RoleCatalog> = Arc::new(SqlxRoleCatalog::new(
@@ -166,7 +166,7 @@ pub async fn membership_grant(environment: &str, args: MembershipGrantArgs) -> a
     let role_id = assignable
         .iter()
         .find(|role| role.key() == args.role)
-        .map(|role| role.id().as_uuid())
+        .map(|role| role.id().as_i64())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "role {} is not assignable in tenant {tenant_slug}",

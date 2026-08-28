@@ -63,7 +63,7 @@ async fn tenant_id_by_slug(environment: &str, slug: &str) -> anyhow::Result<Uuid
         .await?
         .ok_or_else(|| anyhow::anyhow!("no tenant with slug {slug}"))?;
     scope.commit().await?;
-    Ok(tenant.id().as_uuid())
+    Ok(tenant.id().as_i64())
 }
 
 // ---------------------------------------------------------------------------

@@ -130,6 +130,7 @@ async fn main() -> ExitCode {
     });
     let tenancy = build_tenancy_state(
         pool.clone(),
+        ids.clone(),
         redis.clone(),
         &config.tenancy,
         custom_domain_lookup,
@@ -140,6 +141,7 @@ async fn main() -> ExitCode {
     let localization = if config.features.localization {
         Some(build_localization_state(
             pool.clone(),
+            ids.clone(),
             &config.localization,
             metrics.prometheus_registry(),
         ))
@@ -149,6 +151,7 @@ async fn main() -> ExitCode {
     let notification_localizer = localization.as_ref().map(|wiring| {
         Arc::new(sanvi_localization::adapters::NotificationLocalizer::new(
             pool.clone(),
+            ids.clone(),
             wiring.service.clone(),
             config.localization.clone(),
         ))
@@ -175,6 +178,7 @@ async fn main() -> ExitCode {
 
     let identity = build_identity_state(
         pool.clone(),
+        ids.clone(),
         redis.clone(),
         &config.identity,
         &config.ory.kratos_public_url,
@@ -186,7 +190,7 @@ async fn main() -> ExitCode {
 
     // The audit writer/reader are shared by the access and platform_admin
     // contexts (they record; the audit context owns the schema).
-    let audit = build_audit_state(pool.clone(), &config.audit);
+    let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);
 
     // Construction order matters: platform_admin owns the approval gate the
     // access context consumes, but its `EntitlementAdmin` port is *the
@@ -197,6 +201,7 @@ async fn main() -> ExitCode {
 
     let access = build_access_state(
         pool.clone(),
+        ids.clone(),
         &config.access,
         &config.ory.keto_read_url,
         &config.ory.keto_write_url,
@@ -231,6 +236,7 @@ async fn main() -> ExitCode {
 
     let platform_admin = build_platform_admin_state(
         pool.clone(),
+        ids.clone(),
         &config.platform_admin,
         Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
         identity.memberships.clone(),
@@ -246,6 +252,7 @@ async fn main() -> ExitCode {
     let billing = if config.features.billing {
         Some(build_billing_state(
             pool.clone(),
+            ids.clone(),
             &config.billing,
             access.entitlements_repo.clone(),
             access.features_repo.clone(),
@@ -355,6 +362,7 @@ async fn main() -> ExitCode {
         ];
         Some(build_privacy_state(
             pool.clone(),
+            ids.clone(),
             &config.privacy,
             privacy_providers,
             audit.writer.clone(),
@@ -371,6 +379,7 @@ async fn main() -> ExitCode {
     let theming = if config.features.theming {
         Some(build_theming_state(
             pool.clone(),
+            ids.clone(),
             &config.theming,
             metrics.prometheus_registry(),
             redis.clone(),
@@ -394,6 +403,7 @@ async fn main() -> ExitCode {
             };
         Some(build_domains_state(
             pool.clone(),
+            ids.clone(),
             &config.domains,
             metrics.prometheus_registry(),
             redis.clone(),
@@ -411,6 +421,7 @@ async fn main() -> ExitCode {
     // before the switch; that money must retain a local record.
     let payments = Some(build_payments_state(
         pool.clone(),
+        ids.clone(),
         &config.payments,
         metrics.prometheus_registry(),
         &config.telemetry.environment,

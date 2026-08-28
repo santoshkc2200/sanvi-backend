@@ -76,15 +76,17 @@ pub async fn publish(
 
     // 4. Registry insert, in the audited platform scope, atomically with
     //    the published event.
+    let ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator> =
+        std::sync::Arc::new(sanvi_kernel::SnowflakeGenerator::new(0));
     let pool = build_pool(&config.database).await?;
     let themes: std::sync::Arc<dyn ThemeRepository> =
         std::sync::Arc::new(SqlxThemeRepository::new());
     let events: std::sync::Arc<dyn EventPublisher> =
-        std::sync::Arc::new(OutboxEventPublisher::new());
+        std::sync::Arc::new(OutboxEventPublisher::new(ids.clone()));
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
-    let install = InstallThemeVersion::new(themes, events, clock, pool.clone(), store);
+    let install = InstallThemeVersion::new(themes, events, clock, pool.clone(), store, ids.clone());
 
-    let tx_manager = sanvi_persistence::TxManager::new(pool);
+    let tx_manager = sanvi_persistence::TxManager::new(pool, ids);
     let mut scope = tx_manager
         .begin_unscoped("theming.theme.publish", "cli")
         .await
@@ -151,16 +153,18 @@ pub async fn versions(environment: &str, key: &str) -> anyhow::Result<()> {
 /// Withdraw a version (the kill switch; pinned tenants keep rendering).
 pub async fn yank(environment: &str, key: &str, version: &str) -> anyhow::Result<()> {
     let config = crate::config::load(environment)?;
+    let ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator> =
+        std::sync::Arc::new(sanvi_kernel::SnowflakeGenerator::new(0));
     let pool = build_pool(&config.database).await?;
     let themes: std::sync::Arc<dyn ThemeRepository> =
         std::sync::Arc::new(SqlxThemeRepository::new());
     let events: std::sync::Arc<dyn EventPublisher> =
-        std::sync::Arc::new(OutboxEventPublisher::new());
+        std::sync::Arc::new(OutboxEventPublisher::new(ids.clone()));
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
     let use_case =
         sanvi_theming::application::YankThemeVersion::new(themes, events, clock, pool.clone());
 
-    let tx_manager = sanvi_persistence::TxManager::new(pool);
+    let tx_manager = sanvi_persistence::TxManager::new(pool, ids);
     let mut scope = tx_manager
         .begin_unscoped("theming.theme.yank", "cli")
         .await
