@@ -466,8 +466,9 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
         Arc::new(SqlxRefundRepository::new());
     let disputes: Arc<dyn sanvi_payments::domain::DisputeRepository> =
         Arc::new(SqlxDisputeRepository::new());
-    let audit: Arc<dyn sanvi_audit::domain::AuditWriter> =
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new());
+    let audit: Arc<dyn sanvi_audit::domain::AuditWriter> = Arc::new(
+        sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids()),
+    );
 
     PaymentsState {
         config: PaymentsConfig::default(),
@@ -490,7 +491,9 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             ),
             providers.clone(),
             connections,
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         disconnect_connection: Arc::new(sanvi_payments::application::DisconnectConnection::new(
             TxManager::new(
@@ -560,7 +563,9 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             Arc::new(SqlxProviderConnectionRepository::new()),
             checkouts.clone(),
             Arc::new(OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
             TxManager::new(
@@ -581,7 +586,9 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             refunds.clone(),
             disputes.clone(),
             checkouts.clone(),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
         list_payouts: Arc::new(sanvi_payments::application::ListPayouts::new(
@@ -792,7 +799,9 @@ fn start_connection_use_case(pool: &sanvi_persistence::PgPool) -> StartProviderC
         Arc::new(providers),
         Arc::new(SqlxProviderConnectionRepository::new()),
         Arc::new(OutboxEventPublisher::new()),
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
     )
 }
 
@@ -967,7 +976,9 @@ fn session_fixture(pool: &sanvi_persistence::PgPool) -> (CreateAccountSession, F
         TxManager::new(pool.clone()),
         Arc::new(providers),
         Arc::new(SqlxProviderConnectionRepository::new()),
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
     );
     (use_case, provider)
 }
@@ -2043,13 +2054,13 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             Arc::new(ProviderRegistry::new()),
                             connections.clone(),
                             Arc::new(OutboxEventPublisher::new()),
-                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                         )),
                         account_session: Arc::new(CreateAccountSession::new(
                             TxManager::new(pool.clone()),
                             Arc::new(ProviderRegistry::new()),
                             connections,
-                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                         )),
                         disconnect_connection: Arc::new(
                             sanvi_payments::application::DisconnectConnection::new(
@@ -2059,7 +2070,7 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                                 Arc::new(SqlxDisputeRepository::new()),
                                 Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
                                 Arc::new(OutboxEventPublisher::new()),
-                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                             ),
                         ),
                         webhook_receiver: Arc::new(WebhookReceiver::new(
@@ -2103,7 +2114,7 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             Arc::new(SqlxProviderConnectionRepository::new()),
                             Arc::new(SqlxCheckoutRepository::new()),
                             Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new()),
-                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                         )),
                         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
                             TxManager::new(pool.clone()),
@@ -2119,7 +2130,7 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                                 Arc::new(SqlxRefundRepository::new()),
                                 Arc::new(SqlxDisputeRepository::new()),
                                 Arc::new(SqlxCheckoutRepository::new()),
-                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                             ),
                         ),
                         payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
@@ -2236,13 +2247,17 @@ fn checkout_fixture(
             providers.clone(),
             connections.clone(),
             Arc::new(OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         account_session: Arc::new(CreateAccountSession::new(
             TxManager::new(pool.clone()),
             providers.clone(),
             connections.clone(),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         disconnect_connection: Arc::new(sanvi_payments::application::DisconnectConnection::new(
             TxManager::new(pool.clone()),
@@ -2251,7 +2266,9 @@ fn checkout_fixture(
             Arc::new(SqlxDisputeRepository::new()),
             Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
             Arc::new(OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         webhook_receiver: Arc::new(WebhookReceiver::new(
             TxManager::new(pool.clone()),
@@ -2294,7 +2311,9 @@ fn checkout_fixture(
             Arc::new(SqlxProviderConnectionRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
             Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
             TxManager::new(pool.clone()),
@@ -2309,7 +2328,9 @@ fn checkout_fixture(
             Arc::new(SqlxRefundRepository::new()),
             Arc::new(SqlxDisputeRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
         list_payouts: Arc::new(sanvi_payments::application::ListPayouts::new(
