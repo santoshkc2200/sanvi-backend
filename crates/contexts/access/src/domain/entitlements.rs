@@ -59,12 +59,14 @@ impl EntitlementSource {
 /// A stored entitlement row for one tenant + feature + source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Entitlement {
+    #[schema(value_type = String)]
     tenant_id: TenantId,
     feature: FeatureKey,
     enabled: bool,
     limit: Option<i64>,
     source: EntitlementSource,
     expires_at: Option<DateTime<Utc>>,
+    #[schema(value_type = Option<String>)]
     granted_by: Option<UserId>,
     granted_reason: Option<String>,
     updated_at: DateTime<Utc>,

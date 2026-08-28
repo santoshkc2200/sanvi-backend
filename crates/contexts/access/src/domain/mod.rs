@@ -24,4 +24,5 @@ pub use ports::{
     IdGenerator, PermissionStore, QuotaUsageStore, ResourceRef, RoleRepository, Tuple,
 };
 pub use quota::period_start;
-pub use roles::{Role, RoleId, RoleScope, SYSTEM_ROLE_SEEDS};
+pub use roles::{Role, RoleId, RoleScope, SYSTEM_ROLE_SEEDS, TenantId};
+pub use sanvi_kernel::UserId;

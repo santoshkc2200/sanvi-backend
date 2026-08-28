@@ -2,9 +2,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
+use sanvi_kernel::{RoleId, SnowflakeId, TenantId, UserId};
 use sanvi_persistence::{PlatformScope, ScopedTx};
-use serde::{Deserialize, Serialize};
-use sanvi_kernel::{RoleId, TenantId, UserId};
 
 use crate::domain::entitlements::{Entitlement, EntitlementSource, ResolvedEntitlement};
 use crate::domain::error::AccessError;
@@ -287,7 +286,7 @@ pub trait QuotaUsageStore: Send + Sync {
     async fn usage(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         period: NaiveDate,
     ) -> Result<i64, AccessError>;
@@ -302,7 +301,7 @@ pub trait QuotaUsageStore: Send + Sync {
 }
 
 /// The resolved entitlement set for one tenant, as served from the cache.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CachedEntitlements {
     pub entries: Vec<ResolvedEntitlement>,
     pub cached_at: DateTime<Utc>,
@@ -344,7 +343,7 @@ pub enum ApprovalOutcome {
     NotRequired,
     /// The action was recorded as a pending approval; a second platform
     /// admin must approve it before it executes.
-    Required { approval_id: i64 },
+    Required { approval_id: SnowflakeId },
 }
 
 /// The four-eyes gate: an action marked `requires_approval` becomes a

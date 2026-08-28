@@ -21,9 +21,9 @@ use sanvi_access::{
     },
 };
 use sanvi_audit::{adapters::SqlxAuditWriter, domain::AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use sanvi_testsupport::TestDb;
-use uuid::Uuid;
 
 async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, TestDb) {
     let db = sanvi_testsupport::test_db().await;
@@ -33,14 +33,14 @@ async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, Tes
 }
 
 /// Insert a tenant row directly (the entitlement FK needs one).
-async fn insert_tenant(owner: &sanvi_persistence::PgPool, id: Uuid, slug: &str) {
+async fn insert_tenant(owner: &sanvi_persistence::PgPool, id: TenantId, slug: &str) {
     sqlx::query(
         "INSERT INTO tenancy.tenants
            (id, slug, display_name, status, region, default_locale,
             created_at, updated_at)
          VALUES ($1, $2, $3, 'active', 'us', 'en', now(), now())",
     )
-    .bind(id)
+    .bind(id.as_i64())
     .bind(slug)
     .bind(format!("Tenant {slug}"))
     .execute(owner)
@@ -63,7 +63,7 @@ impl ApprovalGate for NoopApproval {
     async fn request_if_required(
         &self,
         _scope: &mut sanvi_persistence::PlatformScope<'_>,
-        _requested_by: Uuid,
+        _requested_by: UserId,
         _action_type: &str,
         _payload: serde_json::Value,
     ) -> Result<sanvi_access::domain::ApprovalOutcome, AccessError> {
@@ -75,16 +75,19 @@ fn noop_approval() -> Arc<dyn ApprovalGate> {
     Arc::new(NoopApproval)
 }
 
-async fn wire(pool: sanvi_persistence::PgPool) -> Wired {
-    let tx_manager = TxManager::new(pool.clone());
+async fn wire(
+    pool: sanvi_persistence::PgPool,
+    ids: Arc<dyn sanvi_kernel::RawIdGenerator>,
+) -> Wired {
+    let tx_manager = TxManager::new(pool.clone(), ids.clone());
     let features: Arc<dyn FeatureRepository> = Arc::new(SqlxFeatureRepository::new());
     let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
     let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());
     let events: Arc<dyn sanvi_access::domain::EventPublisher> =
-        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new());
+        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new(ids.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let cache: Arc<dyn EntitlementCache> = Arc::new(NoopEntitlementCache);
-    let audit: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new());
+    let audit: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new(ids));
 
     // Seed the catalog first (idempotent).
     let seed = SeedFeatures::new(tx_manager.clone(), features.clone());
@@ -121,12 +124,14 @@ async fn wire(pool: sanvi_persistence::PgPool) -> Wired {
 #[tokio::test]
 async fn an_override_flips_the_gate_for_one_tenant_only() {
     let (app, migrator, _node) = prepare().await;
-    let tenant_a = Uuid::now_v7();
-    let tenant_b = Uuid::now_v7();
+    let ids = sanvi_testsupport::test_ids();
+    let tenant_a = TenantId::from_snowflake(ids.next_id().unwrap());
+    let tenant_b = TenantId::from_snowflake(ids.next_id().unwrap());
+    let actor = UserId::from_snowflake(ids.next_id().unwrap());
     insert_tenant(&migrator, tenant_a, "acme").await;
     insert_tenant(&migrator, tenant_b, "beta").await;
 
-    let wired = wire(app.clone()).await;
+    let wired = wire(app.clone(), ids.clone()).await;
     let feature = FeatureKey::parse("advertising.google_ads").unwrap();
 
     // Default: disabled everywhere.
@@ -137,7 +142,7 @@ async fn an_override_flips_the_gate_for_one_tenant_only() {
     let grant_result = wired
         .grant
         .execute(
-            Uuid::now_v7(),
+            actor,
             None,
             GrantEntitlementCommand {
                 tenant_id: tenant_a,
@@ -162,7 +167,7 @@ async fn an_override_flips_the_gate_for_one_tenant_only() {
 
     // The override row is visible to the operator listing.
     let overrides = sanvi_access::application::ListTenantOverrides::new(
-        TxManager::new(app),
+        TxManager::new(app, ids),
         Arc::new(SqlxEntitlementRepository::new()),
     )
     .execute(tenant_a)
@@ -176,17 +181,19 @@ async fn an_override_flips_the_gate_for_one_tenant_only() {
 #[tokio::test]
 async fn quota_consumption_never_oversells_under_concurrency() {
     let (app, migrator, _node) = prepare().await;
-    let tenant = Uuid::now_v7();
+    let ids = sanvi_testsupport::test_ids();
+    let tenant = TenantId::from_snowflake(ids.next_id().unwrap());
+    let actor = UserId::from_snowflake(ids.next_id().unwrap());
     insert_tenant(&migrator, tenant, "quota").await;
 
-    let wired = wire(app.clone()).await;
+    let wired = wire(app.clone(), ids.clone()).await;
     let feature = FeatureKey::parse("tenancy.member_limit").unwrap();
 
     // Set the quota via an override with limit 10.
     wired
         .grant
         .execute(
-            Uuid::now_v7(),
+            actor,
             None,
             GrantEntitlementCommand {
                 tenant_id: tenant,
@@ -243,11 +250,13 @@ async fn quota_consumption_never_oversells_under_concurrency() {
 #[tokio::test]
 async fn expired_overrides_fall_back_to_defaults_and_sweep() {
     let (app, migrator, _node) = prepare().await;
-    let tenant = Uuid::now_v7();
+    let ids = sanvi_testsupport::test_ids();
+    let tenant = TenantId::from_snowflake(ids.next_id().unwrap());
+    let actor = UserId::from_snowflake(ids.next_id().unwrap());
     insert_tenant(&migrator, tenant, "expiry").await;
 
-    let tx_manager = TxManager::new(app.clone());
-    let wired = wire(app.clone()).await;
+    let tx_manager = TxManager::new(app.clone(), ids.clone());
+    let wired = wire(app.clone(), ids.clone()).await;
     let feature = FeatureKey::parse("advertising.google_ads").unwrap();
 
     // A grant that expires one second from now.
@@ -255,7 +264,7 @@ async fn expired_overrides_fall_back_to_defaults_and_sweep() {
     wired
         .grant
         .execute(
-            Uuid::now_v7(),
+            actor,
             None,
             GrantEntitlementCommand {
                 tenant_id: tenant,
@@ -280,7 +289,7 @@ async fn expired_overrides_fall_back_to_defaults_and_sweep() {
         tx_manager,
         Arc::new(SqlxEntitlementRepository::new()),
         wired.cache.clone(),
-        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new(ids)),
         Arc::new(SystemClock),
     );
     assert_eq!(sweep.execute(10).await.unwrap(), 1);

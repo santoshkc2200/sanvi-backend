@@ -5,9 +5,8 @@
 //! payloads.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId, RoleId, TenantId};
 use serde::Serialize;
-use uuid::Uuid;
 
 /// Machine-readable event names, stable across versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,42 +55,42 @@ pub enum AccessEvent {
         key: String,
     },
     EntitlementGranted {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature_key: String,
         enabled: bool,
         limit: Option<i64>,
         expires_at: Option<DateTime<Utc>>,
     },
     EntitlementRevoked {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature_key: String,
     },
     EntitlementExpired {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature_key: String,
     },
     QuotaExceeded {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature_key: String,
         limit: i64,
         attempted: i64,
     },
     RoleCreated {
-        tenant_id: Option<Uuid>,
-        role_id: Uuid,
+        tenant_id: Option<TenantId>,
+        role_id: RoleId,
         key: String,
         permissions: Vec<String>,
     },
     RoleUpdated {
-        tenant_id: Option<Uuid>,
-        role_id: Uuid,
+        tenant_id: Option<TenantId>,
+        role_id: RoleId,
         key: String,
         added_permissions: Vec<String>,
         removed_permissions: Vec<String>,
     },
     RoleDeleted {
-        tenant_id: Option<Uuid>,
-        role_id: Uuid,
+        tenant_id: Option<TenantId>,
+        role_id: RoleId,
         key: String,
         permissions: Vec<String>,
     },
@@ -112,7 +111,7 @@ impl AccessEvent {
     }
 
     /// The tenant the event concerns, when it concerns one.
-    pub fn tenant_id(&self) -> Option<Uuid> {
+    pub fn tenant_id(&self) -> Option<TenantId> {
         match self {
             Self::EntitlementGranted { tenant_id, .. }
             | Self::EntitlementRevoked { tenant_id, .. }
@@ -127,21 +126,22 @@ impl AccessEvent {
 
     /// The outbox envelope for this event. Tenant-scoped events tag the
     /// tenant id in metadata; the aggregate id is the role id (role
-    /// events), the tenant id (entitlement/quota events) or nil (feature
-    /// events, which have no natural uuid).
-    pub fn envelope(&self) -> EventEnvelope {
+    /// events), the tenant id (entitlement/quota events) or the event id
+    /// (feature events, which have no natural first-party id).
+    pub fn envelope(&self, id: EventId) -> EventEnvelope {
         let payload = serde_json::to_value(self).expect("access events serialize infallibly");
         let aggregate_id = match self {
             Self::RoleCreated { role_id, .. }
             | Self::RoleUpdated { role_id, .. }
-            | Self::RoleDeleted { role_id, .. } => *role_id,
+            | Self::RoleDeleted { role_id, .. } => role_id.as_snowflake(),
             Self::EntitlementGranted { tenant_id, .. }
             | Self::EntitlementRevoked { tenant_id, .. }
             | Self::EntitlementExpired { tenant_id, .. }
-            | Self::QuotaExceeded { tenant_id, .. } => *tenant_id,
-            Self::FeatureDefined { .. } => Uuid::nil(),
+            | Self::QuotaExceeded { tenant_id, .. } => tenant_id.as_snowflake(),
+            Self::FeatureDefined { .. } => id.as_snowflake(),
         };
         let envelope = EventEnvelope::new(
+            id,
             self.name().aggregate(),
             aggregate_id,
             self.name().as_str(),
@@ -175,7 +175,8 @@ mod tests {
 
     #[test]
     fn tenant_scoped_events_carry_tenant_metadata() {
-        let tenant_id = Uuid::now_v7();
+        let tenant_id = TenantId::try_from(101_i64).unwrap();
+        let event_id = EventId::try_from(1_i64).unwrap();
         let event = AccessEvent::EntitlementGranted {
             tenant_id,
             feature_key: "domains.custom".to_string(),
@@ -183,22 +184,24 @@ mod tests {
             limit: None,
             expires_at: None,
         };
-        let envelope = event.envelope();
+        let envelope = event.envelope(event_id);
         assert_eq!(envelope.metadata["tenant_id"], tenant_id.to_string());
-        assert_eq!(envelope.aggregate_id, tenant_id);
+        assert_eq!(envelope.aggregate_id, tenant_id.as_snowflake());
     }
 
     #[test]
     fn role_events_use_the_role_id_as_aggregate_id() {
-        let role_id = Uuid::now_v7();
+        let role_id = RoleId::try_from(201_i64).unwrap();
+        let tenant_id = TenantId::try_from(101_i64).unwrap();
+        let event_id = EventId::try_from(1_i64).unwrap();
         let event = AccessEvent::RoleCreated {
-            tenant_id: Some(Uuid::now_v7()),
+            tenant_id: Some(tenant_id),
             role_id,
             key: "support_agent".to_string(),
             permissions: vec!["identity.member.read".to_string()],
         };
-        let envelope = event.envelope();
-        assert_eq!(envelope.aggregate_id, role_id);
+        let envelope = event.envelope(event_id);
+        assert_eq!(envelope.aggregate_id, role_id.as_snowflake());
         assert!(envelope.metadata["tenant_id"].is_string());
     }
 }

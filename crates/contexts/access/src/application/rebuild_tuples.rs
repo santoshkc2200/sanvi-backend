@@ -77,15 +77,16 @@ impl RebuildAccessTuples {
         //    System tenant templates materialize for every tenant that has
         //    members, plus platform role memberships exist only when granted
         //    (platform memberships are stored like tenant ones by the CLI).
-        let mut tenants: std::collections::BTreeSet<uuid::Uuid> = std::collections::BTreeSet::new();
+        let mut tenants: std::collections::BTreeSet<sanvi_kernel::TenantId> =
+            std::collections::BTreeSet::new();
         for membership in &memberships {
             tenants.insert(membership.tenant_id());
             tuples.push(Tuple::tenant_membership(
                 membership.tenant_id(),
-                membership.user_id().as_i64(),
+                membership.user_id(),
             ));
             for role_id in membership.role_ids() {
-                if let Some(role) = roles.iter().find(|role| role.id().as_i64() == *role_id) {
+                if let Some(role) = roles.iter().find(|role| role.id() == *role_id) {
                     // System tenant templates materialize per tenant.
                     let object = if role.tenant_id().is_none() {
                         format!("{}:{}", membership.tenant_id(), role.key())
@@ -94,7 +95,7 @@ impl RebuildAccessTuples {
                     };
                     tuples.push(Tuple::role_membership(
                         &object,
-                        membership.user_id().as_i64(),
+                        membership.user_id(),
                     ));
                 } else {
                     warn!(role_id = %role_id, "membership references a deleted role; skipping tuple");

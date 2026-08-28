@@ -7,14 +7,14 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{RoleId, TenantId, UserId};
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::events::AccessEvent;
 use crate::domain::permissions::{Permission, PermissionScope, lookup};
 use crate::domain::ports::{Authorizer, Decision, EventPublisher, ResourceRef};
-use crate::domain::roles::{Role, RoleId, RoleScope};
+use crate::domain::roles::{Role, RoleScope};
 use crate::domain::{AccessError, Clock, IdGenerator, RoleRepository};
 
 /// Validates and normalizes a permission set: every key must be declared
@@ -41,8 +41,8 @@ fn normalize_permissions(raw: &[String]) -> Result<BTreeSet<String>, AccessError
 /// error during the check blocks the grant rather than allowing it.
 async fn ensure_actor_holds(
     authorizer: &Arc<dyn Authorizer>,
-    actor: Uuid,
-    tenant_id: Uuid,
+    actor: UserId,
+    tenant_id: TenantId,
     permissions: &BTreeSet<String>,
 ) -> Result<(), AccessError> {
     for permission in permissions {
@@ -63,7 +63,7 @@ async fn ensure_actor_holds(
 }
 
 pub struct CreateCustomRoleCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub key: String,
     pub name: String,
     pub permissions: Vec<String>,
@@ -102,8 +102,8 @@ impl CreateCustomRole {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: CreateCustomRoleCommand,
     ) -> Result<Role, AccessError> {
         let permissions = normalize_permissions(&cmd.permissions)?;
@@ -146,7 +146,7 @@ impl CreateCustomRole {
                 &mut scope,
                 &[AccessEvent::RoleCreated {
                     tenant_id: Some(cmd.tenant_id),
-                    role_id: role.id().as_i64(),
+                    role_id: role.id(),
                     key: role.key().to_string(),
                     permissions: permissions.iter().cloned().collect(),
                 }],
@@ -183,7 +183,7 @@ impl CreateCustomRole {
 
 pub struct UpdateCustomRoleCommand {
     pub role_id: RoleId,
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub name: Option<String>,
     pub permissions: Option<Vec<String>>,
 }
@@ -218,8 +218,8 @@ impl UpdateCustomRole {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: UpdateCustomRoleCommand,
     ) -> Result<Role, AccessError> {
         let mut scope = self
@@ -285,7 +285,7 @@ impl UpdateCustomRole {
                 &mut scope,
                 &[AccessEvent::RoleUpdated {
                     tenant_id: Some(tenant_id),
-                    role_id: updated.id().as_i64(),
+                    role_id: updated.id(),
                     key: updated.key().to_string(),
                     added_permissions: added,
                     removed_permissions: removed,
@@ -351,9 +351,9 @@ impl DeleteCustomRole {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
-        tenant_id: Uuid,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
+        tenant_id: TenantId,
         role_id: RoleId,
     ) -> Result<(), AccessError> {
         let mut scope = self
@@ -384,7 +384,7 @@ impl DeleteCustomRole {
                 &mut scope,
                 &[AccessEvent::RoleDeleted {
                     tenant_id: existing.tenant_id(),
-                    role_id: existing.id().as_i64(),
+                    role_id: existing.id(),
                     key: existing.key().to_string(),
                     permissions: existing.permissions().iter().cloned().collect(),
                 }],
@@ -442,7 +442,7 @@ impl ListRoles {
         Ok(roles)
     }
 
-    pub async fn execute_tenant(&self, tenant_id: Uuid) -> Result<Vec<Role>, AccessError> {
+    pub async fn execute_tenant(&self, tenant_id: TenantId) -> Result<Vec<Role>, AccessError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("list_roles", "tenant-admin")

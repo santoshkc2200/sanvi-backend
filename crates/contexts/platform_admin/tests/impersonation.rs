@@ -94,7 +94,7 @@ fn wire(pool: sanvi_persistence::PgPool, privacy: Arc<dyn PrivacyLock>) -> Wired
     let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
     let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator);
     let clock = Arc::new(SystemClock);
-    let audit: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new());
+    let audit: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new(sanvi_testsupport::test_ids()));
 
     Wired {
         create: Arc::new(CreateImpersonation::new(

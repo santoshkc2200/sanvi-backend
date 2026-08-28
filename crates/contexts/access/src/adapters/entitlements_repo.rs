@@ -5,9 +5,9 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use sqlx::FromRow;
-use uuid::Uuid;
 
 use crate::domain::entitlements::{Entitlement, EntitlementSource};
 use crate::domain::features::FeatureKey;
@@ -15,26 +15,33 @@ use crate::domain::{AccessError, EntitlementRepository, QuotaUsageStore};
 
 #[derive(Debug, Clone, FromRow)]
 struct EntitlementRow {
-    tenant_id: Uuid,
+    tenant_id: i64,
     feature_key: String,
     enabled: bool,
     limit: Option<i64>,
     source: String,
     expires_at: Option<DateTime<Utc>>,
-    granted_by: Option<Uuid>,
+    granted_by: Option<i64>,
     granted_reason: Option<String>,
     updated_at: DateTime<Utc>,
 }
 
 fn to_entitlement(row: EntitlementRow) -> Result<Entitlement, AccessError> {
+    let tenant_id = TenantId::try_from(row.tenant_id)
+        .map_err(|err| AccessError::Storage(format!("invalid tenant id: {err}")))?;
+    let granted_by = row
+        .granted_by
+        .map(UserId::try_from)
+        .transpose()
+        .map_err(|err| AccessError::Storage(format!("invalid granted_by user id: {err}")))?;
     Ok(Entitlement::from_parts(
-        row.tenant_id,
+        tenant_id,
         FeatureKey::parse(&row.feature_key)?,
         row.enabled,
         row.limit,
         EntitlementSource::parse(&row.source)?,
         row.expires_at,
-        row.granted_by,
+        granted_by,
         row.granted_reason,
         row.updated_at,
     ))
@@ -54,7 +61,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
     async fn list_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Entitlement>, AccessError> {
         let rows: Vec<EntitlementRow> = sqlx::query_as(
             "SELECT tenant_id, feature_key, enabled, \"limit\", source,
@@ -62,7 +69,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
              FROM access.entitlements
              WHERE tenant_id = $1 ORDER BY feature_key, source",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
@@ -72,7 +79,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
     async fn list_for_tenant_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Entitlement>, AccessError> {
         let rows: Vec<EntitlementRow> = sqlx::query_as(
             "SELECT tenant_id, feature_key, enabled, \"limit\", source,
@@ -80,7 +87,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
              FROM access.entitlements
              WHERE tenant_id = $1 ORDER BY feature_key, source",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
@@ -105,13 +112,13 @@ impl EntitlementRepository for SqlxEntitlementRepository {
                granted_reason = EXCLUDED.granted_reason,
                updated_at = EXCLUDED.updated_at",
         )
-        .bind(entitlement.tenant_id())
+        .bind(entitlement.tenant_id().as_i64())
         .bind(entitlement.feature().as_str())
         .bind(entitlement.enabled())
         .bind(entitlement.limit())
         .bind(entitlement.source().as_str())
         .bind(entitlement.expires_at())
-        .bind(entitlement.granted_by())
+        .bind(entitlement.granted_by().map(|id| id.as_i64()))
         .bind(entitlement.granted_reason())
         .bind(entitlement.updated_at())
         .execute(&mut **scope.tx_mut().as_inner())
@@ -123,7 +130,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
     async fn delete(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         source: EntitlementSource,
     ) -> Result<(), AccessError> {
@@ -131,7 +138,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
             "DELETE FROM access.entitlements
              WHERE tenant_id = $1 AND feature_key = $2 AND source = $3",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(feature.as_str())
         .bind(source.as_str())
         .execute(&mut **scope.tx_mut().as_inner())
@@ -143,7 +150,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
     async fn count_active(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         now: DateTime<Utc>,
     ) -> Result<u32, AccessError> {
         let count: i64 = sqlx::query_scalar(
@@ -151,7 +158,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
              WHERE tenant_id = $1 AND source = 'override'
                AND (expires_at IS NULL OR expires_at > $2)",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(now)
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
@@ -183,14 +190,14 @@ impl EntitlementRepository for SqlxEntitlementRepository {
     async fn list_by_granted_by(
         &self,
         scope: &mut PlatformScope<'_>,
-        user_id: Uuid,
+        user_id: UserId,
     ) -> Result<Vec<Entitlement>, AccessError> {
         let rows: Vec<EntitlementRow> = sqlx::query_as(
             "SELECT tenant_id, feature_key, enabled, \"limit\", source,
                     expires_at, granted_by, granted_reason, updated_at
              FROM access.entitlements WHERE granted_by = $1",
         )
-        .bind(user_id)
+        .bind(user_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
@@ -200,7 +207,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
     async fn anonymise_granted_by(
         &self,
         scope: &mut PlatformScope<'_>,
-        user_id: Uuid,
+        user_id: UserId,
     ) -> Result<usize, AccessError> {
         let result = sqlx::query(
             "UPDATE access.entitlements
@@ -208,7 +215,7 @@ impl EntitlementRepository for SqlxEntitlementRepository {
                  granted_reason = 'redacted by privacy erasure (phase 05)'
              WHERE granted_by = $1",
         )
-        .bind(user_id)
+        .bind(user_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
@@ -230,7 +237,7 @@ impl QuotaUsageStore for SqlxQuotaUsageStore {
     async fn consume(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         period: NaiveDate,
         amount: i64,
@@ -247,7 +254,7 @@ impl QuotaUsageStore for SqlxQuotaUsageStore {
                WHERE access.quota_usage.used + EXCLUDED.used <= $5
              RETURNING used",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(feature.as_str())
         .bind(period)
         .bind(amount)
@@ -261,7 +268,7 @@ impl QuotaUsageStore for SqlxQuotaUsageStore {
     async fn usage(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         period: NaiveDate,
     ) -> Result<i64, AccessError> {
@@ -269,7 +276,7 @@ impl QuotaUsageStore for SqlxQuotaUsageStore {
             "SELECT used FROM access.quota_usage
              WHERE tenant_id = $1 AND feature_key = $2 AND period_start = $3",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(feature.as_str())
         .bind(period)
         .fetch_optional(&mut **scope.tx_mut().as_inner())

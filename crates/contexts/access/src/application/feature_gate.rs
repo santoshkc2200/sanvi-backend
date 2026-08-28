@@ -15,8 +15,8 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::events::AccessEvent;
@@ -82,7 +82,7 @@ impl EntitlementResolver {
     /// The resolved set for a tenant. Cache hits skip the database; on a
     /// miss the database is read and the result is cached. Backend failures
     /// fail closed — never fabricate an entitlement.
-    pub async fn resolve(&self, tenant_id: Uuid) -> Result<ResolvedSet, AccessError> {
+    pub async fn resolve(&self, tenant_id: TenantId) -> Result<ResolvedSet, AccessError> {
         if let Some(cached) = self.cache.get(tenant_id).await {
             return Ok(ResolvedSet::Cached(cached.entries));
         }
@@ -95,7 +95,7 @@ impl EntitlementResolver {
 
     async fn resolve_from_db(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<ResolvedEntitlement>, AccessError> {
         let now = self.clock.now();
 
@@ -115,7 +115,7 @@ impl EntitlementResolver {
         let rows = {
             let mut scope = self
                 .tx_manager
-                .begin_for(tenant_id)
+                .begin_for(tenant_id.as_i64())
                 .await
                 .map_err(storage)?;
             let rows = self
@@ -130,7 +130,7 @@ impl EntitlementResolver {
     }
 
     /// Drop the cached set for a tenant (grant/revoke/expiry paths).
-    pub async fn invalidate(&self, tenant_id: Uuid) {
+    pub async fn invalidate(&self, tenant_id: TenantId) {
         self.cache.invalidate(tenant_id).await;
     }
 }
@@ -165,7 +165,7 @@ impl EntitlementFeatureGate {
 
 #[async_trait::async_trait]
 impl FeatureGate for EntitlementFeatureGate {
-    async fn is_enabled(&self, tenant_id: Uuid, feature: &FeatureKey) -> Result<bool, AccessError> {
+    async fn is_enabled(&self, tenant_id: TenantId, feature: &FeatureKey) -> Result<bool, AccessError> {
         let set = self.resolver.resolve(tenant_id).await?;
         let entry = set
             .find(feature)
@@ -177,7 +177,7 @@ impl FeatureGate for EntitlementFeatureGate {
 
     async fn remaining(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
     ) -> Result<Option<i64>, AccessError> {
         let set = self.resolver.resolve(tenant_id).await?;
@@ -200,7 +200,7 @@ impl FeatureGate for EntitlementFeatureGate {
                 let period = period_start(self.clock.now());
                 let mut scope = self
                     .tx_manager
-                    .begin_for(tenant_id)
+                    .begin_for(tenant_id.as_i64())
                     .await
                     .map_err(storage)?;
                 let used = self
@@ -215,7 +215,7 @@ impl FeatureGate for EntitlementFeatureGate {
 
     async fn consume(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         amount: i64,
     ) -> Result<(), AccessError> {
@@ -250,7 +250,7 @@ impl FeatureGate for EntitlementFeatureGate {
                 let period = period_start(self.clock.now());
                 let mut scope = self
                     .tx_manager
-                    .begin_for(tenant_id)
+                    .begin_for(tenant_id.as_i64())
                     .await
                     .map_err(storage)?;
                 match self

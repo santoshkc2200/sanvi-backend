@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{SnowflakeId, TenantId, UserId};
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::application::feature_gate::EntitlementResolver;
 use crate::application::storage;
@@ -31,7 +31,7 @@ pub struct EntitlementPolicy {
 }
 
 pub struct GrantEntitlementCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub feature_key: FeatureKey,
     pub enabled: bool,
     pub limit: Option<i64>,
@@ -45,7 +45,7 @@ pub struct GrantEntitlementCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrantEntitlementOutput {
     Granted,
-    ApprovalRequired { approval_id: Uuid },
+    ApprovalRequired { approval_id: SnowflakeId },
 }
 
 pub struct GrantEntitlement {
@@ -84,8 +84,8 @@ impl GrantEntitlement {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: GrantEntitlementCommand,
     ) -> Result<GrantEntitlementOutput, AccessError> {
         let now = self.clock.now();
@@ -219,7 +219,7 @@ impl GrantEntitlement {
 }
 
 pub struct RevokeEntitlementCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub feature_key: FeatureKey,
 }
 
@@ -253,8 +253,8 @@ impl RevokeEntitlement {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: RevokeEntitlementCommand,
     ) -> Result<(), AccessError> {
         let mut scope = self
@@ -318,7 +318,7 @@ impl ListTenantEntitlements {
         Self { resolver }
     }
 
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<Vec<ResolvedEntitlement>, AccessError> {
+    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<ResolvedEntitlement>, AccessError> {
         let set = self.resolver.resolve(tenant_id).await?;
         Ok(match set {
             crate::application::feature_gate::ResolvedSet::Fresh(entries)
@@ -341,7 +341,7 @@ impl ListTenantOverrides {
         }
     }
 
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<Vec<Entitlement>, AccessError> {
+    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<Entitlement>, AccessError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("list_entitlement_overrides", "platform-admin")

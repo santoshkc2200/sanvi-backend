@@ -10,13 +10,13 @@ use std::time::Duration;
 
 use chrono::Utc;
 use redis::AsyncCommands;
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use crate::domain::ResolvedEntitlement;
 use crate::domain::ports::{CachedEntitlements, EntitlementCache};
 
 /// The canonical Redis key for a tenant's resolved set.
-pub fn entitlement_key(tenant_id: Uuid) -> String {
+pub fn entitlement_key(tenant_id: TenantId) -> String {
     format!("sanvi:{tenant_id}:entitlements")
 }
 
@@ -34,7 +34,7 @@ impl RedisEntitlementCache {
 
 #[async_trait::async_trait]
 impl EntitlementCache for RedisEntitlementCache {
-    async fn get(&self, tenant_id: Uuid) -> Option<CachedEntitlements> {
+    async fn get(&self, tenant_id: TenantId) -> Option<CachedEntitlements> {
         let key = entitlement_key(tenant_id);
         let mut conn = self.conn.clone();
         let raw: Option<String> = conn
@@ -55,7 +55,7 @@ impl EntitlementCache for RedisEntitlementCache {
         }
     }
 
-    async fn put(&self, tenant_id: Uuid, entries: &[ResolvedEntitlement], ttl_secs: u64) {
+    async fn put(&self, tenant_id: TenantId, entries: &[ResolvedEntitlement], ttl_secs: u64) {
         let key = entitlement_key(tenant_id);
         let value = CachedEntitlements {
             entries: entries.to_vec(),
@@ -75,7 +75,7 @@ impl EntitlementCache for RedisEntitlementCache {
         }
     }
 
-    async fn invalidate(&self, tenant_id: Uuid) {
+    async fn invalidate(&self, tenant_id: TenantId) {
         let mut conn = self.conn.clone();
         if let Err(err) = conn.del::<_, ()>(entitlement_key(tenant_id)).await {
             tracing::warn!(error = %err, "entitlement cache delete failed");
@@ -113,7 +113,7 @@ impl EntitlementCache for RedisEntitlementCache {
 
 /// Bounded in-memory cache (single process, tests, small deployments).
 pub struct InMemoryEntitlementCache {
-    inner: Mutex<HashMap<Uuid, (CachedEntitlements, std::time::Instant)>>,
+    inner: Mutex<HashMap<TenantId, (CachedEntitlements, std::time::Instant)>>,
     ttl: Duration,
     max_entries: usize,
 }
@@ -130,7 +130,7 @@ impl InMemoryEntitlementCache {
 
 #[async_trait::async_trait]
 impl EntitlementCache for InMemoryEntitlementCache {
-    async fn get(&self, tenant_id: Uuid) -> Option<CachedEntitlements> {
+    async fn get(&self, tenant_id: TenantId) -> Option<CachedEntitlements> {
         let now = std::time::Instant::now();
         let mut map = self.inner.lock().expect("entitlement cache lock poisoned");
         match map.get(&tenant_id) {
@@ -144,7 +144,7 @@ impl EntitlementCache for InMemoryEntitlementCache {
         }
     }
 
-    async fn put(&self, tenant_id: Uuid, entries: &[ResolvedEntitlement], _ttl_secs: u64) {
+    async fn put(&self, tenant_id: TenantId, entries: &[ResolvedEntitlement], _ttl_secs: u64) {
         let mut map = self.inner.lock().expect("entitlement cache lock poisoned");
         if map.len() >= self.max_entries && !map.contains_key(&tenant_id) {
             // Bounded: drop an arbitrary entry rather than growing forever.
@@ -164,7 +164,7 @@ impl EntitlementCache for InMemoryEntitlementCache {
         );
     }
 
-    async fn invalidate(&self, tenant_id: Uuid) {
+    async fn invalidate(&self, tenant_id: TenantId) {
         let mut map = self.inner.lock().expect("entitlement cache lock poisoned");
         map.remove(&tenant_id);
     }
@@ -181,13 +181,13 @@ pub struct NoopEntitlementCache;
 
 #[async_trait::async_trait]
 impl EntitlementCache for NoopEntitlementCache {
-    async fn get(&self, _tenant_id: Uuid) -> Option<CachedEntitlements> {
+    async fn get(&self, _tenant_id: TenantId) -> Option<CachedEntitlements> {
         None
     }
 
-    async fn put(&self, _tenant_id: Uuid, _entries: &[ResolvedEntitlement], _ttl_secs: u64) {}
+    async fn put(&self, _tenant_id: TenantId, _entries: &[ResolvedEntitlement], _ttl_secs: u64) {}
 
-    async fn invalidate(&self, _tenant_id: Uuid) {}
+    async fn invalidate(&self, _tenant_id: TenantId) {}
 
     async fn invalidate_all(&self) {}
 }
@@ -211,7 +211,7 @@ mod tests {
     #[tokio::test]
     async fn in_memory_cache_serves_within_the_ttl() {
         let cache = InMemoryEntitlementCache::new(Duration::from_secs(60), 10);
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(101_i64).unwrap();
         assert!(cache.get(tenant).await.is_none());
         cache.put(tenant, &[resolved("domains.custom")], 60).await;
         let hit = cache.get(tenant).await.unwrap();
@@ -223,16 +223,16 @@ mod tests {
     #[tokio::test]
     async fn in_memory_cache_stays_bounded() {
         let cache = InMemoryEntitlementCache::new(Duration::from_secs(60), 2);
-        cache.put(Uuid::now_v7(), &[], 60).await;
-        cache.put(Uuid::now_v7(), &[], 60).await;
-        cache.put(Uuid::now_v7(), &[], 60).await;
+        cache.put(TenantId::try_from(1_i64).unwrap(), &[], 60).await;
+        cache.put(TenantId::try_from(2_i64).unwrap(), &[], 60).await;
+        cache.put(TenantId::try_from(3_i64).unwrap(), &[], 60).await;
         // Eviction happened; still usable.
-        assert!(cache.get(Uuid::now_v7()).await.is_none());
+        assert!(cache.get(TenantId::try_from(1_i64).unwrap()).await.is_none());
     }
 
     #[test]
     fn key_shape_matches_the_plan() {
-        let tenant = Uuid::nil();
+        let tenant = TenantId::try_from(101_i64).unwrap();
         assert_eq!(
             entitlement_key(tenant),
             format!("sanvi:{tenant}:entitlements")

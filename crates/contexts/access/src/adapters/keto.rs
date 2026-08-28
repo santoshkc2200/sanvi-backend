@@ -1,9 +1,6 @@
-//! The Keto REST adapter: relation-tuple writes/deletes on the admin API,
-//! batch membership checks on the read API.
-
 use async_trait::async_trait;
+use sanvi_kernel::UserId;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::domain::AccessError;
 use crate::domain::ports::{PermissionStore, Tuple};
@@ -190,7 +187,7 @@ impl PermissionStore for HttpKetoClient {
 
     async fn check_membership(
         &self,
-        user_id: Uuid,
+        user_id: UserId,
         objects: &[String],
     ) -> Result<Vec<bool>, AccessError> {
         // Keto v26 (legacy namespaces) exposes only the single check
@@ -247,14 +244,14 @@ mod tests {
     fn tuple_bodies_serialize_to_the_keto_shape() {
         let tuple = Tuple::role_membership(
             "acme-tenant:tenant_owner",
-            Uuid::parse_str("0190f0d0-0000-7000-8000-000000000001").unwrap(),
+            UserId::try_from(101_i64).unwrap(),
         );
         let body = TupleBody::from_tuple(&tuple);
         let json = serde_json::to_value(body).unwrap();
         assert_eq!(json["namespace"], "role");
         assert_eq!(json["object"], "acme-tenant:tenant_owner");
         assert_eq!(json["relation"], "member");
-        assert_eq!(json["subject_id"], "0190f0d0-0000-7000-8000-000000000001");
+        assert_eq!(json["subject_id"], "101");
         assert!(json.get("subject_set").is_none());
 
         let grant = Tuple::permission_grant("identity.member.read", "acme-tenant:tenant_owner");

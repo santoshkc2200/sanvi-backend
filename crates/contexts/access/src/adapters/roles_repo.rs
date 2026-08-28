@@ -7,11 +7,11 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use sanvi_kernel::TenantId;
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::PlatformScope;
 use sqlx::FromRow;
 
-use crate::domain::roles::{Role, RoleId, RoleScope};
+use crate::domain::roles::{Role, RoleScope};
 use crate::domain::{AccessError, RoleRepository};
 
 #[derive(Debug, Clone, FromRow)]

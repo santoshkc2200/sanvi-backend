@@ -1,12 +1,10 @@
-//! Handlers: thin actix shims over the application layer.
-
 use std::sync::Arc;
 
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use sanvi_http::{ApiError, CurrentSubject, CurrentTenant, FreshAal2Required, RequiredPermission};
+use sanvi_kernel::{RoleId, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::{
     CreateCustomRole, CreateCustomRoleCommand, DefineFeature, DefineFeatureCommand,
@@ -15,7 +13,7 @@ use crate::application::{
     UpdateFeature, UpdateFeatureCommand,
 };
 use crate::domain::features::{Feature, FeatureKey, FeatureKind, Visibility};
-use crate::domain::roles::{Role, RoleId, RoleScope};
+use crate::domain::roles::{Role, RoleScope};
 use crate::domain::{AccessError, ResolvedEntitlement};
 
 /// Application state visible to this context's handlers.
@@ -119,9 +117,11 @@ pub async fn list_permissions(
 /// One role as exposed by the API.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RoleView {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: RoleId,
     pub scope: RoleScope,
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
     pub key: String,
     pub name: String,
     pub permissions: Vec<String>,
@@ -132,7 +132,7 @@ pub struct RoleView {
 impl From<&Role> for RoleView {
     fn from(role: &Role) -> Self {
         Self {
-            id: role.id().as_i64(),
+            id: role.id(),
             scope: role.scope(),
             tenant_id: role.tenant_id(),
             key: role.key().to_string(),
@@ -253,7 +253,7 @@ pub struct UpdateRoleRequest {
     path = "/api/v1/tenant/roles/{id}",
     tag = "access",
     operation_id = "update_role",
-    params(("id" = Uuid, Path, description = "Role id")),
+    params(("id" = String, Path, description = "Role id")),
     request_body = UpdateRoleRequest,
     responses(
         (status = 200, description = "Role updated", body = RoleView),
@@ -266,20 +266,21 @@ pub async fn update_role(
     state: web::Data<AccessState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     body: web::Json<UpdateRoleRequest>,
     _guard: RequiredPermission,
     req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
     let actor = subject.0.user_id;
     let on_behalf_of = on_behalf_of(&req);
+    let role_id = role_id(&path)?;
     let role = state
         .update_role
         .execute(
             actor,
             on_behalf_of,
             UpdateCustomRoleCommand {
-                role_id: RoleId::from_uuid(path.into_inner()),
+                role_id,
                 tenant_id: tenant.0.tenant_id,
                 name: body.name.clone(),
                 permissions: body.permissions.clone(),
@@ -296,7 +297,7 @@ pub async fn update_role(
     path = "/api/v1/tenant/roles/{id}",
     tag = "access",
     operation_id = "delete_role",
-    params(("id" = Uuid, Path, description = "Role id")),
+    params(("id" = String, Path, description = "Role id")),
     responses(
         (status = 204, description = "Role deleted"),
         (status = 403, description = "System role or permission denied", body = sanvi_http::ProblemDetail),
@@ -307,19 +308,20 @@ pub async fn delete_role(
     state: web::Data<AccessState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     _guard: RequiredPermission,
     req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
     let actor = subject.0.user_id;
     let on_behalf_of = on_behalf_of(&req);
+    let role_id = role_id(&path)?;
     state
         .delete_role
         .execute(
             actor,
             on_behalf_of,
             tenant.0.tenant_id,
-            RoleId::from_uuid(path.into_inner()),
+            role_id,
         )
         .await
         .map_err(api_error)?;
@@ -590,9 +592,15 @@ pub async fn list_tenant_entitlements(
 
 // Helpers ---------------------------------------------------------------------
 
+/// Parse a role id path segment.
+fn role_id(path: &web::Path<String>) -> Result<RoleId, ApiError> {
+    path.parse::<RoleId>()
+        .map_err(|_| ApiError::bad_request("invalid role id"))
+}
+
 /// The actor to record in audit entries as `on_behalf_of`: the
 /// impersonating operator, when the request arrived through an
 /// impersonation grant (resolved by the impersonation middleware).
-fn on_behalf_of(req: &actix_web::HttpRequest) -> Option<Uuid> {
+fn on_behalf_of(req: &actix_web::HttpRequest) -> Option<UserId> {
     sanvi_http::impersonation_actor(req)
 }

@@ -31,5 +31,5 @@ pub use seed_roles::SeedRoles;
 
 /// Maps infrastructure failures into the domain vocabulary at the boundary.
 pub(crate) fn storage(err: impl std::fmt::Display) -> crate::domain::AccessError {
-    crate::domain::AccessError::Storage(err.to_string())
+    crate::domain::AccessError::Storage(format!("{err:#}"))
 }
