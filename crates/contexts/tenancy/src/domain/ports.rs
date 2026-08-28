@@ -139,7 +139,7 @@ pub trait EventPublisher: Send + Sync {
 
 /// Source of new tenant ids (tests substitute deterministic generators).
 pub trait IdGenerator: Send + Sync {
-    fn next_tenant_id(&self) -> TenantId;
+    fn next_tenant_id(&self) -> Result<TenantId, TenancyError>;
 }
 
 /// The query shape for the operator tenant search (see
@@ -174,7 +174,7 @@ pub trait Clock: Send + Sync {
 #[async_trait]
 pub trait TenantResolutionCache: Send + Sync {
     async fn get_slug(&self, slug: &str) -> Result<Option<Tenant>, TenancyError>;
-    async fn get_id(&self, id: uuid::Uuid) -> Result<Option<Tenant>, TenancyError>;
+    async fn get_id(&self, id: TenantId) -> Result<Option<Tenant>, TenancyError>;
     async fn put(&self, tenant: &Tenant) -> Result<(), TenancyError>;
-    async fn invalidate(&self, slug: &str, id: uuid::Uuid) -> Result<(), TenancyError>;
+    async fn invalidate(&self, slug: &str, id: TenantId) -> Result<(), TenancyError>;
 }

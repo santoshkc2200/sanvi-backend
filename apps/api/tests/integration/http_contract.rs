@@ -12,6 +12,7 @@ use sanvi_api::{
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
 use sanvi_tenancy::adapters::http::state_for_tests as tenancy_state_for_tests;
+use sanvi_testsupport::test_ids;
 
 /// A lazy pool that never connects: the readiness probe is not part of this
 /// test suite (covered by the context's own tests).
@@ -106,7 +107,7 @@ fn test_app() -> actix_web::App<
         config,
         metrics,
         system,
-        tenancy_state_for_tests(),
+        tenancy_state_for_tests(test_ids()),
         identity,
         access,
         audit,

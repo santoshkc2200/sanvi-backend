@@ -3,7 +3,9 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sanvi_kernel::EventEnvelope;
+use std::sync::Arc;
+
+use sanvi_kernel::{EventEnvelope, EventId, RawIdGenerator};
 use sanvi_messaging::{ConsumerHandler, OutboxWriter};
 use sanvi_persistence::{PlatformScope, ScopedTx};
 
@@ -13,12 +15,14 @@ use crate::domain::{Clock, EventPublisher, IdGenerator, TenancyError};
 
 /// Publishes tenant events into the transactional outbox (same transaction
 /// as the state change they describe).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct OutboxEventPublisher;
+#[derive(Clone)]
+pub struct OutboxEventPublisher {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl OutboxEventPublisher {
-    pub fn new() -> Self {
-        Self
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
     }
 }
 
@@ -31,7 +35,7 @@ impl EventPublisher for OutboxEventPublisher {
     ) -> Result<(), TenancyError> {
         for event in events {
             OutboxWriter
-                .append(scope.tx_mut(), &event.envelope())
+                .append(scope.tx_mut(), &self.envelope(event)?)
                 .await
                 .map_err(|err| TenancyError::Storage(err.to_string()))?;
         }
@@ -45,7 +49,7 @@ impl EventPublisher for OutboxEventPublisher {
     ) -> Result<(), TenancyError> {
         for event in events {
             OutboxWriter
-                .append(scope.tx_mut(), &event.envelope())
+                .append(scope.tx_mut(), &self.envelope(event)?)
                 .await
                 .map_err(|err| TenancyError::Storage(err.to_string()))?;
         }
@@ -67,13 +71,34 @@ impl EventPublisher for OutboxEventPublisher {
     }
 }
 
-/// Real id generation (UUIDv7 via the shared kernel).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SystemIdGenerator;
+impl OutboxEventPublisher {
+    fn envelope(&self, event: &TenantEvent) -> Result<EventEnvelope, TenancyError> {
+        let id = self
+            .ids
+            .next_id()
+            .map_err(|err| TenancyError::IdGeneration(err.to_string()))?;
+        Ok(event.envelope(EventId::from_snowflake(id)))
+    }
+}
+
+/// Tenant IDs delegated to the process-wide raw generator.
+#[derive(Clone)]
+pub struct SystemIdGenerator {
+    ids: Arc<dyn RawIdGenerator>,
+}
+
+impl SystemIdGenerator {
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
+}
 
 impl IdGenerator for SystemIdGenerator {
-    fn next_tenant_id(&self) -> TenantId {
-        TenantId::new()
+    fn next_tenant_id(&self) -> Result<TenantId, TenancyError> {
+        self.ids
+            .next_id()
+            .map(TenantId::from_snowflake)
+            .map_err(|err| TenancyError::IdGeneration(err.to_string()))
     }
 }
 
@@ -96,7 +121,7 @@ impl Clock for SystemClock {
 /// Handlers are idempotent by construction (dedup key in
 /// `platform.processed_events`), so re-delivery after a crash is safe.
 pub fn tenant_event_handler(
-    invalidate: impl Fn(String, uuid::Uuid) + Send + Sync + 'static,
+    invalidate: impl Fn(String, TenantId) + Send + Sync + 'static,
 ) -> ConsumerHandler {
     let invalidate = std::sync::Arc::new(invalidate);
     std::sync::Arc::new(move |envelope: EventEnvelope| {
@@ -110,8 +135,8 @@ pub fn tenant_event_handler(
             .metadata
             .get("tenant_id")
             .and_then(|id| id.as_str())
-            .and_then(|id| id.parse::<uuid::Uuid>().ok())
-            .unwrap_or(envelope.aggregate_id);
+            .and_then(|id| id.parse::<TenantId>().ok())
+            .unwrap_or_else(|| TenantId::from_snowflake(envelope.aggregate_id));
 
         Box::pin(async move {
             match invalidate_slug {
@@ -125,4 +150,28 @@ pub fn tenant_event_handler(
             }
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sanvi_kernel::{IdGenerationError, SnowflakeId};
+
+    struct FailingIds;
+
+    impl RawIdGenerator for FailingIds {
+        fn next_id(&self) -> Result<SnowflakeId, IdGenerationError> {
+            Err(IdGenerationError::InvalidNode(0))
+        }
+    }
+
+    #[test]
+    fn tenant_id_generation_preserves_generator_failure() {
+        let ids = SystemIdGenerator::new(Arc::new(FailingIds));
+
+        assert!(matches!(
+            ids.next_tenant_id(),
+            Err(TenancyError::IdGeneration(_))
+        ));
+    }
 }

@@ -3,12 +3,10 @@
 
 use std::time::Duration;
 
+use crate::domain::tenant::{Tenant, TenantId};
+use crate::domain::{TenancyError, TenantResolutionCache};
 use async_trait::async_trait;
 use redis::AsyncCommands;
-use uuid::Uuid;
-
-use crate::domain::tenant::Tenant;
-use crate::domain::{TenancyError, TenantResolutionCache};
 
 /// Key namespace for resolution entries (platform-level: no tenant exists
 /// *before* resolution, so the tenant-scoped `TenantCache` shape does not
@@ -17,7 +15,7 @@ fn slug_key(slug: &str) -> String {
     format!("sanvi:tenant:resolution:slug:{slug}")
 }
 
-fn id_key(id: Uuid) -> String {
+fn id_key(id: TenantId) -> String {
     format!("sanvi:tenant:resolution:id:{id}")
 }
 
@@ -73,17 +71,17 @@ impl TenantResolutionCache for RedisTenantResolutionCache {
         self.get_raw(&slug_key(slug)).await
     }
 
-    async fn get_id(&self, id: Uuid) -> Result<Option<Tenant>, TenancyError> {
+    async fn get_id(&self, id: TenantId) -> Result<Option<Tenant>, TenancyError> {
         self.get_raw(&id_key(id)).await
     }
 
     async fn put(&self, tenant: &Tenant) -> Result<(), TenancyError> {
         self.put_raw(&slug_key(tenant.slug().as_str()), tenant)
             .await?;
-        self.put_raw(&id_key(tenant.id().as_uuid()), tenant).await
+        self.put_raw(&id_key(tenant.id()), tenant).await
     }
 
-    async fn invalidate(&self, slug: &str, id: Uuid) -> Result<(), TenancyError> {
+    async fn invalidate(&self, slug: &str, id: TenantId) -> Result<(), TenancyError> {
         self.invalidate_raw(&slug_key(slug)).await?;
         self.invalidate_raw(&id_key(id)).await
     }
@@ -99,7 +97,7 @@ impl TenantResolutionCache for NoopTenantResolutionCache {
         Ok(None)
     }
 
-    async fn get_id(&self, _id: Uuid) -> Result<Option<Tenant>, TenancyError> {
+    async fn get_id(&self, _id: TenantId) -> Result<Option<Tenant>, TenancyError> {
         Ok(None)
     }
 
@@ -107,7 +105,7 @@ impl TenantResolutionCache for NoopTenantResolutionCache {
         Ok(())
     }
 
-    async fn invalidate(&self, _slug: &str, _id: Uuid) -> Result<(), TenancyError> {
+    async fn invalidate(&self, _slug: &str, _id: TenantId) -> Result<(), TenancyError> {
         Ok(())
     }
 }

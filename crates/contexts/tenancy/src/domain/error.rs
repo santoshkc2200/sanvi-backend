@@ -53,4 +53,7 @@ pub enum TenancyError {
     /// A settings update was rejected.
     #[error("invalid settings: {0}")]
     InvalidSettings(String),
+
+    #[error("id generation failed: {0}")]
+    IdGeneration(String),
 }

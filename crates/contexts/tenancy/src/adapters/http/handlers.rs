@@ -72,6 +72,10 @@ pub fn api_error(err: TenancyError) -> ApiError {
             tracing::error!(error = %detail, "tenancy storage failure");
             ApiError::internal("storage failure")
         }
+        TenancyError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "tenancy ID generation failure");
+            ApiError::internal("ID generation failure")
+        }
     }
 }
 
@@ -413,7 +417,13 @@ pub async fn get_settings(
     current: CurrentTenant,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let id = TenantId::from_uuid(current.0.tenant_id);
+    let id = match TenantId::try_from(current.0.tenant_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return HttpResponse::BadRequest()
+                .json(ApiError::bad_request("invalid tenant id").problem());
+        }
+    };
     match state.get_settings.execute(id).await {
         Ok(output) => HttpResponse::Ok().json(output),
         Err(err) => {
@@ -445,7 +455,13 @@ pub async fn put_settings(
     body: web::Json<SettingsBody>,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let id = TenantId::from_uuid(current.0.tenant_id);
+    let id = match TenantId::try_from(current.0.tenant_id) {
+        Ok(id) => id,
+        Err(_) => {
+            return HttpResponse::BadRequest()
+                .json(ApiError::bad_request("invalid tenant id").problem());
+        }
+    };
     match state
         .update_settings
         .execute(
@@ -549,10 +565,11 @@ pub struct SettingsBody {
 }
 
 /// Convenience for tests: state whose handlers are never invoked.
-pub fn state_for_tests() -> TenancyState {
+pub fn state_for_tests(ids: Arc<dyn sanvi_kernel::RawIdGenerator>) -> TenancyState {
     let tx_manager = sanvi_persistence::TxManager::new(
         sanvi_persistence::PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
             .expect("lazy pool construction never connects"),
+        ids,
     );
     let tenants: Arc<dyn crate::domain::TenantRepository> = Arc::new(UnreachableRepo);
     let settings: Arc<dyn crate::domain::TenantSettingsRepository> = Arc::new(UnreachableSettings);
@@ -753,7 +770,7 @@ impl crate::domain::EventPublisher for UnreachableEvents {
 
 struct UnreachableIds;
 impl crate::domain::IdGenerator for UnreachableIds {
-    fn next_tenant_id(&self) -> TenantId {
+    fn next_tenant_id(&self) -> Result<TenantId, TenancyError> {
         unreachable!()
     }
 }
@@ -771,13 +788,13 @@ impl crate::domain::TenantResolutionCache for UnreachableCache {
     async fn get_slug(&self, _slug: &str) -> Result<Option<crate::domain::Tenant>, TenancyError> {
         unreachable!()
     }
-    async fn get_id(&self, _id: uuid::Uuid) -> Result<Option<crate::domain::Tenant>, TenancyError> {
+    async fn get_id(&self, _id: TenantId) -> Result<Option<crate::domain::Tenant>, TenancyError> {
         unreachable!()
     }
     async fn put(&self, _tenant: &crate::domain::Tenant) -> Result<(), TenancyError> {
         unreachable!()
     }
-    async fn invalidate(&self, _slug: &str, _id: uuid::Uuid) -> Result<(), TenancyError> {
+    async fn invalidate(&self, _slug: &str, _id: TenantId) -> Result<(), TenancyError> {
         unreachable!()
     }
 }

@@ -12,9 +12,9 @@ use std::time::Duration;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use uuid::Uuid;
 
 const VERSION: &str = "v1";
 
@@ -42,9 +42,9 @@ pub enum SignedTokenError {
 type HmacSha256 = Hmac<Sha256>;
 
 /// Mint a token asserting `tenant_id` (uses key `k1`).
-pub fn mint(key: &SigningKey, tenant_id: Uuid, now: DateTime<Utc>) -> String {
+pub fn mint(key: &SigningKey, tenant_id: TenantId, now: DateTime<Utc>) -> String {
     let ts = now.timestamp();
-    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tenant_id.as_bytes());
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tenant_id.to_string());
     let mac_input = format!("{VERSION}.{}.{b64}.{ts}", key.id);
     let mut mac =
         HmacSha256::new_from_slice(key.secret.as_bytes()).expect("hmac accepts keys of any length");
@@ -59,7 +59,7 @@ pub fn verify(
     keys: &[SigningKey],
     now: DateTime<Utc>,
     skew: Duration,
-) -> Result<Uuid, SignedTokenError> {
+) -> Result<TenantId, SignedTokenError> {
     let parts: Vec<&str> = token.split('.').collect();
     let [version, key_id, b64, ts_raw, signature] = parts.as_slice() else {
         return Err(SignedTokenError::Malformed);
@@ -91,10 +91,13 @@ pub fn verify(
     mac.verify_slice(&hex_decode(signature).map_err(|_| SignedTokenError::Malformed)?)
         .map_err(|_| SignedTokenError::BadSignature)?;
 
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let id = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(b64)
         .map_err(|_| SignedTokenError::Malformed)?;
-    Uuid::from_slice(&bytes).map_err(|_| SignedTokenError::Malformed)
+    std::str::from_utf8(&id)
+        .map_err(|_| SignedTokenError::Malformed)?
+        .parse()
+        .map_err(|_| SignedTokenError::Malformed)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -130,7 +133,7 @@ mod tests {
 
     #[test]
     fn mint_and_verify_roundtrip() {
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(101_i64).unwrap();
         let token = mint(&key(), tenant, now());
         assert_eq!(
             verify(&token, &[key()], now(), Duration::from_secs(60)).unwrap(),
@@ -140,7 +143,7 @@ mod tests {
 
     #[test]
     fn tampered_payload_fails() {
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(102_i64).unwrap();
         let token = mint(&key(), tenant, now());
         let mut tampered = token.as_bytes().to_vec();
         // Flip one byte of the base64 tenant id segment.
@@ -159,7 +162,7 @@ mod tests {
             id: "k2".to_string(),
             secret: "other".to_string(),
         };
-        let token = mint(&key(), Uuid::now_v7(), now());
+        let token = mint(&key(), TenantId::try_from(103_i64).unwrap(), now());
         assert!(matches!(
             verify(&token, &[other], now(), Duration::from_secs(60)),
             Err(SignedTokenError::UnknownKey(_))
@@ -168,7 +171,7 @@ mod tests {
 
     #[test]
     fn expired_tokens_are_rejected() {
-        let token = mint(&key(), Uuid::now_v7(), now());
+        let token = mint(&key(), TenantId::try_from(104_i64).unwrap(), now());
         let later = now() + chrono::Duration::days(1);
         assert!(matches!(
             verify(&token, &[key()], later, Duration::from_secs(60)),
@@ -178,7 +181,7 @@ mod tests {
 
     #[test]
     fn clock_skew_within_tolerance_is_accepted() {
-        let token = mint(&key(), Uuid::now_v7(), now());
+        let token = mint(&key(), TenantId::try_from(105_i64).unwrap(), now());
         let slightly_later = now() + chrono::Duration::seconds(30);
         assert!(verify(&token, &[key()], slightly_later, Duration::from_secs(60)).is_ok());
     }
@@ -189,8 +192,8 @@ mod tests {
             id: "k2".to_string(),
             secret: "rotated".to_string(),
         };
-        let old_token = mint(&key(), Uuid::now_v7(), now());
-        let new_token = mint(&new_key, Uuid::now_v7(), now());
+        let old_token = mint(&key(), TenantId::try_from(106_i64).unwrap(), now());
+        let new_token = mint(&new_key, TenantId::try_from(107_i64).unwrap(), now());
         let keys = vec![new_key, key()];
         assert!(verify(&old_token, &keys, now(), Duration::from_secs(60)).is_ok());
         assert!(verify(&new_token, &keys, now(), Duration::from_secs(60)).is_ok());

@@ -39,7 +39,7 @@ impl GetTenantSettings {
     pub async fn execute(&self, tenant_id: TenantId) -> Result<TenantSettingsOutput, TenancyError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id.as_uuid())
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         let entries = self.settings.list_all(&mut scope, tenant_id).await?;
@@ -101,7 +101,7 @@ impl UpdateTenantSettings {
 
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id.as_uuid())
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
 

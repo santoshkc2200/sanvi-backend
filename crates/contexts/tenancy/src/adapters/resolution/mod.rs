@@ -22,20 +22,20 @@ pub use signed::{SignedTokenError, SigningKey, mint, verify};
 
 use crate::application::ResolveTenant;
 use crate::domain::TenancyError;
-use crate::domain::tenant::Tenant;
+use crate::domain::tenant::{Tenant, TenantId};
 use crate::domain::values::TenantSlug;
 
 /// Phase-08 slot: resolves custom domains to tenant ids. Empty until the
 /// `domains` context lands.
 #[async_trait::async_trait]
 pub trait CustomDomainLookup: Send + Sync {
-    async fn lookup(&self, host: &str) -> Result<Option<uuid::Uuid>, TenancyError>;
+    async fn lookup(&self, host: &str) -> Result<Option<TenantId>, TenancyError>;
 }
 
 /// Convert an aggregate into the middleware's context shape.
 pub fn tenant_context_from(tenant: &Tenant, source: ResolutionSource) -> TenantContext {
     TenantContext {
-        tenant_id: tenant.id().as_uuid(),
+        tenant_id: tenant.id().as_i64(),
         slug: tenant.slug().to_string(),
         display_name: tenant.display_name().to_string(),
         status: match tenant.status() {
@@ -130,7 +130,7 @@ impl HostTenantResolver {
         {
             let tenant = self
                 .resolve
-                .by_id(crate::domain::TenantId::from_uuid(tenant_id))
+                .by_id(tenant_id)
                 .await
                 .map_err(|err| ApiError::service_unavailable(err.to_string()))?;
             return Ok(
@@ -186,7 +186,7 @@ impl TenantResolver for HostTenantResolver {
                 };
                 let tenant = self
                     .resolve
-                    .by_id(crate::domain::TenantId::from_uuid(tenant_id))
+                    .by_id(tenant_id)
                     .await
                     .map_err(|err| ApiError::service_unavailable(err.to_string()))?;
                 return Ok(match tenant {
@@ -206,7 +206,7 @@ impl TenantResolver for HostTenantResolver {
             {
                 let tenant = self
                     .resolve
-                    .by_id(crate::domain::TenantId::from_uuid(tenant_id))
+                    .by_id(tenant_id)
                     .await
                     .map_err(|err| ApiError::service_unavailable(err.to_string()))?;
                 return Ok(match tenant {
@@ -239,6 +239,7 @@ mod tests {
                     "postgres://nobody:nothing@127.0.0.1:1/none",
                 )
                 .expect("lazy pool construction never connects"),
+                sanvi_testsupport::test_ids(),
             ),
             Arc::new(UnreachableRepo),
             Arc::new(UnreachableCache),
@@ -303,13 +304,13 @@ mod tests {
         async fn get_slug(&self, _slug: &str) -> Result<Option<Tenant>, TenancyError> {
             unreachable!()
         }
-        async fn get_id(&self, _id: uuid::Uuid) -> Result<Option<Tenant>, TenancyError> {
+        async fn get_id(&self, _id: TenantId) -> Result<Option<Tenant>, TenancyError> {
             unreachable!()
         }
         async fn put(&self, _tenant: &Tenant) -> Result<(), TenancyError> {
             unreachable!()
         }
-        async fn invalidate(&self, _slug: &str, _id: uuid::Uuid) -> Result<(), TenancyError> {
+        async fn invalidate(&self, _slug: &str, _id: TenantId) -> Result<(), TenancyError> {
             unreachable!()
         }
     }
@@ -355,7 +356,7 @@ mod tests {
     #[test]
     fn context_mapping_reflects_runtime_statuses() {
         let (tenant, _) = Tenant::provision(
-            crate::domain::TenantId::new(),
+            TenantId::try_from(101_i64).unwrap(),
             TenantSlug::parse("acme").unwrap(),
             crate::domain::TenantName::parse("Acme").unwrap(),
             crate::domain::DataRegion::Jp,

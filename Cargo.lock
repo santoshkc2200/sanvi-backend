@@ -3329,6 +3329,7 @@ dependencies = [
  "sanvi-system",
  "sanvi-telemetry",
  "sanvi-tenancy",
+ "sanvi-testsupport",
  "sanvi-theming",
  "serde",
  "serde_json",
@@ -3805,7 +3806,6 @@ dependencies = [
  "tokio",
  "tracing",
  "utoipa",
- "uuid",
 ]
 
 [[package]]

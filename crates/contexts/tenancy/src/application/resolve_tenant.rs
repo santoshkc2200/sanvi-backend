@@ -61,7 +61,7 @@ impl ResolveTenant {
     }
 
     pub async fn by_id(&self, id: TenantId) -> Result<Option<Tenant>, TenancyError> {
-        match self.cache.get_id(id.as_uuid()).await {
+        match self.cache.get_id(id).await {
             Ok(Some(tenant)) => return Ok(Some(tenant)),
             Ok(None) => {}
             Err(err) => {
@@ -85,7 +85,7 @@ impl ResolveTenant {
     }
 
     /// Drop cached entries for a tenant (event-driven invalidation).
-    pub async fn invalidate(&self, slug: &str, id: uuid::Uuid) {
+    pub async fn invalidate(&self, slug: &str, id: TenantId) {
         if let Err(err) = self.cache.invalidate(slug, id).await {
             warn!(error = %err, slug, tenant_id = %id, "failed to invalidate resolution cache");
         }
