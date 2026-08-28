@@ -507,6 +507,7 @@ pub fn build_identity_state(
         HttpKratosClient::new(
             kratos_public_url.to_string(),
             Some(kratos_admin_url.to_string()),
+            config.session_cookie_name.clone(),
         )
         .expect("kratos client construction is infallible"),
     );
@@ -3202,7 +3203,8 @@ pub fn build_app(
     // scope (a second scope on the same prefix would shadow the first).
     let tenant_scope = web::scope("/api/v1/tenant")
         .configure(tenancy_routes::tenant_scope_routes)
-        .configure(identity_routes::tenant_scope_routes);
+        .configure(identity_routes::tenant_scope_routes)
+        .configure(sanvi_access::routes::tenant_scope_routes);
     let tenant_scope = match &billing {
         Some(_) => tenant_scope.configure(billing_routes::tenant_scope_routes),
         None => tenant_scope,
@@ -3265,6 +3267,11 @@ pub fn build_app(
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)
         .configure(platform_routes)
+        // Deeper platform_admin routes (`/platform/tenants/{id}/…`) must be
+        // registered before tenancy's shorter `/platform/tenants/{id}` —
+        // registering the shorter dynamic resource first silently shadows
+        // the longer siblings in actix's route tree (they 404).
+        .configure(platform_admin_routes::platform_admin_routes)
         .configure(tenancy_routes::platform_routes)
         .service(tenant_scope)
         .configure(tenancy_routes::public_routes)
@@ -3272,7 +3279,6 @@ pub fn build_app(
         .configure(identity_routes::internal_routes)
         .configure(sanvi_access::routes::access_routes)
         .configure(sanvi_audit::routes::audit_routes)
-        .configure(platform_admin_routes::platform_admin_routes)
         .service(web::scope("/api/v1/system").configure(api_routes));
 
     // Phase-04 gate: with the flag off, the billing state is not wired and

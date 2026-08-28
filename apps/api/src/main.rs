@@ -268,6 +268,7 @@ async fn main() -> ExitCode {
                         sanvi_identity::adapters::HttpKratosClient::new(
                             config.ory.kratos_public_url.clone(),
                             Some(config.ory.kratos_admin_url.clone()),
+                            config.identity.session_cookie_name.clone(),
                         )
                         .expect("kratos client construction is infallible"),
                     ),

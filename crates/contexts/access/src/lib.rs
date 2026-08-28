@@ -31,7 +31,7 @@ pub use domain::{
 
 /// Wire access routes into an actix `ServiceConfig`.
 pub mod routes {
-    pub use crate::adapters::http::access_routes;
+    pub use crate::adapters::http::{access_routes, tenant_scope_routes};
 }
 
 /// The permission requirements of this context's routes (for the

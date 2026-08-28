@@ -105,12 +105,12 @@ fn token_hash(session_token: &str) -> String {
 impl SessionVerifier for KratosSessionVerifier {
     fn verify<'a>(
         &'a self,
-        session_token: Option<&'a str>,
+        session_token: Option<(&'a str, sanvi_http::SessionChannel)>,
         tenant_id: Option<uuid::Uuid>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<Subject>, ApiError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let Some(session_token) = session_token else {
+            let Some((session_token, channel)) = session_token else {
                 return Ok(None);
             };
             let hash = token_hash(session_token);
@@ -121,7 +121,11 @@ impl SessionVerifier for KratosSessionVerifier {
                 Ok(None) => {
                     // 2. Kratos whoami; cache whatever we learn (including
                     //    absence, implicitly by not caching).
-                    let verified = self.kratos.whoami(session_token).await.map_err(backend)?;
+                    let verified = self
+                        .kratos
+                        .whoami(session_token, channel)
+                        .await
+                        .map_err(backend)?;
                     if let Some(session) = &verified
                         && let Err(err) = self.cache.put(&hash, session, self.cache_ttl_secs).await
                     {
@@ -134,7 +138,10 @@ impl SessionVerifier for KratosSessionVerifier {
                     // "no session" and never fail closed to 503 — the cache
                     // is an optimisation.
                     tracing::warn!(error = %err, "session cache read failed; verifying via kratos");
-                    self.kratos.whoami(session_token).await.map_err(backend)?
+                    self.kratos
+                        .whoami(session_token, channel)
+                        .await
+                        .map_err(backend)?
                 }
             };
 

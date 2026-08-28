@@ -31,13 +31,13 @@ cargo run -p sanvi-api
 cargo run -p sanvi-worker
 
 # In another shell:
-curl http://localhost:8080/healthz
-curl http://localhost:8080/readyz
-curl http://localhost:8080/api/v1/system/version
-curl http://localhost:8080/openapi.json
-curl http://localhost:8080/metrics
+curl http://localhost:8081/healthz
+curl http://localhost:8081/readyz
+curl http://localhost:8081/api/v1/system/version
+curl http://localhost:8081/openapi.json
+curl http://localhost:8081/metrics
 
-# Scalar API docs: http://localhost:8080/scalar (dev dependency, see below)
+# Scalar API docs: http://localhost:8081/scalar (dev dependency, see below)
 ```
 
 ### Creating a tenant (phase 01)
@@ -53,8 +53,8 @@ Once provisioned, `acme` serves traffic on its subdomain
 (`acme.localhost` locally; `acme.platform.sanvi.app` in production):
 
 ```bash
-curl http://localhost:8080/api/v1/public/tenant-context -H 'Host: acme.localhost'
-curl http://localhost:8080/api/v1/tenant/context -H 'Host: acme.localhost'
+curl http://localhost:8081/api/v1/public/tenant-context -H 'Host: acme.localhost'
+curl http://localhost:8081/api/v1/tenant/context -H 'Host: acme.localhost'
 ```
 
 Tenant isolation is enforced twice over: repositories can only be
@@ -87,7 +87,7 @@ cargo run -p sanvi-cli -- membership grant --email operator@example.com --role p
 cargo run -p sanvi-cli -- seed access
 
 # 5. Invite members through the API (requires a session token):
-curl -X POST http://localhost:8080/api/v1/tenant/invitations \
+curl -X POST http://localhost:8081/api/v1/tenant/invitations \
   -H "Authorization: Bearer <session-token>" -H 'Host: acme.localhost' \
   -H 'Content-Type: application/json' \
   -d '{"email": "bob@example.com", "role_ids": ["<tenant_member role id>"]}'

@@ -182,7 +182,7 @@ pub async fn list_sessions(
     _guard: RequiredPermission,
 ) -> impl Responder {
     respond(
-        state.list_sessions.execute(&token.0).await,
+        state.list_sessions.execute(&token.0, token.1).await,
         actix_web::http::StatusCode::OK,
     )
 }
@@ -210,7 +210,7 @@ pub async fn revoke_session(
     let user_id = UserId::from_uuid(subject.0.user_id);
     match state
         .revoke_session
-        .execute(user_id, &path.into_inner(), &token.0)
+        .execute(user_id, &path.into_inner(), &token.0, token.1)
         .await
     {
         Ok(()) => HttpResponse::NoContent().finish(),

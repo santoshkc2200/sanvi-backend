@@ -12,4 +12,4 @@ pub use handlers::{
     define_feature, delete_role, deprecate_feature, list_features, list_permissions,
     list_roles_platform, list_roles_tenant, update_feature, update_role,
 };
-pub use routes::access_routes;
+pub use routes::{access_routes, tenant_scope_routes};

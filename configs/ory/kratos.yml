@@ -4,7 +4,10 @@ dsn: postgres://postgres:postgres-local-dev@postgres:5432/postgres
 
 serve:
   public:
-    base_url: http://127.0.0.1:4433/
+    # Must match the host the browser uses for the UI (tenant host
+    # `acme.localhost` in local dev), because Kratos cookies are host-scoped
+    # and the flow `action` URLs are absolute.
+    base_url: http://acme.localhost:4433/
     # `@sanvi/auth` (frontend phase 02) calls this API directly from the
     # browser — there is no backend proxy for Kratos's self-service flows —
     # so every app's dev origin needs an explicit CORS allowance. `false` by
@@ -21,12 +24,29 @@ serve:
         - http://localhost:5174
         - http://localhost:5175
         - http://localhost:5176
+        # Tenant subdomain storefronts served by the one dev storefront app
+        # (host-based tenancy means each tenant browses a different origin).
+        - http://acme.localhost:5174
+        - http://acme.localhost:5175
+        - http://acme.localhost:5176
+        - http://globex.localhost:5174
+        - http://suspended-co.localhost:5174
       allowed_methods:
         - GET
         - POST
         - PUT
         - PATCH
         - DELETE
+      # `@sanvi/auth` reaches Kratos through @sanvi/api-client, which sends
+      # `x-request-id` on every call — a preflight requesting a header not
+      # listed here answers without ACAO and the browser blocks the call.
+      allowed_headers:
+        - Content-Type
+        - Accept
+        - X-Request-Id
+        - Accept-Language
+        - Authorization
+        - Idempotency-Key
       allow_credentials: true
   admin:
     base_url: http://127.0.0.1:4434/
@@ -36,7 +56,7 @@ selfservice:
   # owns its own redirects regardless (see the per-flow `ui_url`s below) — this
   # only matters as the fallback Kratos itself redirects to (an expired-flow
   # error page, an OIDC callback with no in-flight browser flow, etc.).
-  default_browser_return_url: http://127.0.0.1:5174/
+  default_browser_return_url: http://acme.localhost:5174/
   allowed_return_urls:
     - http://127.0.0.1:5173
     - http://127.0.0.1:5174
@@ -46,6 +66,12 @@ selfservice:
     - http://localhost:5174
     - http://localhost:5175
     - http://localhost:5176
+    # Tenant subdomain storefronts (see the CORS list above).
+    - http://acme.localhost:5174
+    - http://acme.localhost:5175
+    - http://acme.localhost:5176
+    - http://globex.localhost:5174
+    - http://suspended-co.localhost:5174
 
   methods:
     password:
@@ -99,9 +125,9 @@ selfservice:
 
   flows:
     error:
-      ui_url: http://127.0.0.1:5174/error
+      ui_url: http://acme.localhost:5174/error
     settings:
-      ui_url: http://127.0.0.1:5174/settings
+      ui_url: http://acme.localhost:5174/settings
       privileged_session_max_age: 15m
       required_aal: aal1
       after:
@@ -114,7 +140,7 @@ selfservice:
           - hook: web_hook
             config: &settings_webhook
               can_interrupt: false
-              url: http://host.docker.internal:8080/internal/kratos/settings
+              url: http://host.docker.internal:8081/internal/kratos/settings
               method: POST
               body: file:///etc/config/kratos/webhook.settings.jsonnet
               response:
@@ -124,15 +150,15 @@ selfservice:
                 X-Sanvi-Webhook: webhook-local-dev-secret
     recovery:
       enabled: true
-      ui_url: http://127.0.0.1:5174/recovery
+      ui_url: http://acme.localhost:5174/recovery
     verification:
       enabled: true
-      ui_url: http://127.0.0.1:5174/verification
+      ui_url: http://acme.localhost:5174/verification
       after:
-        default_browser_return_url: http://127.0.0.1:5174/
+        default_browser_return_url: http://acme.localhost:5174/
     logout:
       after:
-        default_browser_return_url: http://127.0.0.1:5174/login
+        default_browser_return_url: http://acme.localhost:5174/login
         # NOTE: v26's logout flow has no webhook support (the config schema
         # forbids `after.hooks`). Session-cache invalidation on logout
         # happens through the API's own `DELETE /api/v1/me/sessions/{id}`
@@ -140,7 +166,7 @@ selfservice:
         # ≤ 60 s cache TTL as the backstop. `/internal/kratos/logout` stays
         # mounted for forward compatibility.
     login:
-      ui_url: http://127.0.0.1:5174/login
+      ui_url: http://acme.localhost:5174/login
       lifespan: 10m
       after:
         hooks:
@@ -150,7 +176,7 @@ selfservice:
           - hook: web_hook
             config: &login_webhook
               can_interrupt: true
-              url: http://host.docker.internal:8080/internal/kratos/login
+              url: http://host.docker.internal:8081/internal/kratos/login
               method: POST
               body: file:///etc/config/kratos/webhook.login.jsonnet
               response:
@@ -160,7 +186,7 @@ selfservice:
                 X-Sanvi-Webhook: webhook-local-dev-secret
     registration:
       lifespan: 10m
-      ui_url: http://127.0.0.1:5174/registration
+      ui_url: http://acme.localhost:5174/registration
       after:
         password:
           hooks:
@@ -173,7 +199,7 @@ selfservice:
                 # cannot create the projection; the login hook + nightly
                 # reconciliation are the backstops for the rare miss.
                 can_interrupt: false
-                url: http://host.docker.internal:8080/internal/kratos/registration
+                url: http://host.docker.internal:8081/internal/kratos/registration
                 method: POST
                 body: file:///etc/config/kratos/webhook.registration.jsonnet
                 response:

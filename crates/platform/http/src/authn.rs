@@ -38,11 +38,18 @@ pub struct Subject {
     pub authenticated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// The transport channel over which a session token arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionChannel {
+    Cookie,
+    Bearer,
+}
+
 /// Port for session verification, implemented by the identity context.
 pub trait SessionVerifier: Send + Sync {
     fn verify<'a>(
         &'a self,
-        session_token: Option<&'a str>,
+        session_token: Option<(&'a str, SessionChannel)>,
         tenant_id: Option<Uuid>,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Subject>, ApiError>> + Send + 'a>>;
 }
@@ -52,18 +59,18 @@ pub trait SessionVerifier: Send + Sync {
 pub fn session_token_from_request(
     req: &actix_web::HttpRequest,
     cookie_name: &str,
-) -> Option<String> {
+) -> Option<(String, SessionChannel)> {
     if let Some(token) = req
         .cookie(cookie_name)
         .map(|cookie| cookie.value().to_string())
     {
-        return Some(token);
+        return Some((token, SessionChannel::Cookie));
     }
     req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::to_string)
+        .map(|token| (token.to_string(), SessionChannel::Bearer))
 }
 
 /// Everything the authentication middleware needs.
@@ -151,8 +158,12 @@ where
                 .get::<crate::tenancy::TenantContext>()
                 .map(|context| context.tenant_id);
 
-            if let Some(token) = token.as_deref() {
-                match parts.verifier.verify(Some(token), tenant_id).await {
+            if let Some((token, channel)) = token.as_ref() {
+                match parts
+                    .verifier
+                    .verify(Some((token.as_str(), *channel)), tenant_id)
+                    .await
+                {
                     Ok(Some(subject)) => {
                         req.extensions_mut().insert(subject.clone());
                         let span = tracing::Span::current();
@@ -222,7 +233,7 @@ impl actix_web::FromRequest for OptionalSubject {
 /// Extractor: the raw session token (cookie or bearer). Needed by endpoints
 /// that must talk to Kratos directly (session list/revocation).
 #[derive(Clone)]
-pub struct SessionToken(pub String);
+pub struct SessionToken(pub String, pub SessionChannel);
 
 impl actix_web::FromRequest for SessionToken {
     type Error = ApiError;
@@ -234,7 +245,7 @@ impl actix_web::FromRequest for SessionToken {
             .map(|parts| parts.session_cookie_name.clone())
             .unwrap_or_else(|| "ory_kratos_session".to_string());
         match session_token_from_request(req, &cookie_name) {
-            Some(token) => std::future::ready(Ok(Self(token))),
+            Some((token, channel)) => std::future::ready(Ok(Self(token, channel))),
             None => std::future::ready(Err(ApiError::Unauthorized)),
         }
     }
@@ -287,5 +298,56 @@ impl actix_web::FromRequest for FreshAal2Required {
                 detail: "fresh aal2 re-authentication required".to_string(),
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionChannel, session_token_from_request};
+
+    /// The channel is what the token arrived on, never a guess from its
+    /// value: Kratos accepts a cookie value only as a cookie, and an API
+    /// session token only as `X-Session-Token`, and self-hosted Kratos
+    /// before v1.0 gave the two no distinguishing prefix.
+    #[test]
+    fn the_channel_follows_the_transport_not_the_value() {
+        let cookie = actix_web::test::TestRequest::default()
+            .cookie(actix_web::cookie::Cookie::new(
+                "ory_kratos_session",
+                "opaque",
+            ))
+            .to_http_request();
+        assert_eq!(
+            session_token_from_request(&cookie, "ory_kratos_session"),
+            Some(("opaque".to_string(), SessionChannel::Cookie))
+        );
+
+        let bearer = actix_web::test::TestRequest::default()
+            .insert_header((actix_web::http::header::AUTHORIZATION, "Bearer opaque"))
+            .to_http_request();
+        assert_eq!(
+            session_token_from_request(&bearer, "ory_kratos_session"),
+            Some(("opaque".to_string(), SessionChannel::Bearer))
+        );
+
+        // The cookie wins when both are present, and its value is not
+        // sniffed for a prefix on the way out.
+        let both = actix_web::test::TestRequest::default()
+            .cookie(actix_web::cookie::Cookie::new(
+                "ory_kratos_session",
+                "from-cookie",
+            ))
+            .insert_header((actix_web::http::header::AUTHORIZATION, "Bearer from-header"))
+            .to_http_request();
+        assert_eq!(
+            session_token_from_request(&both, "ory_kratos_session"),
+            Some(("from-cookie".to_string(), SessionChannel::Cookie))
+        );
+
+        let neither = actix_web::test::TestRequest::default().to_http_request();
+        assert_eq!(
+            session_token_from_request(&neither, "ory_kratos_session"),
+            None
+        );
     }
 }
