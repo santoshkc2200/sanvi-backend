@@ -1,5 +1,5 @@
+use sanvi_kernel::SnowflakeId;
 use thiserror::Error;
-use uuid::Uuid;
 
 /// Domain errors for the `audit` context.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub enum AuditError {
 
     #[error("audit chain mismatch at entry {entry_id} (position {position}): {detail}")]
     ChainMismatch {
-        entry_id: Uuid,
+        entry_id: SnowflakeId,
         position: usize,
         detail: String,
     },

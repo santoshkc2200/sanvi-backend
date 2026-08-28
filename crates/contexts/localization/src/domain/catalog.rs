@@ -85,7 +85,8 @@ pub struct Translation {
     pub key: String,
     pub locale: String,
     pub value: String,
-    pub updated_by: Option<uuid::Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub updated_by: Option<sanvi_kernel::UserId>,
     pub updated_at: DateTime<Utc>,
 }
 

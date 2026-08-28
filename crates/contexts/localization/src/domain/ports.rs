@@ -2,11 +2,11 @@
 //! and the cross-context user-locale hook.
 
 use async_trait::async_trait;
+use sanvi_kernel::{TenantId, UserId};
 use chrono::{DateTime, Utc};
 use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::catalog::Translation;
 use crate::domain::error::LocalizationError;
@@ -33,7 +33,7 @@ pub trait SupportedLocaleRepository: Send + Sync {
 /// A tenant's locale settings: default, enabled set, IANA timezone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantLocaleSettings {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub default_locale: Locale,
     pub enabled_locales: Vec<Locale>,
     pub timezone: String,
@@ -41,7 +41,7 @@ pub struct TenantLocaleSettings {
 }
 
 impl TenantLocaleSettings {
-    pub fn default_for(tenant_id: Uuid) -> Self {
+    pub fn default_for(tenant_id: TenantId) -> Self {
         Self {
             tenant_id,
             default_locale: Locale::default(),
@@ -58,7 +58,7 @@ pub trait TenantLocaleRepository: Send + Sync {
     async fn get(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<TenantLocaleSettings>, LocalizationError>;
 
     async fn upsert(
@@ -77,7 +77,7 @@ pub trait TranslationRepository: Send + Sync {
     async fn list_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Translation>, LocalizationError>;
 
     async fn list_platform(&self, pool: &PgPool) -> Result<Vec<Translation>, LocalizationError>;
@@ -90,7 +90,7 @@ pub trait TranslationRepository: Send + Sync {
     async fn upsert_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         translation: &Translation,
     ) -> Result<(), LocalizationError>;
 
@@ -103,7 +103,7 @@ pub trait TranslationRepository: Send + Sync {
     async fn delete_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         key: &str,
         locale: &str,
     ) -> Result<(), LocalizationError>;
@@ -121,7 +121,7 @@ pub trait TranslationRepository: Send + Sync {
 /// repository; the localization context must not depend on identity).
 #[async_trait]
 pub trait UserLocaleProvider: Send + Sync {
-    async fn locale_for(&self, user_id: Uuid) -> Option<String>;
+    async fn locale_for(&self, user_id: UserId) -> Option<String>;
 }
 
 /// Source of time, injectable for tests.

@@ -57,7 +57,7 @@ impl PersonalDataProvider for AuditPrivacyProvider {
     async fn collect(&self, subject: &SubjectRef) -> Result<DataBundle, PrivacyError> {
         let actor_id = subject.identifiers.iter().find_map(|id| {
             (id.id_type == "user_id")
-                .then(|| uuid::Uuid::parse_str(&id.value).ok())
+                .then(|| id.value.parse::<sanvi_kernel::UserId>().ok())
                 .flatten()
         });
         let Some(actor_id) = actor_id else {
@@ -157,12 +157,12 @@ impl sanvi_privacy::domain::AuditWriter for PrivacyAuditWriterAdapter {
     async fn record(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
-        actor: uuid::Uuid,
+        actor: Option<sanvi_kernel::UserId>,
         action: String,
         resource: String,
         detail: serde_json::Value,
     ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
-        let actor_type = if actor == uuid::Uuid::nil() {
+        let actor_type = if actor.is_none() {
             ActorType::System
         } else {
             ActorType::User
@@ -173,7 +173,7 @@ impl sanvi_privacy::domain::AuditWriter for PrivacyAuditWriterAdapter {
                 &AuditEntryData {
                     occurred_at: chrono::Utc::now(),
                     actor_type,
-                    actor_id: Some(actor),
+                    actor_id: actor,
                     on_behalf_of: None,
                     tenant_id: None,
                     action,

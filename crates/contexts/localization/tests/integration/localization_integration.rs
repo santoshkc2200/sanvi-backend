@@ -16,6 +16,7 @@ use sanvi_localization::{
         TenantLocaleSettings, Translation, TranslationRepository, Translator,
     },
 };
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use sanvi_testsupport::TestDb;
 
@@ -29,6 +30,7 @@ async fn prepare() -> (sanvi_persistence::PgPool, TestDb) {
 fn service(pool: sanvi_persistence::PgPool) -> Arc<LocalizationService> {
     Arc::new(LocalizationService::new(
         pool,
+        sanvi_testsupport::test_ids(),
         Arc::new(SqlxTranslationRepository::new()),
         Arc::new(LocalizationCache::new()),
         Arc::new(LocalizationMetrics::new(&prometheus::Registry::new())),
@@ -37,13 +39,13 @@ fn service(pool: sanvi_persistence::PgPool) -> Arc<LocalizationService> {
 }
 
 /// Seed a minimal tenant row (`tenant_locales` references `tenancy.tenants`).
-async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> uuid::Uuid {
-    let id = uuid::Uuid::now_v7();
+async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> TenantId {
+    let id = TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     sqlx::query(
         "INSERT INTO tenancy.tenants (id, slug, display_name, status, region)
          VALUES ($1, $2, $2, 'active', 'us')",
     )
-    .bind(id)
+    .bind(id.as_i64())
     .bind(slug)
     .execute(pool)
     .await
@@ -66,7 +68,7 @@ async fn supported_locales_are_seeded_en_and_ja() {
 #[tokio::test]
 async fn tenant_locale_settings_are_rls_isolated() {
     let (pool, _node) = prepare().await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let repo = SqlxTenantLocaleRepository::new();
     let tenant_a = seed_tenant(&pool, "loc-a").await;
     let tenant_b = seed_tenant(&pool, "loc-b").await;
@@ -79,14 +81,14 @@ async fn tenant_locale_settings_are_rls_isolated() {
         updated_at: chrono::Utc::now(),
     };
     {
-        let mut scope = tx.begin_for(tenant_a).await.unwrap();
+        let mut scope = tx.begin_for(tenant_a.as_i64()).await.unwrap();
         repo.upsert(&mut scope, &settings_a).await.unwrap();
         scope.commit().await.unwrap();
     }
 
     // Visible inside tenant A's scope…
     {
-        let mut scope = tx.begin_for(tenant_a).await.unwrap();
+        let mut scope = tx.begin_for(tenant_a.as_i64()).await.unwrap();
         let read = repo.get(&mut scope, tenant_a).await.unwrap().unwrap();
         scope.commit().await.unwrap();
         assert_eq!(read.default_locale.as_str(), "ja");
@@ -95,7 +97,7 @@ async fn tenant_locale_settings_are_rls_isolated() {
 
     // …and invisible inside tenant B's (RLS FORCE).
     {
-        let mut scope = tx.begin_for(tenant_b).await.unwrap();
+        let mut scope = tx.begin_for(tenant_b.as_i64()).await.unwrap();
         let read = repo.get(&mut scope, tenant_b).await.unwrap();
         scope.commit().await.unwrap();
         assert!(read.is_none());
@@ -105,7 +107,7 @@ async fn tenant_locale_settings_are_rls_isolated() {
 #[tokio::test]
 async fn platform_overrides_are_readable_but_only_writable_from_the_platform_scope() {
     let (pool, _node) = prepare().await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let repo = SqlxTranslationRepository::new();
 
     let translation = Translation {
@@ -121,7 +123,7 @@ async fn platform_overrides_are_readable_but_only_writable_from_the_platform_sco
     // platform writes through the audited `PlatformScope`, and when raw SQL
     // sneaks in anyway the RLS policy rejects it.
     let tenant = seed_tenant(&pool, "loc-plat").await;
-    let mut tenant_scope = tx.begin_for(tenant).await.unwrap();
+    let mut tenant_scope = tx.begin_for(tenant.as_i64()).await.unwrap();
     let result = sqlx::query(
         "INSERT INTO localization.translations (scope, key, locale, value)
          VALUES ('platform', 'billing.invoice.label', 'ja', 'インボイス')",
@@ -149,13 +151,13 @@ async fn platform_overrides_are_readable_but_only_writable_from_the_platform_sco
 #[tokio::test]
 async fn audited_platform_scope_can_collect_and_anonymize_tenant_translation_attribution() {
     let (pool, _node) = prepare().await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let repo = SqlxTranslationRepository::new();
     let tenant = seed_tenant(&pool, "loc-dsr").await;
-    let actor = uuid::Uuid::now_v7();
+    let actor = UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
 
     {
-        let mut scope = tx.begin_for(tenant).await.unwrap();
+        let mut scope = tx.begin_for(tenant.as_i64()).await.unwrap();
         repo.upsert_tenant(
             &mut scope,
             tenant,
@@ -179,19 +181,19 @@ async fn audited_platform_scope_can_collect_and_anonymize_tenant_translation_att
         .unwrap();
     let visible: i64 =
         sqlx::query_scalar("SELECT count(*) FROM localization.translations WHERE updated_by = $1")
-            .bind(actor)
+            .bind(actor.as_i64())
             .fetch_one(&mut **platform.tx_mut().as_inner())
             .await
             .unwrap();
     assert_eq!(visible, 1);
     sqlx::query("UPDATE localization.translations SET updated_by = NULL WHERE updated_by = $1")
-        .bind(actor)
+        .bind(actor.as_i64())
         .execute(&mut **platform.tx_mut().as_inner())
         .await
         .unwrap();
     platform.commit().await.unwrap();
 
-    let mut tenant_scope = tx.begin_for(tenant).await.unwrap();
+    let mut tenant_scope = tx.begin_for(tenant.as_i64()).await.unwrap();
     let translations = repo.list_tenant(&mut tenant_scope, tenant).await.unwrap();
     tenant_scope.commit().await.unwrap();
     assert_eq!(translations.len(), 1);
@@ -201,11 +203,11 @@ async fn audited_platform_scope_can_collect_and_anonymize_tenant_translation_att
 #[tokio::test]
 async fn platform_translation_put_replaces_rows_omitted_from_the_request() {
     let (pool, _node) = prepare().await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let repo = Arc::new(SqlxTranslationRepository::new());
     let update = UpdatePlatformTranslations::new(
         repo.clone(),
-        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
         Arc::new(sanvi_localization::adapters::SystemClock),
     );
 
@@ -256,7 +258,7 @@ async fn platform_translation_put_replaces_rows_omitted_from_the_request() {
 #[tokio::test]
 async fn tenant_overrides_merge_over_static_and_platform_catalogs() {
     let (pool, _node) = prepare().await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let repo = SqlxTranslationRepository::new();
     let tenant = seed_tenant(&pool, "loc-merge").await;
 
@@ -281,7 +283,7 @@ async fn tenant_overrides_merge_over_static_and_platform_catalogs() {
 
     // Tenant override wins over the platform override.
     {
-        let mut scope = tx.begin_for(tenant).await.unwrap();
+        let mut scope = tx.begin_for(tenant.as_i64()).await.unwrap();
         repo.upsert_tenant(
             &mut scope,
             tenant,
@@ -341,7 +343,7 @@ async fn static_catalogs_render_without_any_database_rows() {
 #[tokio::test]
 async fn overrides_reject_unknown_keys_and_broken_patterns() {
     let (pool, _node) = prepare().await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let repo = SqlxTranslationRepository::new();
     let tenant = seed_tenant(&pool, "loc-override").await;
 
@@ -353,10 +355,10 @@ async fn overrides_reject_unknown_keys_and_broken_patterns() {
     }];
     let updates = UpdateTenantOverrides::new(
         Arc::new(repo),
-        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
         Arc::new(sanvi_localization::adapters::SystemClock),
     );
-    let mut scope = tx.begin_for(tenant).await.unwrap();
+    let mut scope = tx.begin_for(tenant.as_i64()).await.unwrap();
     let result = updates
         .execute(&mut scope, tenant, None, "en", &patch)
         .await;
@@ -372,7 +374,7 @@ async fn overrides_reject_unknown_keys_and_broken_patterns() {
         locale: "en".to_string(),
         value: "{unterminated".to_string(),
     }];
-    let mut scope = tx.begin_for(tenant).await.unwrap();
+    let mut scope = tx.begin_for(tenant.as_i64()).await.unwrap();
     let result = updates
         .execute(&mut scope, tenant, None, "en", &patch)
         .await;
@@ -388,7 +390,7 @@ async fn overrides_reject_unknown_keys_and_broken_patterns() {
         locale: "en".to_string(),
         value: "Statement".to_string(),
     }];
-    let mut scope = tx.begin_for(tenant).await.unwrap();
+    let mut scope = tx.begin_for(tenant.as_i64()).await.unwrap();
     updates
         .execute(&mut scope, tenant, None, "en", &patch)
         .await
@@ -396,7 +398,7 @@ async fn overrides_reject_unknown_keys_and_broken_patterns() {
     scope.commit().await.unwrap();
 
     let get = GetTenantOverrides::new(Arc::new(repo));
-    let mut scope = tx.begin_for(tenant).await.unwrap();
+    let mut scope = tx.begin_for(tenant.as_i64()).await.unwrap();
     let overrides = get.execute(&mut scope, tenant).await.unwrap();
     scope.commit().await.unwrap();
     assert_eq!(overrides.len(), 1);

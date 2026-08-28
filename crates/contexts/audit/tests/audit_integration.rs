@@ -9,6 +9,7 @@ use sanvi_audit::{
         ActorType, AuditEntryData, AuditError, AuditReader, AuditWriter, GENESIS_HASH, verify_chain,
     },
 };
+use sanvi_kernel::TenantId;
 use sanvi_persistence::PlatformScope;
 use sanvi_testsupport::TestDb;
 
@@ -21,11 +22,11 @@ async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, Tes
     (app, migrator, db)
 }
 
-fn data(action: &str, tenant_id: Option<uuid::Uuid>) -> AuditEntryData {
+fn data(action: &str, tenant_id: Option<TenantId>) -> AuditEntryData {
     AuditEntryData {
         occurred_at: chrono::Utc::now(),
         actor_type: ActorType::PlatformAdmin,
-        actor_id: Some(uuid::Uuid::now_v7()),
+        actor_id: Some(sanvi_kernel::UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap())),
         on_behalf_of: None,
         tenant_id,
         action: action.to_string(),
@@ -42,8 +43,8 @@ fn data(action: &str, tenant_id: Option<uuid::Uuid>) -> AuditEntryData {
 #[tokio::test]
 async fn appends_form_a_verifiable_chain() {
     let (app, _migrator, _node) = prepare().await;
-    let tx_manager = sanvi_persistence::TxManager::new(app.clone());
-    let writer = SqlxAuditWriter::new();
+    let tx_manager = sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids());
+    let writer = SqlxAuditWriter::new(sanvi_testsupport::test_ids());
     let reader = SqlxAuditReader::new();
 
     let mut scope: PlatformScope<'_> = tx_manager
@@ -67,7 +68,7 @@ async fn appends_form_a_verifiable_chain() {
 
     // The chain verifies through the use case (paged).
     let verify = VerifyAuditChain::new(
-        sanvi_persistence::TxManager::new(app.clone()),
+        sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids()),
         std::sync::Arc::new(SqlxAuditReader::new()),
         1, // batch size 1: page boundaries must continue the chain
     );
@@ -99,8 +100,8 @@ async fn appends_form_a_verifiable_chain() {
 #[tokio::test]
 async fn update_and_delete_are_rejected_by_the_trigger() {
     let (app, migrator, _node) = prepare().await;
-    let tx_manager = sanvi_persistence::TxManager::new(app.clone());
-    let writer = SqlxAuditWriter::new();
+    let tx_manager = sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids());
+    let writer = SqlxAuditWriter::new(sanvi_testsupport::test_ids());
     let mut scope: PlatformScope<'_> = tx_manager
         .begin_unscoped("test_append", "test")
         .await
@@ -149,7 +150,7 @@ async fn update_and_delete_are_rejected_by_the_trigger() {
 
     // The row is intact and still verifies.
     let verify = VerifyAuditChain::new(
-        sanvi_persistence::TxManager::new(app.clone()),
+        sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids()),
         std::sync::Arc::new(SqlxAuditReader::new()),
         100,
     );
@@ -159,8 +160,8 @@ async fn update_and_delete_are_rejected_by_the_trigger() {
 #[tokio::test]
 async fn a_tampered_chain_is_detected() {
     let (app, _migrator, _node) = prepare().await;
-    let tx_manager = sanvi_persistence::TxManager::new(app.clone());
-    let writer = SqlxAuditWriter::new();
+    let tx_manager = sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids());
+    let writer = SqlxAuditWriter::new(sanvi_testsupport::test_ids());
     let mut scope: PlatformScope<'_> = tx_manager
         .begin_unscoped("test_append", "test")
         .await
@@ -176,7 +177,7 @@ async fn a_tampered_chain_is_detected() {
     scope.commit().await.unwrap();
 
     let verify = VerifyAuditChain::new(
-        sanvi_persistence::TxManager::new(app.clone()),
+        sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids()),
         std::sync::Arc::new(SqlxAuditReader::new()),
         100,
     );
@@ -213,10 +214,10 @@ async fn a_tampered_chain_is_detected() {
 #[tokio::test]
 async fn audit_rows_are_rls_isolated_between_tenants() {
     let (app, _migrator, _node) = prepare().await;
-    let tx_manager = sanvi_persistence::TxManager::new(app.clone());
-    let writer = SqlxAuditWriter::new();
-    let tenant_a = uuid::Uuid::now_v7();
-    let tenant_b = uuid::Uuid::now_v7();
+    let tx_manager = sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids());
+    let writer = SqlxAuditWriter::new(sanvi_testsupport::test_ids());
+    let tenant_a = TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+    let tenant_b = TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
 
     let mut scope: PlatformScope<'_> = tx_manager
         .begin_unscoped("test_append", "test")
@@ -234,9 +235,9 @@ async fn audit_rows_are_rls_isolated_between_tenants() {
 
     // A tenant-scoped transaction must see only its own rows (raw SQL:
     // the reader port is platform-scoped by design).
-    let mut scoped = tx_manager.begin_for(tenant_a).await.expect("scoped tx");
+    let mut scoped = tx_manager.begin_for(tenant_a.as_i64()).await.expect("scoped tx");
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit.entries WHERE tenant_id = $1")
-        .bind(tenant_a)
+        .bind(tenant_a.as_i64())
         .fetch_one(&mut **scoped.tx_mut().as_inner())
         .await
         .expect("scoped read");

@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use sanvi_kernel::events::EventEnvelope;
+use sanvi_kernel::events::{EventEnvelope, EventId};
+use sanvi_kernel::{SnowflakeId, TenantId};
 use sanvi_localization::adapters::{LocalizationCache, LocalizationMetrics, LocalizationService};
 use sanvi_localization::domain::{Arg, LocalizationError, TranslationRepository};
 use sanvi_localization::{LocalizationConfig, Message, Translator};
@@ -19,7 +20,7 @@ impl TranslationRepository for EmptyRepos {
     async fn list_tenant(
         &self,
         _scope: &mut ScopedTx<'_>,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
     ) -> Result<Vec<sanvi_localization::Translation>, LocalizationError> {
         Ok(Vec::new())
     }
@@ -38,7 +39,7 @@ impl TranslationRepository for EmptyRepos {
     async fn upsert_tenant(
         &self,
         _scope: &mut ScopedTx<'_>,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
         _translation: &sanvi_localization::Translation,
     ) -> Result<(), LocalizationError> {
         Ok(())
@@ -53,7 +54,7 @@ impl TranslationRepository for EmptyRepos {
     async fn delete_tenant(
         &self,
         _scope: &mut ScopedTx<'_>,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
         _key: &str,
         _locale: &str,
     ) -> Result<(), LocalizationError> {
@@ -79,6 +80,7 @@ fn service() -> Arc<LocalizationService> {
     let metrics = Arc::new(LocalizationMetrics::new(&prometheus::Registry::new()));
     Arc::new(LocalizationService::new(
         pool,
+        sanvi_testsupport::test_ids(),
         Arc::new(EmptyRepos),
         cache,
         metrics,
@@ -135,8 +137,9 @@ fn render_email(
 async fn an_en_request_that_enqueues_a_job_renders_en_later() {
     let translator = service();
     let envelope = EventEnvelope::new(
+        EventId::try_from(1_i64).unwrap(),
         "identity.invitation",
-        uuid::Uuid::now_v7(),
+        SnowflakeId::try_from(2_i64).unwrap(),
         "identity.invitation_created",
         serde_json::json!({ "invitee": "taro@example.com" }),
     )
@@ -158,8 +161,9 @@ async fn an_en_request_that_enqueues_a_job_renders_en_later() {
 async fn a_ja_request_that_enqueues_a_job_renders_ja_later() {
     let translator = service();
     let envelope = EventEnvelope::new(
+        EventId::try_from(3_i64).unwrap(),
         "identity.invitation",
-        uuid::Uuid::now_v7(),
+        SnowflakeId::try_from(4_i64).unwrap(),
         "identity.invitation_created",
         serde_json::json!({ "invitee": "taro@example.com" }),
     )
@@ -182,8 +186,9 @@ fn locale_is_a_required_field_on_user_visible_events() {
     // A worker context without a locale is a bug this assertion catches at
     // enqueue time (see `EventEnvelope::with_locale` in the kernel).
     let envelope = EventEnvelope::new(
+        EventId::try_from(5_i64).unwrap(),
         "identity.invitation",
-        uuid::Uuid::now_v7(),
+        SnowflakeId::try_from(6_i64).unwrap(),
         "identity.invitation_created",
         serde_json::json!({}),
     );

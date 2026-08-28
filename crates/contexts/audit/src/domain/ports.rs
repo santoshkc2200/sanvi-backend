@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::PlatformScope;
-use uuid::Uuid;
 
 use crate::domain::entry::{AuditEntry, AuditEntryData};
 use crate::domain::error::AuditError;
@@ -35,8 +35,8 @@ pub struct AuditCursor {
 /// Filters for audit queries. `None` means "no constraint".
 #[derive(Debug, Clone, Default)]
 pub struct AuditFilters {
-    pub tenant_id: Option<Uuid>,
-    pub actor_id: Option<Uuid>,
+    pub tenant_id: Option<TenantId>,
+    pub actor_id: Option<UserId>,
     pub action: Option<String>,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,

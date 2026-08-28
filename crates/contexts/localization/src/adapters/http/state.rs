@@ -26,6 +26,7 @@ pub struct LocalizationState {
     pub catalog: Arc<CatalogService>,
     pub supported: Arc<dyn SupportedLocaleRepository>,
     pub pool: PgPool,
+    pub ids: Arc<dyn sanvi_kernel::RawIdGenerator>,
 
     pub get_settings: Arc<GetLocalizationSettings>,
     pub update_settings: Arc<UpdateLocalizationSettings>,

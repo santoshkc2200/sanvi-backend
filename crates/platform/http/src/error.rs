@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn localize_problem_uses_tenant_scope_for_title_and_detail() {
-        let tenant_id = uuid::Uuid::now_v7();
+        let tenant_id = sanvi_kernel::TenantId::try_from(1_000_001_i64).unwrap();
         let translator: std::sync::Arc<dyn ProblemTranslator> = std::sync::Arc::new(FakeTranslator);
         let req = actix_web::test::TestRequest::default()
             .app_data(web::Data::new(ProblemTranslatorData(translator)))

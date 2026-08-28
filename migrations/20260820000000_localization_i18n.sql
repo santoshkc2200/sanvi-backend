@@ -65,7 +65,7 @@ CREATE TABLE localization.translations (
   PRIMARY KEY (scope, key, locale),
   CONSTRAINT translations_scope_check
     CHECK (scope = 'platform'
-           OR scope ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+           OR scope ~ '^[1-9][0-9]{0,18}$'),
   CONSTRAINT translations_locale_check CHECK (locale ~ '^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,4})?$')
 );
 

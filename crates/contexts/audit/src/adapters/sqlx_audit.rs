@@ -6,8 +6,10 @@
 //! entry linking to it. Everything runs inside the caller's transaction.
 
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use sanvi_kernel::{RawIdGenerator, SnowflakeId, TenantId, UserId};
 use sanvi_persistence::PlatformScope;
 use sqlx::FromRow;
 
@@ -23,12 +25,12 @@ const CHAIN_LOCK_KEY: i64 = 0x5356_4155_4449_5401;
 #[derive(Debug, Clone, FromRow)]
 struct EntryRow {
     seq: i64,
-    id: uuid::Uuid,
+    id: i64,
     occurred_at: chrono::DateTime<chrono::Utc>,
     actor_type: String,
-    actor_id: Option<uuid::Uuid>,
-    on_behalf_of: Option<uuid::Uuid>,
-    tenant_id: Option<uuid::Uuid>,
+    actor_id: Option<i64>,
+    on_behalf_of: Option<i64>,
+    tenant_id: Option<i64>,
     action: String,
     resource_type: Option<String>,
     resource_id: Option<String>,
@@ -50,14 +52,31 @@ fn to_entry(row: EntryRow) -> Result<AuditEntry, AuditError> {
         .hash
         .try_into()
         .map_err(|_| AuditError::Storage("hash is not 32 bytes".to_string()))?;
+    let id = SnowflakeId::try_from(row.id)
+        .map_err(|err| AuditError::Storage(format!("invalid audit entry id: {err}")))?;
+    let actor_id = row
+        .actor_id
+        .map(UserId::try_from)
+        .transpose()
+        .map_err(|err| AuditError::Storage(format!("invalid audit actor id: {err}")))?;
+    let on_behalf_of = row
+        .on_behalf_of
+        .map(UserId::try_from)
+        .transpose()
+        .map_err(|err| AuditError::Storage(format!("invalid audit on-behalf-of id: {err}")))?;
+    let tenant_id = row
+        .tenant_id
+        .map(TenantId::try_from)
+        .transpose()
+        .map_err(|err| AuditError::Storage(format!("invalid audit tenant id: {err}")))?;
     Ok(AuditEntry::from_parts(
         row.seq,
-        row.id,
+        id,
         row.occurred_at,
         ActorType::parse(&row.actor_type)?,
-        row.actor_id,
-        row.on_behalf_of,
-        row.tenant_id,
+        actor_id,
+        on_behalf_of,
+        tenant_id,
         row.action,
         row.resource_type,
         row.resource_id,
@@ -71,12 +90,14 @@ fn to_entry(row: EntryRow) -> Result<AuditEntry, AuditError> {
     ))
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SqlxAuditWriter;
+#[derive(Clone)]
+pub struct SqlxAuditWriter {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl SqlxAuditWriter {
-    pub fn new() -> Self {
-        Self
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
     }
 }
 
@@ -107,7 +128,11 @@ impl AuditWriter for SqlxAuditWriter {
                 .map_err(|_| AuditError::Storage("tail hash is not 32 bytes".to_string()))?,
             None => GENESIS_HASH,
         };
-        let entry = AuditEntry::new(data.clone(), prev_hash)?;
+        let id = self
+            .ids
+            .next_id()
+            .map_err(|err| AuditError::Storage(format!("failed to generate audit entry id: {err}")))?;
+        let entry = AuditEntry::new(id, data.clone(), prev_hash)?;
 
         let seq: i64 = sqlx::query_scalar(
             "INSERT INTO audit.entries
@@ -117,12 +142,12 @@ impl AuditWriter for SqlxAuditWriter {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
              RETURNING seq",
         )
-        .bind(entry.id)
+        .bind(entry.id.as_i64())
         .bind(entry.occurred_at)
         .bind(entry.actor_type.as_str())
-        .bind(entry.actor_id)
-        .bind(entry.on_behalf_of)
-        .bind(entry.tenant_id)
+        .bind(entry.actor_id.map(|id| id.as_i64()))
+        .bind(entry.on_behalf_of.map(|id| id.as_i64()))
+        .bind(entry.tenant_id.map(|id| id.as_i64()))
         .bind(&entry.action)
         .bind(&entry.resource_type)
         .bind(&entry.resource_id)
@@ -167,8 +192,8 @@ impl AuditReader for SqlxAuditReader {
                         action, resource_type, resource_id, before, after, request_id,
                         ip, user_agent, prev_hash, hash
                  FROM audit.entries
-                 WHERE ($1::uuid IS NULL OR tenant_id = $1)
-                   AND ($2::uuid IS NULL OR actor_id = $2)
+                 WHERE ($1::bigint IS NULL OR tenant_id = $1)
+                   AND ($2::bigint IS NULL OR actor_id = $2)
                    AND ($3::text IS NULL OR action = $3)
                    AND ($4::timestamptz IS NULL OR occurred_at >= $4)
                    AND ($5::timestamptz IS NULL OR occurred_at < $5)
@@ -176,8 +201,8 @@ impl AuditReader for SqlxAuditReader {
                  ORDER BY seq ASC
                  LIMIT $7",
             )
-            .bind(filters.tenant_id)
-            .bind(filters.actor_id)
+            .bind(filters.tenant_id.map(|id| id.as_i64()))
+            .bind(filters.actor_id.map(|id| id.as_i64()))
             .bind(&filters.action)
             .bind(filters.since)
             .bind(filters.until)
@@ -192,8 +217,8 @@ impl AuditReader for SqlxAuditReader {
                         action, resource_type, resource_id, before, after, request_id,
                         ip, user_agent, prev_hash, hash
                  FROM audit.entries
-                 WHERE ($1::uuid IS NULL OR tenant_id = $1)
-                   AND ($2::uuid IS NULL OR actor_id = $2)
+                 WHERE ($1::bigint IS NULL OR tenant_id = $1)
+                   AND ($2::bigint IS NULL OR actor_id = $2)
                    AND ($3::text IS NULL OR action = $3)
                    AND ($4::timestamptz IS NULL OR occurred_at >= $4)
                    AND ($5::timestamptz IS NULL OR occurred_at < $5)
@@ -201,8 +226,8 @@ impl AuditReader for SqlxAuditReader {
                  ORDER BY seq DESC
                  LIMIT $7",
             )
-            .bind(filters.tenant_id)
-            .bind(filters.actor_id)
+            .bind(filters.tenant_id.map(|id| id.as_i64()))
+            .bind(filters.actor_id.map(|id| id.as_i64()))
             .bind(&filters.action)
             .bind(filters.since)
             .bind(filters.until)
@@ -226,8 +251,8 @@ impl AuditReader for SqlxAuditReader {
 pub fn entry_data(
     occurred_at: chrono::DateTime<chrono::Utc>,
     actor_type: ActorType,
-    actor_id: Option<uuid::Uuid>,
-    tenant_id: Option<uuid::Uuid>,
+    actor_id: Option<UserId>,
+    tenant_id: Option<TenantId>,
     action: impl Into<String>,
 ) -> AuditEntryData {
     AuditEntryData {

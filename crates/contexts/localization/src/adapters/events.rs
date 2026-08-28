@@ -1,19 +1,36 @@
 //! Outbox-backed event publishing and system clock (mirrors the other
 //! contexts' adapter pattern).
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{EventId, RawIdGenerator};
 use sanvi_messaging::OutboxWriter;
 
 use crate::domain::LocalizationError;
 use crate::domain::events::LocalizationEvent;
 use crate::domain::ports::{Clock, EventPublisher};
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct OutboxEventPublisher;
+#[derive(Clone)]
+pub struct OutboxEventPublisher {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl OutboxEventPublisher {
-    pub fn new() -> Self {
-        Self
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
+
+    fn envelope(
+        &self,
+        event: &LocalizationEvent,
+    ) -> Result<sanvi_kernel::EventEnvelope, LocalizationError> {
+        let id = self
+            .ids
+            .next_id()
+            .map(EventId::from_snowflake)
+            .map_err(|err| LocalizationError::Outbox(err.to_string()))?;
+        Ok(event.envelope(id))
     }
 }
 
@@ -24,7 +41,7 @@ impl EventPublisher for OutboxEventPublisher {
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         event: &LocalizationEvent,
     ) -> Result<(), LocalizationError> {
-        let envelope = event.envelope();
+        let envelope = self.envelope(event)?;
         OutboxWriter
             .append(scope.tx_mut(), &envelope)
             .await
@@ -36,7 +53,7 @@ impl EventPublisher for OutboxEventPublisher {
         scope: &mut sanvi_persistence::ScopedTx<'_>,
         event: &LocalizationEvent,
     ) -> Result<(), LocalizationError> {
-        let envelope = event.envelope();
+        let envelope = self.envelope(event)?;
         OutboxWriter
             .append(scope.tx_mut(), &envelope)
             .await
@@ -71,7 +88,7 @@ pub fn localization_event_handler(
                         .metadata
                         .get("tenant_id")
                         .and_then(|value| value.as_str())
-                        .and_then(|value| uuid::Uuid::parse_str(value).ok());
+                        .and_then(|value| value.parse::<sanvi_kernel::TenantId>().ok());
                     if let Some(tenant_id) = tenant_id {
                         service.invalidate_tenant(tenant_id);
                     }

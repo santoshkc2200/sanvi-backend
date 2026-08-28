@@ -23,6 +23,7 @@ pub use redis::{redis_url, test_stream};
 
 use std::{
     sync::Arc,
+    sync::OnceLock,
     sync::atomic::{AtomicI64, Ordering},
 };
 
@@ -50,7 +51,12 @@ impl RawIdGenerator for TestIdGenerator {
     }
 }
 
-/// Fresh deterministic ID source for each test fixture.
+/// One shared deterministic ID source per test *process* (not per call):
+/// repeat calls within — or across — a test return the same underlying
+/// counter, so a test that needs several distinct ids (e.g. two seeded
+/// tenants) never collides on the same value.
 pub fn test_ids() -> Arc<dyn RawIdGenerator> {
-    Arc::new(TestIdGenerator::new(1_000_000))
+    static IDS: OnceLock<Arc<dyn RawIdGenerator>> = OnceLock::new();
+    IDS.get_or_init(|| Arc::new(TestIdGenerator::new(1_000_000)))
+        .clone()
 }

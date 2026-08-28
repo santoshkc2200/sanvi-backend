@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::catalog::Translation;
 use crate::domain::error::LocalizationError;
@@ -60,7 +60,7 @@ impl GetTenantOverrides {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<TranslationView>, LocalizationError> {
         let overrides = self.repo.list_tenant(scope, tenant_id).await?;
         Ok(overrides.into_iter().map(TranslationView::from).collect())
@@ -89,8 +89,8 @@ impl UpdateTenantOverrides {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        actor_id: Option<Uuid>,
+        tenant_id: TenantId,
+        actor_id: Option<UserId>,
         acting_locale: &str,
         patches: &[TranslationPatch],
     ) -> Result<Vec<TranslationView>, LocalizationError> {
@@ -207,7 +207,7 @@ impl UpdatePlatformTranslations {
     pub async fn execute(
         &self,
         scope: &mut PlatformScope<'_>,
-        actor_id: Option<Uuid>,
+        actor_id: Option<UserId>,
         acting_locale: &str,
         patches: &[TranslationPatch],
     ) -> Result<Vec<TranslationView>, LocalizationError> {

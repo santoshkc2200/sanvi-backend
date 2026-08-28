@@ -43,7 +43,7 @@ impl PersonalDataProvider for LocalizationPrivacyProvider {
     async fn collect(&self, subject: &SubjectRef) -> Result<DataBundle, PrivacyError> {
         let user_id = subject.identifiers.iter().find_map(|id| {
             (id.id_type == "user_id")
-                .then(|| uuid::Uuid::parse_str(&id.value).ok())
+                .then(|| id.value.parse::<sanvi_kernel::UserId>().ok())
                 .flatten()
         });
         let Some(user_id) = user_id else {
@@ -62,7 +62,7 @@ impl PersonalDataProvider for LocalizationPrivacyProvider {
             "SELECT scope, key, locale, value, updated_at
              FROM localization.translations
              WHERE updated_by = $1",
-            user_id
+            user_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -97,7 +97,7 @@ impl PersonalDataProvider for LocalizationPrivacyProvider {
     ) -> Result<EraseReport, PrivacyError> {
         let user_id = subject.identifiers.iter().find_map(|id| {
             (id.id_type == "user_id")
-                .then(|| uuid::Uuid::parse_str(&id.value).ok())
+                .then(|| id.value.parse::<sanvi_kernel::UserId>().ok())
                 .flatten()
         });
         let Some(user_id) = user_id else {
@@ -116,7 +116,7 @@ impl PersonalDataProvider for LocalizationPrivacyProvider {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let result = sqlx::query!(
             "UPDATE localization.translations SET updated_by = NULL WHERE updated_by = $1",
-            user_id
+            user_id.as_i64()
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
