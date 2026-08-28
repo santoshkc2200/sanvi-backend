@@ -4,10 +4,9 @@
 //! total.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+use sanvi_kernel::{Id, TenantId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::BillingError;
 use crate::domain::plan::{PlanId, PriceId};
@@ -139,7 +138,7 @@ pub struct Period {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subscription {
     id: SubscriptionId,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     plan_id: PlanId,
     price_id: Option<PriceId>,
     source: SubscriptionSource,
@@ -162,7 +161,7 @@ impl Subscription {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: SubscriptionId,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plan_id: PlanId,
         price_id: Option<PriceId>,
         source: SubscriptionSource,
@@ -207,7 +206,7 @@ impl Subscription {
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         id: SubscriptionId,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plan_id: PlanId,
         price_id: Option<PriceId>,
         source: SubscriptionSource,
@@ -250,7 +249,7 @@ impl Subscription {
     pub fn id(&self) -> SubscriptionId {
         self.id
     }
-    pub fn tenant_id(&self) -> Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         self.tenant_id
     }
     pub fn plan_id(&self) -> PlanId {
@@ -435,18 +434,27 @@ impl Subscription {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
     use super::*;
+    use crate::domain::plan::PlanTag;
 
     fn now() -> DateTime<Utc> {
         Utc::now()
     }
 
+    static NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
+    fn test_id<Tag>() -> Id<Tag> {
+        Id::try_from(NEXT_ID.fetch_add(1, Ordering::Relaxed)).unwrap()
+    }
+
     fn sub(status: SubscriptionStatus, collection: CollectionState) -> Subscription {
         let mut s = Subscription::new(
-            SubscriptionId::new(),
-            Uuid::now_v7(),
-            PlanId::from_uuid(Uuid::now_v7()),
-            Some(PriceId::from_uuid(Uuid::now_v7())),
+            test_id(),
+            test_id(),
+            test_id(),
+            Some(test_id()),
             SubscriptionSource::Stripe,
             Some("cus_x".to_string()),
             Some("sub_x".to_string()),
@@ -465,9 +473,9 @@ mod tests {
     fn stripe_subscriptions_require_full_stripe_identity() {
         assert!(
             Subscription::new(
-                SubscriptionId::new(),
-                Uuid::now_v7(),
-                PlanId::from_uuid(Uuid::now_v7()),
+                test_id(),
+                test_id(),
+                test_id(),
                 None,
                 SubscriptionSource::Stripe,
                 Some("cus_x".to_string()),
@@ -479,9 +487,9 @@ mod tests {
         );
         assert!(
             Subscription::new(
-                SubscriptionId::new(),
-                Uuid::now_v7(),
-                PlanId::from_uuid(Uuid::now_v7()),
+                test_id(),
+                test_id(),
+                test_id(),
                 None,
                 SubscriptionSource::Override,
                 None,
@@ -580,7 +588,7 @@ mod tests {
     #[test]
     fn plan_change_is_detected() {
         let mut s = sub(SubscriptionStatus::Active, CollectionState::Ok);
-        let new_plan = PlanId::new();
+        let new_plan = test_id::<PlanTag>();
         let changed = s.apply_stripe_update(
             SubscriptionStatus::Active,
             new_plan,

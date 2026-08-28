@@ -3,10 +3,9 @@
 //! retention rule that overrides erasure requests.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+use sanvi_kernel::{Id, TenantId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::BillingError;
 use crate::domain::subscription::Period;
@@ -54,7 +53,7 @@ impl InvoiceStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvoiceRef {
     id: InvoiceId,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     stripe_invoice_id: String,
     number: Option<String>,
     status: InvoiceStatus,
@@ -71,7 +70,7 @@ impl InvoiceRef {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: InvoiceId,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         stripe_invoice_id: String,
         number: Option<String>,
         status: InvoiceStatus,
@@ -117,7 +116,7 @@ impl InvoiceRef {
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         id: InvoiceId,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         stripe_invoice_id: String,
         number: Option<String>,
         status: InvoiceStatus,
@@ -148,7 +147,7 @@ impl InvoiceRef {
     pub fn id(&self) -> InvoiceId {
         self.id
     }
-    pub fn tenant_id(&self) -> Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         self.tenant_id
     }
     pub fn stripe_invoice_id(&self) -> &str {
@@ -185,7 +184,15 @@ impl InvoiceRef {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
     use super::*;
+
+    static NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
+    fn test_id<Tag>() -> Id<Tag> {
+        Id::try_from(NEXT_ID.fetch_add(1, Ordering::Relaxed)).unwrap()
+    }
 
     #[test]
     fn invoice_status_mirrors_stripe() {
@@ -204,8 +211,8 @@ mod tests {
     #[test]
     fn invoices_validate_identity_and_amounts() {
         let ok = InvoiceRef::new(
-            InvoiceId::new(),
-            Uuid::now_v7(),
+            test_id(),
+            test_id(),
             "in_x".to_string(),
             Some("3A2F".to_string()),
             InvoiceStatus::Paid,
@@ -220,8 +227,8 @@ mod tests {
         assert!(ok.is_ok());
         assert!(
             InvoiceRef::new(
-                InvoiceId::new(),
-                Uuid::now_v7(),
+                test_id(),
+                test_id(),
                 " ".to_string(),
                 None,
                 InvoiceStatus::Open,

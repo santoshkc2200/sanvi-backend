@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
+use sanvi_kernel::TenantId;
 use sha2::Sha256;
 use uuid::Uuid;
 
@@ -309,7 +310,7 @@ fn parse_epoch(value: Option<i64>) -> Option<chrono::DateTime<chrono::Utc>> {
 impl StripeClient for HttpStripeClient {
     async fn ensure_customer(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command_id: Uuid,
     ) -> Result<StripeCustomer, BillingError> {
         let body = self

@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use serde::Serialize;
 use tracing::info;
@@ -52,8 +53,8 @@ impl CreatePortalSession {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        tenant_id: Uuid,
+        actor: UserId,
+        tenant_id: TenantId,
     ) -> Result<PortalSessionView, BillingError> {
         let mut scope = self
             .tx_manager

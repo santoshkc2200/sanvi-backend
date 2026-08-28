@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, web};
 use sanvi_http::{ApiError, CurrentSubject, RequiredPermission, TenantContext};
+use sanvi_kernel::TenantId;
 use serde::Deserialize;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::{
     AddPlanPrice, AddPlanPriceCommand, ApplySubscriptionOverride, ApplySubscriptionOverrideCommand,
@@ -92,7 +92,7 @@ pub fn api_error(err: BillingError) -> ApiError {
     }
 }
 
-fn current_tenant(req: &HttpRequest) -> Result<Uuid, ApiError> {
+fn current_tenant(req: &HttpRequest) -> Result<TenantId, ApiError> {
     req.extensions()
         .get::<TenantContext>()
         .map(|context| context.tenant_id)
@@ -127,7 +127,8 @@ pub async fn list_public_plans(state: web::Data<BillingState>) -> Result<impl Re
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CheckoutSessionRequest {
-    pub price_id: Uuid,
+    #[schema(value_type = String)]
+    pub price_id: PriceId,
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
 }
@@ -161,7 +162,7 @@ pub async fn create_checkout_session(
             subject.0.user_id,
             CreateCheckoutSessionCommand {
                 tenant_id,
-                price_id: PriceId::from_uuid(body.price_id),
+                price_id: body.price_id,
                 success_url: body.success_url.clone(),
                 cancel_url: body.cancel_url.clone(),
             },
@@ -348,7 +349,7 @@ pub struct UpdatePlanRequest {
     path = "/api/v1/platform/plans/{id}",
     tag = "billing",
     operation_id = "update_plan",
-    params(("id" = Uuid, Path, description = "Plan id")),
+    params(("id" = String, Path, description = "Plan id")),
     request_body = UpdatePlanRequest,
     responses(
         (status = 200, description = "Updated plan", body = crate::application::PlanAdminView),
@@ -359,7 +360,7 @@ pub struct UpdatePlanRequest {
 pub async fn update_plan(
     state: web::Data<BillingState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<PlanId>,
     body: web::Json<UpdatePlanRequest>,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -368,7 +369,7 @@ pub async fn update_plan(
         .execute(
             subject.0.user_id,
             UpdatePlanCommand {
-                plan_id: PlanId::from_uuid(path.into_inner()),
+                plan_id: path.into_inner(),
                 name: body.name.clone(),
                 stripe_product_id: body.stripe_product_id.clone(),
                 visibility: body.visibility,
@@ -396,7 +397,7 @@ pub struct AddPriceRequest {
     path = "/api/v1/platform/plans/{id}/prices",
     tag = "billing",
     operation_id = "add_plan_price",
-    params(("id" = Uuid, Path, description = "Plan id")),
+    params(("id" = String, Path, description = "Plan id")),
     request_body = AddPriceRequest,
     responses(
         (status = 201, description = "Created price", body = crate::application::PlanAdminPriceView),
@@ -407,7 +408,7 @@ pub struct AddPriceRequest {
 pub async fn add_plan_price(
     state: web::Data<BillingState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<PlanId>,
     body: web::Json<AddPriceRequest>,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -416,7 +417,7 @@ pub async fn add_plan_price(
         .execute(
             subject.0.user_id,
             AddPlanPriceCommand {
-                plan_id: PlanId::from_uuid(path.into_inner()),
+                plan_id: path.into_inner(),
                 stripe_price_id: body.stripe_price_id.clone(),
                 currency: body.currency.clone(),
                 interval: body.interval,
@@ -442,7 +443,7 @@ pub struct SetEntitlementsRequest {
     path = "/api/v1/platform/plans/{id}/entitlements",
     tag = "billing",
     operation_id = "set_plan_entitlements",
-    params(("id" = Uuid, Path, description = "Plan id")),
+    params(("id" = String, Path, description = "Plan id")),
     request_body = SetEntitlementsRequest,
     responses(
         (status = 200, description = "The new map", body = Vec<EntitlementGrant>),
@@ -454,7 +455,7 @@ pub struct SetEntitlementsRequest {
 pub async fn set_plan_entitlements(
     state: web::Data<BillingState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<PlanId>,
     body: web::Json<SetEntitlementsRequest>,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -463,7 +464,7 @@ pub async fn set_plan_entitlements(
         .execute(
             subject.0.user_id,
             SetPlanEntitlementsCommand {
-                plan_id: PlanId::from_uuid(path.into_inner()),
+                plan_id: path.into_inner(),
                 grants: body.grants.clone(),
             },
         )
@@ -490,7 +491,7 @@ pub struct SubscriptionOverrideRequest {
     path = "/api/v1/platform/tenants/{id}/subscription/override",
     tag = "billing",
     operation_id = "apply_subscription_override",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     request_body = SubscriptionOverrideRequest,
     responses(
         (status = 200, description = "Override applied"),
@@ -502,7 +503,7 @@ pub struct SubscriptionOverrideRequest {
 pub async fn apply_subscription_override(
     state: web::Data<BillingState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     body: web::Json<SubscriptionOverrideRequest>,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -528,7 +529,7 @@ pub async fn apply_subscription_override(
     path = "/api/v1/platform/tenants/{id}/subscription/override",
     tag = "billing",
     operation_id = "revoke_subscription_override",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     responses(
         (status = 204, description = "Override revoked"),
         (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
@@ -538,7 +539,7 @@ pub async fn apply_subscription_override(
 pub async fn revoke_subscription_override(
     state: web::Data<BillingState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
     state

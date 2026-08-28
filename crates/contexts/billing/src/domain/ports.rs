@@ -8,6 +8,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use uuid::Uuid;
 
@@ -108,7 +109,7 @@ pub trait SubscriptionRepository: Send + Sync {
     async fn anonymise_stripe_ids(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<usize, BillingError>;
 
     /// Remove a tenant's projection (used when an operator override is
@@ -116,14 +117,14 @@ pub trait SubscriptionRepository: Send + Sync {
     async fn delete_by_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<bool, BillingError>;
 
     /// The tenant's own row (RLS sees only them).
     async fn find_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<Subscription>, BillingError>;
 
     /// The same row, read under the audited platform scope (checkout,
@@ -131,7 +132,7 @@ pub trait SubscriptionRepository: Send + Sync {
     async fn find_by_tenant_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<Subscription>, BillingError>;
 
     async fn find_by_stripe_subscription_id(
@@ -188,7 +189,7 @@ pub trait SubscriptionRepository: Send + Sync {
 /// process retries converge on one Customer and one Session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckoutState {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub price_id: PriceId,
     pub command_id: Uuid,
     pub stripe_customer_id: Option<String>,
@@ -215,7 +216,7 @@ pub trait CheckoutStateRepository: Send + Sync {
     async fn set_customer(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command_id: Uuid,
         stripe_customer_id: &str,
     ) -> Result<(), BillingError>;
@@ -223,7 +224,7 @@ pub trait CheckoutStateRepository: Send + Sync {
     async fn complete(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command_id: Uuid,
         stripe_session_id: &str,
         session_url: &str,
@@ -232,13 +233,13 @@ pub trait CheckoutStateRepository: Send + Sync {
     async fn customer_for_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<String>, BillingError>;
 
     async fn anonymise(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<usize, BillingError>;
 }
 
@@ -258,7 +259,7 @@ pub trait InvoiceRepository: Send + Sync {
     async fn list_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         limit: u32,
     ) -> Result<Vec<InvoiceRef>, BillingError>;
 
@@ -266,7 +267,7 @@ pub trait InvoiceRepository: Send + Sync {
     async fn list_for_tenant_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         limit: u32,
     ) -> Result<Vec<InvoiceRef>, BillingError>;
 
@@ -354,7 +355,7 @@ pub struct CheckoutSessionRequest {
     pub customer_id: String,
     pub stripe_price_id: String,
     pub trial_period_days: Option<u16>,
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub success_url: String,
     pub cancel_url: String,
     /// Only set when the tax gate confirmed active registrations exist.
@@ -422,7 +423,7 @@ pub trait StripeClient: Send + Sync {
     /// Create (or reuse, via idempotency) the tenant's Stripe customer.
     async fn ensure_customer(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command_id: Uuid,
     ) -> Result<StripeCustomer, BillingError>;
 
@@ -464,7 +465,7 @@ pub trait EntitlementSyncer: Send + Sync {
     async fn sync_subscription(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plan_key: &str,
         grants: &[EntitlementGrant],
     ) -> Result<(), BillingError>;
@@ -474,7 +475,7 @@ pub trait EntitlementSyncer: Send + Sync {
     async fn clear_subscription(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<(), BillingError>;
 }
 
@@ -486,29 +487,29 @@ pub trait EntitlementSyncer: Send + Sync {
 pub trait TenantLifecycle: Send + Sync {
     /// Suspend for billing (idempotent: an already-suspended tenant stays
     /// as-is, whatever the reason).
-    async fn suspend_billing(&self, tenant_id: Uuid) -> Result<(), BillingError>;
+    async fn suspend_billing(&self, tenant_id: TenantId) -> Result<(), BillingError>;
 
     /// Resume, but only from a billing suspension.
-    async fn resume_billing(&self, tenant_id: Uuid) -> Result<(), BillingError>;
+    async fn resume_billing(&self, tenant_id: TenantId) -> Result<(), BillingError>;
 }
 
 /// Tenant-facing notifications (stub logs today; the notifications context
 /// takes over delivery in a later phase).
 #[async_trait]
 pub trait Notifications: Send + Sync {
-    async fn payment_failed(&self, tenant_id: Uuid) -> Result<(), BillingError>;
+    async fn payment_failed(&self, tenant_id: TenantId) -> Result<(), BillingError>;
 
-    async fn grace_expired(&self, tenant_id: Uuid) -> Result<(), BillingError>;
+    async fn grace_expired(&self, tenant_id: TenantId) -> Result<(), BillingError>;
 
     async fn trial_ending(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         trial_end: DateTime<Utc>,
     ) -> Result<(), BillingError>;
 
-    async fn subscription_canceled(&self, tenant_id: Uuid) -> Result<(), BillingError>;
+    async fn subscription_canceled(&self, tenant_id: TenantId) -> Result<(), BillingError>;
 
-    async fn subscription_restored(&self, tenant_id: Uuid) -> Result<(), BillingError>;
+    async fn subscription_restored(&self, tenant_id: TenantId) -> Result<(), BillingError>;
 }
 
 /// Publishes billing events into the transactional outbox.
@@ -523,10 +524,10 @@ pub trait EventPublisher: Send + Sync {
 
 /// Source of new ids (tests substitute deterministic generators).
 pub trait IdGenerator: Send + Sync {
-    fn next_plan_id(&self) -> PlanId;
-    fn next_price_id(&self) -> PriceId;
-    fn next_subscription_id(&self) -> SubscriptionId;
-    fn next_invoice_id(&self) -> InvoiceId;
+    fn next_plan_id(&self) -> Result<PlanId, BillingError>;
+    fn next_price_id(&self) -> Result<PriceId, BillingError>;
+    fn next_subscription_id(&self) -> Result<SubscriptionId, BillingError>;
+    fn next_invoice_id(&self) -> Result<InvoiceId, BillingError>;
 }
 
 /// The system clock (tests substitute fixed times).

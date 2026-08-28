@@ -3,10 +3,9 @@
 //! tenant access from these rows.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+use sanvi_kernel::{Id, TenantId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::BillingError;
 
@@ -386,25 +385,33 @@ impl EntitlementGrant {
 pub(crate) const TENANT_METADATA_KEY: &str = "sanvi_tenant_id";
 
 /// Resolve a tenant id from Stripe metadata (subscription or customer).
-pub(crate) fn tenant_id_from_metadata(metadata: &serde_json::Value) -> Option<Uuid> {
+pub(crate) fn tenant_id_from_metadata(metadata: &serde_json::Value) -> Option<TenantId> {
     metadata
         .get(TENANT_METADATA_KEY)
         .and_then(|v| v.as_str())
-        .and_then(|raw| Uuid::parse_str(raw).ok())
+        .and_then(|raw| raw.parse::<TenantId>().ok())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
     use super::*;
 
     fn now() -> DateTime<Utc> {
         Utc::now()
     }
 
+    static NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
+    fn test_id<Tag>() -> Id<Tag> {
+        Id::try_from(NEXT_ID.fetch_add(1, Ordering::Relaxed)).unwrap()
+    }
+
     #[test]
     fn plan_keys_are_normalized_and_validated() {
         let plan = Plan::new(
-            PlanId::new(),
+            test_id(),
             " Professional ".to_string(),
             "Professional".to_string(),
             PlanTier::Professional,
@@ -417,7 +424,7 @@ mod tests {
         assert_eq!(plan.key(), "professional");
         assert!(
             Plan::new(
-                PlanId::new(),
+                test_id(),
                 "bad key!".to_string(),
                 "x".to_string(),
                 PlanTier::Starter,
@@ -433,7 +440,7 @@ mod tests {
     #[test]
     fn seeded_product_id_can_be_replaced() {
         let mut plan = Plan::new(
-            PlanId::new(),
+            test_id(),
             "starter".to_string(),
             "Starter".to_string(),
             PlanTier::Starter,
@@ -459,8 +466,8 @@ mod tests {
     fn prices_enforce_iso_currency_and_nonnegative_amounts() {
         assert!(
             PlanPrice::new(
-                PriceId::new(),
-                PlanId::new(),
+                test_id(),
+                test_id(),
                 "price_x".to_string(),
                 "USD".to_string(),
                 PriceInterval::Month,
@@ -472,8 +479,8 @@ mod tests {
         );
         assert!(
             PlanPrice::new(
-                PriceId::new(),
-                PlanId::new(),
+                test_id(),
+                test_id(),
                 "price_x".to_string(),
                 "us".to_string(),
                 PriceInterval::Month,
@@ -485,8 +492,8 @@ mod tests {
         );
         assert!(
             PlanPrice::new(
-                PriceId::new(),
-                PlanId::new(),
+                test_id(),
+                test_id(),
                 "price_x".to_string(),
                 "usd".to_string(),
                 PriceInterval::Month,
@@ -516,12 +523,12 @@ mod tests {
     }
 
     #[test]
-    fn tenant_id_from_metadata_accepts_uuids_only() {
+    fn tenant_id_from_metadata_accepts_canonical_snowflake_strings_only() {
         assert_eq!(
-            tenant_id_from_metadata(&serde_json::json!({ TENANT_METADATA_KEY: "not-a-uuid" })),
+            tenant_id_from_metadata(&serde_json::json!({ TENANT_METADATA_KEY: "not-a-snowflake" })),
             None
         );
-        let id = Uuid::now_v7();
+        let id = TenantId::try_from(1_000_001_i64).unwrap();
         assert_eq!(
             tenant_id_from_metadata(&serde_json::json!({
                 TENANT_METADATA_KEY: id.to_string()

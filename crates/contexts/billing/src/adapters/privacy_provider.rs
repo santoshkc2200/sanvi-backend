@@ -94,7 +94,7 @@ impl PersonalDataProvider for BillingPrivacyProvider {
                 label: "subscription".to_string(),
                 value: serde_json::json!({
                     "status": subscription.status().as_str(),
-                    "plan_id": subscription.plan_id().as_uuid(),
+                    "plan_id": subscription.plan_id().as_i64(),
                     "stripe_customer_id": subscription.stripe_customer_id(),
                 }),
             });

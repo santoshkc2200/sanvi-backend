@@ -3,16 +3,15 @@
 //! suspension. A legal or abuse suspension is never silently lifted.
 
 use async_trait::async_trait;
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 use sanvi_tenancy::{
     application::{ResumeTenant, SuspendTenant},
     domain::{
-        Clock as TenancyClock, EventPublisher, SuspensionReason, TenantId, TenantRepository,
-        TenantStatus,
+        Clock as TenancyClock, EventPublisher, SuspensionReason, TenantRepository, TenantStatus,
     },
 };
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::{BillingError, TenantLifecycle};
@@ -49,8 +48,8 @@ impl TenancyTenantLifecycle {
 
 #[async_trait]
 impl TenantLifecycle for TenancyTenantLifecycle {
-    async fn suspend_billing(&self, tenant_id: Uuid) -> Result<(), BillingError> {
-        let id = TenantId::from_uuid(tenant_id);
+    async fn suspend_billing(&self, tenant_id: TenantId) -> Result<(), BillingError> {
+        let id = tenant_id;
         // Already suspended (any reason) → idempotent no-op: never overwrite
         // a more serious suspension with ours.
         {
@@ -81,8 +80,8 @@ impl TenantLifecycle for TenancyTenantLifecycle {
         Ok(())
     }
 
-    async fn resume_billing(&self, tenant_id: Uuid) -> Result<(), BillingError> {
-        let id = TenantId::from_uuid(tenant_id);
+    async fn resume_billing(&self, tenant_id: TenantId) -> Result<(), BillingError> {
+        let id = tenant_id;
         {
             let mut scope = self
                 .tx_manager

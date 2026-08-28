@@ -707,7 +707,7 @@ impl WebhookDispatcher {
         let outcome = match &existing {
             None => {
                 let subscription = Subscription::new(
-                    self.ids.next_subscription_id(),
+                    self.ids.next_subscription_id()?,
                     tenant_id,
                     plan_id,
                     price.as_ref().map(|p| p.id()),
@@ -1008,11 +1008,12 @@ impl WebhookDispatcher {
             .invoices
             .find_by_stripe_invoice_id(scope, &data.id)
             .await?;
+        let invoice_id = match existing.as_ref().map(|i| i.id()) {
+            Some(id) => id,
+            None => self.ids.next_invoice_id()?,
+        };
         let invoice = InvoiceRef::new(
-            existing
-                .as_ref()
-                .map(|i| i.id())
-                .unwrap_or_else(|| self.ids.next_invoice_id()),
+            invoice_id,
             subscription.tenant_id(),
             data.id.clone(),
             data.number.clone(),

@@ -4,8 +4,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::TenantId;
 use tracing::info;
-use uuid::Uuid;
 
 use crate::domain::{BillingError, Notifications};
 
@@ -20,7 +20,7 @@ impl LoggingNotifications {
 
 #[async_trait]
 impl Notifications for LoggingNotifications {
-    async fn payment_failed(&self, tenant_id: Uuid) -> Result<(), BillingError> {
+    async fn payment_failed(&self, tenant_id: TenantId) -> Result<(), BillingError> {
         info!(
             tenant_id = %tenant_id,
             notification = "billing.payment_failed",
@@ -29,7 +29,7 @@ impl Notifications for LoggingNotifications {
         Ok(())
     }
 
-    async fn grace_expired(&self, tenant_id: Uuid) -> Result<(), BillingError> {
+    async fn grace_expired(&self, tenant_id: TenantId) -> Result<(), BillingError> {
         info!(
             tenant_id = %tenant_id,
             notification = "billing.grace_expired",
@@ -40,7 +40,7 @@ impl Notifications for LoggingNotifications {
 
     async fn trial_ending(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         trial_end: DateTime<Utc>,
     ) -> Result<(), BillingError> {
         info!(
@@ -52,7 +52,7 @@ impl Notifications for LoggingNotifications {
         Ok(())
     }
 
-    async fn subscription_canceled(&self, tenant_id: Uuid) -> Result<(), BillingError> {
+    async fn subscription_canceled(&self, tenant_id: TenantId) -> Result<(), BillingError> {
         info!(
             tenant_id = %tenant_id,
             notification = "billing.subscription_canceled",
@@ -61,7 +61,7 @@ impl Notifications for LoggingNotifications {
         Ok(())
     }
 
-    async fn subscription_restored(&self, tenant_id: Uuid) -> Result<(), BillingError> {
+    async fn subscription_restored(&self, tenant_id: TenantId) -> Result<(), BillingError> {
         info!(
             tenant_id = %tenant_id,
             notification = "billing.subscription_restored",

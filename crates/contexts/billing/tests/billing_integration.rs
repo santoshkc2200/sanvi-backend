@@ -33,6 +33,7 @@ use sanvi_billing::{
         TaxGate, TaxRegistration, TenantLifecycle, WebhookEventRepository,
     },
 };
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use sanvi_testsupport::TestDb;
 
@@ -41,6 +42,10 @@ async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, Tes
     let app = db.app_pool();
     let admin = db.admin_pool().await;
     (app, admin, db)
+}
+
+fn test_actor() -> UserId {
+    UserId::try_from(9_999_999_i64).unwrap()
 }
 
 /// A configurable Stripe fake: records calls, returns scripted answers.
@@ -78,7 +83,7 @@ impl StripeClient for FakeStripe {
 
     async fn ensure_customer(
         &self,
-        _tenant_id: Uuid,
+        _tenant_id: TenantId,
         _command_id: Uuid,
     ) -> Result<StripeCustomer, sanvi_billing::domain::BillingError> {
         self.inner.lock().unwrap().customers += 1;
@@ -173,7 +178,7 @@ fn subscription_event(
     created: DateTime<Utc>,
     sub_id: &str,
     status: &str,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     price_id: &str,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -237,7 +242,7 @@ struct Stack {
 }
 
 async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> Stack {
-    let tx = TxManager::new(pool);
+    let tx = TxManager::new(pool, sanvi_testsupport::test_ids());
     let plans: Arc<dyn PlanRepository> = Arc::new(SqlxPlanRepository::new());
     let prices: Arc<dyn PlanPriceRepository> = Arc::new(SqlxPlanPriceRepository::new());
     let grants: Arc<dyn PlanEntitlementRepository> = Arc::new(SqlxPlanEntitlementRepository::new());
@@ -246,19 +251,25 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
     let checkout_states = Arc::new(SqlxCheckoutStateRepository::new());
     let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> =
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let notifications: Arc<dyn Notifications> = Arc::new(LoggingNotifications::new());
-    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator);
+    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let entitlements: Arc<dyn sanvi_access::domain::EntitlementRepository> =
         Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new());
-    let syncer: Arc<dyn EntitlementSyncer> = Arc::new(AccessEntitlementSyncer::new(entitlements));
+    let syncer: Arc<dyn EntitlementSyncer> = Arc::new(AccessEntitlementSyncer::new(
+        entitlements,
+        sanvi_testsupport::test_ids(),
+    ));
     let tenants: Arc<dyn sanvi_tenancy::domain::TenantRepository> =
         Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new());
     let lifecycle: Arc<dyn TenantLifecycle> = Arc::new(TenancyTenantLifecycle::new(
         tx.clone(),
         tenants,
-        Arc::new(sanvi_tenancy::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_tenancy::adapters::OutboxEventPublisher::new(
+            sanvi_testsupport::test_ids(),
+        )),
         Arc::new(sanvi_tenancy::adapters::SystemClock),
     ));
     let stripe: Arc<dyn StripeClient> = fake.clone();
@@ -298,7 +309,9 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
         checkout_states,
         stripe.clone(),
         tax_gate,
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
         clock.clone(),
         "http://localhost/success".to_string(),
         "http://localhost/cancel".to_string(),
@@ -331,7 +344,9 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
         syncer.clone(),
         ids.clone(),
         clock.clone(),
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
     );
 
     Stack {
@@ -348,7 +363,7 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
     }
 }
 
-async fn provision_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid {
+async fn provision_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> TenantId {
     use sanvi_tenancy::{
         adapters::{
             OutboxEventPublisher as TenancyEvents, SystemClock as TenancyClock,
@@ -358,11 +373,11 @@ async fn provision_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid 
         application::{ActivateTenant, ProvisionTenant, ProvisionTenantCommand},
         domain::{SlugReservationPort, TenantRepository},
     };
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events = Arc::new(TenancyEvents::new());
-    let ids = Arc::new(TenancyIds);
+    let events = Arc::new(TenancyEvents::new(sanvi_testsupport::test_ids()));
+    let ids = Arc::new(TenancyIds::new(sanvi_testsupport::test_ids()));
     let clock = Arc::new(TenancyClock);
     let provision = ProvisionTenant::new(
         tx.clone(),
@@ -381,18 +396,15 @@ async fn provision_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid 
         })
         .await
         .unwrap();
-    let tenant_id: Uuid = view.id.parse().unwrap();
+    let tenant_id: TenantId = view.id.parse().unwrap();
     let activate = ActivateTenant::new(tx, tenants, events, clock);
-    activate
-        .execute(sanvi_tenancy::domain::TenantId::from_uuid(tenant_id))
-        .await
-        .unwrap();
+    activate.execute(tenant_id).await.unwrap();
     tenant_id
 }
 
 async fn seed_features(pool: &sanvi_persistence::PgPool) {
     let use_case = sanvi_access::application::SeedFeatures::new(
-        TxManager::new(pool.clone()),
+        TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
         Arc::new(sanvi_access::adapters::SqlxFeatureRepository::new()),
     );
     use_case.execute().await.unwrap();
@@ -404,8 +416,10 @@ async fn add_price(stack: &Stack, plan_id: PlanId, stripe_price_id: &str) -> Pri
         .begin_unscoped("test_add_price", "test")
         .await
         .unwrap();
+    let price_id =
+        PriceId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
     let price = sanvi_billing::domain::PlanPrice::new(
-        PriceId::new(),
+        price_id,
         plan_id,
         stripe_price_id.to_string(),
         "usd".to_string(),
@@ -435,13 +449,13 @@ async fn receive_and_dispatch(stack: &Stack, payload: &serde_json::Value) -> boo
 
 async fn subscription_source_rows(
     pool: &sanvi_persistence::PgPool,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
 ) -> Vec<(String, bool, Option<i64>)> {
     sqlx::query_as::<_, (String, bool, Option<i64>)>(
         "SELECT feature_key, enabled, \"limit\" FROM access.entitlements
          WHERE tenant_id = $1 AND source = 'subscription' ORDER BY feature_key",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .fetch_all(pool)
     .await
     .unwrap()
@@ -474,7 +488,7 @@ async fn subscribe_dunn_recover_and_reconcile() {
     let session = stack
         .checkout
         .execute(
-            Uuid::nil(),
+            test_actor(),
             CreateCheckoutSessionCommand {
                 tenant_id,
                 price_id,
@@ -490,7 +504,7 @@ async fn subscribe_dunn_recover_and_reconcile() {
     let retried_session = stack
         .checkout
         .execute(
-            Uuid::nil(),
+            test_actor(),
             CreateCheckoutSessionCommand {
                 tenant_id,
                 price_id,
@@ -677,7 +691,7 @@ async fn subscribe_dunn_recover_and_reconcile() {
          SET collection_started_at = now() - interval '15 days'
          WHERE tenant_id = $1",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .execute(&admin)
     .await
     .unwrap();
@@ -692,14 +706,14 @@ async fn subscribe_dunn_recover_and_reconcile() {
     );
     let tenant_status: String =
         sqlx::query_scalar("SELECT status FROM tenancy.tenants WHERE id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&admin)
             .await
             .unwrap();
     assert_eq!(tenant_status, "suspended");
     let reason: String =
         sqlx::query_scalar("SELECT suspended_reason FROM tenancy.tenants WHERE id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&admin)
             .await
             .unwrap();
@@ -713,7 +727,7 @@ async fn subscribe_dunn_recover_and_reconcile() {
          SET status = 'active', suspended_reason = NULL
          WHERE id = $1",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .execute(&admin)
     .await
     .unwrap();
@@ -721,7 +735,7 @@ async fn subscribe_dunn_recover_and_reconcile() {
     assert_eq!(retry_report.grace_expired, 1);
     let retried_status: String =
         sqlx::query_scalar("SELECT status FROM tenancy.tenants WHERE id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&admin)
             .await
             .unwrap();
@@ -759,7 +773,7 @@ async fn subscribe_dunn_recover_and_reconcile() {
     assert_eq!(subscription.collection_state(), CollectionState::Ok);
     let tenant_status: String =
         sqlx::query_scalar("SELECT status FROM tenancy.tenants WHERE id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&admin)
             .await
             .unwrap();
@@ -830,7 +844,7 @@ async fn subscribe_dunn_recover_and_reconcile() {
     let replacement_session = stack
         .checkout
         .execute(
-            Uuid::nil(),
+            test_actor(),
             CreateCheckoutSessionCommand {
                 tenant_id,
                 price_id,
@@ -913,7 +927,7 @@ async fn platform_override_grants_and_revokes() {
     stack
         .override_apply
         .execute(
-            Uuid::nil(),
+            test_actor(),
             ApplySubscriptionOverrideCommand {
                 tenant_id,
                 plan_key: "enterprise".to_string(),
@@ -931,7 +945,7 @@ async fn platform_override_grants_and_revokes() {
     );
     let source: String =
         sqlx::query_scalar("SELECT source FROM billing.subscriptions WHERE tenant_id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&admin)
             .await
             .unwrap();
@@ -943,21 +957,24 @@ async fn platform_override_grants_and_revokes() {
     let revoke = RevokeSubscriptionOverride::new(
         stack.tx.clone(),
         stack.subscriptions.clone(),
-        Arc::new(AccessEntitlementSyncer::new(Arc::new(
-            sanvi_access::adapters::SqlxEntitlementRepository::new(),
-        ))),
+        Arc::new(AccessEntitlementSyncer::new(
+            Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
+            sanvi_testsupport::test_ids(),
+        )),
         Arc::new(SystemClock),
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
     );
     revoke
-        .execute(Uuid::nil(), tenant_id)
+        .execute(test_actor(), tenant_id)
         .await
         .expect("override revoked");
     let rows = subscription_source_rows(&admin, tenant_id).await;
     assert!(rows.is_empty(), "revoke clears the override's entitlements");
     let subscription_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM billing.subscriptions WHERE tenant_id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&admin)
             .await
             .unwrap();
@@ -999,7 +1016,9 @@ async fn checkout_fails_loudly_without_tax_registration() {
         Arc::new(SqlxCheckoutStateRepository::new()),
         stack.fake.clone(),
         tax_gate,
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
         Arc::new(SystemClock),
         "http://localhost/success".to_string(),
         "http://localhost/cancel".to_string(),
@@ -1010,7 +1029,7 @@ async fn checkout_fails_loudly_without_tax_registration() {
     let err = stack
         .checkout
         .execute(
-            Uuid::nil(),
+            test_actor(),
             CreateCheckoutSessionCommand {
                 tenant_id,
                 price_id,
