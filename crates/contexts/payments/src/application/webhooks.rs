@@ -214,6 +214,7 @@ pub struct WebhookDispatcher {
     payouts: Option<Arc<dyn crate::domain::ports::PayoutRepository>>,
     /// 09.6 tax-compliance re-checks triggered by tax.* account events.
     tax_checker: Option<Arc<crate::application::tax_settings::CheckTenantTaxCompliance>>,
+    ids: Arc<dyn crate::domain::ports::IdGenerator>,
     metrics: Option<PaymentsMetrics>,
 }
 
@@ -225,6 +226,7 @@ impl WebhookDispatcher {
         registry: Arc<ProviderRegistry>,
         events: Arc<dyn EventPublisher>,
         notifier: Arc<dyn ConnectionNotifier>,
+        ids: Arc<dyn crate::domain::ports::IdGenerator>,
     ) -> Self {
         Self {
             tx_manager,
@@ -238,6 +240,7 @@ impl WebhookDispatcher {
             disputes: None,
             payouts: None,
             tax_checker: None,
+            ids,
             metrics: None,
         }
     }
@@ -604,6 +607,7 @@ impl WebhookDispatcher {
             &mut scope,
             checkouts,
             self.events.as_ref(),
+            self.ids.as_ref(),
             &connection,
             record,
         )
@@ -681,6 +685,7 @@ impl WebhookDispatcher {
             checkouts.as_ref(),
             refunds_repo.as_ref(),
             self.events.as_ref(),
+            self.ids.as_ref(),
             &connection,
             record,
         )
@@ -759,6 +764,7 @@ impl WebhookDispatcher {
             checkouts.as_ref(),
             disputes_repo.as_ref(),
             self.events.as_ref(),
+            self.ids.as_ref(),
             &connection,
             record,
         )
@@ -811,26 +817,22 @@ impl WebhookDispatcher {
         if let Some(metrics) = &self.metrics {
             metrics.webhook_unknown_account.inc();
         }
-        let mut scope = self
-            .tx_manager
-            .begin_unscoped("acknowledge_unroutable_connect_webhook", ACTOR)
-            .await
-            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
-        self.events_repo
-            .mark_processed(&mut scope, &record.stripe_event_id)
-            .await?;
-        scope
-            .commit()
-            .await
-            .map_err(|err| PaymentsError::Storage(err.to_string()))?;
-        Ok(())
+        self.acknowledge(record).await
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApplyOutcome {
     Applied,
     Skipped,
+}
+
+impl ApplyOutcome {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Skipped => "skipped",
+        }
+    }
 }
 
 /// Metrics are emitted only after their projection transaction commits.
@@ -901,15 +903,6 @@ fn record_committed_metrics(
     }
 }
 
-impl ApplyOutcome {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Applied => "processed",
-            Self::Skipped => "skipped",
-        }
-    }
-}
-
 /// The event types this slice handles: everything about the connected
 /// account itself, from both the v1 envelope (`account.updated`,
 /// `capability.updated`) and Accounts v2 (`v2.core.account…`).
@@ -971,29 +964,29 @@ fn is_tax_event(event_type: &str) -> bool {
 // ---------------------------------------------------------------------------
 // 09.4 payment handlers.
 //
-// Every handler is idempotent by construction: payments upsert on
-// `(tenant_id, external_payment_id)` (the unique index is the dedupe),
-// checkout transitions are forward-only through the aggregate's state
-// machine, and sibling events converge (`checkout.session.completed`
-// then `payment_intent.succeeded` land the same row in the same state).
+// Direct charges only: the payment moves the tenant's own money, so every
+// record is keyed by the requesting tenant's id. The webhook payload's
+// metadata (`checkout_id` + `tenant_id`) is the primary link back to our
+// checkout row; `checkout.session.id` (`cs_…`) is the secondary lookup.
 //
 // An expired session carries no provider payment object, so no
 // `payments.payments` row exists to write — the honest record of "no
 // money moved" is the checkout transition alone.
 // ---------------------------------------------------------------------------
 
-use crate::domain::checkout::Checkout;
+use crate::domain::checkout::{Checkout, CheckoutId};
 use crate::domain::events::EventAmount;
 use crate::domain::money::Money;
-use crate::domain::payment::{PaymentFailure, PaymentRecord, PaymentStatus};
-use crate::domain::ports::CheckoutLifecycleStore;
+use crate::domain::payment::{PaymentFailure, PaymentId, PaymentRecord, PaymentStatus};
+use crate::domain::ports::{CheckoutLifecycleStore, IdGenerator};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::PlatformScope;
-use uuid::Uuid;
 
 async fn handle_payment_event(
     scope: &mut PlatformScope<'_>,
     checkouts: Arc<dyn CheckoutLifecycleStore>,
     events: &dyn EventPublisher,
+    ids: &dyn IdGenerator,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<(ApplyOutcome, Vec<CommittedMetric>), PaymentsError> {
@@ -1040,6 +1033,7 @@ async fn handle_payment_event(
                 let (payment, changed) = upsert_payment(
                     scope,
                     checkouts.as_ref(),
+                    ids,
                     tenant_id,
                     Some(checkout.id),
                     external_payment_id,
@@ -1121,6 +1115,7 @@ async fn handle_payment_event(
             let (payment, changed) = upsert_payment(
                 scope,
                 checkouts.as_ref(),
+                ids,
                 tenant_id,
                 checkout.as_ref().map(|c| c.id),
                 &external_payment_id,
@@ -1202,9 +1197,10 @@ async fn locate_checkout(
         object
             .pointer("/metadata/checkout_id")
             .and_then(Value::as_str),
-    ) && let (Ok(tenant_id), Ok(checkout_id)) =
-        (Uuid::parse_str(tenant_raw), Uuid::parse_str(checkout_raw))
-        && let Some(found) = checkouts.find_by_id(scope, tenant_id, checkout_id).await?
+    ) && let (Ok(tenant_id), Ok(checkout_id)) = (
+        tenant_raw.parse::<TenantId>(),
+        checkout_raw.parse::<CheckoutId>(),
+    ) && let Some(found) = checkouts.find_by_id(scope, tenant_id, checkout_id).await?
     {
         return Ok(Some(found));
     }
@@ -1226,8 +1222,9 @@ async fn locate_checkout(
 async fn upsert_payment(
     scope: &mut PlatformScope<'_>,
     checkouts: &dyn CheckoutLifecycleStore,
-    tenant_id: Uuid,
-    checkout_id: Option<Uuid>,
+    ids: &dyn IdGenerator,
+    tenant_id: TenantId,
+    checkout_id: Option<CheckoutId>,
     external_payment_id: &str,
     status: PaymentStatus,
     amount: Money,
@@ -1241,7 +1238,10 @@ async fn upsert_payment(
     let changed = !existing.as_ref().is_some_and(|p| p.status == status);
     // Preserve an existing id and any previously recorded provider fee
     // (the disclosure survives sibling events that don't carry the fee).
-    let id = existing.as_ref().map_or_else(Uuid::now_v7, |p| p.id);
+    let id = match existing.as_ref() {
+        Some(p) => p.id,
+        None => ids.next_payment_id()?,
+    };
     let mut record = PaymentRecord::new(
         id,
         tenant_id,
@@ -1323,6 +1323,7 @@ async fn handle_refund_event(
     checkouts: &dyn CheckoutLifecycleStore,
     refunds: &dyn crate::domain::ports::RefundRepository,
     events: &dyn EventPublisher,
+    ids: &dyn IdGenerator,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<(ApplyOutcome, Vec<CommittedMetric>), PaymentsError> {
@@ -1458,7 +1459,10 @@ async fn handle_refund_event(
         let existing = refunds
             .find_by_external_id_platform(scope, tenant_id, &external_refund_id)
             .await?;
-        let id = existing.as_ref().map(|r| r.id).unwrap_or_else(Uuid::now_v7);
+        let id = match existing.as_ref() {
+            Some(r) => r.id,
+            None => ids.next_refund_id()?,
+        };
         let mut refund_record = RefundRecord {
             id,
             tenant_id,
@@ -1519,6 +1523,7 @@ async fn handle_dispute_event(
     checkouts: &dyn CheckoutLifecycleStore,
     disputes: &dyn crate::domain::ports::DisputeRepository,
     events: &dyn EventPublisher,
+    ids: &dyn IdGenerator,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<
@@ -1644,7 +1649,10 @@ async fn handle_dispute_event(
     let is_new = existing.is_none();
     let was_open = existing.as_ref().is_some_and(|d| d.status.is_open());
     let existing_created = existing.as_ref().map(|d| d.created_at);
-    let id = existing.map(|d| d.id).unwrap_or_else(Uuid::now_v7);
+    let id = match existing {
+        Some(d) => d.id,
+        None => ids.next_dispute_id()?,
+    };
     let mut dispute = DisputeRecord::new(
         id,
         tenant_id,
@@ -1695,7 +1703,7 @@ async fn handle_dispute_event(
 /// What `apply_dispute_event` needs to notify about once the transaction
 /// has committed.
 struct DisputeOpenedSignal {
-    dispute_id: Uuid,
+    dispute_id: crate::domain::dispute::DisputeId,
     due_by: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -1765,6 +1773,7 @@ impl WebhookDispatcher {
             &mut scope,
             payouts_repo.as_ref(),
             self.events.as_ref(),
+            self.ids.as_ref(),
             &connection,
             record,
         )
@@ -1930,6 +1939,7 @@ async fn handle_payout_event(
     scope: &mut PlatformScope<'_>,
     payouts: &dyn crate::domain::ports::PayoutRepository,
     events: &dyn EventPublisher,
+    ids: &dyn IdGenerator,
     connection: &crate::domain::connection::ProviderConnection,
     record: &WebhookEventRecord,
 ) -> Result<
@@ -1994,7 +2004,10 @@ async fn handle_payout_event(
     let transitioned = !existing
         .as_ref()
         .is_some_and(|p| p.status == crate::domain::ports::PayoutStatus::Paid);
-    let id = existing.as_ref().map(|p| p.id).unwrap_or_else(Uuid::now_v7);
+    let id = match existing.as_ref() {
+        Some(p) => p.id,
+        None => ids.next_payout_id()?,
+    };
     let mut payout = crate::domain::payout::PayoutRecord::new(
         id,
         tenant_id,

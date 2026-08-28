@@ -14,7 +14,7 @@ pub mod stripe_connect;
 pub mod stubs;
 pub mod throttle;
 
-pub use events::OutboxEventPublisher;
+pub use events::{OutboxEventPublisher, SystemIdGenerator};
 pub use fake_provider::{FAKE_WEBHOOK_SECRET, FakeProvider, FakeScript};
 pub use metrics::PaymentsMetrics;
 pub use notify::{DenyAllVerifier, LoggingConnectionNotifier};

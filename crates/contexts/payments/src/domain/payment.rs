@@ -10,10 +10,18 @@
 //! the ports (this slice) already speak them.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{Id, TenantId, UserId};
 use uuid::Uuid;
 
+use super::checkout::CheckoutId;
 use super::error::PaymentsError;
 use super::money::Money;
+
+pub enum PaymentTag {}
+pub type PaymentId = Id<PaymentTag>;
+
+pub enum RefundTag {}
+pub type RefundId = Id<RefundTag>;
 
 /// The payment lifecycle as webhooks report it. Values are fixed by the
 /// 09.0 schema CHECK on `payments.payments`.
@@ -60,9 +68,9 @@ pub struct PaymentFailure {
 /// One payment on the tenant's connected account.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaymentRecord {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub checkout_id: Option<Uuid>,
+    pub id: PaymentId,
+    pub tenant_id: TenantId,
+    pub checkout_id: Option<CheckoutId>,
     /// The provider's payment id (`pi_…` / `pay_…`), unique per tenant.
     pub external_payment_id: String,
     pub status: PaymentStatus,
@@ -83,9 +91,9 @@ pub struct PaymentRecord {
 
 impl PaymentRecord {
     pub fn new(
-        id: Uuid,
-        tenant_id: Uuid,
-        checkout_id: Option<Uuid>,
+        id: PaymentId,
+        tenant_id: TenantId,
+        checkout_id: Option<CheckoutId>,
         external_payment_id: String,
         amount: Money,
     ) -> Result<Self, PaymentsError> {
@@ -149,14 +157,14 @@ impl RefundStatus {
 /// currency-checked, minor-unit exact, JPY-correct by construction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RefundRecord {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub payment_id: Uuid,
+    pub id: RefundId,
+    pub tenant_id: TenantId,
+    pub payment_id: PaymentId,
     pub external_refund_id: Option<String>,
     pub amount: Money,
     pub reason: Option<String>,
     pub status: RefundStatus,
-    pub created_by: Option<Uuid>,
+    pub created_by: Option<UserId>,
     pub created_at: DateTime<Utc>,
     pub idempotency_key: Option<Uuid>,
 }
@@ -165,11 +173,11 @@ impl RefundRecord {
     /// Build a refund against a payment, enforcing portion ≤ total at the
     /// type boundary — before any provider call.
     pub fn against(
-        id: Uuid,
+        id: RefundId,
         payment: &PaymentRecord,
         portion_minor: i64,
         reason: Option<String>,
-        created_by: Option<Uuid>,
+        created_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<Self, PaymentsError> {
         let amount = payment.amount.portion_of(portion_minor)?;
@@ -199,9 +207,9 @@ mod tests {
 
     fn payment(amount_minor: i64, currency: &str) -> PaymentRecord {
         PaymentRecord::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-            Some(Uuid::now_v7()),
+            PaymentId::try_from(1_i64).unwrap(),
+            TenantId::try_from(2_i64).unwrap(),
+            Some(CheckoutId::try_from(3_i64).unwrap()),
             format!("pi_{}", Uuid::now_v7().simple()),
             Money::new(amount_minor, currency).unwrap(),
         )
@@ -235,8 +243,8 @@ mod tests {
     fn payments_require_identity_and_a_positive_amount() {
         assert!(
             PaymentRecord::new(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                PaymentId::try_from(1_i64).unwrap(),
+                TenantId::try_from(2_i64).unwrap(),
                 None,
                 "  ".to_string(),
                 Money::new(100, "USD").unwrap(),
@@ -245,8 +253,8 @@ mod tests {
         );
         assert!(
             PaymentRecord::new(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                PaymentId::try_from(1_i64).unwrap(),
+                TenantId::try_from(2_i64).unwrap(),
                 None,
                 "pi_x".to_string(),
                 Money::new(0, "USD").unwrap(),
@@ -259,7 +267,7 @@ mod tests {
     fn partial_refunds_are_portion_guarded_in_jpy_and_usd() {
         let usd = payment(1999, "USD");
         let refund = RefundRecord::against(
-            Uuid::now_v7(),
+            RefundId::try_from(10_i64).unwrap(),
             &usd,
             999,
             Some("duplicate".to_string()),
@@ -271,15 +279,52 @@ mod tests {
         assert_eq!(refund.status, RefundStatus::Pending);
 
         // Zero and over-total portions are refused.
-        assert!(RefundRecord::against(Uuid::now_v7(), &usd, 0, None, None, Utc::now()).is_err());
-        assert!(RefundRecord::against(Uuid::now_v7(), &usd, 2000, None, None, Utc::now()).is_err());
+        assert!(
+            RefundRecord::against(
+                RefundId::try_from(11_i64).unwrap(),
+                &usd,
+                0,
+                None,
+                None,
+                Utc::now()
+            )
+            .is_err()
+        );
+        assert!(
+            RefundRecord::against(
+                RefundId::try_from(12_i64).unwrap(),
+                &usd,
+                2000,
+                None,
+                None,
+                Utc::now()
+            )
+            .is_err()
+        );
 
         // JPY: ¥2,000 payment, ¥500 refund — minor units, no ÷100.
         let jpy = payment(2000, "JPY");
-        let refund =
-            RefundRecord::against(Uuid::now_v7(), &jpy, 500, None, None, Utc::now()).unwrap();
+        let refund = RefundRecord::against(
+            RefundId::try_from(13_i64).unwrap(),
+            &jpy,
+            500,
+            None,
+            None,
+            Utc::now(),
+        )
+        .unwrap();
         assert_eq!(refund.amount.amount_minor, 500);
         assert_eq!(refund.amount.currency.as_str(), "JPY");
-        assert!(RefundRecord::against(Uuid::now_v7(), &jpy, 2001, None, None, Utc::now()).is_err());
+        assert!(
+            RefundRecord::against(
+                RefundId::try_from(14_i64).unwrap(),
+                &jpy,
+                2001,
+                None,
+                None,
+                Utc::now()
+            )
+            .is_err()
+        );
     }
 }

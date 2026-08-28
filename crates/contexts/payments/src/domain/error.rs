@@ -124,6 +124,16 @@ pub enum PaymentsError {
     /// Persistence failure (logged, never leaked to the client).
     #[error("storage failure: {0}")]
     Storage(String),
+
+    /// ID generator failure.
+    #[error("id generation failure: {0}")]
+    IdGeneration(String),
+}
+
+impl From<sanvi_kernel::IdGenerationError> for PaymentsError {
+    fn from(err: sanvi_kernel::IdGenerationError) -> Self {
+        Self::IdGeneration(err.to_string())
+    }
 }
 
 impl PaymentsError {
@@ -150,7 +160,7 @@ impl PaymentsError {
             Self::InvalidMoney(_) | Self::InvalidConnection(_) => "bad-request",
             Self::NotEntitled(_) => "entitlement-required",
             Self::WebhookRejected(_) => "unauthorized",
-            Self::Storage(_) => "internal-error",
+            Self::Storage(_) | Self::IdGeneration(_) => "internal-error",
         }
     }
 }

@@ -29,12 +29,12 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use chrono::Utc;
-use uuid::Uuid;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 
-use crate::domain::connection::ProviderConnection;
+use crate::domain::connection::{ConnectionId, ProviderConnection};
 use crate::domain::disconnect::DisconnectBlocker;
 use crate::domain::error::PaymentsError;
 use crate::domain::events::{EventPublisher, PaymentsEvent};
@@ -48,12 +48,12 @@ pub const TENANT_REQUEST_REASON: &str = "tenant request";
 
 #[derive(Debug, Clone)]
 pub struct DisconnectCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     /// Which of the tenant's connections to disconnect (a reconnect
     /// history can hold several).
-    pub connection_id: Uuid,
+    pub connection_id: ConnectionId,
     /// Who asked — the audit entry's actor.
-    pub actor: Uuid,
+    pub actor: UserId,
     pub ip: Option<IpAddr>,
 }
 
@@ -102,7 +102,7 @@ impl DisconnectConnection {
     ) -> Result<ProviderConnection, PaymentsError> {
         let mut scope = self
             .tx_manager
-            .begin_for(command.tenant_id)
+            .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
 

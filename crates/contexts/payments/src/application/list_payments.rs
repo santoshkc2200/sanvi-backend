@@ -7,21 +7,21 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 
 use crate::domain::dispute::DisputeRecord;
 use crate::domain::error::PaymentsError;
-use crate::domain::payment::{PaymentRecord, RefundRecord, RefundStatus};
+use crate::domain::payment::{PaymentId, PaymentRecord, RefundRecord, RefundStatus};
 use crate::domain::ports::{DisputeRepository, PaymentFilter, PaymentRepository, RefundRepository};
 use crate::domain::timeline::{PaymentTimeline, TimelineEntry};
 
 /// Filter as the handler parsed it from query params — strings still raw
 /// so we can surface 400s with the field that failed.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ListPaymentsCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub status: Option<String>,
     pub currency: Option<String>,
     pub customer: Option<String>,
@@ -87,7 +87,7 @@ impl ListPayments {
         }
         let mut scope = self
             .tx_manager
-            .begin_for(command.tenant_id)
+            .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let page = self
@@ -151,12 +151,12 @@ impl GetPaymentDetail {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        payment_id: Uuid,
+        tenant_id: TenantId,
+        payment_id: PaymentId,
     ) -> Result<PaymentDetail, PaymentsError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let payment = self
@@ -311,8 +311,8 @@ mod tests {
     #[test]
     fn timeline_orders_created_before_refund_before_dispute() {
         let payment = crate::domain::PaymentRecord::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            PaymentId::try_from(100).unwrap(),
+            TenantId::try_from(101).unwrap(),
             None,
             "pi_test_1".to_string(),
             crate::domain::Money::new(2000, "JPY").unwrap(),
@@ -322,17 +322,17 @@ mod tests {
         payment.status = crate::domain::PaymentStatus::Succeeded;
         payment.captured_at = Some(Utc::now());
         let mut refund = crate::domain::payment::RefundRecord::against(
-            Uuid::now_v7(),
+            crate::domain::payment::RefundId::try_from(102).unwrap(),
             &payment,
             500,
             Some("duplicate".to_string()),
-            Some(Uuid::now_v7()),
+            Some(sanvi_kernel::UserId::try_from(103).unwrap()),
             Utc::now() + chrono::Duration::seconds(10),
         )
         .unwrap();
         refund.status = RefundStatus::Succeeded;
         let dispute = crate::domain::dispute::DisputeRecord::new(
-            Uuid::now_v7(),
+            crate::domain::dispute::DisputeId::try_from(104).unwrap(),
             payment.tenant_id,
             payment.id,
             "dp_test_1".to_string(),
@@ -354,8 +354,8 @@ mod tests {
     #[test]
     fn pending_refunds_are_not_money_moved_and_closed_disputes_close_twice() {
         let payment = crate::domain::PaymentRecord::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            PaymentId::try_from(100).unwrap(),
+            TenantId::try_from(101).unwrap(),
             None,
             "pi_test_2".to_string(),
             crate::domain::Money::new(1000, "JPY").unwrap(),
@@ -365,7 +365,7 @@ mod tests {
         payment.status = crate::domain::PaymentStatus::Succeeded;
         payment.captured_at = Some(Utc::now());
         let mut succeeded = crate::domain::payment::RefundRecord::against(
-            Uuid::now_v7(),
+            crate::domain::payment::RefundId::try_from(102).unwrap(),
             &payment,
             300,
             None,
@@ -375,7 +375,7 @@ mod tests {
         .unwrap();
         succeeded.status = RefundStatus::Succeeded;
         let pending = crate::domain::payment::RefundRecord::against(
-            Uuid::now_v7(),
+            crate::domain::payment::RefundId::try_from(103).unwrap(),
             &payment,
             100,
             None,
@@ -385,7 +385,7 @@ mod tests {
         .unwrap();
         let raised_at = Utc::now() + chrono::Duration::seconds(30);
         let mut dispute = crate::domain::dispute::DisputeRecord::new(
-            Uuid::now_v7(),
+            crate::domain::dispute::DisputeId::try_from(104).unwrap(),
             payment.tenant_id,
             payment.id,
             "dp_test_2".to_string(),
@@ -420,3 +420,4 @@ mod tests {
         assert_eq!(closed.detail.as_deref(), Some("won"));
     }
 }
+

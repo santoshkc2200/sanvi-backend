@@ -13,9 +13,9 @@
 //! capability strings or refund sums.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::UserId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use super::money::Money;
 
@@ -31,7 +31,7 @@ pub struct TimelineEntry {
     /// Who caused this entry, when a human exists (refunds). Webhook-
     /// derived entries have no actor — the provider did.
     #[schema(value_type = Option<String>)]
-    pub actor: Option<Uuid>,
+    pub actor: Option<UserId>,
     /// Money attached to the entry (payment total, refund portion,
     /// dispute amount), when relevant.
     pub amount: Option<Money>,

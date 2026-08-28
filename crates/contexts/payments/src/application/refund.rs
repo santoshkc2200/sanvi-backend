@@ -20,36 +20,25 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 
 use crate::domain::error::PaymentsError;
 use crate::domain::events::{EventPublisher, PaymentsEvent};
 use crate::domain::money::Money;
-use crate::domain::payment::{RefundRecord, RefundStatus};
+use crate::domain::payment::{PaymentId, RefundId, RefundRecord, RefundStatus};
 use crate::domain::ports::{
-    CheckoutRepository, PaymentRepository, ProviderConnectionRepository, ProviderRefundCommand,
-    RefundRepository,
+    CheckoutRepository, IdGenerator, PaymentRepository, ProviderConnectionRepository,
+    ProviderRefundCommand, RefundRepository,
 };
 
 use super::registry::ProviderRegistry;
 
-const REFUND_ID_NAMESPACE: Uuid = Uuid::from_bytes([
-    0x9b, 0x42, 0xf7, 0x1a, 0x33, 0x5c, 0x4a, 0x8f, 0xb1, 0x22, 0x77, 0x9e, 0xcc, 0x44, 0x1d, 0xaa,
-]);
-
-fn refund_id_for(tenant_id: Uuid, payment_id: Uuid, idempotency_key: Uuid) -> Uuid {
-    let mut bytes = [0u8; 48];
-    bytes[..16].copy_from_slice(tenant_id.as_bytes());
-    bytes[16..32].copy_from_slice(payment_id.as_bytes());
-    bytes[32..].copy_from_slice(idempotency_key.as_bytes());
-    Uuid::new_v5(&REFUND_ID_NAMESPACE, &bytes)
-}
-
 /// What the handler parsed from the refund request body.
 #[derive(Debug, Clone)]
 pub struct RefundCommand {
-    pub tenant_id: Uuid,
-    pub payment_id: Uuid,
+    pub tenant_id: TenantId,
+    pub payment_id: PaymentId,
     /// `None` → full remaining amount (the Dashboard's "refund all"
     /// path), `Some(money)` → partial. When `Some`, the currency must
     /// match the payment's currency and the minor units must not exceed
@@ -64,7 +53,7 @@ pub struct RefundCommand {
     /// `note` in the audit `after` payload so support sees both.
     pub note: Option<String>,
     pub idempotency_key: Uuid,
-    pub actor: Uuid,
+    pub actor: UserId,
     pub ip: Option<IpAddr>,
 }
 
@@ -77,6 +66,7 @@ pub struct IssueRefund {
     checkouts: Arc<dyn CheckoutRepository>,
     events: Arc<dyn EventPublisher>,
     audit: Arc<dyn AuditWriter>,
+    ids: Arc<dyn IdGenerator>,
 }
 
 impl IssueRefund {
@@ -90,6 +80,7 @@ impl IssueRefund {
         checkouts: Arc<dyn CheckoutRepository>,
         events: Arc<dyn EventPublisher>,
         audit: Arc<dyn AuditWriter>,
+        ids: Arc<dyn IdGenerator>,
     ) -> Self {
         Self {
             tx_manager,
@@ -100,6 +91,7 @@ impl IssueRefund {
             checkouts,
             events,
             audit,
+            ids,
         }
     }
 
@@ -127,7 +119,7 @@ impl IssueRefund {
         let payment = {
             let mut scope = self
                 .tx_manager
-                .begin_for(command.tenant_id)
+                .begin_for(command.tenant_id.as_i64())
                 .await
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             let payment = self
@@ -160,7 +152,7 @@ impl IssueRefund {
         let existing = {
             let mut scope = self
                 .tx_manager
-                .begin_for(command.tenant_id)
+                .begin_for(command.tenant_id.as_i64())
                 .await
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             let existing = self
@@ -205,7 +197,7 @@ impl IssueRefund {
         let refunded_minor = {
             let mut scope = self
                 .tx_manager
-                .begin_for(command.tenant_id)
+                .begin_for(command.tenant_id.as_i64())
                 .await
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             let sum = self
@@ -267,7 +259,7 @@ impl IssueRefund {
             }
         };
 
-        let refund_id = refund_id_for(command.tenant_id, payment.id, command.idempotency_key);
+        let refund_id = self.ids.next_refund_id()?;
         let now = Utc::now();
         let mut refund = RefundRecord::against(
             refund_id,
@@ -285,7 +277,7 @@ impl IssueRefund {
         {
             let mut scope = self
                 .tx_manager
-                .begin_for(command.tenant_id)
+                .begin_for(command.tenant_id.as_i64())
                 .await
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             match self.refunds.insert(&mut scope, &refund).await {
@@ -303,7 +295,7 @@ impl IssueRefund {
                     // conflict, not a success.
                     let mut scope2 = self
                         .tx_manager
-                        .begin_for(command.tenant_id)
+                        .begin_for(command.tenant_id.as_i64())
                         .await
                         .map_err(|err| PaymentsError::Storage(err.to_string()))?;
                     let winner = self
@@ -351,12 +343,12 @@ impl IssueRefund {
     /// PaymentIntent webhooks) fall back to the tenant's live connection.
     async fn resolve_connection(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         payment: &crate::domain::PaymentRecord,
     ) -> Result<crate::domain::ProviderConnection, PaymentsError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let connection = if let Some(checkout_id) = payment.checkout_id {
@@ -462,7 +454,7 @@ impl IssueRefund {
             .ok_or_else(|| PaymentsError::Storage("refund has no provider id".to_string()))?;
         let mut scope = self
             .tx_manager
-            .begin_for(command.tenant_id)
+            .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let winner = match self
@@ -526,8 +518,8 @@ impl IssueRefund {
     /// Best-effort failure marking: a storage failure here is logged and
     /// swamped by the provider error the caller already holds — the row
     /// stays pending and the next same-key retry re-drives it.
-    async fn mark_failed(&self, tenant_id: Uuid, refund_id: Uuid) {
-        let Ok(mut scope) = self.tx_manager.begin_for(tenant_id).await else {
+    async fn mark_failed(&self, tenant_id: TenantId, refund_id: RefundId) {
+        let Ok(mut scope) = self.tx_manager.begin_for(tenant_id.as_i64()).await else {
             tracing::error!(refund_id = %refund_id, "failed to open scope to mark refund failed");
             return;
         };
@@ -611,42 +603,14 @@ fn payload_matches(existing: &RefundRecord, requested: &Option<Money>, reason: &
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn refund_id_is_deterministic_per_tenant_payment_and_key() {
-        let tenant = Uuid::now_v7();
-        let payment = Uuid::now_v7();
-        let key = Uuid::now_v7();
-        assert_eq!(
-            refund_id_for(tenant, payment, key),
-            refund_id_for(tenant, payment, key)
-        );
-        assert_ne!(
-            refund_id_for(tenant, payment, key),
-            refund_id_for(Uuid::now_v7(), payment, key)
-        );
-        assert_ne!(
-            refund_id_for(tenant, payment, key),
-            refund_id_for(tenant, Uuid::now_v7(), key)
-        );
-        assert_ne!(
-            refund_id_for(tenant, payment, key),
-            refund_id_for(tenant, payment, Uuid::now_v7())
-        );
-    }
-}
-
-#[cfg(test)]
 mod payload_tests {
     use super::*;
 
     fn record(amount_minor: i64, reason: &str) -> RefundRecord {
         RefundRecord {
-            id: Uuid::now_v7(),
-            tenant_id: Uuid::now_v7(),
-            payment_id: Uuid::now_v7(),
+            id: RefundId::try_from(101).unwrap(),
+            tenant_id: TenantId::try_from(102).unwrap(),
+            payment_id: PaymentId::try_from(103).unwrap(),
             external_refund_id: Some("re_x".to_string()),
             amount: Money::new(amount_minor, "JPY").unwrap(),
             reason: Some(reason.to_string()),
@@ -678,3 +642,4 @@ mod payload_tests {
         assert!(!payload_matches(&existing, &None, "goodwill"));
     }
 }
+

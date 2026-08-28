@@ -829,7 +829,7 @@ impl PaymentProviderPort for StripeConnectProvider {
                 "checkout_session_create",
                 reqwest::Method::POST,
                 "/v1/checkout/sessions",
-                Some(checkout.id), // provider-side idempotency = our row id
+                checkout.idempotency_key,
                 None,
                 Some(&form),
                 Some(&command.external_account_id),
@@ -1321,7 +1321,7 @@ mod tests {
 
     fn create_request() -> CreateAccountRequest {
         CreateAccountRequest {
-            tenant_id: Uuid::now_v7(),
+            tenant_id: sanvi_kernel::TenantId::try_from(1_i64).unwrap(),
             country: Some(CountryCode::parse("JP").expect("valid")),
             default_currency: Some(crate::domain::money::Currency::parse("JPY").expect("valid")),
             display_name: Some("Hitobiyori Studio".to_string()),
@@ -1543,15 +1543,17 @@ mod tests {
 
     // -- checkout on the connected account (09.4) ----------------------------
 
-    use crate::domain::checkout::{Checkout, MerchantOrderRef};
+    use crate::domain::checkout::{Checkout, CheckoutId, MerchantOrderRef};
+    use crate::domain::connection::ConnectionId;
     use crate::domain::money::Money;
     use crate::domain::ports::CreateCheckoutCommand;
+    use sanvi_kernel::TenantId;
 
     fn checkout_command(account: &str, fee: Option<i64>) -> CreateCheckoutCommand {
         let checkout = Checkout::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            CheckoutId::try_from(1_i64).unwrap(),
+            TenantId::try_from(2_i64).unwrap(),
+            ConnectionId::try_from(3_i64).unwrap(),
             MerchantOrderRef::parse("order-2026-0821").unwrap(),
             Money::new(2000, "JPY").unwrap(),
             Utc::now(),

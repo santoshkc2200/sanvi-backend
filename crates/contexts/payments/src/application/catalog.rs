@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use super::ProvidersView;
 use crate::domain::PaymentsError;
@@ -22,7 +22,7 @@ use crate::domain::provider::CountryCode;
 pub trait ProviderCatalog: Send + Sync {
     async fn list(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         tenant_country: Option<CountryCode>,
     ) -> Result<ProvidersView, PaymentsError>;
 }
@@ -38,7 +38,7 @@ pub struct EmptyProviderCatalog;
 impl ProviderCatalog for EmptyProviderCatalog {
     async fn list(
         &self,
-        _tenant_id: Uuid,
+        _tenant_id: TenantId,
         _tenant_country: Option<CountryCode>,
     ) -> Result<ProvidersView, PaymentsError> {
         Ok(ProvidersView { providers: vec![] })
@@ -78,7 +78,7 @@ impl RegistryProviderCatalog {
 impl ProviderCatalog for RegistryProviderCatalog {
     async fn list(
         &self,
-        _tenant_id: Uuid,
+        _tenant_id: TenantId,
         tenant_country: Option<CountryCode>,
     ) -> Result<ProvidersView, PaymentsError> {
         let mut providers = Vec::new();
@@ -123,7 +123,7 @@ impl ListProviders {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         tenant_country: Option<CountryCode>,
     ) -> Result<ProvidersView, PaymentsError> {
         self.catalog.list(tenant_id, tenant_country).await
@@ -140,7 +140,7 @@ mod tests {
     #[tokio::test]
     async fn the_empty_catalog_answers_an_empty_envelope() {
         let use_case = ListProviders::new(Arc::new(EmptyProviderCatalog));
-        let view = use_case.execute(Uuid::now_v7(), None).await.unwrap();
+        let view = use_case.execute(TenantId::try_from(1_000_001_i64).unwrap(), None).await.unwrap();
         assert!(view.providers.is_empty());
     }
 
@@ -151,7 +151,7 @@ mod tests {
         let catalog =
             RegistryProviderCatalog::new(Arc::new(registry), RuntimeEnvironment::NonProduction);
 
-        let view = catalog.list(Uuid::now_v7(), None).await.unwrap();
+        let view = catalog.list(TenantId::try_from(1_000_001_i64).unwrap(), None).await.unwrap();
         assert_eq!(view.providers.len(), 1);
         let entry = &view.providers[0];
         assert_eq!(entry.kind, "fake");
@@ -173,7 +173,7 @@ mod tests {
         let catalog =
             RegistryProviderCatalog::new(Arc::new(registry), RuntimeEnvironment::Production);
 
-        let view = catalog.list(Uuid::now_v7(), None).await.unwrap();
+        let view = catalog.list(TenantId::try_from(1_000_001_i64).unwrap(), None).await.unwrap();
         assert!(
             view.providers.is_empty(),
             "production must list no fake entry"
@@ -190,13 +190,13 @@ mod tests {
         // The fake supports US/JP: a JP tenant connects, a GB tenant sees
         // the unavailable state.
         let jp = catalog
-            .list(Uuid::now_v7(), Some(CountryCode::parse("JP").unwrap()))
+            .list(TenantId::try_from(1_000_001_i64).unwrap(), Some(CountryCode::parse("JP").unwrap()))
             .await
             .unwrap();
         assert!(jp.providers[0].available);
 
         let gb = catalog
-            .list(Uuid::now_v7(), Some(CountryCode::parse("GB").unwrap()))
+            .list(TenantId::try_from(1_000_001_i64).unwrap(), Some(CountryCode::parse("GB").unwrap()))
             .await
             .unwrap();
         assert!(!gb.providers[0].available);

@@ -7,19 +7,22 @@
 //! (mapped views land in 09.2), and no onboarding PII is ever stored here.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{Id, TenantId};
 use serde_json::Value;
-use uuid::Uuid;
 
 use super::capability::{CapabilitySet, RequirementSummary};
 use super::error::PaymentsError;
 use super::ports::ProviderAccountStatus;
 use super::provider::{ConnectionStatus, ProviderKind};
 
+pub enum ConnectionTag {}
+pub type ConnectionId = Id<ConnectionTag>;
+
 /// A tenant's connection to a payment provider.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderConnection {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub id: ConnectionId,
+    pub tenant_id: TenantId,
     pub provider: ProviderKind,
     /// The provider's account identifier (`acct_…` for Stripe).
     pub external_account_id: String,
@@ -41,8 +44,8 @@ impl ProviderConnection {
     /// A connection ready for onboarding (09.2 creates the external
     /// account and starts here).
     pub fn pending(
-        id: Uuid,
-        tenant_id: Uuid,
+        id: ConnectionId,
+        tenant_id: TenantId,
         provider: ProviderKind,
         external_account_id: String,
         now: DateTime<Utc>,
@@ -216,8 +219,8 @@ mod tests {
 
     fn onboarding() -> ProviderConnection {
         let mut conn = ProviderConnection::pending(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            ConnectionId::try_from(1_i64).unwrap(),
+            TenantId::try_from(2_i64).unwrap(),
             ProviderKind::StripeConnect,
             "acct_test".to_string(),
             Utc::now(),
@@ -273,8 +276,8 @@ mod tests {
 
         // Pending → Restricted is illegal (never entered onboarding).
         let mut fresh = ProviderConnection::pending(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            ConnectionId::try_from(3_i64).unwrap(),
+            TenantId::try_from(4_i64).unwrap(),
             ProviderKind::Fake,
             "acct_fake_1".to_string(),
             Utc::now(),
@@ -318,8 +321,8 @@ mod tests {
         let t0 = Utc::now();
         // A fresh Pending row carries last_synced_at = its creation time.
         let mut conn = ProviderConnection::pending(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            ConnectionId::try_from(5_i64).unwrap(),
+            TenantId::try_from(6_i64).unwrap(),
             ProviderKind::Fake,
             "acct_stale".to_string(),
             t0,
@@ -344,8 +347,8 @@ mod tests {
         let fresh = ProviderConnection {
             last_synced_at: None,
             ..ProviderConnection::pending(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                ConnectionId::try_from(7_i64).unwrap(),
+                TenantId::try_from(8_i64).unwrap(),
                 ProviderKind::Fake,
                 "acct_stale_2".to_string(),
                 t0,

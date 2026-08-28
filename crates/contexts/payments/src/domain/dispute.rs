@@ -11,10 +11,14 @@
 //! amounts only.
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use sanvi_kernel::{Id, TenantId};
 
 use super::error::PaymentsError;
 use super::money::Money;
+use super::payment::PaymentId;
+
+pub enum DisputeTag {}
+pub type DisputeId = Id<DisputeTag>;
 
 /// The dispute lifecycle as Stripe reports it. Values are fixed by the
 /// 09.5 schema CHECK on `payments.disputes`. Unknown provider values
@@ -81,9 +85,9 @@ impl DisputeStatus {
 /// no evidence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisputeRecord {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub payment_id: Uuid,
+    pub id: DisputeId,
+    pub tenant_id: TenantId,
+    pub payment_id: PaymentId,
     /// Provider's dispute id (`dp_…` for Stripe).
     pub external_dispute_id: String,
     pub status: DisputeStatus,
@@ -101,10 +105,11 @@ impl DisputeRecord {
     /// Build a dispute record as webhooks report it — validates ids but
     /// not status (unknown statuses are kept as `Other` so the handler
     /// never drops an event because of a new provider value).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        id: Uuid,
-        tenant_id: Uuid,
-        payment_id: Uuid,
+        id: DisputeId,
+        tenant_id: TenantId,
+        payment_id: PaymentId,
         external_dispute_id: String,
         status: DisputeStatus,
         amount: Money,
@@ -182,9 +187,9 @@ mod tests {
         let now = Utc::now();
         assert!(
             DisputeRecord::new(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                DisputeId::try_from(1_i64).unwrap(),
+                TenantId::try_from(2_i64).unwrap(),
+                PaymentId::try_from(3_i64).unwrap(),
                 "  ".to_string(),
                 DisputeStatus::NeedsResponse,
                 Money::new(2000, "JPY").unwrap(),
@@ -198,9 +203,9 @@ mod tests {
         // against a payment, but we still guard that the id exists, not
         // the amount sign (Money is non-negative by type).
         let record = DisputeRecord::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            DisputeId::try_from(1_i64).unwrap(),
+            TenantId::try_from(2_i64).unwrap(),
+            PaymentId::try_from(3_i64).unwrap(),
             "dp_test_123".to_string(),
             DisputeStatus::NeedsResponse,
             Money::new(2000, "JPY").unwrap(),

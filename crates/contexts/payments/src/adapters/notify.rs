@@ -11,8 +11,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
+use crate::domain::connection::ConnectionId;
+use crate::domain::dispute::DisputeId;
 use crate::domain::error::PaymentsError;
 use crate::domain::ports::{ConnectionNotifier, WebhookVerifierPort};
 
@@ -29,8 +31,8 @@ impl LoggingConnectionNotifier {
 impl ConnectionNotifier for LoggingConnectionNotifier {
     async fn connection_activated(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<(), PaymentsError> {
         tracing::info!(
             tenant_id = %tenant_id,
@@ -42,8 +44,8 @@ impl ConnectionNotifier for LoggingConnectionNotifier {
 
     async fn connection_restricted(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         detail: &str,
     ) -> Result<(), PaymentsError> {
         tracing::warn!(
@@ -57,8 +59,8 @@ impl ConnectionNotifier for LoggingConnectionNotifier {
 
     async fn requirement_deadline_approaching(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         deadline: DateTime<Utc>,
     ) -> Result<(), PaymentsError> {
         tracing::info!(
@@ -72,8 +74,8 @@ impl ConnectionNotifier for LoggingConnectionNotifier {
 
     async fn dispute_opened(
         &self,
-        tenant_id: Uuid,
-        dispute_id: Uuid,
+        tenant_id: TenantId,
+        dispute_id: DisputeId,
         due_by: Option<DateTime<Utc>>,
     ) -> Result<(), PaymentsError> {
         tracing::warn!(
@@ -87,7 +89,7 @@ impl ConnectionNotifier for LoggingConnectionNotifier {
 
     async fn payout_failed(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_payout_id: &str,
         amount: &crate::domain::Money,
     ) -> Result<(), PaymentsError> {
@@ -103,7 +105,7 @@ impl ConnectionNotifier for LoggingConnectionNotifier {
 
     async fn tax_compliance_lapsed(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         detail: &str,
     ) -> Result<(), PaymentsError> {
         tracing::warn!(

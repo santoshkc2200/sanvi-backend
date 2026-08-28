@@ -9,17 +9,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 
 use crate::domain::dispute::{DisputeRecord, DisputeStatus};
 use crate::domain::error::PaymentsError;
+use crate::domain::payment::PaymentId;
 use crate::domain::ports::{DisputeFilter, DisputeRepository, PaymentRepository};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ListDisputesCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub status: Option<String>,
     pub currency: Option<String>,
     pub date_from: Option<DateTime<Utc>>,
@@ -92,7 +93,7 @@ impl ListDisputes {
         }
         let mut scope = self
             .tx_manager
-            .begin_for(command.tenant_id)
+            .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let page = self
@@ -104,7 +105,7 @@ impl ListDisputes {
         // through its payment → checkout → connection chain. A dangling
         // link anywhere falls back to the tenant's live connection — only
         // a tenant with no live connection renders without links.
-        let mut account_by_payment: HashMap<Uuid, Option<String>> = HashMap::new();
+        let mut account_by_payment: HashMap<PaymentId, Option<String>> = HashMap::new();
         for dispute in &page.items {
             if account_by_payment.contains_key(&dispute.payment_id) {
                 continue;

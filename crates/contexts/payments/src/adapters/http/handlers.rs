@@ -13,6 +13,7 @@ use sanvi_http::{
     ApiError, CurrentSubject, CurrentTenant, PROBLEM_TYPE_BASE, ProblemDetail, RequiredFeature,
     RequiredPermission,
 };
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -21,9 +22,12 @@ use uuid::Uuid;
 use crate::adapters::http::PaymentsState;
 use crate::application::{ProvidersView, StartConnectionCommand};
 use crate::config::PaymentsConfig;
-use crate::domain::connection::ProviderConnection;
+use crate::domain::connection::{ConnectionId, ProviderConnection};
+use crate::domain::checkout::CheckoutId;
+use crate::domain::dispute::DisputeId;
 use crate::domain::error::PaymentsError;
 use crate::domain::money::Currency;
+use crate::domain::payment::{PaymentId, RefundId};
 use crate::domain::provider::{CountryCode, ProviderKind};
 
 /// The payments context's domain-error → HTTP status/detail mapping. The
@@ -96,6 +100,10 @@ pub fn api_error(err: PaymentsError) -> ApiError {
         PaymentsError::Storage(detail) => {
             tracing::error!(error = %detail, "payments storage failure");
             ApiError::internal("storage failure")
+        }
+        PaymentsError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "payments id generation failure");
+            ApiError::internal("id generation failure")
         }
         // Normally intercepted in `payments_problem` with its structured
         // blocker body; the bare mapping keeps this match exhaustive.
@@ -236,7 +244,8 @@ pub struct BlockerView {
 /// never-persisted response).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConnectionView {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: ConnectionId,
     #[schema(example = "stripe_connect")]
     pub provider: String,
     #[schema(example = "onboarding")]
@@ -346,7 +355,8 @@ pub struct CreateConnectionRequest {
 /// Fetched per render; never persisted, never logged, single-render.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConnectionSessionView {
-    pub connection_id: Uuid,
+    #[schema(value_type = String)]
+    pub connection_id: ConnectionId,
     #[schema(example = "stripe_connect")]
     pub provider: String,
     /// The provider's embedded-components client secret. Handle like a
@@ -485,8 +495,9 @@ pub async fn create_payment_connection(
     Ok(HttpResponse::Created().json(ConnectionView::of(&connection, &state.config)))
 }
 
-/// `POST /api/v1/tenant/payments/connections/{id}/session` — mint a
-/// short-lived Account Session for the embedded onboarding component.
+/// `POST /api/v1/tenant/payments/connections/{id}/session` — mint an
+/// Account Session client secret for the embedded onboarding component.
+///
 /// Fetched per render: never persisted, never logged, single-render;
 /// refused outright for a disconnected connection.
 #[utoipa::path(
@@ -495,7 +506,7 @@ pub async fn create_payment_connection(
     tag = "payments",
     operation_id = "create_payment_connection_session",
     params(
-        ("id" = Uuid, Path, description = "The connection id"),
+        ("id" = String, Path, description = "The connection id"),
         ("Idempotency-Key" = uuid::Uuid, Header, description = "Required on every mutating payments endpoint; sessions are minted fresh per call")
     ),
     responses(
@@ -512,7 +523,7 @@ pub async fn create_payment_connection_session(
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
-    path: web::Path<Uuid>,
+    path: web::Path<ConnectionId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -563,7 +574,7 @@ pub struct DisconnectBlockerView {
     tag = "payments",
     operation_id = "get_payment_connection",
     params(
-        ("id" = Uuid, Path, description = "The connection id")
+        ("id" = String, Path, description = "The connection id")
     ),
     responses(
         (status = 200, description = "Status, capabilities, requirements, blockers and the server-computed can_accept_payments", body = ConnectionView),
@@ -575,7 +586,7 @@ pub async fn get_payment_connection(
     state: web::Data<PaymentsState>,
     tenant: CurrentTenant,
     _subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<ConnectionId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -600,7 +611,7 @@ pub async fn get_payment_connection(
     tag = "payments",
     operation_id = "delete_payment_connection",
     params(
-        ("id" = Uuid, Path, description = "The connection id"),
+        ("id" = String, Path, description = "The connection id"),
         ("Idempotency-Key" = uuid::Uuid, Header, description = "Required on every mutating payments endpoint")
     ),
     responses(
@@ -616,7 +627,7 @@ pub async fn delete_payment_connection(
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
-    path: web::Path<Uuid>,
+    path: web::Path<ConnectionId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -696,7 +707,8 @@ pub struct CreateCheckoutRequest {
 /// never from the redirect.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CheckoutView {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: CheckoutId,
     /// `pending` | `paid` | `failed` | `expired` | `canceled`.
     #[schema(example = "pending")]
     pub status: String,
@@ -716,8 +728,8 @@ pub struct CheckoutView {
     /// Server-issued exactly once per order when paid; identical on every
     /// refresh of the confirmation page, so phase 10's conversion
     /// pipeline cannot double-count.
-    #[schema(value_type = Option<Uuid>)]
-    pub conversion_event_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub conversion_event_id: Option<PaymentId>,
     #[schema(value_type = String)]
     pub created_at: DateTime<Utc>,
 }
@@ -747,8 +759,8 @@ fn public_status(
 
 async fn load_checkout(
     state: &PaymentsState,
-    tenant_id: Uuid,
-    checkout_id: Uuid,
+    tenant_id: TenantId,
+    checkout_id: CheckoutId,
 ) -> Result<
     (
         crate::domain::Checkout,
@@ -758,7 +770,7 @@ async fn load_checkout(
 > {
     let mut scope = state
         .tx
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
     let checkout = state
@@ -783,12 +795,12 @@ async fn load_checkout(
 /// The newest payment recorded against a checkout (RLS-scoped read).
 async fn load_latest_payment(
     state: &PaymentsState,
-    tenant_id: Uuid,
-    checkout_id: Uuid,
+    tenant_id: TenantId,
+    checkout_id: CheckoutId,
 ) -> Result<Option<crate::domain::PaymentRecord>, actix_web::Error> {
     let mut scope = state
         .tx
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
     let latest = state
@@ -802,7 +814,7 @@ async fn load_latest_payment(
 
 /// The confirmation payload for a checkout + its newest payment record.
 fn checkout_view(
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     checkout: &crate::domain::Checkout,
     latest: Option<&crate::domain::PaymentRecord>,
     url: Option<String>,
@@ -838,7 +850,7 @@ fn checkout_view(
 /// IP, per customer reference. Customer refs hash so arbitrary JSON never
 /// becomes a map key of unbounded size.
 fn throttle_buckets(
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     ip: Option<IpAddr>,
     customer_ref: Option<&Value>,
 ) -> Vec<String> {
@@ -982,7 +994,7 @@ pub async fn create_tenant_checkout(
     tag = "payments",
     operation_id = "get_tenant_checkout",
     params(
-        ("id" = Uuid, Path, description = "The checkout id returned by POST /api/v1/tenant/checkout")
+        ("id" = String, Path, description = "The checkout id returned by POST /api/v1/tenant/checkout")
     ),
     responses(
         (status = 200, description = "The webhook-truthful checkout state (the only thing the confirmation page trusts)", body = CheckoutView),
@@ -994,7 +1006,7 @@ pub async fn create_tenant_checkout(
 pub async fn get_tenant_checkout(
     state: web::Data<PaymentsState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CheckoutId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -1027,11 +1039,11 @@ pub async fn get_tenant_checkout(
 /// page still gets truthful status), never to an invented link.
 async fn hosted_url(
     state: &PaymentsState,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     checkout: &crate::domain::Checkout,
     session_id: &str,
 ) -> Option<String> {
-    let mut scope = state.tx.begin_for(tenant_id).await.ok()?;
+    let mut scope = state.tx.begin_for(tenant_id.as_i64()).await.ok()?;
     let connection = state
         .connections
         .find_by_id(&mut scope, tenant_id, checkout.connection_id)
@@ -1061,12 +1073,12 @@ async fn hosted_url(
 /// not to someone else's row.
 async fn load_connection(
     state: &PaymentsState,
-    tenant_id: Uuid,
-    connection_id: Uuid,
+    tenant_id: TenantId,
+    connection_id: ConnectionId,
 ) -> Result<ProviderConnection, actix_web::Error> {
     let mut scope = state
         .tx
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
     let connection = state
@@ -1089,9 +1101,11 @@ async fn load_connection(
 /// One payment as the tenant sees it in the list.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PaymentView {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: PaymentId,
     pub external_payment_id: String,
-    pub checkout_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub checkout_id: Option<CheckoutId>,
     pub status: String,
     pub amount_minor: i64,
     pub currency: String,
@@ -1139,14 +1153,17 @@ impl From<crate::domain::PaymentRecord> for PaymentView {
 /// One refund record.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RefundView {
-    pub id: Uuid,
-    pub payment_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: RefundId,
+    #[schema(value_type = String)]
+    pub payment_id: PaymentId,
     pub external_refund_id: Option<String>,
     pub amount_minor: i64,
     pub currency: String,
     pub status: String,
     pub reason: Option<String>,
-    pub created_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub created_by: Option<UserId>,
     #[schema(value_type = String)]
     pub created_at: DateTime<Utc>,
 }
@@ -1170,8 +1187,10 @@ impl From<crate::domain::payment::RefundRecord> for RefundView {
 /// One dispute plus its dashboard deep link (read-only).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct DisputeView {
-    pub id: Uuid,
-    pub payment_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: DisputeId,
+    #[schema(value_type = String)]
+    pub payment_id: PaymentId,
     pub external_dispute_id: String,
     pub status: String,
     pub amount_minor: i64,
@@ -1326,7 +1345,7 @@ pub async fn list_payments(
     tag = "payments",
     operation_id = "get_tenant_payment",
     params(
-        ("id" = Uuid, Path, description = "The payment id")
+        ("id" = String, Path, description = "The payment id")
     ),
     responses(
         (status = 200, description = "Payment detail with timeline, refunds and disputes", body = PaymentDetailView),
@@ -1337,7 +1356,7 @@ pub async fn list_payments(
 pub async fn get_payment(
     state: web::Data<PaymentsState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<PaymentId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -1407,7 +1426,7 @@ pub async fn get_payment(
     tag = "payments",
     operation_id = "refund_tenant_payment",
     params(
-        ("id" = Uuid, Path, description = "The payment id"),
+        ("id" = String, Path, description = "The payment id"),
         ("Idempotency-Key" = Uuid, Header, description = "Required (UUID). The same key with the same amount/reason replays the same refund; a different payload conflicts")
     ),
     request_body = RefundRequest,
@@ -1426,7 +1445,7 @@ pub async fn refund_payment(
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
-    path: web::Path<Uuid>,
+    path: web::Path<PaymentId>,
     body: web::Json<RefundRequest>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,

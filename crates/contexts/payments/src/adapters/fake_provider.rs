@@ -108,6 +108,8 @@ struct FakeState {
     /// The last checkout command the provider saw (fee + tax routing),
     /// for end-to-end wiring assertions.
     last_checkout: Option<LastCheckoutObservation>,
+    /// The last idempotency key the provider saw across all operations.
+    last_idempotency_key: Option<String>,
 }
 
 /// What the fake records about the most recent checkout creation.
@@ -123,6 +125,16 @@ pub struct LastCheckoutObservation {
 impl FakeProvider {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The last idempotency key the provider received.
+    pub fn last_idempotency_key(&self) -> String {
+        self.state
+            .lock()
+            .expect("fake provider state lock")
+            .last_idempotency_key
+            .clone()
+            .unwrap_or_default()
     }
 
     fn descriptor() -> ProviderDescriptor {
@@ -255,6 +267,7 @@ impl PaymentProviderPort for FakeProvider {
         request: &CreateAccountRequest,
     ) -> Result<ProviderAccount, PaymentsError> {
         let mut state = self.state.lock().expect("fake provider state lock");
+        state.last_idempotency_key = Some(request.idempotency_key.to_string());
         // Provider-side idempotency: the same key returns the same
         // account — the property the orphan-adoption path relies on.
         if let Some(existing) = state.by_idempotency_key.get(&request.idempotency_key) {
@@ -359,6 +372,9 @@ impl PaymentProviderPort for FakeProvider {
         command: &CreateCheckoutCommand,
     ) -> Result<ProviderCheckoutSession, PaymentsError> {
         let mut state = self.state.lock().expect("fake provider state lock");
+        if let Some(ref key) = command.checkout.idempotency_key {
+            state.last_idempotency_key = Some(key.to_string());
+        }
         if !state.accounts.contains_key(&command.external_account_id) {
             return Err(PaymentsError::ProviderUnavailable(format!(
                 "fake provider knows no account {:?}",
@@ -370,7 +386,7 @@ impl PaymentProviderPort for FakeProvider {
             "https://pay.fake.sanvi.dev/{}/{}/{}",
             external_session_id,
             checkout_locale(command),
-            command.checkout.id.simple()
+            command.checkout.id
         );
         // The application fee and tax liability ride only when the use
         // case supplies them; the fake records what it saw so tests can
@@ -429,6 +445,7 @@ impl PaymentProviderPort for FakeProvider {
         command: &ProviderRefundCommand,
     ) -> Result<ProviderRefund, PaymentsError> {
         let mut state = self.state.lock().expect("fake provider state lock");
+        state.last_idempotency_key = Some(command.idempotency_key.to_string());
         if !state.accounts.contains_key(&command.external_account_id) {
             return Err(PaymentsError::ProviderUnavailable(format!(
                 "fake provider knows no account {:?}",
@@ -549,7 +566,10 @@ impl WebhookVerifierPort for FakeProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::checkout::{Checkout, MerchantOrderRef};
+    use crate::domain::checkout::{Checkout, CheckoutId, MerchantOrderRef};
+    use crate::domain::connection::ConnectionId;
+    use crate::domain::payment::{PaymentId, RefundId};
+    use sanvi_kernel::TenantId;
     use uuid::Uuid;
 
     type HmacSha256 = hmac::Hmac<sha2::Sha256>;
@@ -562,9 +582,9 @@ mod tests {
         CreateCheckoutCommand {
             external_account_id: external_account_id.to_string(),
             checkout: Checkout::new(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                CheckoutId::try_from(1_i64).unwrap(),
+                TenantId::try_from(2_i64).unwrap(),
+                ConnectionId::try_from(3_i64).unwrap(),
                 MerchantOrderRef::parse("order-1").unwrap(),
                 Money::new(amount_minor, currency).unwrap(),
                 Utc::now(),
@@ -587,7 +607,7 @@ mod tests {
     #[tokio::test]
     async fn the_fake_provider_passes_the_full_lifecycle_script() {
         let provider = FakeProvider::new();
-        let tenant_id = Uuid::now_v7();
+        let tenant_id = TenantId::try_from(10_i64).unwrap();
 
         // Connect: an account exists, but cannot go active yet.
         let account = provider
@@ -626,7 +646,7 @@ mod tests {
 
         // A refund of ¥500 against the ¥2,000 payment succeeds.
         let payment = crate::domain::payment::PaymentRecord::new(
-            Uuid::now_v7(),
+            PaymentId::try_from(100_i64).unwrap(),
             tenant_id,
             Some(command.checkout.id),
             "pi_fake_1".to_string(),
@@ -634,7 +654,7 @@ mod tests {
         )
         .unwrap();
         let refund_record = crate::domain::payment::RefundRecord::against(
-            Uuid::now_v7(),
+            RefundId::try_from(200_i64).unwrap(),
             &payment,
             500,
             None,
@@ -686,9 +706,10 @@ mod tests {
     #[tokio::test]
     async fn the_fake_provider_is_scriptable_for_failure_and_surprise() {
         let provider = FakeProvider::new();
+        let tenant_id = TenantId::try_from(20_i64).unwrap();
         let account = provider
             .create_account(&CreateAccountRequest {
-                tenant_id: Uuid::now_v7(),
+                tenant_id,
                 country: None,
                 default_currency: None,
                 display_name: None,
@@ -717,15 +738,15 @@ mod tests {
             ..FakeScript::default()
         });
         let payment = crate::domain::payment::PaymentRecord::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            PaymentId::try_from(300_i64).unwrap(),
+            tenant_id,
             None,
             "pi_fake_2".to_string(),
             Money::new(1000, "JPY").unwrap(),
         )
         .unwrap();
         let refund_record = crate::domain::payment::RefundRecord::against(
-            Uuid::now_v7(),
+            RefundId::try_from(400_i64).unwrap(),
             &payment,
             100,
             None,
@@ -745,7 +766,7 @@ mod tests {
         assert!(matches!(err, PaymentsError::ProviderUnavailable(_)));
         // The scripted failure was consumed: the next refund succeeds.
         let refund_record = crate::domain::payment::RefundRecord::against(
-            Uuid::now_v7(),
+            RefundId::try_from(401_i64).unwrap(),
             &payment,
             100,
             None,

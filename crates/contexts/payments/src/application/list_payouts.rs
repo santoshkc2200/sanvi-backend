@@ -4,12 +4,15 @@
 //! surface); this endpoint exists for the tenant's payments list view and
 //! for support.
 
+use std::sync::Arc;
+
 use serde::Serialize;
-use uuid::Uuid;
+
+use sanvi_kernel::TenantId;
+use sanvi_persistence::TxManager;
 
 use crate::domain::error::PaymentsError;
 use crate::domain::ports::{ProviderConnectionRepository, ProviderPayout};
-use sanvi_persistence::TxManager;
 
 /// One payout as the tenant's list renders it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -46,8 +49,6 @@ pub struct ListPayouts {
     registry: Arc<crate::application::ProviderRegistry>,
 }
 
-use std::sync::Arc;
-
 impl ListPayouts {
     pub fn new(
         tx_manager: TxManager,
@@ -64,10 +65,10 @@ impl ListPayouts {
     /// Read the live payout history off the tenant's own connected
     /// account. No connection → an empty view, not an error: the settings
     /// page renders before onboarding completes.
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<PayoutsView, PaymentsError> {
+    pub async fn execute(&self, tenant_id: TenantId) -> Result<PayoutsView, PaymentsError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let connections = self.connections.list(&mut scope, tenant_id).await;
