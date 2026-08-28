@@ -120,6 +120,18 @@ ads-invariants:
 ads-invariants-self-test:
     ./scripts/check-ads-invariants.sh --self-test
 
+# `just test` and `just test-quiet` need nothing from this recipe -- they run
+# the same script themselves and eval its output in their own shell.
+#
+# Running *this* recipe before a bare `cargo` is the trap: `just` runs it in a
+# subprocess, so the `export` lines it prints are shown to you but never reach
+# your shell, and the tests then take the fallback path and leak a container
+# per test process anyway. To scope a run by hand, run the script directly, so
+# the eval happens in the shell the tests will inherit:
+#
+#     eval "$(./scripts/test-db.sh up)"
+#     cargo nextest run -p sanvi-billing
+#
 # One Postgres + Redis for the whole run; each test still gets its own
 # database, cloned from a pre-migrated template. Without `test-db` every test
 # process starts (and leaves behind) a container of its own.

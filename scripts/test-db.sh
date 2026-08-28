@@ -24,6 +24,52 @@ port_of() {
     docker port "$1" "$2" 2>/dev/null | head -1 | sed 's/.*://'
 }
 
+# The label every container `testcontainers` starts carries. The test harness
+# holds its Postgres in a `static` and `mem::forget`s it (nothing drops a
+# `static`), so a run that does not go through this script leaves its container
+# behind for good — one per test *process*, and nextest forks a process per
+# binary. The servers this script starts are plain `docker run` with no such
+# label, so a sweep by it can never touch them, the migrated template they hold,
+# or any compose stack.
+TC_LABEL='org.testcontainers.managed-by=testcontainers'
+
+# Age of a container in seconds, or nothing if it cannot be determined.
+#
+# `.State.StartedAt` is UTC with nanoseconds; BSD `date` has no directive for
+# the fraction, so it is stripped and the zone supplied by `-u` instead.
+# Parsing it as *local* time — the easy mistake — inflates every age by the
+# host's UTC offset and so reaps containers belonging to a run in flight.
+# The second form is GNU `date`, for CI.
+container_age() {
+    local started epoch
+    started="$(docker inspect "$1" --format '{{.State.StartedAt}}' 2>/dev/null)" || return 0
+    started="${started%.*}"
+    epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "$started" +%s 2>/dev/null \
+          || date -u -d "${started}Z" +%s 2>/dev/null)" || return 0
+    [[ -n "$epoch" ]] && echo "$(( $(date -u +%s) - epoch ))"
+    return 0
+}
+
+# Reap testcontainers strays older than an hour.
+#
+# By age, not wholesale: a run in flight has containers seconds old, so the
+# threshold is what makes this safe to call unconditionally at the start of
+# every run — no check for a concurrent run, no coordination between them.
+# A container whose age cannot be read is left alone; one more stray costs
+# 119 MB, reaping a live server costs the run.
+sweep_stale_testcontainers() {
+    local max_age="${SANVI_TC_MAX_AGE:-3600}" strays container age
+    strays="$(docker ps -aq --filter "label=$TC_LABEL" 2>/dev/null || true)"
+    [[ -z "$strays" ]] && return 0
+    for container in $strays; do
+        age="$(container_age "$container")"
+        if [[ -n "$age" ]] && (( age > max_age )); then
+            docker rm -f "$container" >/dev/null 2>&1 || true
+        fi
+    done
+    return 0
+}
+
 start_postgres() {
     if [[ -z "$(docker ps -q --filter "name=^${PG_NAME}$")" ]]; then
         docker rm -f "$PG_NAME" >/dev/null 2>&1 || true
@@ -89,6 +135,7 @@ print_env() {
 
 case "${1:-}" in
     up)
+        sweep_stale_testcontainers
         start_postgres
         start_redis
         flush_redis
@@ -104,8 +151,9 @@ case "${1:-}" in
     prune)
         docker rm -f "$PG_NAME" "$REDIS_NAME" >/dev/null 2>&1 || true
         # Containers from runs that did not use this script: testcontainers
-        # labels everything it starts.
-        stray="$(docker ps -aq --filter 'label=org.testcontainers=true')"
+        # labels everything it starts. Unlike `up`, this reaps them regardless
+        # of age -- `prune` is an explicit "nothing of mine is running" request.
+        stray="$(docker ps -aq --filter "label=$TC_LABEL")"
         [[ -n "$stray" ]] && docker rm -f $stray >/dev/null 2>&1 || true
         echo "test containers removed"
         ;;
