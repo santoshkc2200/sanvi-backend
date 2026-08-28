@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
+use sanvi_kernel::UserId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_persistence::TxManager;
 
@@ -146,7 +146,7 @@ impl RetentionSweep {
             self.audit
                 .record(
                     &mut scope,
-                    Uuid::nil(),
+                    None,
                     "privacy.retention.sweep".to_string(),
                     "retention_sweep".to_string(),
                     serde_json::to_value(&deleted).unwrap_or_default(),
@@ -225,7 +225,7 @@ impl UpsertRetentionRule {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: UpsertRetentionRuleCommand,
     ) -> Result<(), PrivacyError> {
         let rule = RetentionRule {
@@ -254,7 +254,7 @@ impl UpsertRetentionRule {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.retention.update".to_string(),
                 rule.data_class.as_str().to_string(),
                 serde_json::to_value(&rule).unwrap_or_default(),

@@ -5,18 +5,19 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::UserId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_persistence::TxManager;
 
 use crate::domain::{
-    AffectedSet, AuditWriter, BreachIncident, BreachObligationCalculator, BreachRepository, Clock,
-    DataClass, EventPublisher, IdGenerator, JurisdictionProfile, JurisdictionRepository, LegalHold,
-    LegalHoldRepository, NotificationObligation, PrivacyError, PrivacyEvent, ProcessingActivity,
-    ProcessingActivityRepository, RiskAssessment, RiskAssessmentRepository, SubProcessor,
-    SubProcessorNotifier, SubProcessorRepository,
+    AffectedSet, AuditWriter, BreachIncident, BreachIncidentId, BreachObligationCalculator,
+    BreachRepository, Clock, DataClass, EventPublisher, IdGenerator, JurisdictionProfile,
+    JurisdictionRepository, LegalHold, LegalHoldId, LegalHoldRepository, NotificationObligation,
+    PrivacyError, PrivacyEvent, ProcessingActivity, ProcessingActivityId,
+    ProcessingActivityRepository, RiskAssessment, RiskAssessmentId, RiskAssessmentRepository,
+    SubProcessor, SubProcessorNotifier, SubProcessorRepository,
 };
 
 // ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ impl UpsertJurisdiction {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: UpsertJurisdictionCommand,
     ) -> Result<(), PrivacyError> {
         let profile = JurisdictionProfile {
@@ -128,7 +129,7 @@ impl UpsertJurisdiction {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.jurisdiction.update".to_string(),
                 profile.code.as_str().to_string(),
                 serde_json::to_value(&profile).unwrap_or_default(),
@@ -182,14 +183,14 @@ impl ApplyLegalHold {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: ApplyLegalHoldCommand,
-    ) -> Result<Uuid, PrivacyError> {
+    ) -> Result<LegalHoldId, PrivacyError> {
         if command.reason.trim().is_empty() {
             return Err(PrivacyError::Conflict("reason required".to_string()));
         }
         let hold = LegalHold {
-            id: self.ids.next(),
+            id: self.ids.next_legal_hold_id()?,
             scope: command.scope.clone(),
             reason: command.reason,
             created_by: actor,
@@ -215,7 +216,7 @@ impl ApplyLegalHold {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.hold.apply".to_string(),
                 hold.id.to_string(),
                 serde_json::json!({ "reason": hold.reason }),
@@ -251,7 +252,7 @@ impl ReleaseLegalHold {
         }
     }
 
-    pub async fn execute(&self, actor: Uuid, hold_id: Uuid) -> Result<(), PrivacyError> {
+    pub async fn execute(&self, actor: UserId, hold_id: LegalHoldId) -> Result<(), PrivacyError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_hold_release", "privacy")
@@ -264,7 +265,7 @@ impl ReleaseLegalHold {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.hold.release".to_string(),
                 hold_id.to_string(),
                 serde_json::json!({}),
@@ -349,7 +350,7 @@ impl UpsertSubProcessor {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: UpsertSubProcessorCommand,
     ) -> Result<(), PrivacyError> {
         let processor = SubProcessor {
@@ -376,7 +377,7 @@ impl UpsertSubProcessor {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.subprocessor.update".to_string(),
                 processor.name.clone(),
                 serde_json::to_value(&processor).unwrap_or_default(),
@@ -412,7 +413,7 @@ impl RemoveSubProcessor {
         }
     }
 
-    pub async fn execute(&self, actor: Uuid, name: &str) -> Result<(), PrivacyError> {
+    pub async fn execute(&self, actor: UserId, name: &str) -> Result<(), PrivacyError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_subprocessor_remove", "privacy")
@@ -426,7 +427,7 @@ impl RemoveSubProcessor {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.subprocessor.remove".to_string(),
                 name.to_string(),
                 serde_json::json!({}),
@@ -458,7 +459,8 @@ pub struct RecordBreachIncidentCommand {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RecordBreachIncidentOutput {
-    pub incident_id: Uuid,
+    #[schema(value_type = String)]
+    pub incident_id: BreachIncidentId,
     pub obligations: Vec<NotificationObligation>,
 }
 
@@ -499,7 +501,7 @@ impl RecordBreachIncident {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: RecordBreachIncidentCommand,
     ) -> Result<RecordBreachIncidentOutput, PrivacyError> {
         let jurisdictions = command
@@ -513,7 +515,7 @@ impl RecordBreachIncident {
             .map(|class| DataClass::parse(class))
             .collect::<Result<Vec<_>, _>>()?;
         let incident = BreachIncident {
-            id: self.ids.next(),
+            id: self.ids.next_breach_incident_id()?,
             discovered_at: command.discovered_at,
             contained_at: command.contained_at,
             affected: AffectedSet {
@@ -565,7 +567,7 @@ impl RecordBreachIncident {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.breach.record".to_string(),
                 incident.id.to_string(),
                 serde_json::to_value(&incident).unwrap_or_default(),
@@ -627,7 +629,7 @@ impl ListObligations {
 
     pub async fn execute(
         &self,
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
     ) -> Result<Vec<NotificationObligation>, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -683,11 +685,11 @@ impl UpsertActivity {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: UpsertActivityCommand,
-    ) -> Result<Uuid, PrivacyError> {
+    ) -> Result<ProcessingActivityId, PrivacyError> {
         let activity = ProcessingActivity {
-            id: self.ids.next(),
+            id: self.ids.next_processing_activity_id()?,
             name: command.name.clone(),
             purpose: command.purpose,
             data_classes: command
@@ -712,7 +714,7 @@ impl UpsertActivity {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.activity.upsert".to_string(),
                 activity.id.to_string(),
                 serde_json::to_value(&activity).unwrap_or_default(),
@@ -728,7 +730,8 @@ impl UpsertActivity {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct UpsertAssessmentCommand {
-    pub activity_id: Uuid,
+    #[schema(value_type = String)]
+    pub activity_id: ProcessingActivityId,
     pub jurisdictions: Vec<String>,
     pub trigger: String,
     pub status: String,
@@ -761,11 +764,11 @@ impl UpsertAssessment {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: UpsertAssessmentCommand,
-    ) -> Result<Uuid, PrivacyError> {
+    ) -> Result<RiskAssessmentId, PrivacyError> {
         let assessment = RiskAssessment {
-            id: self.ids.next(),
+            id: self.ids.next_risk_assessment_id()?,
             activity_id: command.activity_id,
             jurisdictions: command
                 .jurisdictions
@@ -790,7 +793,7 @@ impl UpsertAssessment {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.assessment.upsert".to_string(),
                 assessment.id.to_string(),
                 serde_json::to_value(&assessment).unwrap_or_default(),
@@ -889,8 +892,8 @@ impl MarkBreachNotified {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        incident_id: Uuid,
+        actor: UserId,
+        incident_id: BreachIncidentId,
         command: MarkBreachNotifiedCommand,
     ) -> Result<(), PrivacyError> {
         let audience = crate::domain::ObligationAudience::parse(&command.audience)?;
@@ -912,7 +915,7 @@ impl MarkBreachNotified {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.breach.notify".to_string(),
                 incident_id.to_string(),
                 serde_json::json!({

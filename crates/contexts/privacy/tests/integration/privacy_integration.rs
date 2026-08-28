@@ -9,6 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use sanvi_kernel::{RawIdGenerator, UserId};
 use sanvi_persistence::TxManager;
 use sanvi_privacy::adapters::{
     LoggingNotifications, OutboxEventPublisher, PrivacyContextProvider, Sha256Hasher,
@@ -28,11 +29,11 @@ use sanvi_privacy::application::{
 use sanvi_privacy::domain::{
     AppealOutcome, AppealRepository, AuditWriter, AuthorizedAgentRepository, Clock,
     ConsentRepository, DATA_CLASSES, DataBundle, DataClass, DataClassDef, DataEntry,
-    DirectiveRepository, DirectiveResolver, DirectiveSource, DirectiveState, DsrId, DsrKind,
+    DirectiveRepository, DirectiveResolver, DirectiveSource, DirectiveState, DsrKind,
     DsrRepository, DsrStatus, EnvelopeCrypto, EraseMode, EraseReport, EventPublisher,
-    ExportArtifactRepository, Hasher, IdGenerator, JurisdictionRepository, LegalHoldRepository,
-    Notifications, ParticipantRepository, PersonalDataProvider, PrivacyError, ProcessingPurpose,
-    ProviderRegistry, RectifyPatch, RetentionRuleRepository, SignalRepository,
+    ExportArtifactRepository, Hasher, IdGenerator, JurisdictionRepository, LegalHoldId,
+    LegalHoldRepository, Notifications, ParticipantRepository, PersonalDataProvider, PrivacyError,
+    ProcessingPurpose, ProviderRegistry, RectifyPatch, RetentionRuleRepository, SignalRepository,
     SubProcessorRepository, SubjectRef, SubjectRepository, VerificationRepository,
 };
 use sanvi_testsupport::TestDb;
@@ -55,7 +56,7 @@ impl AuditWriter for NoopAudit {
     async fn record(
         &self,
         _scope: &mut sanvi_persistence::PlatformScope<'_>,
-        _actor: Uuid,
+        _actor: Option<UserId>,
         _action: String,
         _resource: String,
         _detail: serde_json::Value,
@@ -121,6 +122,7 @@ impl PersonalDataProvider for FakeProvider {
 // ---------------------------------------------------------------------------
 
 struct Wired {
+    raw_ids: Arc<dyn RawIdGenerator>,
     tx: TxManager,
     submit: SubmitDsr,
     status: GetRequestStatus,
@@ -150,7 +152,8 @@ struct Wired {
 #[allow(clippy::too_many_arguments)]
 async fn wire() -> Wired {
     let (pool, migrator, db) = prepare().await;
-    let tx = TxManager::new(pool.clone());
+    let raw_ids: Arc<dyn RawIdGenerator> = sanvi_testsupport::test_ids();
+    let tx = TxManager::new(pool.clone(), raw_ids.clone());
     let subjects: Arc<dyn SubjectRepository> = Arc::new(SqlxSubjectRepository::new());
     let jurisdictions: Arc<dyn JurisdictionRepository> =
         Arc::new(SqlxJurisdictionRepository::new());
@@ -169,10 +172,10 @@ async fn wire() -> Wired {
         Arc::new(SqlxSubjectKeyRepository::new());
     let challenges: Arc<dyn VerificationRepository> = Arc::new(SqlxVerificationRepository::new());
     let agents: Arc<dyn AuthorizedAgentRepository> = Arc::new(SqlxAuthorizedAgentRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids.clone()));
     let notifications: Arc<dyn Notifications> = Arc::new(LoggingNotifications);
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator);
+    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(raw_ids.clone()));
     let hasher: Arc<dyn Hasher> = Arc::new(Sha256Hasher::new("test-pepper".to_string()));
     let crypto: Arc<dyn EnvelopeCrypto> = Arc::new(SqlxEnvelopeCrypto::new(
         tx.clone(),
@@ -260,6 +263,7 @@ async fn wire() -> Wired {
         notifications.clone(),
         events.clone(),
         hasher.clone(),
+        ids.clone(),
         clock.clone(),
         export_dir,
         7,
@@ -281,6 +285,7 @@ async fn wire() -> Wired {
         signals.clone(),
         directives.clone(),
         events.clone(),
+        ids.clone(),
         clock.clone(),
         "2026-08-19".to_string(),
     );
@@ -291,6 +296,7 @@ async fn wire() -> Wired {
         consents.clone(),
         directives.clone(),
         events.clone(),
+        ids.clone(),
         clock.clone(),
     );
     let reject = RejectRequest::new(
@@ -330,6 +336,7 @@ async fn wire() -> Wired {
     );
 
     Wired {
+        raw_ids,
         tx,
         submit,
         status,
@@ -357,7 +364,13 @@ async fn wire() -> Wired {
     }
 }
 
-fn eu_submit(_user_id: Uuid, kind: DsrKind) -> SubmitDsrCommand {
+/// Fresh distinct `UserId` for test actors (drawn from the wiring's shared
+/// ID source, so distinct calls never collide within one test).
+fn fresh_user(raw_ids: &Arc<dyn RawIdGenerator>) -> UserId {
+    UserId::from_snowflake(raw_ids.next_id().unwrap())
+}
+
+fn eu_submit(_user_id: UserId, kind: DsrKind) -> SubmitDsrCommand {
     SubmitDsrCommand {
         subject: sanvi_privacy::application::SubjectInput {
             kind: "tenant_user".to_string(),
@@ -376,7 +389,7 @@ fn eu_submit(_user_id: Uuid, kind: DsrKind) -> SubmitDsrCommand {
     }
 }
 
-fn us_submit(_user_id: Uuid, kind: DsrKind) -> SubmitDsrCommand {
+fn us_submit(_user_id: UserId, kind: DsrKind) -> SubmitDsrCommand {
     SubmitDsrCommand {
         subject: sanvi_privacy::application::SubjectInput {
             kind: "tenant_user".to_string(),
@@ -395,7 +408,7 @@ fn us_submit(_user_id: Uuid, kind: DsrKind) -> SubmitDsrCommand {
     }
 }
 
-fn va_submit(_user_id: Uuid, kind: DsrKind) -> SubmitDsrCommand {
+fn va_submit(_user_id: UserId, kind: DsrKind) -> SubmitDsrCommand {
     let mut command = us_submit(_user_id, kind);
     command.subject.evidence = vec![sanvi_privacy::application::EvidenceInput {
         kind: "declared_residency".to_string(),
@@ -411,7 +424,7 @@ fn va_submit(_user_id: Uuid, kind: DsrKind) -> SubmitDsrCommand {
 #[tokio::test]
 async fn authenticated_export_request_collects_from_every_provider() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     let output = wired
         .submit
         .execute(Some(user), None, None, eu_submit(user, DsrKind::Export))
@@ -440,7 +453,7 @@ async fn authenticated_export_request_collects_from_every_provider() {
         .unwrap();
     let participants = wired
         .participants
-        .list(&mut scope, DsrId::from_uuid(output.request_id))
+        .list(&mut scope, output.request_id)
         .await
         .unwrap();
     assert_eq!(participants.len(), wired.registry.len());
@@ -458,7 +471,7 @@ async fn authenticated_export_request_collects_from_every_provider() {
 #[tokio::test]
 async fn erasure_runs_every_provider_and_crypto_shreds() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     let output = wired
         .submit
         .execute(Some(user), None, None, eu_submit(user, DsrKind::Erasure))
@@ -484,8 +497,8 @@ async fn erasure_runs_every_provider_and_crypto_shreds() {
 #[tokio::test]
 async fn eu_and_us_defaults_differ_but_the_code_path_is_one() {
     let wired = wire().await;
-    let eu_user = Uuid::now_v7();
-    let us_user = Uuid::now_v7();
+    let eu_user = fresh_user(&wired.raw_ids);
+    let us_user = fresh_user(&wired.raw_ids);
     wired
         .submit
         .execute(
@@ -538,7 +551,7 @@ async fn eu_and_us_defaults_differ_but_the_code_path_is_one() {
 #[tokio::test]
 async fn opt_out_needs_no_verification_and_flips_immediately() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     wired
         .submit
         .execute(Some(user), None, None, us_submit(user, DsrKind::Access))
@@ -576,7 +589,7 @@ async fn opt_out_needs_no_verification_and_flips_immediately() {
 #[tokio::test]
 async fn gpc_signal_denies_before_login_and_binds_after() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     let device = format!("device-{}", Uuid::now_v7());
 
     // Pre-authentication: the device signal denies immediately.
@@ -643,7 +656,7 @@ async fn gpc_signal_denies_before_login_and_binds_after() {
 #[tokio::test]
 async fn consent_withdrawal_flips_marketing_email() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     wired
         .submit
         .execute(Some(user), None, None, us_submit(user, DsrKind::Access))
@@ -698,7 +711,7 @@ async fn consent_withdrawal_flips_marketing_email() {
 #[tokio::test]
 async fn legal_hold_blocks_erasure_until_released() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     let output = wired
         .submit
         .execute(Some(user), None, None, eu_submit(user, DsrKind::Erasure))
@@ -707,10 +720,10 @@ async fn legal_hold_blocks_erasure_until_released() {
 
     let mut scope = wired.tx.begin_unscoped("test_hold", "test").await.unwrap();
     let hold = sanvi_privacy::domain::LegalHold {
-        id: Uuid::now_v7(),
+        id: LegalHoldId::from_snowflake(wired.raw_ids.next_id().unwrap()),
         scope: serde_json::json!({ "subject_key": format!("user:{user}") }),
         reason: "litigation".to_string(),
-        created_by: Uuid::nil(),
+        created_by: fresh_user(&wired.raw_ids),
         created_at: chrono::Utc::now(),
         released_at: None,
         released_by: None,
@@ -735,7 +748,7 @@ async fn legal_hold_blocks_erasure_until_released() {
         .unwrap();
     wired
         .holds
-        .release(&mut scope, hold.id, Uuid::nil())
+        .release(&mut scope, hold.id, fresh_user(&wired.raw_ids))
         .await
         .unwrap();
     scope.commit().await.unwrap();
@@ -746,14 +759,14 @@ async fn legal_hold_blocks_erasure_until_released() {
 #[tokio::test]
 async fn a_us_refusal_can_be_appealed_and_decided_by_a_second_operator() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     let output = wired
         .submit
         .execute(Some(user), None, None, va_submit(user, DsrKind::Access))
         .await
         .unwrap();
 
-    let operator = Uuid::now_v7();
+    let operator = fresh_user(&wired.raw_ids);
     wired
         .reject
         .execute(
@@ -790,7 +803,7 @@ async fn a_us_refusal_can_be_appealed_and_decided_by_a_second_operator() {
         .await;
     assert!(matches!(self_review, Err(PrivacyError::AppealSelfReview)));
 
-    let second_operator = Uuid::now_v7();
+    let second_operator = fresh_user(&wired.raw_ids);
     let decision = wired
         .decide_appeal
         .execute(
@@ -820,7 +833,7 @@ async fn a_us_refusal_can_be_appealed_and_decided_by_a_second_operator() {
 #[tokio::test]
 async fn export_download_respects_token_passphrase_and_cap() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     let output = wired
         .submit
         .execute(Some(user), None, None, eu_submit(user, DsrKind::Export))
@@ -838,7 +851,7 @@ async fn export_download_respects_token_passphrase_and_cap() {
         .unwrap();
     let request = wired
         .requests
-        .find_by_id(&mut scope, DsrId::from_uuid(output.request_id))
+        .find_by_id(&mut scope, output.request_id)
         .await
         .unwrap()
         .unwrap();
@@ -868,7 +881,7 @@ async fn export_download_respects_token_passphrase_and_cap() {
 #[tokio::test]
 async fn retention_sweep_dry_run_reports_without_deleting() {
     let wired = wire().await;
-    let user = Uuid::now_v7();
+    let user = fresh_user(&wired.raw_ids);
     wired
         .submit
         .execute(Some(user), None, None, eu_submit(user, DsrKind::Access))

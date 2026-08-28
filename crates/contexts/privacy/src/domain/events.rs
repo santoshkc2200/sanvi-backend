@@ -3,11 +3,11 @@
 //! notifications context, tenant operators) react to these; the directive
 //! materialisation itself is synchronous in the submitting transaction.
 
+use sanvi_kernel::{EventEnvelope, EventId, SnowflakeId, TenantId, UserId};
 use serde::Serialize;
-use sha2::Digest;
-use uuid::Uuid;
 
 use crate::domain::types::{ProcessingPurpose, SubjectRef};
+use crate::domain::{AppealId, BreachIncidentId, DsrId, LegalHoldId};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -44,14 +44,14 @@ pub enum PrivacyEvent {
     },
     /// A data subject request was received.
     DsrReceived {
-        request_id: Uuid,
+        request_id: DsrId,
         subject: SubjectRef,
         dsr_kind: String,
         jurisdiction: String,
     },
     /// A DSR reached a terminal state.
     DsrClosed {
-        request_id: Uuid,
+        request_id: DsrId,
         subject: SubjectRef,
         dsr_kind: String,
         status: String,
@@ -60,26 +60,26 @@ pub enum PrivacyEvent {
     /// A subject's data was erased (crypto-shred + provider erasure done).
     SubjectErased {
         subject: SubjectRef,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
     },
     /// A US appeal was decided; the outcome must include the authority
     /// complaint route.
     AppealDecided {
-        request_id: Uuid,
-        appeal_id: Uuid,
+        request_id: DsrId,
+        appeal_id: AppealId,
         outcome: String,
         jurisdiction: String,
     },
     /// A legal hold was applied.
     LegalHoldApplied {
-        hold_id: Uuid,
+        hold_id: LegalHoldId,
         scope: serde_json::Value,
     },
     /// A legal hold was released.
-    LegalHoldReleased { hold_id: Uuid },
+    LegalHoldReleased { hold_id: LegalHoldId },
     /// A breach incident was recorded.
     BreachRecorded {
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
         jurisdictions: Vec<String>,
     },
     /// The jurisdiction resolution changed for a subject.
@@ -107,39 +107,57 @@ impl PrivacyEvent {
         }
     }
 
-    pub fn envelope(&self, tenant_id: Option<Uuid>) -> sanvi_kernel::EventEnvelope {
+    pub fn tenant_id(&self) -> Option<TenantId> {
+        match self {
+            Self::ConsentGranted { subject, .. }
+            | Self::ConsentWithdrawn { subject, .. }
+            | Self::ProcessingOptedOut { subject, .. }
+            | Self::SensitiveUseLimited { subject, .. }
+            | Self::DsrReceived { subject, .. }
+            | Self::DsrClosed { subject, .. }
+            | Self::JurisdictionResolved { subject, .. } => subject.tenant_id,
+            Self::SubjectErased { tenant_id, .. } => *tenant_id,
+            Self::AppealDecided { .. }
+            | Self::LegalHoldApplied { .. }
+            | Self::LegalHoldReleased { .. }
+            | Self::BreachRecorded { .. } => None,
+        }
+    }
+
+    pub fn envelope(&self, id: EventId, tenant_id: Option<TenantId>) -> EventEnvelope {
         let aggregate_id = match self {
             Self::ConsentGranted { .. }
             | Self::ConsentWithdrawn { .. }
             | Self::ProcessingOptedOut { .. }
             | Self::SensitiveUseLimited { .. }
             | Self::SubjectErased { .. }
-            | Self::JurisdictionResolved { .. } => subject_uuid(self),
+            | Self::JurisdictionResolved { .. } => {
+                subject_aggregate(self).unwrap_or_else(|| id.as_snowflake())
+            }
             Self::DsrReceived { request_id, .. }
             | Self::DsrClosed { request_id, .. }
-            | Self::AppealDecided { request_id, .. } => *request_id,
+            | Self::AppealDecided { request_id, .. } => request_id.as_snowflake(),
             Self::LegalHoldApplied { hold_id, .. } | Self::LegalHoldReleased { hold_id } => {
-                *hold_id
+                hold_id.as_snowflake()
             }
-            Self::BreachRecorded { incident_id, .. } => *incident_id,
+            Self::BreachRecorded { incident_id, .. } => incident_id.as_snowflake(),
         };
-        let mut envelope = sanvi_kernel::EventEnvelope::new(
+        let mut envelope = EventEnvelope::new(
+            id,
             "privacy.subject",
             aggregate_id,
             self.name(),
             serde_json::to_value(self).expect("privacy events always serialize"),
         );
         if let Some(tenant_id) = tenant_id {
-            envelope = envelope.with_metadata("tenant_id", serde_json::json!(tenant_id));
+            envelope =
+                envelope.with_metadata("tenant_id", serde_json::json!(tenant_id.to_string()));
         }
         envelope
     }
 }
 
-fn subject_uuid(event: &PrivacyEvent) -> Uuid {
-    // Subject refs are UUID-shaped only for user-based keys; derive a
-    // deterministic UUID (v5 of the canonical key, DNS namespace) so every
-    // event has a stable aggregate id without parsing the key.
+fn subject_aggregate(event: &PrivacyEvent) -> Option<SnowflakeId> {
     let key = match event {
         PrivacyEvent::ConsentGranted { subject, .. }
         | PrivacyEvent::ConsentWithdrawn { subject, .. }
@@ -147,14 +165,35 @@ fn subject_uuid(event: &PrivacyEvent) -> Uuid {
         | PrivacyEvent::SensitiveUseLimited { subject, .. }
         | PrivacyEvent::SubjectErased { subject, .. }
         | PrivacyEvent::JurisdictionResolved { subject, .. } => subject.canonical_key(),
-        _ => "privacy",
+        _ => return None,
     };
-    // Deterministic UUID from the canonical key (SHA-256, first 16 bytes,
-    // version/variant bits set).
-    let digest = sha2::Sha256::digest(key.as_bytes());
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x50; // UUIDv5-ish version
-    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant
-    Uuid::from_bytes(bytes)
+    key.strip_prefix("user:")
+        .and_then(|raw| raw.parse::<UserId>().ok())
+        .map(UserId::as_snowflake)
+}
+
+#[cfg(test)]
+mod tests {
+    use sanvi_kernel::{EventId, TenantId};
+
+    use super::*;
+    use crate::domain::DsrId;
+
+    #[test]
+    fn dsr_event_envelope_preserves_snowflake_ids_as_decimal_strings() {
+        let request_id = DsrId::try_from(41_i64).unwrap();
+        let tenant_id = TenantId::try_from(42_i64).unwrap();
+        let event = PrivacyEvent::DsrReceived {
+            request_id,
+            subject: SubjectRef::contact("privacy@example.com"),
+            dsr_kind: "access".to_string(),
+            jurisdiction: "eu".to_string(),
+        };
+
+        let envelope = event.envelope(EventId::try_from(43_i64).unwrap(), Some(tenant_id));
+
+        assert_eq!(envelope.aggregate_id, request_id.as_snowflake());
+        assert_eq!(envelope.payload["request_id"], "41");
+        assert_eq!(envelope.metadata["tenant_id"], "42");
+    }
 }

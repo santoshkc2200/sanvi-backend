@@ -4,14 +4,18 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use sanvi_kernel::RawIdGenerator;
 use sha2::Sha256;
-use uuid::Uuid;
+use std::sync::Arc;
 
 use crate::domain::jurisdiction::add_business_days;
 use crate::domain::{
-    AffectedSet, AuthorityContact, BreachIncident, BreachObligationCalculator, BreachRuleSet,
-    Clock, ConsentRecord, Hasher, IdGenerator, JurisdictionProfile, NotificationObligation,
-    Notifications, ObligationAudience, PrivacyError, SubProcessor, SubProcessorNotifier,
+    AffectedSet, AppealId, AuthorityContact, AuthorizedAgentId, BreachIncident, BreachIncidentId,
+    BreachObligationCalculator, BreachRuleSet, Clock, ConsentId, ConsentRecord, DsrId,
+    ExportArtifactId, Hasher, IdGenerator, JurisdictionProfile, LegalHoldId,
+    NotificationObligation, Notifications, ObligationAudience, PreferenceSignalId, PrivacyError,
+    ProcessingActivityId, RiskAssessmentId, SubProcessor, SubProcessorNotifier, SubjectId,
+    VerificationChallengeId,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -23,12 +27,68 @@ impl Clock for SystemClock {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SystemIdGenerator;
+#[derive(Clone)]
+pub struct SystemIdGenerator {
+    ids: Arc<dyn RawIdGenerator>,
+}
+
+impl SystemIdGenerator {
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
+
+    fn next_raw(&self) -> Result<sanvi_kernel::SnowflakeId, PrivacyError> {
+        self.ids.next_id().map_err(PrivacyError::from)
+    }
+}
 
 impl IdGenerator for SystemIdGenerator {
-    fn next(&self) -> Uuid {
-        Uuid::now_v7()
+    fn next_subject_id(&self) -> Result<SubjectId, PrivacyError> {
+        self.next_raw().map(SubjectId::from_snowflake)
+    }
+
+    fn next_dsr_id(&self) -> Result<DsrId, PrivacyError> {
+        self.next_raw().map(DsrId::from_snowflake)
+    }
+
+    fn next_appeal_id(&self) -> Result<AppealId, PrivacyError> {
+        self.next_raw().map(AppealId::from_snowflake)
+    }
+
+    fn next_authorized_agent_id(&self) -> Result<AuthorizedAgentId, PrivacyError> {
+        self.next_raw().map(AuthorizedAgentId::from_snowflake)
+    }
+
+    fn next_breach_incident_id(&self) -> Result<BreachIncidentId, PrivacyError> {
+        self.next_raw().map(BreachIncidentId::from_snowflake)
+    }
+
+    fn next_consent_id(&self) -> Result<ConsentId, PrivacyError> {
+        self.next_raw().map(ConsentId::from_snowflake)
+    }
+
+    fn next_export_artifact_id(&self) -> Result<ExportArtifactId, PrivacyError> {
+        self.next_raw().map(ExportArtifactId::from_snowflake)
+    }
+
+    fn next_legal_hold_id(&self) -> Result<LegalHoldId, PrivacyError> {
+        self.next_raw().map(LegalHoldId::from_snowflake)
+    }
+
+    fn next_preference_signal_id(&self) -> Result<PreferenceSignalId, PrivacyError> {
+        self.next_raw().map(PreferenceSignalId::from_snowflake)
+    }
+
+    fn next_processing_activity_id(&self) -> Result<ProcessingActivityId, PrivacyError> {
+        self.next_raw().map(ProcessingActivityId::from_snowflake)
+    }
+
+    fn next_risk_assessment_id(&self) -> Result<RiskAssessmentId, PrivacyError> {
+        self.next_raw().map(RiskAssessmentId::from_snowflake)
+    }
+
+    fn next_verification_challenge_id(&self) -> Result<VerificationChallengeId, PrivacyError> {
+        self.next_raw().map(VerificationChallengeId::from_snowflake)
     }
 }
 
@@ -292,7 +352,7 @@ mod tests {
         let eu = crate::domain::seeded_profile(&JurisdictionRef::parse("eu").unwrap()).unwrap();
         let ca = crate::domain::seeded_profile(&JurisdictionRef::parse("us-ca").unwrap()).unwrap();
         let incident = BreachIncident {
-            id: Uuid::now_v7(),
+            id: BreachIncidentId::try_from(1_i64).unwrap(),
             discovered_at: now,
             contained_at: None,
             affected: AffectedSet {
@@ -342,7 +402,7 @@ mod tests {
         let now = chrono::Utc::now();
         let co = crate::domain::seeded_profile(&JurisdictionRef::parse("us-co").unwrap()).unwrap();
         let incident = BreachIncident {
-            id: Uuid::now_v7(),
+            id: BreachIncidentId::try_from(2_i64).unwrap(),
             discovered_at: now,
             contained_at: None,
             affected: AffectedSet {

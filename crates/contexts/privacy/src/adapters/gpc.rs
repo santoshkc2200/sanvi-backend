@@ -21,7 +21,8 @@ use sanvi_http::Subject;
 use sanvi_persistence::TxManager;
 
 use crate::domain::{
-    Clock, PreferenceSignal, ProcessingPurpose, SignalRepository, SubjectRef, SubjectRepository,
+    Clock, IdGenerator, PreferenceSignal, ProcessingPurpose, SignalRepository, SubjectRef,
+    SubjectRepository,
 };
 
 const GPC_HEADER: &str = "Sec-GPC";
@@ -34,6 +35,7 @@ pub struct GpcSignalMiddleware {
     signals: Arc<dyn SignalRepository>,
     subjects: Arc<dyn SubjectRepository>,
     clock: Arc<dyn Clock>,
+    ids: Arc<dyn IdGenerator>,
     cookie_name: String,
     cookie_ttl_days: i64,
 }
@@ -44,6 +46,7 @@ impl GpcSignalMiddleware {
         signals: Arc<dyn SignalRepository>,
         subjects: Arc<dyn SubjectRepository>,
         clock: Arc<dyn Clock>,
+        ids: Arc<dyn IdGenerator>,
         cookie_name: String,
         cookie_ttl_days: i64,
     ) -> Self {
@@ -52,6 +55,7 @@ impl GpcSignalMiddleware {
             signals,
             subjects,
             clock,
+            ids,
             cookie_name,
             cookie_ttl_days,
         }
@@ -126,8 +130,15 @@ impl GpcSignalMiddleware {
                     let _ = scope.commit().await;
                     return true;
                 }
+                let signal_id = match self.ids.next_preference_signal_id() {
+                    Ok(id) => id,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to allocate GPC signal id");
+                        return false;
+                    }
+                };
                 let signal = PreferenceSignal {
-                    id: Uuid::now_v7(),
+                    id: signal_id,
                     tenant_id: subject.and_then(|s| s.tenant_id),
                     signal: "gpc".to_string(),
                     device_ref: device_ref.to_string(),

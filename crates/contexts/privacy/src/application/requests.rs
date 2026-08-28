@@ -10,15 +10,16 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{PlatformScope, TxManager};
 
 use crate::domain::{
-    AuditWriter, AuthorizedAgent, AuthorizedAgentRepository, Clock, ConsentRepository, DataSubject,
-    DirectiveRepository, DsrId, DsrKind, DsrRepository, DsrStatus, EventPublisher, EvidenceKind,
-    Hasher, IdGenerator, JurisdictionRepository, Notifications, ParticipantRepository,
-    PrivacyError, PrivacyEvent, ProviderRegistry, RectifyPatch, Requester, SignalRepository,
-    SubjectId, SubjectKind, SubjectRef, SubjectRepository, VerificationChallenge,
-    VerificationRepository, add_days, resolve,
+    AppealId, AuditWriter, AuthorizedAgent, AuthorizedAgentRepository, Clock, ConsentRepository,
+    DataSubject, DirectiveRepository, DsrId, DsrKind, DsrRepository, DsrStatus, EventPublisher,
+    EvidenceKind, Hasher, IdGenerator, JurisdictionRepository, Notifications,
+    ParticipantRepository, PrivacyError, PrivacyEvent, ProviderRegistry, RectifyPatch, Requester,
+    SignalRepository, SubjectKind, SubjectRef, SubjectRepository, VerificationChallenge,
+    VerificationChallengeId, VerificationRepository, add_days, resolve,
 };
 
 /// The subject a request targets, as supplied by the requester.
@@ -68,14 +69,16 @@ pub struct SubmitDsrCommand {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SubmitDsrOutput {
-    pub request_id: Uuid,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
     pub status: DsrStatus,
     pub due_at: DateTime<Utc>,
     pub extended_to: Option<DateTime<Utc>>,
     pub jurisdiction: String,
     /// Present when verification is required before disclosure/deletion.
     pub verification_required: bool,
-    pub challenge_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub challenge_id: Option<VerificationChallengeId>,
     /// Opaque half of the verification credential. The OTP is delivered
     /// out-of-band, so neither response nor notification is sufficient alone.
     pub verification_token: Option<String>,
@@ -159,8 +162,8 @@ impl SubmitDsr {
 
 pub fn subject_ref_from_input(
     input: &SubjectInput,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
+    user_id: Option<UserId>,
+    tenant_id: Option<TenantId>,
 ) -> Result<SubjectRef, PrivacyError> {
     let kind = SubjectKind::parse(&input.kind)?;
     let subject_ref = match kind {
@@ -221,7 +224,7 @@ pub async fn ensure_subject(
     let (jurisdiction, chain) = resolve(evidence);
     let _ = jurisdictions.find(scope, jurisdiction.as_str()).await?; // validity check
     let subject = DataSubject {
-        id: SubjectId::from_uuid(ids.next()),
+        id: ids.next_subject_id()?,
         tenant_id: subject_ref.tenant_id,
         subject_ref: subject_ref.clone(),
         jurisdiction,
@@ -237,8 +240,8 @@ pub async fn ensure_subject(
 impl SubmitDsr {
     pub async fn execute(
         &self,
-        requester_user: Option<Uuid>,
-        tenant_id: Option<Uuid>,
+        requester_user: Option<UserId>,
+        tenant_id: Option<TenantId>,
         ip: Option<IpAddr>,
         command: SubmitDsrCommand,
     ) -> Result<SubmitDsrOutput, PrivacyError> {
@@ -317,7 +320,7 @@ impl SubmitDsr {
             _ => None,
         };
 
-        let request_id = DsrId::from_uuid(self.ids.next());
+        let request_id = self.ids.next_dsr_id()?;
         let request = crate::domain::DataSubjectRequest {
             id: request_id,
             tenant_id: subject_ref.tenant_id,
@@ -345,7 +348,7 @@ impl SubmitDsr {
 
         if let Some(agent) = agent {
             let agent_row = AuthorizedAgent {
-                id: self.ids.next(),
+                id: self.ids.next_authorized_agent_id()?,
                 request_id,
                 agent_name: agent.agent_name.clone(),
                 agent_contact: agent.agent_contact.clone(),
@@ -363,7 +366,7 @@ impl SubmitDsr {
             let code = generate_otp(self.otp_digits);
             let token = Uuid::now_v7().to_string();
             let challenge = VerificationChallenge {
-                id: self.ids.next(),
+                id: self.ids.next_verification_challenge_id()?,
                 request_id,
                 method: "email_otp".to_string(),
                 token_hash: self.hasher.hash(&token),
@@ -403,6 +406,7 @@ impl SubmitDsr {
                 self.consents.as_ref(),
                 self.directives.as_ref(),
                 self.signals.as_ref(),
+                self.ids.as_ref(),
                 &subject,
                 &profile,
                 &subject_ref,
@@ -418,7 +422,7 @@ impl SubmitDsr {
             .publish(
                 &mut scope,
                 &[PrivacyEvent::DsrReceived {
-                    request_id: request_id.as_uuid(),
+                    request_id,
                     subject: subject_ref.clone(),
                     dsr_kind: command.kind.as_str().to_string(),
                     jurisdiction: subject.jurisdiction.as_str().to_string(),
@@ -429,9 +433,9 @@ impl SubmitDsr {
         self.audit
             .record(
                 &mut scope,
-                requester_user.unwrap_or(Uuid::nil()),
+                requester_user,
                 "privacy.dsr.submit".to_string(),
-                request_id.as_uuid().to_string(),
+                request_id.as_i64().to_string(),
                 serde_json::json!({
                     "kind": command.kind.as_str(),
                     "jurisdiction": subject.jurisdiction.as_str(),
@@ -446,7 +450,7 @@ impl SubmitDsr {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
 
         Ok(SubmitDsrOutput {
-            request_id: request_id.as_uuid(),
+            request_id,
             status,
             due_at,
             extended_to: None,
@@ -469,14 +473,16 @@ fn generate_otp(digits: u32) -> String {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct VerifyRequestCommand {
-    pub request_id: Uuid,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
     pub token: String,
     pub code: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct VerifyRequestOutput {
-    pub request_id: Uuid,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
     pub status: DsrStatus,
     pub due_at: DateTime<Utc>,
 }
@@ -528,7 +534,7 @@ impl VerifyRequest {
             .begin_unscoped("privacy_dsr_verify", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let request_id = DsrId::from_uuid(command.request_id);
+        let request_id = command.request_id;
         let request = self
             .requests
             .find_by_id(&mut scope, request_id)
@@ -582,9 +588,9 @@ impl VerifyRequest {
         self.audit
             .record(
                 &mut scope,
-                Uuid::nil(),
+                None,
                 "privacy.dsr.verify".to_string(),
-                request_id.as_uuid().to_string(),
+                request_id.as_i64().to_string(),
                 serde_json::json!({ "method": challenge.method }),
             )
             .await?;
@@ -604,7 +610,8 @@ impl VerifyRequest {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct GetRequestStatusOutput {
-    pub request_id: Uuid,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
     pub kind: DsrKind,
     pub status: DsrStatus,
     pub received_at: DateTime<Utc>,
@@ -621,7 +628,8 @@ pub struct GetRequestStatusOutput {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AppealStatusView {
-    pub appeal_id: Uuid,
+    #[schema(value_type = String)]
+    pub appeal_id: AppealId,
     pub reason: String,
     pub due_at: DateTime<Utc>,
     pub outcome: Option<String>,
@@ -659,8 +667,8 @@ impl GetRequestStatus {
     /// own the request.
     pub async fn execute(
         &self,
-        request_id: Uuid,
-        requester_user: Option<Uuid>,
+        request_id: DsrId,
+        requester_user: Option<UserId>,
         token: Option<&str>,
     ) -> Result<GetRequestStatusOutput, PrivacyError> {
         let mut scope = self
@@ -668,7 +676,7 @@ impl GetRequestStatus {
             .begin_unscoped("privacy_dsr_status", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let id = DsrId::from_uuid(request_id);
+        let id = request_id;
         let request = self
             .requests
             .find_by_id(&mut scope, id)
@@ -725,8 +733,10 @@ impl GetRequestStatus {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RequestOperatorView {
-    pub request_id: Uuid,
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
     pub subject_key: String,
     pub kind: DsrKind,
     pub status: DsrStatus,
@@ -774,7 +784,7 @@ impl ListRequestsOperator {
 
     pub async fn execute_for_tenant(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         status: Option<DsrStatus>,
         limit: u32,
     ) -> Result<Vec<RequestOperatorView>, PrivacyError> {
@@ -797,7 +807,7 @@ impl ListRequestsOperator {
 
 fn request_operator_view(request: crate::domain::DataSubjectRequest) -> RequestOperatorView {
     RequestOperatorView {
-        request_id: request.id.as_uuid(),
+        request_id: request.id,
         tenant_id: request.tenant_id,
         subject_key: request.subject_ref.canonical_key().to_string(),
         kind: request.kind,
@@ -813,7 +823,8 @@ fn request_operator_view(request: crate::domain::DataSubjectRequest) -> RequestO
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ExtendDeadlineCommand {
-    pub request_id: Uuid,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
 }
 
 pub struct ExtendDeadline {
@@ -843,7 +854,7 @@ impl ExtendDeadline {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: ExtendDeadlineCommand,
     ) -> Result<DateTime<Utc>, PrivacyError> {
         let mut scope = self
@@ -851,7 +862,7 @@ impl ExtendDeadline {
             .begin_unscoped("privacy_dsr_extend", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let id = DsrId::from_uuid(command.request_id);
+        let id = command.request_id;
         let mut request = self.requests.find_by_id(&mut scope, id).await?.ok_or(
             PrivacyError::RequestNotFound(command.request_id.to_string()),
         )?;
@@ -873,9 +884,9 @@ impl ExtendDeadline {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.dsr.extend".to_string(),
-                id.as_uuid().to_string(),
+                id.as_i64().to_string(),
                 serde_json::json!({ "extended_to": request.extended_to }),
             )
             .await?;
@@ -917,8 +928,8 @@ impl RejectRequest {
     /// them from the profile).
     pub async fn execute(
         &self,
-        actor: Uuid,
-        request_id: Uuid,
+        actor: UserId,
+        request_id: DsrId,
         reason: String,
     ) -> Result<(), PrivacyError> {
         let mut scope = self
@@ -926,7 +937,7 @@ impl RejectRequest {
             .begin_unscoped("privacy_dsr_reject", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let id = DsrId::from_uuid(request_id);
+        let id = request_id;
         let mut request = self
             .requests
             .find_by_id(&mut scope, id)
@@ -958,7 +969,7 @@ impl RejectRequest {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.dsr.reject".to_string(),
                 request_id.to_string(),
                 serde_json::json!({ "reason": request.rejection_reason }),
@@ -998,8 +1009,8 @@ impl PatchRequest {
     /// request's subject (authenticated) may patch.
     pub async fn execute(
         &self,
-        actor: Uuid,
-        request_id: Uuid,
+        actor: UserId,
+        request_id: DsrId,
         patch: RectifyPatch,
     ) -> Result<(), PrivacyError> {
         let mut scope = self
@@ -1007,7 +1018,7 @@ impl PatchRequest {
             .begin_unscoped("privacy_dsr_rectify", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let id = DsrId::from_uuid(request_id);
+        let id = request_id;
         let request = self
             .requests
             .find_by_id(&mut scope, id)
@@ -1027,7 +1038,7 @@ impl PatchRequest {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.dsr.rectify".to_string(),
                 request_id.to_string(),
                 serde_json::to_value(&patch).unwrap_or_default(),
@@ -1055,8 +1066,8 @@ impl SubmitTenantRequest {
 
     pub async fn execute(
         &self,
-        operator: Uuid,
-        tenant_id: Uuid,
+        operator: UserId,
+        tenant_id: TenantId,
         ip: Option<IpAddr>,
         command: SubmitDsrCommand,
     ) -> Result<SubmitDsrOutput, PrivacyError> {
@@ -1095,7 +1106,7 @@ mod tests {
 
     #[test]
     fn subject_refs_from_inputs() {
-        let user = Uuid::now_v7();
+        let user = UserId::try_from(101_i64).unwrap();
         let input = SubjectInput {
             kind: "tenant_user".to_string(),
             email: None,
@@ -1113,7 +1124,7 @@ mod tests {
             evidence: vec![],
             age_signal: None,
         };
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(102_i64).unwrap();
         let reference = subject_ref_from_input(&end_user, None, Some(tenant)).unwrap();
         assert_eq!(
             reference.canonical_key(),

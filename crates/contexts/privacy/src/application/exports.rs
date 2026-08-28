@@ -7,25 +7,26 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_persistence::TxManager;
 
 use crate::domain::{
-    Clock, DsrRepository, EnvelopeCrypto, ExportArtifact, ExportArtifactRepository, Hasher,
-    PrivacyError,
+    Clock, DsrId, DsrRepository, EnvelopeCrypto, ExportArtifact, ExportArtifactId,
+    ExportArtifactRepository, Hasher, IdGenerator, PrivacyError,
 };
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct DownloadExportCommand {
-    pub request_id: Uuid,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
     pub token: String,
     pub passphrase: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ExportDownloadView {
-    pub artifact_id: Uuid,
+    #[schema(value_type = String)]
+    pub artifact_id: ExportArtifactId,
     pub content: Vec<u8>,
     pub manifest_sha256: String,
 }
@@ -68,10 +69,7 @@ impl DownloadExport {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let request = self
             .requests
-            .find_by_id(
-                &mut scope,
-                crate::domain::DsrId::from_uuid(command.request_id),
-            )
+            .find_by_id(&mut scope, command.request_id)
             .await?
             .ok_or(PrivacyError::ArtifactNotFound(
                 command.request_id.to_string(),
@@ -165,7 +163,11 @@ impl CleanupExpiredExports {
 }
 
 /// The artifact path builder (shared with the saga).
-pub fn artifact_path(export_dir: &str, artifact_id: Uuid, now: DateTime<Utc>) -> String {
+pub fn artifact_path(
+    export_dir: &str,
+    artifact_id: ExportArtifactId,
+    now: DateTime<Utc>,
+) -> String {
     format!(
         "{}/{}-{}.enc",
         export_dir.trim_end_matches('/'),
@@ -181,6 +183,7 @@ pub async fn store_artifact(
     artifacts: &dyn ExportArtifactRepository,
     hasher: &dyn Hasher,
     crypto: &dyn EnvelopeCrypto,
+    ids: &dyn IdGenerator,
     request_id: crate::domain::DsrId,
     subject_id: crate::domain::SubjectId,
     archive: Vec<u8>,
@@ -192,7 +195,7 @@ pub async fn store_artifact(
     now: DateTime<Utc>,
 ) -> Result<ExportArtifact, PrivacyError> {
     let encrypted = crypto.encrypt_with_passphrase(&archive, passphrase)?;
-    let id = Uuid::now_v7();
+    let id = ids.next_export_artifact_id()?;
     let path = artifact_path(export_dir, id, now);
     if let Some(parent) = std::path::Path::new(&path).parent() {
         tokio::fs::create_dir_all(parent)

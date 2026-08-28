@@ -5,9 +5,9 @@
 use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use super::error::PrivacyError;
 use super::jurisdiction::{JurisdictionProfile, add_business_days, add_days};
@@ -15,6 +15,16 @@ use super::types::{DsrKind, DsrStatus, JurisdictionRef, Requester, SubjectRef};
 
 pub type DsrId = sanvi_kernel::Id<DsrTag>;
 pub type SubjectId = sanvi_kernel::Id<SubjectTag>;
+pub type AppealId = sanvi_kernel::Id<AppealTag>;
+pub type AuthorizedAgentId = sanvi_kernel::Id<AuthorizedAgentTag>;
+pub type BreachIncidentId = sanvi_kernel::Id<BreachIncidentTag>;
+pub type ConsentId = sanvi_kernel::Id<ConsentTag>;
+pub type ExportArtifactId = sanvi_kernel::Id<ExportArtifactTag>;
+pub type LegalHoldId = sanvi_kernel::Id<LegalHoldTag>;
+pub type PreferenceSignalId = sanvi_kernel::Id<PreferenceSignalTag>;
+pub type ProcessingActivityId = sanvi_kernel::Id<ProcessingActivityTag>;
+pub type RiskAssessmentId = sanvi_kernel::Id<RiskAssessmentTag>;
+pub type VerificationChallengeId = sanvi_kernel::Id<VerificationChallengeTag>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum DsrTag {}
@@ -22,12 +32,43 @@ pub enum DsrTag {}
 #[derive(Debug, Clone, Copy)]
 pub enum SubjectTag {}
 
+#[derive(Debug, Clone, Copy)]
+pub enum AppealTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AuthorizedAgentTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BreachIncidentTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ConsentTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExportArtifactTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum LegalHoldTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PreferenceSignalTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ProcessingActivityTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RiskAssessmentTag {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum VerificationChallengeTag {}
+
 /// The persisted subject: identity anchor + resolved jurisdiction.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DataSubject {
     #[schema(value_type = String)]
     pub id: SubjectId,
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
     pub subject_ref: SubjectRef,
     pub jurisdiction: JurisdictionRef,
     pub jurisdiction_evidence: Vec<super::types::JurisdictionEvidence>,
@@ -42,7 +83,8 @@ pub struct DataSubject {
 pub struct DataSubjectRequest {
     #[schema(value_type = String)]
     pub id: DsrId,
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
     #[schema(value_type = String)]
     pub subject_id: SubjectId,
     pub subject_ref: SubjectRef,
@@ -56,14 +98,18 @@ pub struct DataSubjectRequest {
     pub completed_at: Option<DateTime<Utc>>,
     pub jurisdiction: JurisdictionRef,
     pub submitted_by: Requester,
-    pub agent_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub agent_id: Option<AuthorizedAgentId>,
     #[schema(value_type = Option<String>)]
     pub requester_ip: Option<IpAddr>,
     pub requester_note: Option<String>,
     pub rejection_reason: Option<String>,
-    pub rejected_by: Option<Uuid>,
-    pub appeal_id: Option<Uuid>,
-    pub export_artifact_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub rejected_by: Option<UserId>,
+    #[schema(value_type = Option<String>)]
+    pub appeal_id: Option<AppealId>,
+    #[schema(value_type = Option<String>)]
+    pub export_artifact_id: Option<ExportArtifactId>,
 }
 
 impl DataSubjectRequest {
@@ -163,7 +209,8 @@ impl DataSubjectRequest {
 /// The appeal aggregate (US states with an appeal right).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Appeal {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: AppealId,
     #[schema(value_type = String)]
     pub request_id: DsrId,
     pub reason: String,
@@ -171,7 +218,8 @@ pub struct Appeal {
     pub due_at: DateTime<Utc>,
     pub outcome: Option<AppealOutcome>,
     pub decided_at: Option<DateTime<Utc>>,
-    pub decided_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub decided_by: Option<UserId>,
     pub decision_reason: Option<String>,
     pub authority_notice: Option<super::jurisdiction::AuthorityContact>,
 }
@@ -187,10 +235,10 @@ impl Appeal {
     pub fn decide(
         &mut self,
         outcome: AppealOutcome,
-        decided_by: Uuid,
+        decided_by: UserId,
         reason: String,
         now: DateTime<Utc>,
-        rejected_by: Option<Uuid>,
+        rejected_by: Option<UserId>,
     ) -> Result<(), PrivacyError> {
         if self.decided_at.is_some() {
             return Err(PrivacyError::Conflict("appeal already decided".to_string()));
@@ -215,8 +263,10 @@ impl Appeal {
 /// A consent/directive ledger entry.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ConsentRecord {
-    pub id: Uuid,
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = String)]
+    pub id: ConsentId,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
     #[schema(value_type = Option<String>)]
     pub subject_id: Option<SubjectId>,
     pub subject_ref: SubjectRef,
@@ -235,8 +285,10 @@ pub struct ConsentRecord {
 /// A pre-authentication preference signal (GPC/UOOM).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PreferenceSignal {
-    pub id: Uuid,
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = String)]
+    pub id: PreferenceSignalId,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
     pub signal: String,
     pub device_ref: String,
     #[schema(value_type = Option<String>)]
@@ -262,13 +314,16 @@ pub struct RetentionRule {
 /// A legal hold: blocks erasure for the named scope until released.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct LegalHold {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: LegalHoldId,
     pub scope: serde_json::Value,
     pub reason: String,
-    pub created_by: Uuid,
+    #[schema(value_type = String)]
+    pub created_by: UserId,
     pub created_at: DateTime<Utc>,
     pub released_at: Option<DateTime<Utc>>,
-    pub released_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub released_by: Option<UserId>,
 }
 
 /// A sub-processor registry row. `role` is the field that turns an
@@ -353,14 +408,16 @@ impl TransferMechanism {
 /// A breach incident aggregate; obligations are computed per jurisdiction.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct BreachIncident {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: BreachIncidentId,
     pub discovered_at: DateTime<Utc>,
     pub contained_at: Option<DateTime<Utc>>,
     pub affected: AffectedSet,
     pub data_classes: Vec<super::types::DataClass>,
     pub encrypted_at_rest: bool,
     pub notes: Option<String>,
-    pub created_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub created_by: Option<UserId>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -411,7 +468,8 @@ impl ObligationAudience {
 /// An export artifact: packaged, encrypted, TTL-bound.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ExportArtifact {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: ExportArtifactId,
     #[schema(value_type = String)]
     pub request_id: DsrId,
     #[schema(value_type = String)]
@@ -431,7 +489,8 @@ pub struct ExportArtifact {
 /// A verification challenge (email OTP).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct VerificationChallenge {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: VerificationChallengeId,
     #[schema(value_type = String)]
     pub request_id: DsrId,
     pub method: String,
@@ -446,14 +505,16 @@ pub struct VerificationChallenge {
 /// A CCPA authorized-agent submission.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AuthorizedAgent {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: AuthorizedAgentId,
     #[schema(value_type = String)]
     pub request_id: DsrId,
     pub agent_name: String,
     pub agent_contact: Option<serde_json::Value>,
     pub authorization_evidence: serde_json::Value,
     pub consumer_verified_at: Option<DateTime<Utc>>,
-    pub verified_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub verified_by: Option<UserId>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -461,16 +522,19 @@ pub struct AuthorizedAgent {
 /// current processing).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProcessingActivity {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: ProcessingActivityId,
     pub name: String,
     pub purpose: String,
     pub data_classes: Vec<super::types::DataClass>,
     pub controller_role: ControllerRole,
     pub basis: Option<String>,
     pub version: i32,
-    pub supersedes: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub supersedes: Option<ProcessingActivityId>,
     pub active: bool,
-    pub created_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub created_by: Option<UserId>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -509,14 +573,17 @@ impl ControllerRole {
 /// A DPIA / US state data-protection assessment.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RiskAssessment {
-    pub id: Uuid,
-    pub activity_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: RiskAssessmentId,
+    #[schema(value_type = String)]
+    pub activity_id: ProcessingActivityId,
     pub jurisdictions: Vec<JurisdictionRef>,
     pub trigger: RiskAssessmentTrigger,
     pub status: RiskAssessmentStatus,
     pub findings: Option<serde_json::Value>,
     pub mitigations: Option<serde_json::Value>,
-    pub reviewed_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub reviewed_by: Option<UserId>,
     pub reviewed_at: Option<DateTime<Utc>>,
     pub next_review_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,

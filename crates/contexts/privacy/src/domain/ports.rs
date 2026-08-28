@@ -12,13 +12,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{PlatformScope, ScopedTx};
-use uuid::Uuid;
 
 use super::dsr::{
-    Appeal, AuthorizedAgent, BreachIncident, ConsentRecord, DataSubject, DataSubjectRequest, DsrId,
-    ExportArtifact, LegalHold, NotificationObligation, PreferenceSignal, ProcessingActivity,
-    RetentionRule, RiskAssessment, SubProcessor, SubjectId, VerificationChallenge,
+    Appeal, AppealId, AuthorizedAgent, AuthorizedAgentId, BreachIncident, BreachIncidentId,
+    ConsentId, ConsentRecord, DataSubject, DataSubjectRequest, DsrId, ExportArtifact,
+    ExportArtifactId, LegalHold, LegalHoldId, NotificationObligation, PreferenceSignal,
+    PreferenceSignalId, ProcessingActivity, ProcessingActivityId, RetentionRule, RiskAssessment,
+    RiskAssessmentId, SubProcessor, SubjectId, VerificationChallenge, VerificationChallengeId,
 };
 use super::error::PrivacyError;
 use super::events::PrivacyEvent;
@@ -111,7 +113,7 @@ pub trait JurisdictionRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         profile: &JurisdictionProfile,
-        updated_by: Uuid,
+        updated_by: UserId,
     ) -> Result<(), PrivacyError>;
 }
 
@@ -179,7 +181,7 @@ pub trait DsrRepository: Send + Sync {
     async fn list_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         status: Option<super::types::DsrStatus>,
         limit: u32,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError>;
@@ -195,7 +197,7 @@ pub trait DsrRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         id: DsrId,
-        actor: Uuid,
+        actor: UserId,
     ) -> Result<(), PrivacyError>;
     async fn extend(
         &self,
@@ -219,14 +221,14 @@ pub trait DsrRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         id: DsrId,
-        artifact_id: Uuid,
+        artifact_id: ExportArtifactId,
     ) -> Result<(), PrivacyError>;
     /// Erasure requests whose subject is inside `tenant_id` — the
     /// impersonation privacy lock.
     async fn has_open_erasure_for_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<bool, PrivacyError>;
     /// Counters for the annual metrics job.
     async fn metrics_by_kind(
@@ -375,7 +377,7 @@ pub trait ConsentRepository: Send + Sync {
     async fn mark_propagated(
         &self,
         scope: &mut PlatformScope<'_>,
-        record_id: Uuid,
+        record_id: ConsentId,
     ) -> Result<(), PrivacyError>;
     /// Rows past their retention period (the sweep deletes/anonymises them).
     async fn expired(
@@ -387,7 +389,7 @@ pub trait ConsentRepository: Send + Sync {
     async fn delete(
         &self,
         scope: &mut PlatformScope<'_>,
-        record_id: Uuid,
+        record_id: ConsentId,
     ) -> Result<(), PrivacyError>;
     /// Pseudonymise the subject's ledger rows (proof survives, identifiers
     /// are replaced). Returns the number of rows anonymised.
@@ -402,7 +404,7 @@ pub trait ConsentRepository: Send + Sync {
     async fn anonymise_record(
         &self,
         scope: &mut PlatformScope<'_>,
-        record_id: Uuid,
+        record_id: ConsentId,
         anonymised: &SubjectRef,
     ) -> Result<(), PrivacyError>;
 }
@@ -429,7 +431,7 @@ pub trait SignalRepository: Send + Sync {
     async fn bind(
         &self,
         scope: &mut PlatformScope<'_>,
-        signal_id: Uuid,
+        signal_id: PreferenceSignalId,
         subject_id: SubjectId,
         jurisdiction: &str,
     ) -> Result<(), PrivacyError>;
@@ -461,7 +463,7 @@ pub trait SignalRepository: Send + Sync {
     async fn delete(
         &self,
         scope: &mut PlatformScope<'_>,
-        signal_id: Uuid,
+        signal_id: PreferenceSignalId,
     ) -> Result<(), PrivacyError>;
     /// Delete the subject's unbound signals (device observations die with
     /// erasure; bound rows were already anonymised via their subject).
@@ -507,7 +509,7 @@ pub trait RetentionRuleRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         rule: &RetentionRule,
-        updated_by: Uuid,
+        updated_by: UserId,
     ) -> Result<(), PrivacyError>;
     async fn ensure_seeded(&self, scope: &mut PlatformScope<'_>) -> Result<usize, PrivacyError>;
 }
@@ -532,8 +534,8 @@ pub trait LegalHoldRepository: Send + Sync {
     async fn release(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
-        released_by: Uuid,
+        id: LegalHoldId,
+        released_by: UserId,
     ) -> Result<(), PrivacyError>;
 }
 
@@ -565,7 +567,7 @@ pub trait BreachRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: BreachIncidentId,
     ) -> Result<Option<BreachIncident>, PrivacyError>;
     async fn list(
         &self,
@@ -574,18 +576,18 @@ pub trait BreachRepository: Send + Sync {
     async fn save_obligation(
         &self,
         scope: &mut PlatformScope<'_>,
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
         obligation: &NotificationObligation,
     ) -> Result<(), PrivacyError>;
     async fn list_obligations(
         &self,
         scope: &mut PlatformScope<'_>,
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
     ) -> Result<Vec<NotificationObligation>, PrivacyError>;
     async fn mark_notified(
         &self,
         scope: &mut PlatformScope<'_>,
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
         jurisdiction: &str,
         audience: super::dsr::ObligationAudience,
         artifact: Option<serde_json::Value>,
@@ -640,7 +642,7 @@ pub trait ExportArtifactRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: ExportArtifactId,
     ) -> Result<Option<ExportArtifact>, PrivacyError>;
     async fn find_by_request(
         &self,
@@ -650,14 +652,18 @@ pub trait ExportArtifactRepository: Send + Sync {
     async fn record_download(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: ExportArtifactId,
     ) -> Result<(), PrivacyError>;
     async fn expired(
         &self,
         scope: &mut PlatformScope<'_>,
         limit: u32,
     ) -> Result<Vec<ExportArtifact>, PrivacyError>;
-    async fn delete(&self, scope: &mut PlatformScope<'_>, id: Uuid) -> Result<(), PrivacyError>;
+    async fn delete(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: ExportArtifactId,
+    ) -> Result<(), PrivacyError>;
 }
 
 #[async_trait]
@@ -675,9 +681,13 @@ pub trait VerificationRepository: Send + Sync {
     async fn record_attempt(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: VerificationChallengeId,
     ) -> Result<(), PrivacyError>;
-    async fn consume(&self, scope: &mut PlatformScope<'_>, id: Uuid) -> Result<(), PrivacyError>;
+    async fn consume(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: VerificationChallengeId,
+    ) -> Result<(), PrivacyError>;
 }
 
 #[async_trait]
@@ -706,7 +716,7 @@ pub trait ProcessingActivityRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: ProcessingActivityId,
     ) -> Result<Option<ProcessingActivity>, PrivacyError>;
     async fn list_active(
         &self,
@@ -725,7 +735,7 @@ pub trait RiskAssessmentRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: RiskAssessmentId,
     ) -> Result<Option<RiskAssessment>, PrivacyError>;
     async fn list(
         &self,
@@ -750,7 +760,7 @@ pub trait AuthorizedAgentRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         request_id: DsrId,
-        verified_by: Uuid,
+        verified_by: UserId,
     ) -> Result<(), PrivacyError>;
 }
 
@@ -886,7 +896,7 @@ pub trait AuditWriter: Send + Sync {
     async fn record(
         &self,
         scope: &mut PlatformScope<'_>,
-        actor: Uuid,
+        actor: Option<UserId>,
         action: String,
         resource: String,
         detail: serde_json::Value,
@@ -898,7 +908,18 @@ pub trait Clock: Send + Sync {
 }
 
 pub trait IdGenerator: Send + Sync {
-    fn next(&self) -> Uuid;
+    fn next_subject_id(&self) -> Result<SubjectId, PrivacyError>;
+    fn next_dsr_id(&self) -> Result<DsrId, PrivacyError>;
+    fn next_appeal_id(&self) -> Result<AppealId, PrivacyError>;
+    fn next_authorized_agent_id(&self) -> Result<AuthorizedAgentId, PrivacyError>;
+    fn next_breach_incident_id(&self) -> Result<BreachIncidentId, PrivacyError>;
+    fn next_consent_id(&self) -> Result<ConsentId, PrivacyError>;
+    fn next_export_artifact_id(&self) -> Result<ExportArtifactId, PrivacyError>;
+    fn next_legal_hold_id(&self) -> Result<LegalHoldId, PrivacyError>;
+    fn next_preference_signal_id(&self) -> Result<PreferenceSignalId, PrivacyError>;
+    fn next_processing_activity_id(&self) -> Result<ProcessingActivityId, PrivacyError>;
+    fn next_risk_assessment_id(&self) -> Result<RiskAssessmentId, PrivacyError>;
+    fn next_verification_challenge_id(&self) -> Result<VerificationChallengeId, PrivacyError>;
 }
 
 /// The registry of every context that must register a provider. The CI test

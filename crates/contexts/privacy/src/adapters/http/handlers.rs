@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, web};
 use sanvi_http::{ApiError, OptionalSubject, RequiredPermission, TenantContext};
+use sanvi_kernel::{TenantId, UserId};
 use serde::Deserialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -23,7 +24,8 @@ use crate::application::{
     UpsertSubProcessorCommand, VerifyRequest, VerifyRequestCommand,
 };
 use crate::domain::{
-    DirectiveResolver, DsrStatus, PrivacyError, ProcessingPurpose, RectifyPatch, SubjectRef,
+    AppealId, BreachIncidentId, DirectiveResolver, DsrId, DsrStatus, LegalHoldId, PrivacyError,
+    ProcessingPurpose, RectifyPatch, SubjectRef,
 };
 
 /// Application state visible to this context's handlers.
@@ -135,8 +137,32 @@ fn require_subject(subject: OptionalSubject) -> Result<sanvi_http::Subject, ApiE
     subject.0.ok_or(ApiError::Unauthorized)
 }
 
-fn require_actor(subject: OptionalSubject) -> Result<Uuid, ApiError> {
+fn require_actor(subject: OptionalSubject) -> Result<UserId, ApiError> {
     require_subject(subject).map(|subject| subject.user_id)
+}
+
+/// Parse a DSR id path segment.
+fn dsr_id(path: &web::Path<String>) -> Result<DsrId, ApiError> {
+    path.parse::<DsrId>()
+        .map_err(|_| ApiError::bad_request("invalid request id"))
+}
+
+/// Parse an appeal id path segment.
+fn appeal_id(path: &web::Path<String>) -> Result<AppealId, ApiError> {
+    path.parse::<AppealId>()
+        .map_err(|_| ApiError::bad_request("invalid appeal id"))
+}
+
+/// Parse a legal hold id path segment.
+fn hold_id(path: &web::Path<String>) -> Result<LegalHoldId, ApiError> {
+    path.parse::<LegalHoldId>()
+        .map_err(|_| ApiError::bad_request("invalid hold id"))
+}
+
+/// Parse a breach incident id path segment.
+fn incident_id(path: &web::Path<String>) -> Result<BreachIncidentId, ApiError> {
+    path.parse::<BreachIncidentId>()
+        .map_err(|_| ApiError::bad_request("invalid incident id"))
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +213,7 @@ pub struct VerifyRequestRequest {
     path = "/api/v1/privacy/requests/{id}/verify",
     tag = "privacy",
     operation_id = "verify_dsr",
-    params(("id" = Uuid, Path, description = "The request id")),
+    params(("id" = String, Path, description = "The request id")),
     request_body = VerifyRequestRequest,
     responses(
         (status = 200, description = "Verified", body = crate::application::VerifyRequestOutput),
@@ -196,13 +222,13 @@ pub struct VerifyRequestRequest {
 )]
 pub async fn verify_dsr(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     body: web::Json<VerifyRequestRequest>,
 ) -> Result<impl Responder, ApiError> {
     let output = state
         .verify_request
         .execute(VerifyRequestCommand {
-            request_id: path.into_inner(),
+            request_id: dsr_id(&path)?,
             token: body.token.clone(),
             code: body.code.clone(),
         })
@@ -223,7 +249,7 @@ pub struct GetRequestQuery {
     path = "/api/v1/privacy/requests/{id}",
     tag = "privacy",
     operation_id = "get_dsr_status",
-    params(("id" = Uuid, Path, description = "The request id"), ("token" = Option<String>, Query, description = "Challenge token (for unauthenticated requesters)")),
+    params(("id" = String, Path, description = "The request id"), ("token" = Option<String>, Query, description = "Challenge token (for unauthenticated requesters)")),
     responses(
         (status = 200, description = "Status incl. ack time and due date", body = crate::application::GetRequestStatusOutput),
         (status = 404, description = "Unknown request", body = sanvi_http::ProblemDetail)
@@ -231,14 +257,14 @@ pub struct GetRequestQuery {
 )]
 pub async fn get_dsr_status(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     query: web::Query<GetRequestQuery>,
     subject: OptionalSubject,
 ) -> Result<impl Responder, ApiError> {
     let user = subject.0.map(|subject| subject.user_id);
     let output = state
         .get_request_status
-        .execute(path.into_inner(), user, query.token.as_deref())
+        .execute(dsr_id(&path)?, user, query.token.as_deref())
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(output))
@@ -263,7 +289,7 @@ pub struct DownloadHeaders {
     path = "/api/v1/privacy/requests/{id}/download",
     tag = "privacy",
     operation_id = "download_export",
-    params(("id" = Uuid, Path, description = "The request id"), ("token" = String, Query, description = "Download token")),
+    params(("id" = String, Path, description = "The request id"), ("token" = String, Query, description = "Download token")),
     responses(
         (status = 200, description = "The encrypted export archive", body = Vec<u8>),
         (status = 404, description = "Unknown artifact", body = sanvi_http::ProblemDetail),
@@ -272,7 +298,7 @@ pub struct DownloadHeaders {
 )]
 pub async fn download_export(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     query: web::Query<DownloadQuery>,
     req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
@@ -284,7 +310,7 @@ pub async fn download_export(
     let output = state
         .download_export
         .execute(DownloadExportCommand {
-            request_id: path.into_inner(),
+            request_id: dsr_id(&path)?,
             token: query.token.clone(),
             passphrase: passphrase.to_string(),
         })
@@ -502,7 +528,7 @@ pub struct AppealRequestRequest {
     path = "/api/v1/privacy/requests/{id}/appeal",
     tag = "privacy",
     operation_id = "appeal_request",
-    params(("id" = Uuid, Path, description = "The refused request id")),
+    params(("id" = String, Path, description = "The refused request id")),
     request_body = AppealRequestRequest,
     responses(
         (status = 201, description = "Appeal accepted; authority contact included", body = crate::application::AppealRequestOutput),
@@ -511,7 +537,7 @@ pub struct AppealRequestRequest {
 )]
 pub async fn appeal_request(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     subject: OptionalSubject,
     body: web::Json<AppealRequestRequest>,
 ) -> Result<impl Responder, ApiError> {
@@ -521,7 +547,7 @@ pub async fn appeal_request(
         .execute(
             Some(user.user_id),
             AppealRequestCommand {
-                request_id: path.into_inner(),
+                request_id: dsr_id(&path)?,
                 reason: body.reason.clone(),
             },
         )
@@ -541,13 +567,13 @@ pub struct RectifyRequest {
     path = "/api/v1/privacy/requests/{id}/rectify",
     tag = "privacy",
     operation_id = "rectify_request",
-    params(("id" = Uuid, Path, description = "The rectification request id")),
+    params(("id" = String, Path, description = "The rectification request id")),
     request_body = RectifyRequest,
     responses((status = 200, description = "Corrections applied"))
 )]
 pub async fn rectify_request(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     subject: OptionalSubject,
     body: web::Json<RectifyRequest>,
 ) -> Result<impl Responder, ApiError> {
@@ -556,7 +582,7 @@ pub async fn rectify_request(
         .patch_request
         .execute(
             user.user_id,
-            path.into_inner(),
+            dsr_id(&path)?,
             RectifyPatch {
                 corrections: body.corrections.clone(),
             },
@@ -663,7 +689,7 @@ pub async fn list_public_subprocessors(
 // Tenant processor mode
 // ---------------------------------------------------------------------------
 
-fn current_tenant(req: &HttpRequest) -> Result<Uuid, ApiError> {
+fn current_tenant(req: &HttpRequest) -> Result<TenantId, ApiError> {
     req.extensions()
         .get::<TenantContext>()
         .map(|context| context.tenant_id)
@@ -786,13 +812,13 @@ pub struct RejectRequestRequest {
     path = "/api/v1/platform/privacy/requests/{id}/reject",
     tag = "privacy",
     operation_id = "reject_dsr",
-    params(("id" = Uuid, Path, description = "The request id")),
+    params(("id" = String, Path, description = "The request id")),
     request_body = RejectRequestRequest,
     responses((status = 200, description = "Rejected"))
 )]
 pub async fn reject_dsr(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     subject: OptionalSubject,
     body: web::Json<RejectRequestRequest>,
     _guard: RequiredPermission,
@@ -800,7 +826,7 @@ pub async fn reject_dsr(
     let actor = require_actor(subject)?;
     state
         .reject_request
-        .execute(actor, path.into_inner(), body.reason.clone())
+        .execute(actor, dsr_id(&path)?, body.reason.clone())
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().finish())
@@ -813,12 +839,12 @@ pub async fn reject_dsr(
     path = "/api/v1/platform/privacy/requests/{id}/extend",
     tag = "privacy",
     operation_id = "extend_dsr",
-    params(("id" = Uuid, Path, description = "The request id")),
+    params(("id" = String, Path, description = "The request id")),
     responses((status = 200, description = "New deadline", body = chrono::DateTime<chrono::Utc>))
 )]
 pub async fn extend_dsr(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     subject: OptionalSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -828,7 +854,7 @@ pub async fn extend_dsr(
         .execute(
             actor,
             ExtendDeadlineCommand {
-                request_id: path.into_inner(),
+                request_id: dsr_id(&path)?,
             },
         )
         .await
@@ -866,7 +892,7 @@ pub struct DecideAppealRequest {
     path = "/api/v1/platform/privacy/appeals/{id}/decision",
     tag = "privacy",
     operation_id = "decide_appeal",
-    params(("id" = Uuid, Path, description = "The appeal id")),
+    params(("id" = String, Path, description = "The appeal id")),
     request_body = DecideAppealRequest,
     responses(
         (status = 200, description = "Decision recorded", body = crate::application::DecideAppealOutput),
@@ -875,7 +901,7 @@ pub struct DecideAppealRequest {
 )]
 pub async fn decide_appeal(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     subject: OptionalSubject,
     body: web::Json<DecideAppealRequest>,
     _guard: RequiredPermission,
@@ -886,7 +912,7 @@ pub async fn decide_appeal(
         .execute(
             actor,
             DecideAppealCommand {
-                appeal_id: path.into_inner(),
+                appeal_id: appeal_id(&path)?,
                 outcome: body.outcome,
                 reason: body.reason.clone(),
             },
@@ -967,7 +993,7 @@ pub async fn list_holds(
     tag = "privacy",
     operation_id = "apply_hold",
     request_body = ApplyLegalHoldCommand,
-    responses((status = 201, description = "Hold applied", body = Uuid))
+    responses((status = 201, description = "Hold applied", body = String))
 )]
 pub async fn apply_hold(
     state: web::Data<PrivacyState>,
@@ -990,19 +1016,19 @@ pub async fn apply_hold(
     path = "/api/v1/platform/privacy/holds/{id}/release",
     tag = "privacy",
     operation_id = "release_hold",
-    params(("id" = Uuid, Path, description = "The hold id")),
+    params(("id" = String, Path, description = "The hold id")),
     responses((status = 200, description = "Hold released"))
 )]
 pub async fn release_hold(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     subject: OptionalSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
     let actor = require_actor(subject)?;
     state
         .release_hold
-        .execute(actor, path.into_inner())
+        .execute(actor, hold_id(&path)?)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().finish())
@@ -1059,18 +1085,18 @@ pub async fn record_incident(
     path = "/api/v1/platform/privacy/incidents/{id}/obligations",
     tag = "privacy",
     operation_id = "list_obligations",
-    params(("id" = Uuid, Path, description = "The incident id")),
+    params(("id" = String, Path, description = "The incident id")),
     responses((status = 200, description = "Obligations", body = Vec<crate::domain::NotificationObligation>))
 )]
 pub async fn list_obligations(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     _subject: OptionalSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
     let obligations = state
         .list_obligations
-        .execute(path.into_inner())
+        .execute(incident_id(&path)?)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(obligations))
@@ -1083,13 +1109,13 @@ pub async fn list_obligations(
     path = "/api/v1/platform/privacy/incidents/{id}/notify",
     tag = "privacy",
     operation_id = "mark_obligation_notified",
-    params(("id" = Uuid, Path, description = "The incident id")),
+    params(("id" = String, Path, description = "The incident id")),
     request_body = MarkBreachNotifiedCommand,
     responses((status = 200, description = "Recorded"))
 )]
 pub async fn mark_obligation_notified(
     state: web::Data<PrivacyState>,
-    path: web::Path<Uuid>,
+    path: web::Path<String>,
     subject: OptionalSubject,
     body: web::Json<MarkBreachNotifiedCommand>,
     _guard: RequiredPermission,
@@ -1097,7 +1123,7 @@ pub async fn mark_obligation_notified(
     let actor = require_actor(subject)?;
     state
         .mark_notified
-        .execute(actor, path.into_inner(), body.into_inner())
+        .execute(actor, incident_id(&path)?, body.into_inner())
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().finish())
@@ -1198,7 +1224,7 @@ pub async fn list_activities(
     tag = "privacy",
     operation_id = "upsert_activity",
     request_body = UpsertActivityCommand,
-    responses((status = 201, description = "Recorded", body = Uuid))
+    responses((status = 201, description = "Recorded", body = String))
 )]
 pub async fn upsert_activity(
     state: web::Data<PrivacyState>,
@@ -1240,7 +1266,7 @@ pub async fn list_assessments(
     tag = "privacy",
     operation_id = "upsert_assessment",
     request_body = UpsertAssessmentCommand,
-    responses((status = 201, description = "Recorded", body = Uuid))
+    responses((status = 201, description = "Recorded", body = String))
 )]
 pub async fn upsert_assessment(
     state: web::Data<PrivacyState>,
