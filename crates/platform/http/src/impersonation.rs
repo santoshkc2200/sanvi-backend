@@ -19,7 +19,7 @@ use actix_web::{
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
+use sanvi_kernel::{RoleId, SnowflakeId, TenantId, UserId};
 
 use crate::authn::Subject;
 use crate::error::ApiError;
@@ -51,11 +51,11 @@ impl ImpersonationMode {
 /// A valid, active impersonation grant resolved for the current request.
 #[derive(Debug, Clone)]
 pub struct ImpersonatedSubject {
-    pub grant_id: Uuid,
-    pub actor_user_id: Uuid,
-    pub target_user_id: Uuid,
-    pub tenant_id: Uuid,
-    pub role_ids: Vec<Uuid>,
+    pub grant_id: SnowflakeId,
+    pub actor_user_id: UserId,
+    pub target_user_id: UserId,
+    pub tenant_id: TenantId,
+    pub role_ids: Vec<RoleId>,
     pub mode: ImpersonationMode,
 }
 
@@ -65,9 +65,9 @@ pub struct ImpersonatedSubject {
 pub trait ImpersonationVerifier: Send + Sync {
     fn verify<'a>(
         &'a self,
-        grant_id: Uuid,
+        grant_id: SnowflakeId,
         actor: &'a Subject,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ImpersonatedSubject>, ApiError>> + Send + 'a>>;
 }
 
@@ -75,15 +75,15 @@ pub trait ImpersonationVerifier: Send + Sync {
 /// middleware; read by handlers that must record `on_behalf_of`).
 #[derive(Debug, Clone)]
 pub struct ImpersonationContext {
-    pub grant_id: Uuid,
-    pub actor_user_id: Uuid,
-    pub target_user_id: Uuid,
+    pub grant_id: SnowflakeId,
+    pub actor_user_id: UserId,
+    pub target_user_id: UserId,
     pub mode: ImpersonationMode,
 }
 
 /// Convenience: the impersonating actor for audit attribution, when the
 /// request ran under impersonation.
-pub fn impersonation_actor(req: &actix_web::HttpRequest) -> Option<Uuid> {
+pub fn impersonation_actor(req: &actix_web::HttpRequest) -> Option<UserId> {
     req.extensions()
         .get::<ImpersonationContext>()
         .map(|context| context.actor_user_id)
@@ -163,7 +163,7 @@ where
                 return service.call(req).await;
             };
 
-            let Ok(grant_id) = raw.parse::<Uuid>() else {
+            let Ok(grant_id) = raw.parse::<SnowflakeId>() else {
                 return Ok(req.into_response(
                     ApiError::BadRequest {
                         detail: "invalid impersonation grant id".to_string(),

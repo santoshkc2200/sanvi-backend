@@ -1,4 +1,5 @@
 use thiserror::Error;
+use sanvi_kernel::IdGenerationError;
 
 /// Domain errors for the `access` context.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -69,4 +70,13 @@ pub enum AccessError {
 
     #[error("storage failure")]
     Storage(String),
+
+    #[error("ID generation failure: {0}")]
+    IdGeneration(String),
+}
+
+impl From<IdGenerationError> for AccessError {
+    fn from(error: IdGenerationError) -> Self {
+        Self::IdGeneration(error.to_string())
+    }
 }

@@ -81,7 +81,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
                revoked_at = EXCLUDED.revoked_at,
                revoked_by = EXCLUDED.revoked_by",
         )
-        .bind(grant.id().as_uuid())
+        .bind(grant.id().as_i64())
         .bind(grant.actor_id())
         .bind(grant.tenant_id())
         .bind(grant.target_user_id())
@@ -107,7 +107,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
                     created_at, expires_at, revoked_at, revoked_by
              FROM platform_admin.impersonation_grants WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -284,7 +284,7 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
                decided_by = EXCLUDED.decided_by,
                decided_at = EXCLUDED.decided_at",
         )
-        .bind(approval.id().as_uuid())
+        .bind(approval.id().as_i64())
         .bind(approval.requested_by())
         .bind(approval.action_type())
         .bind(approval.payload())
@@ -308,7 +308,7 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
                     decided_by, decided_at
              FROM platform_admin.pending_approvals WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -442,7 +442,7 @@ impl TenantAdminViewRepository for SqlxTenantAdminViewRepository {
         let views = self.assemble(scope, &tenants).await?;
         let cursor = next_cursor.map(|cursor| TenantViewCursor {
             created_at: cursor.created_at,
-            tenant_id: cursor.id.as_uuid(),
+            tenant_id: cursor.id.as_i64(),
         });
         Ok((views, cursor))
     }
@@ -473,7 +473,7 @@ impl SqlxTenantAdminViewRepository {
     ) -> Result<Vec<TenantAdminView>, PlatformAdminError> {
         let mut views = Vec::with_capacity(tenants.len());
         for tenant in tenants {
-            let tenant_id = tenant.id().as_uuid();
+            let tenant_id = tenant.id().as_i64();
             let member_count = self
                 .memberships
                 .count_members_platform(scope, tenant_id)

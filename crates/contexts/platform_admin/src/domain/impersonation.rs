@@ -6,10 +6,9 @@
 //! action carries the acting operator's identity (`on_behalf_of`).
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+use sanvi_kernel::{Id, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::PlatformAdminError;
 
@@ -54,24 +53,24 @@ impl ImpersonationMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpersonationGrant {
     id: ImpersonationGrantId,
-    actor_id: Uuid,
-    tenant_id: Uuid,
-    target_user_id: Uuid,
+    actor_id: UserId,
+    tenant_id: TenantId,
+    target_user_id: UserId,
     reason: String,
     mode: ImpersonationMode,
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
-    revoked_by: Option<Uuid>,
+    revoked_by: Option<UserId>,
 }
 
 impl ImpersonationGrant {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ImpersonationGrantId,
-        actor_id: Uuid,
-        tenant_id: Uuid,
-        target_user_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
+        target_user_id: UserId,
         reason: String,
         mode: ImpersonationMode,
         duration_minutes: u32,
@@ -105,15 +104,15 @@ impl ImpersonationGrant {
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         id: ImpersonationGrantId,
-        actor_id: Uuid,
-        tenant_id: Uuid,
-        target_user_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
+        target_user_id: UserId,
         reason: String,
         mode: ImpersonationMode,
         created_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
         revoked_at: Option<DateTime<Utc>>,
-        revoked_by: Option<Uuid>,
+        revoked_by: Option<UserId>,
     ) -> Self {
         Self {
             id,
@@ -132,13 +131,13 @@ impl ImpersonationGrant {
     pub fn id(&self) -> ImpersonationGrantId {
         self.id
     }
-    pub fn actor_id(&self) -> Uuid {
+    pub fn actor_id(&self) -> UserId {
         self.actor_id
     }
-    pub fn tenant_id(&self) -> Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         self.tenant_id
     }
-    pub fn target_user_id(&self) -> Uuid {
+    pub fn target_user_id(&self) -> UserId {
         self.target_user_id
     }
     pub fn reason(&self) -> &str {
@@ -156,7 +155,7 @@ impl ImpersonationGrant {
     pub fn revoked_at(&self) -> Option<DateTime<Utc>> {
         self.revoked_at
     }
-    pub fn revoked_by(&self) -> Option<Uuid> {
+    pub fn revoked_by(&self) -> Option<UserId> {
         self.revoked_by
     }
 
@@ -166,7 +165,7 @@ impl ImpersonationGrant {
     }
 
     /// Revoke (idempotent: revoking a revoked grant is a no-op).
-    pub fn revoke(&mut self, revoked_by: Uuid, now: DateTime<Utc>) {
+    pub fn revoke(&mut self, revoked_by: UserId, now: DateTime<Utc>) {
         if self.revoked_at.is_none() {
             self.revoked_at = Some(now);
             self.revoked_by = Some(revoked_by);
@@ -180,10 +179,10 @@ mod tests {
 
     fn grant(duration: u32) -> ImpersonationGrant {
         ImpersonationGrant::new(
-            ImpersonationGrantId::new(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            ImpersonationGrantId::try_from(101_i64).unwrap(),
+            UserId::try_from(102_i64).unwrap(),
+            TenantId::try_from(103_i64).unwrap(),
+            UserId::try_from(104_i64).unwrap(),
             "investigating support ticket #123".to_string(),
             ImpersonationMode::ReadOnly,
             duration,
@@ -197,10 +196,10 @@ mod tests {
     fn grants_require_a_reason_and_a_positive_duration() {
         assert!(matches!(
             ImpersonationGrant::new(
-                ImpersonationGrantId::new(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                ImpersonationGrantId::try_from(101_i64).unwrap(),
+                UserId::try_from(102_i64).unwrap(),
+                TenantId::try_from(103_i64).unwrap(),
+                UserId::try_from(104_i64).unwrap(),
                 "   ".to_string(),
                 ImpersonationMode::ReadOnly,
                 10,
@@ -211,10 +210,10 @@ mod tests {
         ));
         assert!(matches!(
             ImpersonationGrant::new(
-                ImpersonationGrantId::new(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                ImpersonationGrantId::try_from(101_i64).unwrap(),
+                UserId::try_from(102_i64).unwrap(),
+                TenantId::try_from(103_i64).unwrap(),
+                UserId::try_from(104_i64).unwrap(),
                 "reason".to_string(),
                 ImpersonationMode::ReadOnly,
                 0,
@@ -229,10 +228,10 @@ mod tests {
     fn duration_is_capped_at_the_configured_maximum() {
         assert!(matches!(
             ImpersonationGrant::new(
-                ImpersonationGrantId::new(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                ImpersonationGrantId::try_from(101_i64).unwrap(),
+                UserId::try_from(102_i64).unwrap(),
+                TenantId::try_from(103_i64).unwrap(),
+                UserId::try_from(104_i64).unwrap(),
                 "reason".to_string(),
                 ImpersonationMode::ReadOnly,
                 31,
@@ -254,7 +253,7 @@ mod tests {
     #[test]
     fn revocation_is_immediate_and_idempotent() {
         let mut grant = grant(30);
-        let revoker = Uuid::now_v7();
+        let revoker = UserId::try_from(105_i64).unwrap();
         grant.revoke(revoker, Utc::now());
         assert!(!grant.is_active(Utc::now()));
         assert_eq!(grant.revoked_by(), Some(revoker));

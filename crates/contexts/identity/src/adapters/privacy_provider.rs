@@ -12,7 +12,6 @@
 //! context owns the trail).
 
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use sanvi_persistence::TxManager;
 use sanvi_privacy::domain::{
@@ -60,12 +59,12 @@ impl IdentityPrivacyProvider {
         }
     }
 
-    fn user_id(subject: &SubjectRef) -> Option<Uuid> {
+    fn user_id(subject: &SubjectRef) -> Option<UserId> {
         subject
             .identifiers
             .iter()
             .find(|id| id.id_type == "user_id")
-            .and_then(|id| Uuid::parse_str(&id.value).ok())
+            .and_then(|id| id.value.parse::<UserId>().ok())
     }
 
     fn email(subject: &SubjectRef) -> Option<String> {
@@ -108,7 +107,7 @@ impl PersonalDataProvider for IdentityPrivacyProvider {
         let mut entries = Vec::new();
 
         if let Some(user_id) = Self::user_id(subject) {
-            let id = UserId::from_uuid(user_id);
+            let id = user_id;
             if let Some(user) = self
                 .users
                 .find_by_id(&mut scope, id)
@@ -147,7 +146,7 @@ impl PersonalDataProvider for IdentityPrivacyProvider {
                 .await
                 .map_err(storage)?
                 .into_iter()
-                .filter(|membership| membership.user_id().as_uuid() == user_id)
+                .filter(|membership| membership.user_id() == user_id)
             {
                 entries.push(DataEntry {
                     data_class: DataClass::Membership,
@@ -229,7 +228,7 @@ impl PersonalDataProvider for IdentityPrivacyProvider {
         }
 
         if let Some(user_id) = Self::user_id(subject) {
-            let id = UserId::from_uuid(user_id);
+            let id = user_id;
 
             // Anonymise + deactivate the projection. The pseudonym email
             // keeps the partial unique index satisfied while releasing the
@@ -311,7 +310,7 @@ impl PersonalDataProvider for IdentityPrivacyProvider {
                 "rectification requires a user subject".to_string(),
             ));
         };
-        let id = UserId::from_uuid(user_id);
+        let id = user_id;
         let mut scope = self
             .tx_manager
             .begin_unscoped("identity_privacy_rectify", "identity")

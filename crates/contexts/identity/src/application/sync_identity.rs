@@ -133,7 +133,7 @@ impl SyncIdentityFromKratos {
                 }
                 None => {
                     let user = User::project_new(
-                        self.ids.next_user_id(),
+                        self.ids.next_user_id()?,
                         input.kratos_identity_id,
                         input.email.clone(),
                         input.email_verified,

@@ -2,15 +2,13 @@
 //! by every tenant) and per-tenant custom roles.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+use sanvi_kernel::{RoleId, TenantId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::domain::AccessError;
 use crate::domain::permissions::PermissionScope;
 
-pub enum RoleTag {}
-pub type RoleId = Id<RoleTag>;
 
 /// Where a role applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -45,7 +43,7 @@ pub struct Role {
     scope: RoleScope,
     /// Tenant id for custom tenant roles; NULL for platform roles and the
     /// system tenant templates.
-    tenant_id: Option<uuid::Uuid>,
+    tenant_id: Option<TenantId>,
     key: String,
     name: String,
     permissions: std::collections::BTreeSet<String>,
@@ -57,7 +55,7 @@ impl Role {
     pub fn new(
         id: RoleId,
         scope: RoleScope,
-        tenant_id: Option<uuid::Uuid>,
+        tenant_id: Option<TenantId>,
         key: String,
         name: String,
         permissions: std::collections::BTreeSet<String>,
@@ -107,7 +105,7 @@ impl Role {
     pub fn from_parts(
         id: RoleId,
         scope: RoleScope,
-        tenant_id: Option<uuid::Uuid>,
+        tenant_id: Option<TenantId>,
         key: String,
         name: String,
         permissions: std::collections::BTreeSet<String>,
@@ -132,7 +130,7 @@ impl Role {
     pub fn scope(&self) -> RoleScope {
         self.scope
     }
-    pub fn tenant_id(&self) -> Option<uuid::Uuid> {
+    pub fn tenant_id(&self) -> Option<TenantId> {
         self.tenant_id
     }
     pub fn key(&self) -> &str {

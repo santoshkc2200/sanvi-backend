@@ -77,6 +77,12 @@ pub fn api_error(err: PlatformAdminError) -> ApiError {
             tracing::error!(error = %detail, "platform_admin storage failure");
             ApiError::internal("storage failure")
         }
+        PlatformAdminError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "platform_admin ID generation failure");
+            ApiError::ServiceUnavailable {
+                detail: "ID generation is temporarily unavailable".to_string(),
+            }
+        }
     }
 }
 

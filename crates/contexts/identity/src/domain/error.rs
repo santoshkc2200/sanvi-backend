@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::domain::values::{Email, ProviderId};
 use crate::domain::{InvitationId, MembershipStatus, UserId};
+use sanvi_kernel::{IdGenerationError, RoleId, TenantId};
 
 /// Domain errors for the `identity` context.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -36,7 +37,7 @@ pub enum IdentityError {
     #[error("user {user_id} is not a member of tenant {tenant_id}")]
     NotAMember {
         user_id: UserId,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     },
 
     #[error("a member cannot remove their own membership")]
@@ -73,10 +74,10 @@ pub enum IdentityError {
     InvitationEmailMismatch,
 
     #[error("unknown role id {0}")]
-    UnknownRole(uuid::Uuid),
+    UnknownRole(RoleId),
 
     #[error("role id {0} is not assignable in this tenant")]
-    RoleNotAssignable(uuid::Uuid),
+    RoleNotAssignable(RoleId),
 
     #[error("no roles specified")]
     NoRoles,
@@ -99,8 +100,17 @@ pub enum IdentityError {
     #[error("kratos rejected the request: {0}")]
     KratosRejected(String),
 
+    #[error("ID generation failure: {0}")]
+    IdGeneration(String),
+
     #[error("storage failure")]
     Storage(String),
+}
+
+impl From<IdGenerationError> for IdentityError {
+    fn from(error: IdGenerationError) -> Self {
+        Self::IdGeneration(error.to_string())
+    }
 }
 
 impl IdentityError {

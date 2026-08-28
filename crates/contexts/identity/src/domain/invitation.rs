@@ -4,7 +4,7 @@
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use rand::rngs::OsRng;
-use sanvi_kernel::Id;
+use sanvi_kernel::{Id, RoleId, TenantId};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -56,9 +56,9 @@ impl InvitationToken {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Invitation {
     id: InvitationId,
-    tenant_id: uuid::Uuid,
+    tenant_id: TenantId,
     email: Email,
-    role_ids: Vec<uuid::Uuid>,
+    role_ids: Vec<RoleId>,
     token_hash: String,
     invited_by: Option<UserId>,
     created_at: DateTime<Utc>,
@@ -69,9 +69,9 @@ pub struct Invitation {
 impl Invitation {
     pub fn new(
         id: InvitationId,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         email: Email,
-        role_ids: Vec<uuid::Uuid>,
+        role_ids: Vec<RoleId>,
         token: &InvitationToken,
         invited_by: Option<UserId>,
         now: DateTime<Utc>,
@@ -100,9 +100,9 @@ impl Invitation {
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         id: InvitationId,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         email: Email,
-        role_ids: Vec<uuid::Uuid>,
+        role_ids: Vec<RoleId>,
         token_hash: String,
         invited_by: Option<UserId>,
         created_at: DateTime<Utc>,
@@ -169,13 +169,13 @@ impl Invitation {
     pub fn id(&self) -> InvitationId {
         self.id
     }
-    pub fn tenant_id(&self) -> uuid::Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         self.tenant_id
     }
     pub fn email(&self) -> &Email {
         &self.email
     }
-    pub fn role_ids(&self) -> &[uuid::Uuid] {
+    pub fn role_ids(&self) -> &[RoleId] {
         &self.role_ids
     }
     pub fn token_hash(&self) -> &str {
@@ -203,10 +203,10 @@ mod tests {
         let token = InvitationToken::generate();
         let now = Utc::now();
         let inv = Invitation::new(
-            InvitationId::new(),
-            uuid::Uuid::now_v7(),
+            InvitationId::try_from(101_i64).unwrap(),
+            TenantId::try_from(102_i64).unwrap(),
             Email::parse("alice@example.com").unwrap(),
-            vec![uuid::Uuid::now_v7()],
+            vec![RoleId::try_from(103_i64).unwrap()],
             &token,
             None,
             now,

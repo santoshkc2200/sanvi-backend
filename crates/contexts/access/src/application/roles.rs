@@ -110,7 +110,7 @@ impl CreateCustomRole {
         ensure_actor_holds(&self.authorizer, actor, cmd.tenant_id, &permissions).await?;
 
         let role = Role::new(
-            self.ids.next_role_id(),
+            self.ids.next_role_id()?,
             RoleScope::Tenant,
             Some(cmd.tenant_id),
             cmd.key.clone(),
@@ -146,7 +146,7 @@ impl CreateCustomRole {
                 &mut scope,
                 &[AccessEvent::RoleCreated {
                     tenant_id: Some(cmd.tenant_id),
-                    role_id: role.id().as_uuid(),
+                    role_id: role.id().as_i64(),
                     key: role.key().to_string(),
                     permissions: permissions.iter().cloned().collect(),
                 }],
@@ -285,7 +285,7 @@ impl UpdateCustomRole {
                 &mut scope,
                 &[AccessEvent::RoleUpdated {
                     tenant_id: Some(tenant_id),
-                    role_id: updated.id().as_uuid(),
+                    role_id: updated.id().as_i64(),
                     key: updated.key().to_string(),
                     added_permissions: added,
                     removed_permissions: removed,
@@ -384,7 +384,7 @@ impl DeleteCustomRole {
                 &mut scope,
                 &[AccessEvent::RoleDeleted {
                     tenant_id: existing.tenant_id(),
-                    role_id: existing.id().as_uuid(),
+                    role_id: existing.id().as_i64(),
                     key: existing.key().to_string(),
                     permissions: existing.permissions().iter().cloned().collect(),
                 }],

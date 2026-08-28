@@ -51,7 +51,7 @@ impl SeedRoles {
             match existing {
                 None => {
                     let role = Role::new(
-                        self.ids.next_role_id(),
+                        self.ids.next_role_id()?,
                         seed.scope,
                         None,
                         seed.key.to_string(),

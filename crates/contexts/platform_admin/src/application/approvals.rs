@@ -33,7 +33,7 @@ pub struct ApprovalView {
 impl From<&PendingApproval> for ApprovalView {
     fn from(approval: &PendingApproval) -> Self {
         Self {
-            id: approval.id().as_uuid(),
+            id: approval.id().as_i64(),
             requested_by: approval.requested_by(),
             action_type: approval.action_type().to_string(),
             payload: approval.payload().clone(),
@@ -166,7 +166,7 @@ impl DecideApproval {
             .find_by_id(&mut scope, cmd.approval_id)
             .await?
             .ok_or(PlatformAdminError::ApprovalNotFound {
-                id: cmd.approval_id.as_uuid(),
+                id: cmd.approval_id.as_i64(),
             })?;
         approval.decide(actor, approve, now)?;
 
@@ -314,13 +314,13 @@ impl RecordApprovalRequest {
         payload: serde_json::Value,
     ) -> Result<Uuid, PlatformAdminError> {
         let approval = PendingApproval::new(
-            self.ids.next_approval_id(),
+            self.ids.next_approval_id()?,
             requested_by,
             action_type.to_string(),
             payload,
             self.clock.now(),
         )?;
-        let id = approval.id().as_uuid();
+        let id = approval.id().as_i64();
         self.approvals.save(scope, &approval).await?;
         Ok(id)
     }

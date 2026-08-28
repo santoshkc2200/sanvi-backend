@@ -4,7 +4,8 @@
 //! convention as tenancy) so the access context can sync Keto tuples
 //! without parsing every payload.
 
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId, RoleId, TenantId};
+use crate::domain::InvitationId;
 use serde::Serialize;
 
 use crate::domain::user::{LinkedVia, UserId};
@@ -81,28 +82,28 @@ pub enum IdentityEvent {
         session_id: String,
     },
     MembershipGranted {
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
-        role_ids: Vec<uuid::Uuid>,
+        role_ids: Vec<RoleId>,
     },
     MembershipRolesChanged {
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
-        role_ids: Vec<uuid::Uuid>,
+        role_ids: Vec<RoleId>,
     },
     MembershipRevoked {
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
-        role_ids: Vec<uuid::Uuid>,
+        role_ids: Vec<RoleId>,
     },
     InvitationSent {
-        invitation_id: uuid::Uuid,
-        tenant_id: uuid::Uuid,
+        invitation_id: InvitationId,
+        tenant_id: TenantId,
         email: Email,
     },
     InvitationAccepted {
-        invitation_id: uuid::Uuid,
-        tenant_id: uuid::Uuid,
+        invitation_id: InvitationId,
+        tenant_id: TenantId,
         user_id: UserId,
     },
     UserDeactivated {
@@ -130,7 +131,7 @@ impl IdentityEvent {
 
     /// The tenant this event belongs to (membership/invitation events);
     /// `None` for user- and session-level events.
-    pub fn tenant_id(&self) -> Option<uuid::Uuid> {
+    pub fn tenant_id(&self) -> Option<TenantId> {
         match self {
             Self::MembershipGranted { tenant_id, .. }
             | Self::MembershipRolesChanged { tenant_id, .. }
@@ -160,16 +161,18 @@ impl IdentityEvent {
     }
 
     /// The outbox envelope for this event.
-    pub fn envelope(&self) -> EventEnvelope {
+    pub fn envelope(&self, id: EventId) -> EventEnvelope {
         let payload = serde_json::to_value(self).expect("identity events serialize infallibly");
         let aggregate_id = self
             .user_id()
-            .map(|id| id.as_uuid())
+            .map(|id| id.as_snowflake())
             .unwrap_or_else(|| match self {
-                Self::InvitationSent { invitation_id, .. } => *invitation_id,
-                _ => uuid::Uuid::nil(),
+                Self::InvitationSent { invitation_id, .. }
+                | Self::InvitationAccepted { invitation_id, .. } => invitation_id.as_snowflake(),
+                _ => sanvi_kernel::SnowflakeId::try_from(1_i64).expect("seed aggregate ID"),
             });
         let mut envelope = EventEnvelope::new(
+            id,
             IdentityEventName::AGGREGATE,
             aggregate_id,
             self.name().as_str(),
@@ -201,15 +204,15 @@ mod tests {
 
     #[test]
     fn membership_events_carry_tenant_metadata() {
-        let tenant_id = uuid::Uuid::now_v7();
-        let user_id = UserId::new();
+        let tenant_id = TenantId::try_from(101_i64).unwrap();
+        let user_id = UserId::try_from(102_i64).unwrap();
         let event = IdentityEvent::MembershipGranted {
             tenant_id,
             user_id,
             role_ids: vec![],
         };
-        let envelope = event.envelope();
-        assert_eq!(envelope.aggregate_id, user_id.as_uuid());
+        let envelope = event.envelope(EventId::try_from(103_i64).unwrap());
+        assert_eq!(envelope.aggregate_id, user_id.as_snowflake());
         assert_eq!(envelope.metadata["tenant_id"], tenant_id.to_string());
         assert!(event.tenant_id().is_some());
     }
@@ -217,7 +220,7 @@ mod tests {
     #[test]
     fn user_events_have_no_tenant() {
         let event = IdentityEvent::UserRegistered {
-            user_id: UserId::new(),
+            user_id: UserId::try_from(101_i64).unwrap(),
             email: Email::parse("a@b.co").unwrap(),
         };
         assert!(event.tenant_id().is_none());

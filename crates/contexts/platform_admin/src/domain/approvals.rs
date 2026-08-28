@@ -3,10 +3,9 @@
 //! Both identities are recorded.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+use sanvi_kernel::{Id, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::PlatformAdminError;
 
@@ -49,19 +48,19 @@ impl ApprovalStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingApproval {
     id: ApprovalId,
-    requested_by: Uuid,
+    requested_by: UserId,
     action_type: String,
     payload: serde_json::Value,
     status: ApprovalStatus,
     requested_at: DateTime<Utc>,
-    decided_by: Option<Uuid>,
+    decided_by: Option<UserId>,
     decided_at: Option<DateTime<Utc>>,
 }
 
 impl PendingApproval {
     pub fn new(
         id: ApprovalId,
-        requested_by: Uuid,
+        requested_by: UserId,
         action_type: String,
         payload: serde_json::Value,
         now: DateTime<Utc>,
@@ -85,12 +84,12 @@ impl PendingApproval {
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         id: ApprovalId,
-        requested_by: Uuid,
+        requested_by: UserId,
         action_type: String,
         payload: serde_json::Value,
         status: ApprovalStatus,
         requested_at: DateTime<Utc>,
-        decided_by: Option<Uuid>,
+        decided_by: Option<UserId>,
         decided_at: Option<DateTime<Utc>>,
     ) -> Self {
         Self {
@@ -108,7 +107,7 @@ impl PendingApproval {
     pub fn id(&self) -> ApprovalId {
         self.id
     }
-    pub fn requested_by(&self) -> Uuid {
+    pub fn requested_by(&self) -> UserId {
         self.requested_by
     }
     pub fn action_type(&self) -> &str {
@@ -123,7 +122,7 @@ impl PendingApproval {
     pub fn requested_at(&self) -> DateTime<Utc> {
         self.requested_at
     }
-    pub fn decided_by(&self) -> Option<Uuid> {
+    pub fn decided_by(&self) -> Option<UserId> {
         self.decided_by
     }
     pub fn decided_at(&self) -> Option<DateTime<Utc>> {
@@ -134,13 +133,13 @@ impl PendingApproval {
     /// request (the second pair of eyes).
     pub fn decide(
         &mut self,
-        decided_by: Uuid,
+        decided_by: UserId,
         approve: bool,
         now: DateTime<Utc>,
     ) -> Result<(), PlatformAdminError> {
         if self.status != ApprovalStatus::Pending {
             return Err(PlatformAdminError::ApprovalNotPending {
-                id: self.id.as_uuid(),
+                id: self.id.as_i64(),
             });
         }
         if decided_by == self.requested_by {
@@ -160,7 +159,7 @@ impl PendingApproval {
     pub fn mark_executed(&mut self, now: DateTime<Utc>) -> Result<(), PlatformAdminError> {
         if self.status != ApprovalStatus::Approved {
             return Err(PlatformAdminError::ApprovalNotPending {
-                id: self.id.as_uuid(),
+                id: self.id.as_i64(),
             });
         }
         self.status = ApprovalStatus::Executed;
@@ -175,8 +174,8 @@ mod tests {
 
     fn approval() -> PendingApproval {
         PendingApproval::new(
-            ApprovalId::new(),
-            Uuid::now_v7(),
+            ApprovalId::try_from(101_i64).unwrap(),
+            UserId::try_from(102_i64).unwrap(),
             "entitlement.grant".to_string(),
             serde_json::json!({ "feature": "domains.custom" }),
             Utc::now(),
@@ -188,8 +187,8 @@ mod tests {
     fn approval_requires_a_nonempty_action_type() {
         assert!(matches!(
             PendingApproval::new(
-                ApprovalId::new(),
-                Uuid::now_v7(),
+                ApprovalId::try_from(101_i64).unwrap(),
+                UserId::try_from(102_i64).unwrap(),
                 "  ".to_string(),
                 serde_json::json!({}),
                 Utc::now(),

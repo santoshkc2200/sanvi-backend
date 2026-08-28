@@ -82,10 +82,10 @@ impl RebuildAccessTuples {
             tenants.insert(membership.tenant_id());
             tuples.push(Tuple::tenant_membership(
                 membership.tenant_id(),
-                membership.user_id().as_uuid(),
+                membership.user_id().as_i64(),
             ));
             for role_id in membership.role_ids() {
-                if let Some(role) = roles.iter().find(|role| role.id().as_uuid() == *role_id) {
+                if let Some(role) = roles.iter().find(|role| role.id().as_i64() == *role_id) {
                     // System tenant templates materialize per tenant.
                     let object = if role.tenant_id().is_none() {
                         format!("{}:{}", membership.tenant_id(), role.key())
@@ -94,7 +94,7 @@ impl RebuildAccessTuples {
                     };
                     tuples.push(Tuple::role_membership(
                         &object,
-                        membership.user_id().as_uuid(),
+                        membership.user_id().as_i64(),
                     ));
                 } else {
                     warn!(role_id = %role_id, "membership references a deleted role; skipping tuple");

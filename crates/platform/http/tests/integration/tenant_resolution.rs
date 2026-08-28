@@ -14,7 +14,7 @@ use sanvi_http::{
     Resolution, ResolutionSource, TenantContext, TenantMiddleware, TenantPolicyConfig,
     TenantResolver, TenantRuntimeStatus,
 };
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 /// A resolver with a scriptable answer.
 #[derive(Clone)]
@@ -55,7 +55,7 @@ impl TenantResolver for FakeResolver {
 
 fn context(status: TenantRuntimeStatus) -> TenantContext {
     TenantContext {
-        tenant_id: Uuid::now_v7(),
+        tenant_id: TenantId::try_from(101_i64).unwrap(),
         slug: "acme".to_string(),
         display_name: "Acme".to_string(),
         status,

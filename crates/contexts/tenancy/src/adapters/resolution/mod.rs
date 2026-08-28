@@ -35,7 +35,7 @@ pub trait CustomDomainLookup: Send + Sync {
 /// Convert an aggregate into the middleware's context shape.
 pub fn tenant_context_from(tenant: &Tenant, source: ResolutionSource) -> TenantContext {
     TenantContext {
-        tenant_id: tenant.id().as_i64(),
+        tenant_id: tenant.id(),
         slug: tenant.slug().to_string(),
         display_name: tenant.display_name().to_string(),
         status: match tenant.status() {

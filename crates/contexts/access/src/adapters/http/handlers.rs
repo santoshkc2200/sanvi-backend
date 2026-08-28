@@ -83,6 +83,12 @@ pub fn api_error(err: AccessError) -> ApiError {
             tracing::error!(error = %detail, "access storage failure");
             ApiError::internal("storage failure")
         }
+        AccessError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "access ID generation failure");
+            ApiError::ServiceUnavailable {
+                detail: "ID generation is temporarily unavailable".to_string(),
+            }
+        }
     }
 }
 
@@ -126,7 +132,7 @@ pub struct RoleView {
 impl From<&Role> for RoleView {
     fn from(role: &Role) -> Self {
         Self {
-            id: role.id().as_uuid(),
+            id: role.id().as_i64(),
             scope: role.scope(),
             tenant_id: role.tenant_id(),
             key: role.key().to_string(),

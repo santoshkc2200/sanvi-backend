@@ -52,7 +52,7 @@ pub struct ImpersonationGrantView {
 impl From<&ImpersonationGrant> for ImpersonationGrantView {
     fn from(grant: &ImpersonationGrant) -> Self {
         Self {
-            id: grant.id().as_uuid(),
+            id: grant.id().as_i64(),
             actor_id: grant.actor_id(),
             tenant_id: grant.tenant_id(),
             target_user_id: grant.target_user_id(),
@@ -150,7 +150,7 @@ impl CreateImpersonation {
 
         let now = self.clock.now();
         let grant = ImpersonationGrant::new(
-            self.ids.next_grant_id(),
+            self.ids.next_grant_id()?,
             actor,
             cmd.tenant_id,
             cmd.target_user_id,
@@ -171,7 +171,7 @@ impl CreateImpersonation {
             .publish(
                 &mut scope,
                 &[PlatformAdminEvent::ImpersonationStarted {
-                    grant_id: grant.id().as_uuid(),
+                    grant_id: grant.id().as_i64(),
                     actor_id: actor,
                     tenant_id: cmd.tenant_id,
                     target_user_id: cmd.target_user_id,
@@ -297,7 +297,7 @@ impl RevokeImpersonation {
             .map_err(storage)?;
         let mut grant = self.grants.find_by_id(&mut scope, grant_id).await?.ok_or(
             PlatformAdminError::GrantNotFound {
-                id: grant_id.as_uuid(),
+                id: grant_id.as_i64(),
             },
         )?;
         grant.revoke(actor, now);
@@ -306,7 +306,7 @@ impl RevokeImpersonation {
             .publish(
                 &mut scope,
                 &[PlatformAdminEvent::ImpersonationEnded {
-                    grant_id: grant.id().as_uuid(),
+                    grant_id: grant.id().as_i64(),
                     actor_id: grant.actor_id(),
                     tenant_id: grant.tenant_id(),
                     target_user_id: grant.target_user_id(),

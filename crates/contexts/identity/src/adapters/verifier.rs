@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use sanvi_http::{ApiError, SessionVerifier, Subject};
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::TxManager;
 use sha2::{Digest, Sha256};
 
@@ -64,12 +65,12 @@ impl KratosSessionVerifier {
 
     async fn roles_in(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: crate::domain::UserId,
-    ) -> Result<Vec<uuid::Uuid>, ApiError> {
+    ) -> Result<Vec<RoleId>, ApiError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| ApiError::internal(format!("storage failure: {err}")))?;
         let roles = match self.memberships.find(&mut scope, tenant_id, user_id).await {
@@ -106,7 +107,7 @@ impl SessionVerifier for KratosSessionVerifier {
     fn verify<'a>(
         &'a self,
         session_token: Option<&'a str>,
-        tenant_id: Option<uuid::Uuid>,
+        tenant_id: Option<TenantId>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<Subject>, ApiError>> + Send + 'a>>
     {
         Box::pin(async move {
@@ -162,7 +163,7 @@ impl SessionVerifier for KratosSessionVerifier {
             };
 
             Ok(Some(Subject {
-                user_id: user.id().as_uuid(),
+                user_id: user.id(),
                 session_id: session.session_id,
                 aal: session.aal,
                 methods: session.methods,

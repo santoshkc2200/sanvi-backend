@@ -3,6 +3,7 @@
 //! exists so no identity code path knows (or cares) about the difference.
 
 use async_trait::async_trait;
+use sanvi_kernel::TenantId;
 use tracing::info;
 
 use crate::domain::IdentityError;
@@ -22,7 +23,7 @@ impl LoggingNotifications {
 impl Notifications for LoggingNotifications {
     async fn send_invitation(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         email: &Email,
         tenant_name: &str,
         invite_url: &str,

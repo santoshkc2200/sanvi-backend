@@ -4,14 +4,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use sanvi_kernel::{RoleId, TenantId, UserId};
 
 use crate::domain::entitlements::{Entitlement, EntitlementSource, ResolvedEntitlement};
 use crate::domain::error::AccessError;
 use crate::domain::events::AccessEvent;
 use crate::domain::features::{Feature, FeatureKey};
 use crate::domain::permissions::Permission;
-use crate::domain::roles::{Role, RoleId, RoleScope};
+use crate::domain::roles::{Role, RoleScope};
 
 /// The authorization decision every context consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub enum Decision {
 pub trait Authorizer: Send + Sync {
     async fn check(
         &self,
-        user_id: Uuid,
+        user_id: UserId,
         permission: &Permission,
         resource: &ResourceRef,
     ) -> Result<Decision, AccessError>;
@@ -36,8 +36,8 @@ pub trait Authorizer: Send + Sync {
 /// adapter converts between the two).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceRef {
-    Tenant(Uuid),
-    User(Uuid),
+    Tenant(TenantId),
+    User(UserId),
     Platform,
 }
 
@@ -52,7 +52,7 @@ pub trait RoleRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         scope_kind: RoleScope,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
         key: &str,
     ) -> Result<Option<Role>, AccessError>;
 
@@ -74,7 +74,7 @@ pub trait RoleRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         permission: &str,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
     ) -> Result<Vec<Role>, AccessError>;
 
     /// Every role (seeding and the tuple rebuild).
@@ -85,7 +85,7 @@ pub trait RoleRepository: Send + Sync {
     async fn assignable_to(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Role>, AccessError>;
 }
 
@@ -104,7 +104,7 @@ pub trait PermissionStore: Send + Sync {
     /// Batch membership check: is `user_id` a member of any of `objects`?
     async fn check_membership(
         &self,
-        user_id: Uuid,
+        user_id: UserId,
         objects: &[String],
     ) -> Result<Vec<bool>, AccessError>;
 }
@@ -117,7 +117,7 @@ pub enum Tuple {
         namespace: String,
         object: String,
         relation: String,
-        subject_id: Uuid,
+        subject_id: UserId,
     },
     /// `object#relation@subjectSet` (role → permission grants).
     SubjectSet {
@@ -130,7 +130,7 @@ pub enum Tuple {
 
 impl Tuple {
     /// Role membership: `role:{object}#member@user:{user_id}`.
-    pub fn role_membership(role_object: &str, user_id: Uuid) -> Self {
+    pub fn role_membership(role_object: &str, user_id: UserId) -> Self {
         Self::Subject {
             namespace: "role".to_string(),
             object: role_object.to_string(),
@@ -140,7 +140,7 @@ impl Tuple {
     }
 
     /// Tenant containment: `tenant:{tenant_id}#member@user:{user_id}`.
-    pub fn tenant_membership(tenant_id: Uuid, user_id: Uuid) -> Self {
+    pub fn tenant_membership(tenant_id: TenantId, user_id: UserId) -> Self {
         Self::Subject {
             namespace: "tenant".to_string(),
             object: tenant_id.to_string(),
@@ -169,14 +169,14 @@ impl Tuple {
 pub trait DecisionCache: Send + Sync {
     async fn get(&self, key: &str) -> Option<Decision>;
     async fn put(&self, key: &str, decision: Decision, ttl_secs: u64);
-    async fn invalidate_user(&self, user_id: Uuid);
+    async fn invalidate_user(&self, user_id: UserId);
     /// Drop everything (role authoring changed grants for arbitrary users).
     async fn invalidate_all(&self);
 }
 
 /// Source of new role ids (tests substitute deterministic generators).
 pub trait IdGenerator: Send + Sync {
-    fn next_role_id(&self) -> RoleId;
+    fn next_role_id(&self) -> Result<RoleId, AccessError>;
 }
 
 /// The system clock (tests substitute fixed times).
@@ -211,14 +211,14 @@ pub trait EntitlementRepository: Send + Sync {
     async fn list_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Entitlement>, AccessError>;
 
     /// The same rows, read under the audited platform scope.
     async fn list_for_tenant_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Entitlement>, AccessError>;
 
     async fn save(
@@ -230,7 +230,7 @@ pub trait EntitlementRepository: Send + Sync {
     async fn delete(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         source: EntitlementSource,
     ) -> Result<(), AccessError>;
@@ -239,21 +239,21 @@ pub trait EntitlementRepository: Send + Sync {
     async fn list_by_granted_by(
         &self,
         scope: &mut PlatformScope<'_>,
-        user_id: Uuid,
+        user_id: UserId,
     ) -> Result<Vec<Entitlement>, AccessError>;
 
     /// Phase-05 erasure: clear `granted_by` references on override rows.
     async fn anonymise_granted_by(
         &self,
         scope: &mut PlatformScope<'_>,
-        user_id: Uuid,
+        user_id: UserId,
     ) -> Result<usize, AccessError>;
 
     /// Non-expired override rows (the operator console's entitlement count).
     async fn count_active(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         now: DateTime<Utc>,
     ) -> Result<u32, AccessError>;
 
@@ -276,7 +276,7 @@ pub trait QuotaUsageStore: Send + Sync {
     async fn consume(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         period: NaiveDate,
         amount: i64,
@@ -314,9 +314,9 @@ pub struct CachedEntitlements {
 /// the cache — the atomic counter is always authoritative.
 #[async_trait]
 pub trait EntitlementCache: Send + Sync {
-    async fn get(&self, tenant_id: Uuid) -> Option<CachedEntitlements>;
-    async fn put(&self, tenant_id: Uuid, entries: &[ResolvedEntitlement], ttl_secs: u64);
-    async fn invalidate(&self, tenant_id: Uuid);
+    async fn get(&self, tenant_id: TenantId) -> Option<CachedEntitlements>;
+    async fn put(&self, tenant_id: TenantId, entries: &[ResolvedEntitlement], ttl_secs: u64);
+    async fn invalidate(&self, tenant_id: TenantId);
     async fn invalidate_all(&self);
 }
 
@@ -344,7 +344,7 @@ pub enum ApprovalOutcome {
     NotRequired,
     /// The action was recorded as a pending approval; a second platform
     /// admin must approve it before it executes.
-    Required { approval_id: Uuid },
+    Required { approval_id: i64 },
 }
 
 /// The four-eyes gate: an action marked `requires_approval` becomes a
@@ -355,7 +355,7 @@ pub trait ApprovalGate: Send + Sync {
     async fn request_if_required(
         &self,
         scope: &mut PlatformScope<'_>,
-        requested_by: Uuid,
+        requested_by: UserId,
         action_type: &str,
         payload: serde_json::Value,
     ) -> Result<ApprovalOutcome, AccessError>;
@@ -365,13 +365,13 @@ pub trait ApprovalGate: Send + Sync {
 /// `is_enabled` for booleans, `remaining`/`consume` for quotas.
 #[async_trait]
 pub trait FeatureGate: Send + Sync {
-    async fn is_enabled(&self, tenant_id: Uuid, feature: &FeatureKey) -> Result<bool, AccessError>;
+    async fn is_enabled(&self, tenant_id: TenantId, feature: &FeatureKey) -> Result<bool, AccessError>;
 
     /// Units left in the current period (`None` for boolean features or
     /// unlimited quotas).
     async fn remaining(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
     ) -> Result<Option<i64>, AccessError>;
 
@@ -379,7 +379,7 @@ pub trait FeatureGate: Send + Sync {
     /// [`AccessError::QuotaExceeded`] when the period's limit is exhausted.
     async fn consume(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &FeatureKey,
         amount: i64,
     ) -> Result<(), AccessError>;

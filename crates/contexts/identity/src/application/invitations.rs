@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::TxManager;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -22,7 +23,8 @@ use crate::domain::{
 pub struct InviteMemberCommand {
     #[schema(example = "bob@example.com")]
     pub email: String,
-    pub role_ids: Vec<uuid::Uuid>,
+    #[schema(value_type = Vec<String>)]
+    pub role_ids: Vec<RoleId>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -37,7 +39,8 @@ pub struct InvitationView {
     pub invitation_id: String,
     #[schema(example = "bob@example.com")]
     pub email: String,
-    pub role_ids: Vec<uuid::Uuid>,
+    #[schema(value_type = Vec<String>)]
+    pub role_ids: Vec<RoleId>,
     pub status: InvitationStatus,
     #[schema(value_type = String)]
     pub expires_at: chrono::DateTime<chrono::Utc>,
@@ -88,7 +91,7 @@ impl InviteMember {
 
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         cmd: InviteMemberCommand,
         actor: UserId,
     ) -> Result<(InvitationView, String), IdentityError> {
@@ -97,7 +100,7 @@ impl InviteMember {
             return Err(IdentityError::NoRoles);
         }
         let assignable = self.roles.assignable_roles(tenant_id).await?;
-        let assignable_ids: std::collections::BTreeSet<uuid::Uuid> =
+        let assignable_ids: std::collections::BTreeSet<RoleId> =
             assignable.into_iter().map(|(id, _)| id).collect();
         for id in &cmd.role_ids {
             if !assignable_ids.contains(id) {
@@ -108,7 +111,7 @@ impl InviteMember {
         let now = self.clock.now();
         let token = InvitationToken::generate();
         let invitation = Invitation::new(
-            self.ids.next_invitation_id(),
+            self.ids.next_invitation_id()?,
             tenant_id,
             email.clone(),
             cmd.role_ids.clone(),
@@ -120,12 +123,12 @@ impl InviteMember {
 
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         self.invitations.save(&mut scope, &invitation).await?;
         let events = vec![IdentityEvent::InvitationSent {
-            invitation_id: invitation.id().as_uuid(),
+            invitation_id: invitation.id(),
             tenant_id,
             email: email.clone(),
         }];
@@ -184,7 +187,7 @@ impl AcceptInvitation {
     /// must match the session's email, and the token is single-use.
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         cmd: AcceptInvitationCommand,
         user_id: UserId,
         email: &Email,
@@ -194,7 +197,7 @@ impl AcceptInvitation {
 
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         let mut invitation = self
@@ -202,21 +205,21 @@ impl AcceptInvitation {
             .find_by_token_hash(&mut scope, tenant_id, &token_hash)
             .await?
             .ok_or(IdentityError::InvitationNotFound {
-                id: InvitationId::from_uuid(uuid::Uuid::nil()),
+                id: InvitationId::try_from(1_i64).expect("seed invitation id"),
             })?;
         let now = self.clock.now();
         invitation.validate_acceptance(email, now)?;
 
         // Roles may have been deleted between invite and accept.
         let assignable = self.roles.assignable_roles(tenant_id).await?;
-        let assignable_ids: std::collections::BTreeSet<uuid::Uuid> =
+        let assignable_ids: std::collections::BTreeSet<RoleId> =
             assignable.into_iter().map(|(id, _)| id).collect();
-        if invitation
+        if let Some(unknown) = invitation
             .role_ids()
             .iter()
-            .any(|id| !assignable_ids.contains(id))
+            .find(|id| !assignable_ids.contains(id))
         {
-            return Err(IdentityError::UnknownRole(uuid::Uuid::nil()));
+            return Err(IdentityError::UnknownRole(*unknown));
         }
 
         let mut events = Vec::new();
@@ -259,7 +262,7 @@ impl AcceptInvitation {
         invitation.mark_accepted(now)?;
         self.invitations.save(&mut scope, &invitation).await?;
         events.push(IdentityEvent::InvitationAccepted {
-            invitation_id: invitation.id().as_uuid(),
+            invitation_id: invitation.id(),
             tenant_id,
             user_id,
         });
@@ -300,7 +303,7 @@ impl ResendInvitation {
 
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         invitation_id: InvitationId,
     ) -> Result<InvitationView, IdentityError> {
         let now = self.clock.now();
@@ -308,7 +311,7 @@ impl ResendInvitation {
 
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         let mut invitation = self
@@ -319,7 +322,7 @@ impl ResendInvitation {
         invitation.reissue(&token, now, now + chrono::Duration::days(self.ttl_days))?;
         self.invitations.save(&mut scope, &invitation).await?;
         let events = vec![IdentityEvent::InvitationSent {
-            invitation_id: invitation.id().as_uuid(),
+            invitation_id: invitation.id(),
             tenant_id,
             email: invitation.email().clone(),
         }];
@@ -357,12 +360,12 @@ impl RevokeInvitation {
 
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         invitation_id: InvitationId,
     ) -> Result<(), IdentityError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         self.invitations
@@ -389,11 +392,11 @@ impl ListInvitations {
 
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<InvitationView>, IdentityError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         let invitations = self.invitations.list(&mut scope, tenant_id).await?;

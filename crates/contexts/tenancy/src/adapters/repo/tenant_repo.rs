@@ -224,11 +224,16 @@ impl TenantRepository for SqlxTenantRepository {
         if has_more {
             rows.truncate(search.limit as usize);
         }
-        let next_cursor = rows.last().map(|row| TenantSearchCursor {
-            created_at: row.created_at,
-            id: TenantId::try_from(row.id)
-                .map_err(|err| TenancyError::Storage(format!("invalid tenant id: {err}")))?,
-        });
+        let next_cursor = rows
+            .last()
+            .map(|row| {
+                TenantId::try_from(row.id).map(|id| TenantSearchCursor {
+                    created_at: row.created_at,
+                    id,
+                })
+            })
+            .transpose()
+            .map_err(|err| TenancyError::Storage(format!("invalid tenant id: {err}")))?;
         let tenants = rows
             .into_iter()
             .map(TenantRow::into_tenant)
