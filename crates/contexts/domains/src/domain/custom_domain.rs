@@ -10,9 +10,13 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
+
+use sanvi_kernel::TenantId;
 
 use crate::domain::{DomainsError, Hostname};
+
+pub enum CustomDomainTag {}
+pub type CustomDomainId = sanvi_kernel::Id<CustomDomainTag>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -201,8 +205,10 @@ impl DomainErrorCode {
 /// The custom-domain aggregate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct CustomDomain {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: CustomDomainId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     pub hostname: Hostname,
     pub kind: DomainKind,
     pub role: DomainRole,
@@ -223,8 +229,8 @@ pub struct CustomDomain {
 impl CustomDomain {
     #[allow(clippy::too_many_arguments)]
     pub fn claim(
-        id: Uuid,
-        tenant_id: Uuid,
+        id: CustomDomainId,
+        tenant_id: TenantId,
         hostname: Hostname,
         kind: DomainKind,
         role: DomainRole,
@@ -431,8 +437,8 @@ mod tests {
 
     fn domain() -> CustomDomain {
         CustomDomain::claim(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            CustomDomainId::try_from(1i64).unwrap(),
+            TenantId::try_from(1i64).unwrap(),
             Hostname::parse("example.com").unwrap(),
             DomainKind::Connected,
             DomainRole::Primary,

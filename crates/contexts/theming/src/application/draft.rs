@@ -5,10 +5,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::PgPool;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::views::{TenantThemeView, ThemeSpecView};
 use crate::domain::error::ThemingError;
@@ -16,7 +16,9 @@ use crate::domain::sanitizer::sanitize_css;
 use crate::domain::tenant_theme::{
     LayoutOverride, TenantTheme, ThemeState, validate_layout_overrides,
 };
-use crate::domain::theme::{DEFAULT_THEME_KEY, ThemeStatus, ThemeVersion, ThemeVisibility};
+use crate::domain::theme::{
+    DEFAULT_THEME_KEY, ThemeId, ThemeStatus, ThemeVersion, ThemeVisibility,
+};
 use crate::domain::tokens::{TokenNode, TokenValue, apply_overrides, merge_tokens};
 use crate::domain::{
     Clock, EventPublisher, TenantThemeRepository, ThemeFeatureGate, ThemeRepository, ThemingEvent,
@@ -97,10 +99,10 @@ impl<'a> DraftValidator<'a> {
     /// current selection.
     pub async fn target_version(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         current: &TenantTheme,
         command: &UpdateTenantThemeDraftCommand,
-    ) -> Result<(Uuid, ThemeVersion), ThemingError> {
+    ) -> Result<(ThemeId, ThemeVersion), ThemingError> {
         let theme_key = command
             .theme_key
             .clone()
@@ -166,7 +168,7 @@ impl<'a> DraftValidator<'a> {
     /// checks and preview rendering).
     pub async fn validate_adjustments(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         version: &ThemeVersion,
         token_overrides: &BTreeMap<String, TokenValue>,
         layout_overrides: &BTreeMap<String, LayoutOverride>,
@@ -269,7 +271,7 @@ impl GetTenantThemeDraft {
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<TenantThemeDraftView, ThemingError> {
         let theme = match self
             .tenants
@@ -301,7 +303,7 @@ impl GetTenantThemeDraft {
     }
 
     /// The default draft: the base theme at its latest published version.
-    async fn default_draft(&self, tenant_id: Uuid) -> Result<TenantTheme, ThemingError> {
+    async fn default_draft(&self, tenant_id: TenantId) -> Result<TenantTheme, ThemingError> {
         let theme = self
             .themes
             .get_by_key(&self.pool, DEFAULT_THEME_KEY)
@@ -357,8 +359,8 @@ impl UpdateTenantThemeDraft {
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
-        updated_by: Option<Uuid>,
+        tenant_id: TenantId,
+        updated_by: Option<UserId>,
         locale: &str,
         command: &UpdateTenantThemeDraftCommand,
     ) -> Result<TenantThemeView, ThemingError> {
@@ -426,7 +428,7 @@ impl UpdateTenantThemeDraft {
         Ok(to_view(&theme))
     }
 
-    async fn default_draft(&self, tenant_id: Uuid) -> Result<TenantTheme, ThemingError> {
+    async fn default_draft(&self, tenant_id: TenantId) -> Result<TenantTheme, ThemingError> {
         let theme = self
             .themes
             .get_by_key(&self.pool, DEFAULT_THEME_KEY)

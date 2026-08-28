@@ -1,17 +1,12 @@
-//! The platform (operator) control plane for domains: investigate across
-//! tenants, and force-release a hostname that must leave the platform
-//! (abuse, court order, takeover dispute).
-
 use std::sync::Arc;
-
-use uuid::Uuid;
 
 use sanvi_persistence::TxManager;
 
 use crate::application::views::CustomDomainView;
 use crate::domain::{
-    CertificateAuthorityPort, CertificateRepository, CustomDomainRepository, DnsProviderPort,
-    DomainErrorCode, DomainKind, DomainsError, DomainsEvent, EventPublisher, storage,
+    CertificateAuthorityPort, CertificateRepository, CustomDomainId, CustomDomainRepository,
+    DnsProviderPort, DomainErrorCode, DomainKind, DomainsError, DomainsEvent, EventPublisher,
+    storage,
 };
 
 pub struct PlatformListDomains {
@@ -75,7 +70,7 @@ impl PlatformReleaseDomain {
 
     pub async fn execute(
         &self,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         reason: &str,
     ) -> Result<CustomDomainView, DomainsError> {
         let mut scope = self

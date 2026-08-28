@@ -6,9 +6,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
+use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use uuid::Uuid;
 
 use crate::domain::error::ThemingError;
 use crate::domain::tenant_theme::ThemeState;
@@ -18,7 +18,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// The signed payload: which tenant, which state, until when.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreviewTokenPayload {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub state: String,
     pub expires_at: DateTime<Utc>,
 }
@@ -26,7 +26,7 @@ pub struct PreviewTokenPayload {
 /// Sign a preview token.
 pub fn sign_preview_token(
     secret: &[u8],
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     state: ThemeState,
     ttl_secs: u64,
     now: DateTime<Utc>,
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn round_trip() {
         let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(1_000_001_i64).unwrap();
         let token = sign_preview_token(b"secret", tenant, ThemeState::Draft, 60, now);
         let payload = verify_preview_token(b"secret", &token, now).unwrap();
         assert_eq!(payload.tenant_id, tenant);
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn rejects_tampering_wrong_key_and_expiry() {
         let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(1_000_001_i64).unwrap();
         let token = sign_preview_token(b"secret", tenant, ThemeState::Draft, 60, now);
 
         assert!(matches!(

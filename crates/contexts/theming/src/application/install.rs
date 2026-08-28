@@ -1,18 +1,17 @@
-//! The installation pipeline's use cases: publish a theme version into the
-//! registry, withdraw it (yank), and the platform control-plane reads.
-
 use std::sync::Arc;
 
+use sanvi_kernel::RawIdGenerator;
 use sanvi_persistence::PgPool;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::views::{ThemeAdminView, ThemeVersionAdminView};
 use crate::domain::contrast::check_theme;
 use crate::domain::error::ThemingError;
 use crate::domain::manifest::Manifest;
-use crate::domain::theme::{Theme, ThemeStatus, ThemeVersion, ThemeVisibility, TokenModes};
+use crate::domain::theme::{
+    Theme, ThemeId, ThemeStatus, ThemeVersion, ThemeVersionId, ThemeVisibility, TokenModes,
+};
 use crate::domain::{ArtifactStore, Clock, EventPublisher, ThemeRepository, ThemingEvent};
 
 /// The command a theme artifact resolves to after the publish pipeline
@@ -47,6 +46,7 @@ pub struct InstallThemeVersion {
     clock: Arc<dyn Clock>,
     pool: PgPool,
     artifact_store: Arc<dyn ArtifactStore>,
+    ids: Arc<dyn RawIdGenerator>,
 }
 
 impl InstallThemeVersion {
@@ -56,6 +56,7 @@ impl InstallThemeVersion {
         clock: Arc<dyn Clock>,
         pool: PgPool,
         artifact_store: Arc<dyn ArtifactStore>,
+        ids: Arc<dyn RawIdGenerator>,
     ) -> Self {
         Self {
             themes,
@@ -63,6 +64,7 @@ impl InstallThemeVersion {
             clock,
             pool,
             artifact_store,
+            ids,
         }
     }
 
@@ -97,23 +99,29 @@ impl InstallThemeVersion {
         let visibility = ThemeVisibility::parse(&command.visibility)?;
 
         // 4. New theme? Create the registry row; otherwise reuse it.
-        let theme = match self.themes.get_by_key(&self.pool, &manifest.id).await? {
-            Some(existing) => existing,
-            None => Theme {
-                id: Uuid::now_v7(),
-                key: manifest.id.clone(),
-                publisher: command.publisher.clone(),
-                visibility,
-                required_feature: command.required_feature.clone(),
-                status: ThemeStatus::Active,
-                created_at: self.clock.now(),
-            },
+        let (theme_id, theme_to_insert) = match self.themes.get_by_key(&self.pool, &manifest.id).await? {
+            Some(existing) => (existing.id, None),
+            None => {
+                let id = ThemeId::from_snowflake(self.ids.next_id()?);
+                (
+                    id,
+                    Some(Theme {
+                        id,
+                        key: manifest.id.clone(),
+                        publisher: command.publisher.clone(),
+                        visibility,
+                        required_feature: command.required_feature.clone(),
+                        status: ThemeStatus::Active,
+                        created_at: self.clock.now(),
+                    }),
+                )
+            }
         };
 
         // 5. Immutable version row (the trigger enforces this too).
         let exists = self
             .themes
-            .list_versions(&self.pool, theme.id)
+            .list_versions(&self.pool, theme_id)
             .await?
             .iter()
             .any(|version| version.semver.to_string() == manifest.version);
@@ -131,9 +139,10 @@ impl InstallThemeVersion {
             ThemingError::InvalidManifest(format!("themeApi {:?}: {err}", manifest.theme_api))
         })?;
 
+        let version_id = ThemeVersionId::from_snowflake(self.ids.next_id()?);
         let version = ThemeVersion {
-            id: Uuid::now_v7(),
-            theme_id: theme.id,
+            id: version_id,
+            theme_id,
             semver,
             theme_api_range,
             manifest,
@@ -146,7 +155,9 @@ impl InstallThemeVersion {
 
         // Writes run in the audited platform scope, atomically with the
         // published event.
-        self.themes.insert(scope, &theme).await?;
+        if let Some(theme) = &theme_to_insert {
+            self.themes.insert(scope, theme).await?;
+        }
         self.themes.insert_version(scope, &version).await?;
         self.events
             .publish(

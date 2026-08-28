@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 
+use sanvi_kernel::UserId;
 use sanvi_persistence::TxManager;
 use sanvi_privacy::domain::{
     DATA_CLASSES, DataBundle, DataClass, DataClassDef, DataEntry, EraseMode, EraseReport,
@@ -42,7 +43,7 @@ impl PersonalDataProvider for DomainsPrivacyProvider {
     async fn collect(&self, subject: &SubjectRef) -> Result<DataBundle, PrivacyError> {
         let user_id = subject.identifiers.iter().find_map(|id| {
             (id.id_type == "user_id")
-                .then(|| uuid::Uuid::parse_str(&id.value).ok())
+                .then(|| id.value.parse::<UserId>().ok())
                 .flatten()
         });
         let email = subject
@@ -56,6 +57,7 @@ impl PersonalDataProvider for DomainsPrivacyProvider {
             });
         }
 
+        let user_id_i64 = user_id.map(|id| id.as_i64());
         let mut scope = self
             .tx_manager
             .begin_unscoped("domains_privacy_provider", "domains")
@@ -65,7 +67,7 @@ impl PersonalDataProvider for DomainsPrivacyProvider {
             r#"SELECT id, hostname, registrant_contact, ordered_by, created_at
                FROM domains.orders
                WHERE ordered_by = $1 OR registrant_contact->>'email' = $2"#,
-            user_id,
+            user_id_i64,
             email,
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
@@ -112,7 +114,7 @@ impl PersonalDataProvider for DomainsPrivacyProvider {
     ) -> Result<EraseReport, PrivacyError> {
         let user_id = subject.identifiers.iter().find_map(|id| {
             (id.id_type == "user_id")
-                .then(|| uuid::Uuid::parse_str(&id.value).ok())
+                .then(|| id.value.parse::<UserId>().ok())
                 .flatten()
         });
         let email = subject
@@ -128,6 +130,7 @@ impl PersonalDataProvider for DomainsPrivacyProvider {
             });
         }
 
+        let user_id_i64 = user_id.map(|id| id.as_i64());
         let mut scope = self
             .tx_manager
             .begin_unscoped("domains_privacy_provider", "domains")
@@ -135,7 +138,7 @@ impl PersonalDataProvider for DomainsPrivacyProvider {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let anonymised = sqlx::query!(
             "UPDATE domains.orders SET ordered_by = NULL WHERE ordered_by = $1",
-            user_id
+            user_id_i64
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await

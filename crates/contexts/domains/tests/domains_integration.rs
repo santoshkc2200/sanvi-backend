@@ -1,15 +1,6 @@
-//! The domains context's integration tests.
-//!
-//! Real Postgres, the `sanvi_app` role (NOBYPASSRLS), full
-//! migrations — the same recipe the tenancy/theming/billing suites use.
-//! External gateways (DoH checker, storefront prober, charger, tenant
-//! state, clock) are scripted fakes; the registrar/DNS/CA sandbox
-//! adapters and the SQLx repositories are real.
-
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use uuid::Uuid;
 
 use sanvi_domains::adapters::{
     LiveDomainCache, OutboxEventPublisher, SandboxCertificateAuthority, SandboxRegistrar,
@@ -23,12 +14,13 @@ use sanvi_domains::application::{
 };
 use sanvi_domains::config::DomainsConfig;
 use sanvi_domains::domain::{
-    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomain, CustomDomainRepository,
-    DnsCheckResult, DnsProviderPort, DnsRecordType, DnsVerifierPort, DomainFeatureGate,
-    DomainOrderRepository, DomainQuote, DomainRegistrarPort, DomainRole, DomainStatus,
-    DomainsError, EventPublisher, Hostname, Notifications, ProbeResult, PurchaseCharger,
-    RegistrationResult, RenewalResult, StorefrontProbePort, TenantState, TldPrice,
+    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomain, CustomDomainId,
+    CustomDomainRepository, DnsCheckResult, DnsProviderPort, DnsRecordType, DnsVerifierPort,
+    DomainFeatureGate, DomainOrderId, DomainOrderRepository, DomainQuote, DomainRegistrarPort,
+    DomainRole, DomainStatus, DomainsError, EventPublisher, Hostname, Notifications, ProbeResult,
+    PurchaseCharger, RegistrationResult, RenewalResult, StorefrontProbePort, TenantState, TldPrice,
 };
+use sanvi_kernel::{RawIdGenerator, TenantId};
 use sanvi_persistence::TxManager;
 use sanvi_testsupport::TestDb;
 
@@ -37,13 +29,13 @@ async fn prepare() -> (sanvi_persistence::PgPool, TestDb) {
     (db.app_pool(), db)
 }
 
-async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid {
-    let tenant_id = Uuid::now_v7();
+async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> TenantId {
+    let tenant_id = TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     sqlx::query(
         "INSERT INTO tenancy.tenants (id, slug, display_name, status, region, default_locale)
          VALUES ($1, $2, $3, 'active', 'jp', 'en')",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(slug)
     .bind(format!("{slug} corp"))
     .execute(pool)
@@ -129,7 +121,7 @@ struct FakeTenantState {
 
 #[async_trait::async_trait]
 impl TenantState for FakeTenantState {
-    async fn is_active(&self, _tenant_id: Uuid) -> Result<bool, DomainsError> {
+    async fn is_active(&self, _tenant_id: TenantId) -> Result<bool, DomainsError> {
         Ok(self.active)
     }
 }
@@ -159,7 +151,7 @@ impl Clock for FakeClock {
 
 #[derive(Debug, Clone, Default)]
 struct FakeCharger {
-    charges: Arc<std::sync::Mutex<Vec<(Uuid, i64)>>>,
+    charges: Arc<std::sync::Mutex<Vec<(DomainOrderId, i64)>>>,
     fail_charge: bool,
     fail_refund: bool,
 }
@@ -168,8 +160,8 @@ struct FakeCharger {
 impl PurchaseCharger for FakeCharger {
     async fn charge(
         &self,
-        _tenant_id: Uuid,
-        order_id: Uuid,
+        _tenant_id: TenantId,
+        order_id: DomainOrderId,
         amount_minor: i64,
         _currency: &str,
         _description: &str,
@@ -183,8 +175,8 @@ impl PurchaseCharger for FakeCharger {
 
     async fn refund(
         &self,
-        _tenant_id: Uuid,
-        _order_id: Uuid,
+        _tenant_id: TenantId,
+        _order_id: DomainOrderId,
         _charge_id: &str,
     ) -> Result<(), DomainsError> {
         if self.fail_refund {
@@ -201,7 +193,7 @@ struct FakeGate {
 
 #[async_trait::async_trait]
 impl DomainFeatureGate for FakeGate {
-    async fn is_enabled(&self, _tenant_id: Uuid, _feature: &str) -> Result<bool, DomainsError> {
+    async fn is_enabled(&self, _tenant_id: TenantId, _feature: &str) -> Result<bool, DomainsError> {
         Ok(self.enabled)
     }
 }
@@ -256,6 +248,7 @@ struct Harness {
     verifier: FakeVerifier,
     events: Arc<dyn EventPublisher>,
     clock: Arc<FakeClock>,
+    ids: Arc<dyn RawIdGenerator>,
     config: DomainsConfig,
 }
 
@@ -289,7 +282,7 @@ impl DomainRegistrarPort for RegisterFailsRegistrar {
 
     async fn register(
         &self,
-        _order_id: Uuid,
+        _order_id: DomainOrderId,
         _hostname: &Hostname,
         _term_years: u8,
         _whois_privacy: bool,
@@ -356,18 +349,19 @@ fn build_harness(
     _prober: FakeProber,
     clock: Arc<FakeClock>,
 ) -> Harness {
-    let tx = TxManager::new(pool.clone());
+    let ids = sanvi_testsupport::test_ids();
+    let tx = TxManager::new(pool.clone(), ids.clone());
     let domains: Arc<dyn CustomDomainRepository> = Arc::new(SqlxCustomDomainRepository::new());
     let orders: Arc<dyn DomainOrderRepository> = Arc::new(SqlxDomainOrderRepository::new());
     let certs: Arc<dyn CertificateRepository> = Arc::new(SqlxCertificateRepository::new());
-    let records = Arc::new(SqlxDnsRecordRepository::new());
+    let records = Arc::new(SqlxDnsRecordRepository::new(ids.clone()));
     let provider: Arc<dyn DnsProviderPort> = Arc::new(SqlxDnsProvider::new(records));
     let registrar: Arc<dyn DomainRegistrarPort> = Arc::new(SandboxRegistrar::new(
         "sandbox".to_string(),
         &DomainsConfig::default().registrar.tlds,
     ));
-    let ca: Arc<dyn CertificateAuthorityPort> = Arc::new(SandboxCertificateAuthority::new(90));
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let ca: Arc<dyn CertificateAuthorityPort> = Arc::new(SandboxCertificateAuthority::new(90, ids.clone()));
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(ids.clone()));
     Harness {
         tx,
         domains,
@@ -379,6 +373,7 @@ fn build_harness(
         verifier,
         events,
         clock,
+        ids,
         config: test_config(),
     }
 }
@@ -389,6 +384,7 @@ fn claim_use_case(harness: &Harness, gate: Arc<FakeGate>) -> Arc<ClaimCustomDoma
         gate,
         harness.events.clone(),
         harness.clock.clone(),
+        harness.ids.clone(),
         harness.tx.clone(),
         harness.config.platform_domain.clone(),
         harness.config.connect_entitlement_key.clone(),
@@ -422,10 +418,10 @@ fn cert_sweep(harness: &Harness) -> Arc<RunCertIssuanceSweep> {
     ))
 }
 
-async fn claim(harness: &Harness, tenant_id: Uuid, hostname: &str, role: Option<&str>) -> Uuid {
+async fn claim(harness: &Harness, tenant_id: TenantId, hostname: &str, role: Option<&str>) -> CustomDomainId {
     let gate = Arc::new(FakeGate { enabled: true });
     let use_case = claim_use_case(harness, gate);
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let view = use_case
         .execute(
             &mut scope,
@@ -448,10 +444,10 @@ async fn claim(harness: &Harness, tenant_id: Uuid, hostname: &str, role: Option<
 
 async fn find_domain(
     harness: &Harness,
-    tenant_id: Uuid,
-    domain_id: Uuid,
+    tenant_id: TenantId,
+    domain_id: CustomDomainId,
 ) -> sanvi_domains::domain::CustomDomain {
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let domain = harness
         .domains
         .find(&mut scope, tenant_id, domain_id)
@@ -610,6 +606,7 @@ async fn purchase_saga_ends_live_without_human_steps() {
         Arc::new(FakeGate { enabled: true }),
         harness.events.clone(),
         harness.clock.clone(),
+        harness.ids.clone(),
         harness.tx.clone(),
         harness.config.platform_domain.clone(),
         harness.config.edge_hostname.clone(),
@@ -655,7 +652,7 @@ async fn purchase_saga_ends_live_without_human_steps() {
     let report = cert_sweep.execute(10).await.unwrap();
     assert_eq!(report.issued, 1);
 
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let domains = harness.domains.list(&mut scope, tenant_id).await.unwrap();
     assert!(domains.iter().any(|domain| {
         domain.hostname.as_str() == "acme-purchase.com"
@@ -733,7 +730,7 @@ async fn first_verifier_wins_and_the_squatter_loses_cleanly() {
             .unwrap();
         sqlx::query("UPDATE domains.custom_domains SET next_check_at = $1 WHERE id = $2")
             .bind(clock.now() + Duration::hours(1))
-            .bind(a_id)
+            .bind(a_id.as_i64())
             .execute(&mut **platform.tx_mut().as_inner())
             .await
             .unwrap();
@@ -789,7 +786,7 @@ async fn failed_verification_backs_off_and_expired_claims_close() {
         harness.domains.clone(),
         clock.clone(),
     ));
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let err = verify
         .execute(&mut scope, tenant_id, domain_id)
         .await
@@ -833,7 +830,7 @@ async fn renewal_failure_escalates_and_expiry_warnings_fire() {
     // before expiry).
     clock.set(clock.now() + Duration::days(61));
     let failing_ca =
-        Arc::new(SandboxCertificateAuthority::new(90).with_renewal_error("simulated CA outage"));
+        Arc::new(SandboxCertificateAuthority::new(90, harness.ids.clone()).with_renewal_error("simulated CA outage"));
     let renewal = Arc::new(RunRenewalSweep::new(
         harness.domains.clone(),
         harness.certs.clone(),
@@ -857,7 +854,7 @@ async fn renewal_failure_escalates_and_expiry_warnings_fire() {
 
     // The failure is recorded on the certificate and the domain stays up
     // (the old cert still serves; escalation continues every sweep).
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let cert = harness
         .certs
         .find_for_domain(&mut scope, tenant_id, domain_id)
@@ -955,7 +952,7 @@ async fn tenant_isolation_hides_other_tenants_domains() {
     claim(&harness, tenant_a, "private-a.com", None).await;
 
     // A sees their domain; B sees nothing.
-    let mut scope_a = harness.tx.begin_for(tenant_a).await.unwrap();
+    let mut scope_a = harness.tx.begin_for(tenant_a.as_i64()).await.unwrap();
     assert_eq!(
         harness
             .domains
@@ -967,7 +964,7 @@ async fn tenant_isolation_hides_other_tenants_domains() {
     );
     scope_a.commit().await.unwrap();
 
-    let mut scope_b = harness.tx.begin_for(tenant_b).await.unwrap();
+    let mut scope_b = harness.tx.begin_for(tenant_b.as_i64()).await.unwrap();
     assert!(
         harness
             .domains
@@ -978,7 +975,7 @@ async fn tenant_isolation_hides_other_tenants_domains() {
     );
     // B cannot read A's domain row either (RLS + scoped find).
     let a_id = {
-        let mut scope_a = harness.tx.begin_for(tenant_a).await.unwrap();
+        let mut scope_a = harness.tx.begin_for(tenant_a.as_i64()).await.unwrap();
         let id = harness.domains.list(&mut scope_a, tenant_a).await.unwrap()[0].id;
         scope_a.commit().await.unwrap();
         id
@@ -1017,6 +1014,7 @@ async fn removal_revokes_the_certificate_and_closes_the_zone() {
         Arc::new(FakeGate { enabled: true }),
         harness.events.clone(),
         harness.clock.clone(),
+        harness.ids.clone(),
         harness.tx.clone(),
         harness.config.platform_domain.clone(),
         harness.config.edge_hostname.clone(),
@@ -1053,7 +1051,7 @@ async fn removal_revokes_the_certificate_and_closes_the_zone() {
         .unwrap();
     cert_sweep(&harness).execute(10).await.unwrap();
 
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let domain_id = harness
         .domains
         .list(&mut scope, tenant_id)
@@ -1126,7 +1124,7 @@ async fn primary_promotion_demotes_the_previous_primary() {
         harness.events.clone(),
         harness.clock.clone(),
     ));
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let view = promote
         .execute(&mut scope, tenant_id, second)
         .await
@@ -1163,6 +1161,7 @@ async fn auto_renew_toggle_updates_the_order() {
         Arc::new(FakeGate { enabled: true }),
         harness.events.clone(),
         harness.clock.clone(),
+        harness.ids.clone(),
         harness.tx.clone(),
         harness.config.platform_domain.clone(),
         harness.config.edge_hostname.clone(),
@@ -1199,7 +1198,7 @@ async fn auto_renew_toggle_updates_the_order() {
         harness.clock.clone(),
         false,
     ));
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let view = toggle
         .execute(&mut scope, tenant_id, order_id)
         .await
@@ -1262,6 +1261,7 @@ async fn failed_refund_is_retried_by_the_order_sweep_until_it_lands() {
         Arc::new(FakeGate { enabled: true }),
         harness.events.clone(),
         harness.clock.clone(),
+        harness.ids.clone(),
         harness.tx.clone(),
         harness.config.platform_domain.clone(),
         harness.config.edge_hostname.clone(),
@@ -1276,7 +1276,7 @@ async fn failed_refund_is_retried_by_the_order_sweep_until_it_lands() {
         .unwrap();
     assert_eq!(view.status, "failed");
 
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let order = harness
         .orders
         .find(&mut scope, tenant_id, view.id)
@@ -1304,6 +1304,7 @@ async fn failed_refund_is_retried_by_the_order_sweep_until_it_lands() {
         Arc::new(FakeGate { enabled: true }),
         harness.events.clone(),
         harness.clock.clone(),
+        harness.ids.clone(),
         harness.tx.clone(),
         harness.config.platform_domain.clone(),
         harness.config.edge_hostname.clone(),
@@ -1322,7 +1323,7 @@ async fn failed_refund_is_retried_by_the_order_sweep_until_it_lands() {
     let report = sweep.execute(10).await.unwrap();
     assert_eq!(report.refunded, 1);
 
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let order = harness
         .orders
         .find(&mut scope, tenant_id, view.id)
@@ -1358,7 +1359,7 @@ async fn certificate_issuance_failure_is_retried_on_the_next_sweep() {
         harness.domains.clone(),
         harness.certs.clone(),
         Arc::new(FlakyCa {
-            inner: SandboxCertificateAuthority::new(90),
+            inner: SandboxCertificateAuthority::new(90, harness.ids.clone()),
             fail: fail.clone(),
         }),
         harness.events.clone(),
@@ -1411,6 +1412,7 @@ async fn purchasing_a_hostname_the_tenant_already_claimed_supersedes_the_connect
         Arc::new(FakeGate { enabled: true }),
         harness.events.clone(),
         harness.clock.clone(),
+        harness.ids.clone(),
         harness.tx.clone(),
         harness.config.platform_domain.clone(),
         harness.config.edge_hostname.clone(),
@@ -1437,7 +1439,7 @@ async fn purchasing_a_hostname_the_tenant_already_claimed_supersedes_the_connect
         Some("superseded_by_purchase")
     );
 
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let domains = harness.domains.list(&mut scope, tenant_id).await.unwrap();
     scope.commit().await.unwrap();
     let purchased = domains

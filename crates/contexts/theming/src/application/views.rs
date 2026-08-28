@@ -54,7 +54,8 @@ pub struct ThemeSpecView {
 /// A registry entry for the platform control plane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ThemeAdminView {
-    pub id: uuid::Uuid,
+    #[schema(value_type = String)]
+    pub id: crate::domain::theme::ThemeId,
     pub key: String,
     pub publisher: String,
     pub visibility: ThemeVisibility,

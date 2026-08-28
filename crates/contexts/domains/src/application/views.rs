@@ -1,13 +1,10 @@
-//! HTTP-facing views (what handlers serialize). Views are derived from
-//! aggregates — never written through.
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::{
-    CustomDomain, DnsRecord, DomainFailure, DomainOrder, Hostname, VerificationChallenge,
+    CustomDomain, CustomDomainId, DnsRecord, DomainFailure, DomainOrder, DomainOrderId, Hostname,
+    VerificationChallenge,
 };
 
 /// The challenge as shown to the tenant (the token itself is the secret
@@ -35,7 +32,8 @@ impl ChallengeView {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct CustomDomainView {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: CustomDomainId,
     pub hostname: String,
     pub kind: String,
     pub role: String,
@@ -71,7 +69,8 @@ impl CustomDomainView {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct OrderView {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: DomainOrderId,
     pub hostname: String,
     pub term_years: u8,
     pub price_minor: i64,

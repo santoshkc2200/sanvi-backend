@@ -20,14 +20,16 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use sanvi_kernel::{RawIdGenerator, TenantId, UserId};
 use sanvi_persistence::{ScopedTx, TxManager};
 
 use crate::application::instructions::{challenge_record, routing_records};
 use crate::application::views::OrderView;
 use crate::domain::{
-    Clock, CustomDomain, CustomDomainRepository, DnsProviderPort, DomainErrorCode,
-    DomainFeatureGate, DomainKind, DomainOrder, DomainOrderRepository, DomainRole, DomainsError,
-    DomainsEvent, EventPublisher, Hostname, PurchaseCharger, RegistrantContact, storage,
+    Clock, CustomDomain, CustomDomainId, CustomDomainRepository, DnsProviderPort, DomainErrorCode,
+    DomainFeatureGate, DomainKind, DomainOrder, DomainOrderId, DomainOrderRepository, DomainRole,
+    DomainsError, DomainsEvent, EventPublisher, Hostname, PurchaseCharger, RegistrantContact,
+    storage,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -70,6 +72,7 @@ pub struct PlaceDomainOrder {
     gate: Arc<dyn DomainFeatureGate>,
     events: Arc<dyn EventPublisher>,
     clock: Arc<dyn Clock>,
+    ids: Arc<dyn RawIdGenerator>,
     tx: TxManager,
     platform_domain: String,
     edge_hostname: String,
@@ -90,6 +93,7 @@ impl PlaceDomainOrder {
         gate: Arc<dyn DomainFeatureGate>,
         events: Arc<dyn EventPublisher>,
         clock: Arc<dyn Clock>,
+        ids: Arc<dyn RawIdGenerator>,
         tx: TxManager,
         platform_domain: String,
         edge_hostname: String,
@@ -107,6 +111,7 @@ impl PlaceDomainOrder {
             gate,
             events,
             clock,
+            ids,
             tx,
             platform_domain,
             edge_hostname,
@@ -119,8 +124,8 @@ impl PlaceDomainOrder {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        ordered_by: Option<Uuid>,
+        tenant_id: TenantId,
+        ordered_by: Option<UserId>,
         command: &PlaceDomainOrderCommand,
     ) -> Result<OrderView, DomainsError> {
         if !self
@@ -153,7 +158,7 @@ impl PlaceDomainOrder {
 
         // Idempotency: the same command returns the same order.
         if let Some(key) = command.idempotency_key {
-            let mut scope = self.tx.begin_for(tenant_id).await.map_err(storage)?;
+            let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
             if let Some(order) = self.orders.find_by_key(&mut scope, tenant_id, key).await? {
                 return Ok(OrderView::of(&order));
             }
@@ -191,7 +196,7 @@ impl PlaceDomainOrder {
         }
 
         let now = self.clock.now();
-        let order_id = Uuid::now_v7();
+        let order_id = self.ids.next_id().map(DomainOrderId::from_snowflake)?;
         let order = DomainOrder::new(
             order_id,
             tenant_id,
@@ -208,7 +213,7 @@ impl PlaceDomainOrder {
 
         // Step 1: record the intent (order + event in one transaction).
         {
-            let mut scope = self.tx.begin_for(tenant_id).await.map_err(storage)?;
+            let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
             self.orders.insert(&mut scope, &order).await?;
             self.events
                 .publish_scoped(
@@ -332,8 +337,8 @@ impl PlaceDomainOrder {
         self.load_order(tenant_id, order_id).await
     }
 
-    async fn load_order(&self, tenant_id: Uuid, order_id: Uuid) -> Result<OrderView, DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id).await.map_err(storage)?;
+    async fn load_order(&self, tenant_id: TenantId, order_id: DomainOrderId) -> Result<OrderView, DomainsError> {
+        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
         let order = self
             .orders
             .find(&mut scope, tenant_id, order_id)
@@ -348,11 +353,11 @@ impl PlaceDomainOrder {
     /// sweep.
     pub async fn configure_dns(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         order: &DomainOrder,
         hostname: &Hostname,
     ) -> Result<(), DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id).await.map_err(storage)?;
+        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
 
         // Re-read inside the transaction: a retry may race a success.
         let order = self
@@ -364,7 +369,7 @@ impl PlaceDomainOrder {
         self.provider.create_zone(&mut scope, hostname).await?;
 
         let now = self.clock.now();
-        let claim_id = Uuid::now_v7();
+        let claim_id = self.ids.next_id().map(CustomDomainId::from_snowflake)?;
         let mut token_bytes = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut token_bytes);
         let mut token = hex::encode(token_bytes);
@@ -475,10 +480,10 @@ impl PlaceDomainOrder {
 
     async fn persist_order(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         order: &DomainOrder,
     ) -> Result<(), DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id).await.map_err(storage)?;
+        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
         self.orders.update(&mut scope, order).await?;
         scope.commit().await.map_err(storage)
     }
@@ -486,10 +491,10 @@ impl PlaceDomainOrder {
     async fn persist_failed(
         &self,
         order: &mut DomainOrder,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         detail: &str,
     ) -> Result<(), DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id).await.map_err(storage)?;
+        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
         self.orders.update(&mut scope, order).await?;
         self.events
             .publish_scoped(
@@ -508,11 +513,11 @@ impl PlaceDomainOrder {
     async fn persist_failed_with_refund(
         &self,
         order: &mut DomainOrder,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<(), DomainsError> {
         // Same as persist_failed but keeps `refund_error` in the failure
         // detail for the order sweep to retry.
-        let mut scope = self.tx.begin_for(tenant_id).await.map_err(storage)?;
+        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
         self.orders.update(&mut scope, order).await?;
         self.events
             .publish_scoped(
@@ -530,7 +535,7 @@ impl PlaceDomainOrder {
 
     async fn events_platform(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         events: &[DomainsEvent],
     ) -> Result<(), DomainsError> {
         let mut scope = self
@@ -566,8 +571,8 @@ impl SetOrderAutoRenew {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        order_id: Uuid,
+        tenant_id: TenantId,
+        order_id: DomainOrderId,
     ) -> Result<OrderView, DomainsError> {
         let mut order = self
             .orders

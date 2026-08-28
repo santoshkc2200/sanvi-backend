@@ -1,9 +1,6 @@
-//! The domains context's HTTP state: one `Arc` per use case, assembled in
-//! the composition root.
-
 use std::sync::Arc;
 
-use sanvi_persistence::PgPool;
+use sanvi_persistence::{PgPool, TxManager};
 
 use crate::adapters::{DomainsMetrics, LiveDomainCache};
 use crate::application::{
@@ -17,6 +14,7 @@ use crate::config::DomainsConfig;
 #[derive(Clone)]
 pub struct DomainsState {
     pub pool: PgPool,
+    pub tx: TxManager,
     pub config: DomainsConfig,
     pub metrics: Arc<DomainsMetrics>,
     pub lookup: Arc<LiveDomainLookupService>,

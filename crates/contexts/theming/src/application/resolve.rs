@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::{RawIdGenerator, TenantId};
 use sanvi_persistence::PgPool;
-use uuid::Uuid;
 
 use crate::adapters::cache::ResolvedThemeCache;
 use crate::adapters::metrics::ThemingMetrics;
@@ -47,6 +47,7 @@ impl ResolveThemeService {
         metrics: Arc<ThemingMetrics>,
         clock: Arc<dyn Clock>,
         pool: PgPool,
+        ids: Arc<dyn RawIdGenerator>,
         asset_base_url: String,
         ttl_secs: u64,
     ) -> Self {
@@ -57,7 +58,7 @@ impl ResolveThemeService {
             cache,
             metrics,
             clock,
-            tx: sanvi_persistence::TxManager::new(pool),
+            tx: sanvi_persistence::TxManager::new(pool, ids),
             asset_base_url,
             ttl_secs,
         }
@@ -85,7 +86,7 @@ impl ResolveThemeService {
     /// A tenant's live theme, cache-first.
     pub async fn resolve_live(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         locale: &str,
     ) -> Result<ResolvedTheme, ThemingError> {
         let _timer = self.metrics.resolution_duration.start_timer();
@@ -96,7 +97,7 @@ impl ResolveThemeService {
         self.metrics.cache_misses.inc();
 
         let mut scope =
-            self.tx.begin_for(tenant_id).await.map_err(|err| {
+            self.tx.begin_for(tenant_id.as_i64()).await.map_err(|err| {
                 ThemingError::Storage(format!("failed to open tenant scope: {err}"))
             })?;
         let row = self
@@ -122,12 +123,12 @@ impl ResolveThemeService {
     /// The draft preview: same document shape, revision 0, never cached.
     pub async fn preview_draft(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         locale: &str,
     ) -> Result<ResolvedTheme, ThemingError> {
         let _timer = self.metrics.resolution_duration.start_timer();
         let mut scope =
-            self.tx.begin_for(tenant_id).await.map_err(|err| {
+            self.tx.begin_for(tenant_id.as_i64()).await.map_err(|err| {
                 ThemingError::Storage(format!("failed to open tenant scope: {err}"))
             })?;
         let draft = self
@@ -151,7 +152,7 @@ impl ResolveThemeService {
 
     /// The platform default: the base theme for hosts without a tenant.
     async fn platform_default(&self, locale: &str) -> Result<ResolvedTheme, ThemingError> {
-        self.default_theme(Uuid::nil(), locale).await
+        self.default_theme(TenantId::try_from(1_i64).unwrap(), locale).await
     }
 
     /// A tenant with no live row: the base theme at its latest version.
@@ -159,7 +160,7 @@ impl ResolveThemeService {
     /// fallback path in `build` cannot recurse.
     async fn default_theme(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         locale: &str,
     ) -> Result<ResolvedTheme, ThemingError> {
         let theme = self
@@ -346,7 +347,7 @@ impl PreviewTenantTheme {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         locale: &str,
     ) -> Result<ResolvedTheme, ThemingError> {
         self.service.preview_draft(tenant_id, locale).await

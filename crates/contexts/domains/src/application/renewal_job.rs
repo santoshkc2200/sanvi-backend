@@ -372,7 +372,7 @@ impl RunRenewalSweep {
 
     async fn events_platform(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: sanvi_kernel::TenantId,
         events: &[DomainsEvent],
     ) -> Result<(), DomainsError> {
         let mut scope = self

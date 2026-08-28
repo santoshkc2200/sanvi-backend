@@ -1,10 +1,7 @@
-//! The publish workflow: draft → live with an immutable snapshot, and the
-//! one-click rollback that restores the previous snapshot exactly.
-
 use std::sync::Arc;
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::PgPool;
-use uuid::Uuid;
 
 use crate::application::draft::{DraftValidator, to_view};
 use crate::application::views::TenantThemeView;
@@ -57,8 +54,8 @@ impl PublishTenantTheme {
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
-        published_by: Option<Uuid>,
+        tenant_id: TenantId,
+        published_by: Option<UserId>,
         locale: &str,
     ) -> Result<TenantThemeView, ThemingError> {
         lock_tenant_theme_workflow(scope, tenant_id).await?;
@@ -109,7 +106,7 @@ impl PublishTenantTheme {
 
     async fn validate_draft(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         draft: &TenantTheme,
     ) -> Result<(), ThemingError> {
         let version = self
@@ -166,8 +163,8 @@ impl RollbackTenantTheme {
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
-        published_by: Option<Uuid>,
+        tenant_id: TenantId,
+        published_by: Option<UserId>,
         locale: &str,
     ) -> Result<TenantThemeView, ThemingError> {
         lock_tenant_theme_workflow(scope, tenant_id).await?;
@@ -204,7 +201,7 @@ impl RollbackTenantTheme {
 /// available. The lock is released automatically with the transaction.
 async fn lock_tenant_theme_workflow(
     scope: &mut sanvi_persistence::ScopedTx<'_>,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
 ) -> Result<(), ThemingError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("theming:{tenant_id}"))

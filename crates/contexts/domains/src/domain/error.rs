@@ -1,7 +1,4 @@
-//! The domains context's error type. Domain errors carry no HTTP knowledge;
-//! the adapter boundary maps them onto `ApiError`.
-
-use uuid::Uuid;
+use crate::domain::{CustomDomainId, DomainOrderId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DomainsError {
@@ -21,13 +18,13 @@ pub enum DomainsError {
     HostnameAlreadyRegistered(String),
 
     #[error("unknown domain: {0}")]
-    UnknownDomain(Uuid),
+    UnknownDomain(CustomDomainId),
 
     #[error("unknown order: {0}")]
-    UnknownOrder(Uuid),
+    UnknownOrder(DomainOrderId),
 
     #[error("the domain is not owned by this tenant: {0}")]
-    DomainNotOwned(Uuid),
+    DomainNotOwned(CustomDomainId),
 
     #[error("invalid state transition: {from} → {to}")]
     IllegalTransition { from: String, to: String },
@@ -100,6 +97,9 @@ pub enum DomainsError {
 
     #[error("notification failure: {0}")]
     Notification(String),
+
+    #[error("id generation failed: {0}")]
+    IdGeneration(#[from] sanvi_kernel::IdGenerationError),
 }
 
 impl DomainsError {
@@ -113,6 +113,7 @@ impl DomainsError {
                 | Self::Outbox(_)
                 | Self::Probe(_)
                 | Self::Notification(_)
+                | Self::IdGeneration(_)
         )
     }
 }

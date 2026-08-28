@@ -13,7 +13,6 @@ use sanvi_http::{
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::adapters::http::state::ThemingState;
 use crate::application::UploadBrandAssetCommand;
@@ -78,6 +77,10 @@ pub fn api_error(err: ThemingError) -> ApiError {
         ThemingError::Outbox(detail) => {
             tracing::error!(error = %detail, "theming outbox failure");
             ApiError::internal("event publishing failure")
+        }
+        ThemingError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "theming id generation failure");
+            ApiError::internal("id generation failure")
         }
     }
 }
@@ -291,8 +294,7 @@ pub async fn get_tenant_theme_draft(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
@@ -327,8 +329,7 @@ pub async fn put_tenant_theme_draft(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
     let result = state
@@ -374,8 +375,7 @@ pub async fn publish_tenant_theme(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
     let result = state
@@ -420,8 +420,7 @@ pub async fn rollback_tenant_theme(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
     let result = state
@@ -468,8 +467,7 @@ pub async fn upload_brand_asset(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
     let result = state
@@ -519,8 +517,7 @@ pub async fn remove_brand_asset(
 ) -> Result<HttpResponse, ApiError> {
     let kind = BrandAssetKind::parse(&path.into_inner()).map_err(api_error)?;
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
     let result = state
@@ -584,8 +581,7 @@ pub async fn install_theme_version(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let actor = subject.0.user_id.to_string();
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_platform_scope(&tx_manager, "theming.theme.install", &actor)
+    let mut scope = begin_platform_scope(&state.tx_manager, "theming.theme.install", &actor)
         .await
         .map_err(api_error)?;
     let result = state
@@ -653,8 +649,7 @@ pub async fn yank_theme_version(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let (key, version) = path.into_inner();
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_platform_scope(&tx_manager, "theming.theme.yank", "theming")
+    let mut scope = begin_platform_scope(&state.tx_manager, "theming.theme.yank", "theming")
         .await
         .map_err(api_error)?;
     let result = state
@@ -696,10 +691,10 @@ fn sanitize_locale(raw: &str) -> Result<String, ApiError> {
 /// Tenant-scoped transaction helper.
 async fn begin_tenant_scope<'a>(
     tx_manager: &'a sanvi_persistence::TxManager,
-    tenant_id: Uuid,
+    tenant_id: sanvi_kernel::TenantId,
 ) -> Result<ScopedTx<'a>, ThemingError> {
     tx_manager
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|err| ThemingError::Storage(format!("failed to open tenant scope: {err}")))
 }

@@ -17,10 +17,12 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 
 use crate::domain::{
-    Certificate, CustomDomain, DnsRecord, DomainOrder, DomainsError, DomainsEvent, Hostname,
+    Certificate, CustomDomain, CustomDomainId, DnsRecord, DomainOrder, DomainOrderId, DomainsError,
+    DomainsEvent, Hostname,
 };
 
 // ---------------------------------------------------------------------------
@@ -31,7 +33,7 @@ use crate::domain::{
 /// and the TLS authorize gate read without a scoped transaction).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveHostRef {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub hostname: String,
     pub status: String,
 }
@@ -49,20 +51,20 @@ pub trait CustomDomainRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: CustomDomainId,
     ) -> Result<Option<CustomDomain>, DomainsError>;
 
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<CustomDomain>, DomainsError>;
 
     async fn find_primary(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<CustomDomain>, DomainsError>;
 
     async fn update(
@@ -76,7 +78,7 @@ pub trait CustomDomainRepository: Send + Sync {
     async fn find_active_by_hostname_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         normalized_hostname: &str,
     ) -> Result<Option<CustomDomain>, DomainsError>;
 
@@ -102,7 +104,7 @@ pub trait CustomDomainRepository: Send + Sync {
     async fn upsert_live_host(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         hostname: &str,
         status: &str,
     ) -> Result<(), DomainsError>;
@@ -156,7 +158,7 @@ pub trait CustomDomainRepository: Send + Sync {
     async fn platform_find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: CustomDomainId,
     ) -> Result<Option<CustomDomain>, DomainsError>;
 
     /// Update from a platform scope (platform release).
@@ -179,22 +181,22 @@ pub trait DomainOrderRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: DomainOrderId,
     ) -> Result<Option<DomainOrder>, DomainsError>;
 
     /// Idempotency lookup for the purchase command.
     async fn find_by_key(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         idempotency_key: Uuid,
     ) -> Result<Option<DomainOrder>, DomainsError>;
 
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<DomainOrder>, DomainsError>;
 
     async fn update(
@@ -264,15 +266,15 @@ pub trait CertificateRepository: Send + Sync {
     async fn find_for_domain(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        domain_id: Uuid,
+        tenant_id: TenantId,
+        domain_id: CustomDomainId,
     ) -> Result<Option<Certificate>, DomainsError>;
 
     /// Platform scope read (force-release).
     async fn find_for_domain_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<Option<Certificate>, DomainsError>;
 
     /// Worker: active certs due (or soon due) for renewal.
@@ -299,35 +301,35 @@ pub trait DnsRecordRepository: Send + Sync {
     async fn upsert(
         &self,
         scope: &mut ScopedTx<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         records: &[DnsRecord],
     ) -> Result<(), DomainsError>;
 
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        domain_id: Uuid,
+        tenant_id: TenantId,
+        domain_id: CustomDomainId,
     ) -> Result<Vec<DnsRecord>, DomainsError>;
 
     /// Platform-scope read (worker verification sweeps).
     async fn list_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<Vec<DnsRecord>, DomainsError>;
 
     async fn remove_zone(
         &self,
         scope: &mut ScopedTx<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<(), DomainsError>;
 
     /// Platform-scope zone deletion (force-release).
     async fn remove_zone_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<(), DomainsError>;
 }
 
@@ -350,7 +352,7 @@ pub trait DnsProviderPort: Send + Sync {
     async fn apply_records(
         &self,
         scope: &mut ScopedTx<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         records: &[DnsRecord],
     ) -> Result<(), DomainsError>;
 
@@ -358,28 +360,28 @@ pub trait DnsProviderPort: Send + Sync {
     async fn records(
         &self,
         scope: &mut ScopedTx<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<Vec<DnsRecord>, DomainsError>;
 
     /// Platform-scope read (worker verification sweeps).
     async fn records_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<Vec<DnsRecord>, DomainsError>;
 
     /// Delete the zone (domain removed / force-released).
     async fn remove_zone(
         &self,
         scope: &mut ScopedTx<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<(), DomainsError>;
 
     /// Platform-scope zone deletion (force-release).
     async fn remove_zone_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<(), DomainsError>;
 }
 
@@ -457,7 +459,7 @@ pub trait StorefrontProbePort: Send + Sync {
 /// The access context's entitlement gate, sliced to what domains needs.
 #[async_trait]
 pub trait DomainFeatureGate: Send + Sync {
-    async fn is_enabled(&self, tenant_id: Uuid, feature: &str) -> Result<bool, DomainsError>;
+    async fn is_enabled(&self, tenant_id: TenantId, feature: &str) -> Result<bool, DomainsError>;
 }
 
 /// One-off charging through the billing context (purchases ride the
@@ -467,8 +469,8 @@ pub trait DomainFeatureGate: Send + Sync {
 pub trait PurchaseCharger: Send + Sync {
     async fn charge(
         &self,
-        tenant_id: Uuid,
-        order_id: Uuid,
+        tenant_id: TenantId,
+        order_id: DomainOrderId,
         amount_minor: i64,
         currency: &str,
         description: &str,
@@ -477,8 +479,8 @@ pub trait PurchaseCharger: Send + Sync {
     /// Refund a charge (registration failed after the charge succeeded).
     async fn refund(
         &self,
-        tenant_id: Uuid,
-        order_id: Uuid,
+        tenant_id: TenantId,
+        order_id: DomainOrderId,
         charge_id: &str,
     ) -> Result<(), DomainsError>;
 }
@@ -493,7 +495,7 @@ pub trait GuideTranslator: Send + Sync {
 /// an active tenant").
 #[async_trait]
 pub trait TenantState: Send + Sync {
-    async fn is_active(&self, tenant_id: Uuid) -> Result<bool, DomainsError>;
+    async fn is_active(&self, tenant_id: TenantId) -> Result<bool, DomainsError>;
 }
 
 /// Tenant-facing notifications (a logging stub today; the notifications
@@ -530,14 +532,14 @@ pub trait EventPublisher: Send + Sync {
     async fn publish(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         events: &[DomainsEvent],
     ) -> Result<(), DomainsError>;
 
     async fn publish_scoped(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         events: &[DomainsEvent],
     ) -> Result<(), DomainsError>;
 }

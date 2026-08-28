@@ -7,13 +7,13 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
-use uuid::Uuid;
 
 use crate::domain::error::ThemingError;
 use crate::domain::events::ThemingEvent;
 use crate::domain::tenant_theme::{TenantTheme, ThemeState};
-use crate::domain::theme::{Theme, ThemeVersion};
+use crate::domain::theme::{Theme, ThemeId, ThemeVersion, ThemeVersionId};
 
 /// Platform theme registry (`theming.themes` + `theming.theme_versions`).
 /// Registry reads are unscoped (they are platform reference data); writes
@@ -33,7 +33,7 @@ pub trait ThemeRepository: Send + Sync {
     async fn set_status(
         &self,
         scope: &mut PlatformScope<'_>,
-        theme_id: Uuid,
+        theme_id: ThemeId,
         status: &str,
     ) -> Result<(), ThemingError>;
 
@@ -41,7 +41,7 @@ pub trait ThemeRepository: Send + Sync {
     async fn list_versions(
         &self,
         pool: &PgPool,
-        theme_id: Uuid,
+        theme_id: ThemeId,
     ) -> Result<Vec<ThemeVersion>, ThemingError>;
 
     /// A specific version by theme key + semver (join).
@@ -70,7 +70,7 @@ pub trait ThemeRepository: Send + Sync {
     async fn yank_version(
         &self,
         scope: &mut PlatformScope<'_>,
-        theme_id: Uuid,
+        theme_id: ThemeId,
         semver: &str,
         at: DateTime<Utc>,
     ) -> Result<(), ThemingError>;
@@ -83,7 +83,7 @@ pub trait TenantThemeRepository: Send + Sync {
     async fn get(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         state: ThemeState,
     ) -> Result<Option<TenantTheme>, ThemingError>;
 
@@ -98,8 +98,8 @@ pub trait TenantThemeRepository: Send + Sync {
     async fn publish(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        published_by: Option<Uuid>,
+        tenant_id: TenantId,
+        published_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<i32, ThemingError>;
 
@@ -109,8 +109,8 @@ pub trait TenantThemeRepository: Send + Sync {
     async fn rollback(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        published_by: Option<Uuid>,
+        tenant_id: TenantId,
+        published_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<i32, ThemingError>;
 }
@@ -120,13 +120,13 @@ pub trait TenantThemeRepository: Send + Sync {
 /// access context's feature gate.
 #[async_trait]
 pub trait ThemeFeatureGate: Send + Sync {
-    async fn is_enabled(&self, tenant_id: Uuid, feature: &str) -> Result<bool, ThemingError>;
+    async fn is_enabled(&self, tenant_id: TenantId, feature: &str) -> Result<bool, ThemingError>;
 }
 
 /// A minimal tenant reference for the public theme endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedTenantRef {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub slug: String,
 }
 
@@ -143,13 +143,13 @@ pub trait TenantContextResolver: Send + Sync {
 pub trait BrandAssetStore: Send + Sync {
     async fn put(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         digest: &str,
         ext: &str,
         bytes: &[u8],
     ) -> Result<(), ThemingError>;
 
-    async fn delete(&self, tenant_id: Uuid, digest: &str, ext: &str) -> Result<(), ThemingError>;
+    async fn delete(&self, tenant_id: TenantId, digest: &str, ext: &str) -> Result<(), ThemingError>;
 }
 
 /// Storage for published theme artifacts (content-addressed zips).
@@ -180,4 +180,10 @@ pub trait EventPublisher: Send + Sync {
         scope: &mut ScopedTx<'_>,
         event: &ThemingEvent,
     ) -> Result<(), ThemingError>;
+}
+
+/// Source of new theme identifiers.
+pub trait IdGenerator: Send + Sync {
+    fn next_theme_id(&self) -> Result<ThemeId, ThemingError>;
+    fn next_theme_version_id(&self) -> Result<ThemeVersionId, ThemingError>;
 }

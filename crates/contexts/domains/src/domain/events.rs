@@ -1,16 +1,9 @@
-//! The domains context's outbox events.
-//!
-//! Naming: `<context>.<snake_case>` event types on `<context>.<aggregate>`
-//! aggregates. `tenant_id` rides in envelope metadata (the outbox stream
-//! routes by the aggregate's first segment — `domains`). The worker's
-//! domains consumer uses these to invalidate the host→tenant resolution
-//! cache; notifications contexts subscribe later.
-
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use uuid::Uuid;
 
-use sanvi_kernel::events::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId, SnowflakeId, TenantId};
+
+use crate::domain::{CustomDomainId, DomainOrderId};
 
 pub const DOMAIN_AGGREGATE: &str = "domains.domain";
 pub const ORDER_AGGREGATE: &str = "domains.order";
@@ -78,70 +71,70 @@ impl DomainsEventName {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DomainsEvent {
     DomainClaimed {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         domain_kind: String,
         role: String,
     },
     DomainVerified {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
     },
     DomainVerificationFailed {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         code: String,
         detail: String,
     },
     DomainWentLive {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
     },
     DomainDegraded {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         code: String,
         detail: String,
     },
     DomainRemoved {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         reason: String,
     },
     CertificateIssued {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         not_after: DateTime<Utc>,
     },
     CertificateRenewed {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         not_after: DateTime<Utc>,
     },
     CertificateRenewalFailed {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         not_after: DateTime<Utc>,
         detail: String,
     },
     DomainOrderPlaced {
-        order_id: Uuid,
+        order_id: DomainOrderId,
         hostname: String,
         term_years: u8,
         price_minor: i64,
         currency: String,
     },
     DomainOrderCompleted {
-        order_id: Uuid,
+        order_id: DomainOrderId,
         hostname: String,
     },
     DomainOrderFailed {
-        order_id: Uuid,
+        order_id: DomainOrderId,
         hostname: String,
         detail: String,
     },
     DomainExpiringSoon {
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         hostname: String,
         days_left: u32,
     },
@@ -167,7 +160,7 @@ impl DomainsEvent {
     }
 
     /// The aggregate id (domain id, order id, or certificate's domain id).
-    pub fn aggregate_id(&self) -> Uuid {
+    pub fn aggregate_id(&self) -> SnowflakeId {
         match self {
             Self::DomainClaimed { domain_id, .. }
             | Self::DomainVerified { domain_id, .. }
@@ -178,10 +171,10 @@ impl DomainsEvent {
             | Self::CertificateIssued { domain_id, .. }
             | Self::CertificateRenewed { domain_id, .. }
             | Self::CertificateRenewalFailed { domain_id, .. }
-            | Self::DomainExpiringSoon { domain_id, .. } => *domain_id,
+            | Self::DomainExpiringSoon { domain_id, .. } => domain_id.as_snowflake(),
             Self::DomainOrderPlaced { order_id, .. }
             | Self::DomainOrderCompleted { order_id, .. }
-            | Self::DomainOrderFailed { order_id, .. } => *order_id,
+            | Self::DomainOrderFailed { order_id, .. } => order_id.as_snowflake(),
         }
     }
 
@@ -204,7 +197,7 @@ impl DomainsEvent {
         }
     }
 
-    pub fn envelope(&self, tenant_id: Uuid) -> EventEnvelope {
+    pub fn envelope(&self, id: EventId, tenant_id: TenantId) -> EventEnvelope {
         let aggregate = match self {
             Self::DomainOrderPlaced { .. }
             | Self::DomainOrderCompleted { .. }
@@ -215,6 +208,7 @@ impl DomainsEvent {
             _ => DOMAIN_AGGREGATE,
         };
         EventEnvelope::new(
+            id,
             aggregate,
             self.aggregate_id(),
             self.name().as_str(),
@@ -233,13 +227,13 @@ mod tests {
     fn names_round_trip() {
         for event in [
             DomainsEvent::DomainClaimed {
-                domain_id: Uuid::now_v7(),
+                domain_id: CustomDomainId::try_from(1i64).unwrap(),
                 hostname: "example.com".to_string(),
                 domain_kind: "connected".to_string(),
                 role: "primary".to_string(),
             },
             DomainsEvent::DomainOrderFailed {
-                order_id: Uuid::now_v7(),
+                order_id: DomainOrderId::try_from(2i64).unwrap(),
                 hostname: "example.com".to_string(),
                 detail: "charge failed".to_string(),
             },
@@ -252,11 +246,12 @@ mod tests {
     #[test]
     fn envelope_carries_tenant_metadata() {
         let event = DomainsEvent::DomainVerified {
-            domain_id: Uuid::now_v7(),
+            domain_id: CustomDomainId::try_from(1i64).unwrap(),
             hostname: "example.com".to_string(),
         };
-        let tenant_id = Uuid::now_v7();
-        let envelope = event.envelope(tenant_id);
+        let tenant_id = TenantId::try_from(42i64).unwrap();
+        let event_id = EventId::try_from(100i64).unwrap();
+        let envelope = event.envelope(event_id, tenant_id);
         assert_eq!(envelope.event_type, "domains.domain_verified");
         assert_eq!(
             envelope.metadata.get("tenant_id").and_then(|v| v.as_str()),

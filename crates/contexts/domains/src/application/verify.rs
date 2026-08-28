@@ -1,18 +1,12 @@
-//! `POST /api/v1/tenant/domains/{id}/verify` — trigger a manual re-check.
-//!
-//! The worker owns the polling cadence; this endpoint only nudges it: the
-//! domain moves to `verifying` with `next_check_at = now`, and the next
-//! sweep picks it up. Throttled by the existing `next_check_at` schedule so
-//! a frantic UI cannot hammer resolvers.
-
 use std::sync::Arc;
 
-use uuid::Uuid;
-
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::application::views::CustomDomainView;
-use crate::domain::{Clock, CustomDomainRepository, DomainStatus, DomainsError};
+use crate::domain::{
+    Clock, CustomDomainId, CustomDomainRepository, DomainStatus, DomainsError,
+};
 
 pub struct RequestVerification {
     domains: Arc<dyn CustomDomainRepository>,
@@ -27,8 +21,8 @@ impl RequestVerification {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        domain_id: Uuid,
+        tenant_id: TenantId,
+        domain_id: CustomDomainId,
     ) -> Result<CustomDomainView, DomainsError> {
         let mut domain = self
             .domains

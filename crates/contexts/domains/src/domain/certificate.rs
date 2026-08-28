@@ -8,9 +8,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
-use crate::domain::{DomainsError, Hostname};
+use sanvi_kernel::TenantId;
+
+use crate::domain::{CustomDomainId, DomainsError, Hostname};
+
+pub enum CertificateTag {}
+pub type CertificateId = sanvi_kernel::Id<CertificateTag>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -44,9 +48,12 @@ impl CertificateStatus {
 /// A certificate row for one hostname.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Certificate {
-    pub id: Uuid,
-    pub domain_id: Uuid,
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: CertificateId,
+    #[schema(value_type = String)]
+    pub domain_id: CustomDomainId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     pub hostname: Hostname,
     pub issuer: String,
     pub serial: String,
@@ -63,9 +70,9 @@ pub struct Certificate {
 impl Certificate {
     #[allow(clippy::too_many_arguments)]
     pub fn issued(
-        id: Uuid,
-        domain_id: Uuid,
-        tenant_id: Uuid,
+        id: CertificateId,
+        domain_id: CustomDomainId,
+        tenant_id: TenantId,
         hostname: Hostname,
         issuer: String,
         serial: String,
@@ -124,9 +131,9 @@ mod tests {
     fn cert() -> Certificate {
         let now = Utc::now();
         Certificate::issued(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            CertificateId::try_from(1i64).unwrap(),
+            CustomDomainId::try_from(1i64).unwrap(),
+            TenantId::try_from(1i64).unwrap(),
             Hostname::parse("example.com").unwrap(),
             "Sandbox CA".to_string(),
             "00:01".to_string(),

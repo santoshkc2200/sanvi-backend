@@ -1,19 +1,11 @@
-//! `DELETE /api/v1/tenant/domains/{id}` — remove a domain.
-//!
-//! Compensations depend on what exists: certificates are revoked, purchased
-//! zones are deleted from the DNS provider, the host→tenant cache entry is
-//! invalidated. Registry registrations are not cancellable — a purchased
-//! domain's registration simply lapses (documented in the UI).
-
 use std::sync::Arc;
 
-use uuid::Uuid;
-
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::application::views::CustomDomainView;
 use crate::domain::{
-    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomainRepository,
+    CertificateAuthorityPort, CertificateRepository, Clock, CustomDomainId, CustomDomainRepository,
     DnsProviderPort, DomainErrorCode, DomainKind, DomainsError, DomainsEvent, EventPublisher,
 };
 
@@ -48,8 +40,8 @@ impl RemoveCustomDomain {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        domain_id: Uuid,
+        tenant_id: TenantId,
+        domain_id: CustomDomainId,
     ) -> Result<CustomDomainView, DomainsError> {
         let mut domain = self
             .domains

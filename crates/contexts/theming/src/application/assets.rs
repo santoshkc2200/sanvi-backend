@@ -1,13 +1,10 @@
-//! Brand asset management: upload (validated, metadata-stripped,
-//! content-addressed) and removal.
-
 use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::draft::to_view;
 use crate::application::views::TenantThemeView;
@@ -66,8 +63,8 @@ impl UploadBrandAsset {
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
-        updated_by: Option<Uuid>,
+        tenant_id: TenantId,
+        updated_by: Option<UserId>,
         locale: &str,
         command: &UploadBrandAssetCommand,
     ) -> Result<TenantThemeView, ThemingError> {
@@ -137,7 +134,7 @@ impl UploadBrandAsset {
 
     async fn default_draft(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<crate::domain::tenant_theme::TenantTheme, ThemingError> {
         let theme = self
             .themes
@@ -186,8 +183,8 @@ impl RemoveBrandAsset {
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
-        updated_by: Option<Uuid>,
+        tenant_id: TenantId,
+        updated_by: Option<UserId>,
         locale: &str,
         kind: BrandAssetKind,
     ) -> Result<TenantThemeView, ThemingError> {

@@ -1,23 +1,16 @@
-//! `POST /api/v1/tenant/domains` — claim a connected domain.
-//!
-//! Validation order matters: hostname shape, then platform-domain rules,
-//! then entitlement, then uniqueness. A claimed hostname gets a
-//! high-entropy challenge token and the exact DNS records the tenant must
-//! create; the verification worker picks it up on its next sweep.
-
 use std::sync::Arc;
 
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
+use sanvi_kernel::{RawIdGenerator, TenantId};
 use sanvi_persistence::{ScopedTx, TxManager};
 
 use crate::application::views::CustomDomainView;
 use crate::domain::{
-    Clock, CustomDomain, CustomDomainRepository, DomainFeatureGate, DomainKind, DomainRole,
-    DomainsError, DomainsEvent, EventPublisher, Hostname, storage,
+    Clock, CustomDomain, CustomDomainId, CustomDomainRepository, DomainFeatureGate, DomainKind,
+    DomainRole, DomainsError, DomainsEvent, EventPublisher, Hostname, storage,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -34,6 +27,7 @@ pub struct ClaimCustomDomain {
     gate: Arc<dyn DomainFeatureGate>,
     events: Arc<dyn EventPublisher>,
     clock: Arc<dyn Clock>,
+    ids: Arc<dyn RawIdGenerator>,
     tx: TxManager,
     platform_domain: String,
     connect_entitlement_key: String,
@@ -48,6 +42,7 @@ impl ClaimCustomDomain {
         gate: Arc<dyn DomainFeatureGate>,
         events: Arc<dyn EventPublisher>,
         clock: Arc<dyn Clock>,
+        ids: Arc<dyn RawIdGenerator>,
         tx: TxManager,
         platform_domain: String,
         connect_entitlement_key: String,
@@ -59,6 +54,7 @@ impl ClaimCustomDomain {
             gate,
             events,
             clock,
+            ids,
             tx,
             platform_domain,
             connect_entitlement_key,
@@ -70,7 +66,7 @@ impl ClaimCustomDomain {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command: &ClaimCustomDomainCommand,
     ) -> Result<CustomDomainView, DomainsError> {
         let hostname = Hostname::parse(&command.hostname)?;
@@ -136,8 +132,9 @@ impl ClaimCustomDomain {
         rand::rngs::OsRng.fill_bytes(&mut token_bytes);
         let token = hex::encode(token_bytes);
 
+        let id = self.ids.next_id().map(CustomDomainId::from_snowflake)?;
         let domain = CustomDomain::claim(
-            Uuid::now_v7(),
+            id,
             tenant_id,
             hostname.clone(),
             DomainKind::Connected,

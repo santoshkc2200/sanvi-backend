@@ -5,9 +5,8 @@
 //! a locale from a missing request). Events are published from the same
 //! transaction as the state change that caused them.
 
-use sanvi_kernel::events::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId, SnowflakeId, TenantId};
 use serde::Serialize;
-use uuid::Uuid;
 
 pub const THEME_AGGREGATE: &str = "theming.theme";
 pub const TENANT_THEME_AGGREGATE: &str = "theming.tenant_theme";
@@ -48,14 +47,14 @@ pub enum ThemingEvent {
     ThemeYanked { theme_key: String, version: String },
     /// A tenant edited its draft (overrides, assets, custom CSS, pin).
     TenantThemeChanged {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         /// The locale the change was made under.
         locale: String,
     },
     /// A tenant published its draft: the live theme changed. Consumers
     /// invalidate cached resolved themes.
     TenantThemePublished {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         theme_key: String,
         version: String,
         revision: i32,
@@ -63,13 +62,13 @@ pub enum ThemingEvent {
     },
     /// A tenant rolled back to a previous snapshot.
     TenantThemeRolledBack {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         revision: i32,
         locale: String,
     },
     /// A brand asset (logo/favicon/OG image) was uploaded or removed.
     BrandAssetUpdated {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         asset_kind: String,
         locale: String,
     },
@@ -87,17 +86,17 @@ impl ThemingEvent {
         }
     }
 
-    pub fn aggregate_id(&self) -> Uuid {
+    pub fn aggregate_id(&self, id: EventId) -> SnowflakeId {
         match self {
-            Self::ThemePublished { .. } | Self::ThemeYanked { .. } => Uuid::nil(),
+            Self::ThemePublished { .. } | Self::ThemeYanked { .. } => id.as_snowflake(),
             Self::TenantThemeChanged { tenant_id, .. }
             | Self::TenantThemePublished { tenant_id, .. }
             | Self::TenantThemeRolledBack { tenant_id, .. }
-            | Self::BrandAssetUpdated { tenant_id, .. } => *tenant_id,
+            | Self::BrandAssetUpdated { tenant_id, .. } => tenant_id.as_snowflake(),
         }
     }
 
-    pub fn envelope(&self) -> EventEnvelope {
+    pub fn envelope(&self, id: EventId) -> EventEnvelope {
         let aggregate = match self {
             Self::ThemePublished { .. } | Self::ThemeYanked { .. } => THEME_AGGREGATE,
             Self::TenantThemeChanged { .. }
@@ -105,9 +104,11 @@ impl ThemingEvent {
             | Self::TenantThemeRolledBack { .. } => TENANT_THEME_AGGREGATE,
             Self::BrandAssetUpdated { .. } => BRAND_ASSET_AGGREGATE,
         };
+        let aggregate_id = self.aggregate_id(id);
         EventEnvelope::new(
+            id,
             aggregate,
-            self.aggregate_id(),
+            aggregate_id,
             self.name().as_str(),
             serde_json::to_value(self).expect("theming events serialize"),
         )

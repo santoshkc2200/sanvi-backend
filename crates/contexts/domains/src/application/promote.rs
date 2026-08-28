@@ -1,18 +1,12 @@
-//! `POST /api/v1/tenant/domains/{id}/promote` — make this domain primary.
-//!
-//! The previous primary (if any) becomes an alias; the partial unique
-//! index `one_primary_per_tenant` guarantees the invariant at the storage
-//! layer too.
-
 use std::sync::Arc;
 
-use uuid::Uuid;
-
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::application::views::CustomDomainView;
 use crate::domain::{
-    Clock, CustomDomainRepository, DomainRole, DomainsError, DomainsEvent, EventPublisher,
+    Clock, CustomDomainId, CustomDomainRepository, DomainRole, DomainsError, DomainsEvent,
+    EventPublisher,
 };
 
 pub struct PromotePrimaryDomain {
@@ -37,8 +31,8 @@ impl PromotePrimaryDomain {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        domain_id: Uuid,
+        tenant_id: TenantId,
+        domain_id: CustomDomainId,
     ) -> Result<CustomDomainView, DomainsError> {
         let mut target = self
             .domains

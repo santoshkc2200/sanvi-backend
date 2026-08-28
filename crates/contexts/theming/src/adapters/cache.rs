@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use redis::AsyncCommands;
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use crate::domain::resolved::ResolvedTheme;
 
@@ -42,11 +42,11 @@ impl ResolvedThemeCache {
         }
     }
 
-    fn key(tenant_id: Uuid, locale: &str) -> String {
-        sanvi_cache::tenant_cache_key(tenant_id, "theming", &format!("resolved:{locale}"))
+    fn key(tenant_id: TenantId, locale: &str) -> String {
+        format!("sanvi:{tenant_id}:theming:resolved:{locale}")
     }
 
-    pub async fn get(&self, tenant_id: Uuid, locale: &str) -> Option<ResolvedTheme> {
+    pub async fn get(&self, tenant_id: TenantId, locale: &str) -> Option<ResolvedTheme> {
         let key = Self::key(tenant_id, locale);
         // A process-local entry cannot be invalidated by another process.
         // When Redis is configured it is the single shared cache layer, so
@@ -74,7 +74,7 @@ impl ResolvedThemeCache {
         None
     }
 
-    pub async fn set(&self, tenant_id: Uuid, locale: &str, theme: &ResolvedTheme, ttl_secs: u64) {
+    pub async fn set(&self, tenant_id: TenantId, locale: &str, theme: &ResolvedTheme, ttl_secs: u64) {
         let key = Self::key(tenant_id, locale);
         if let Some(manager) = &self.redis {
             let mut conn = manager.clone();
@@ -92,11 +92,11 @@ impl ResolvedThemeCache {
 
     /// Drop every cached entry for one tenant (Redis + local). Called by
     /// the worker's event handler so every instance forgets the old theme.
-    pub async fn invalidate_tenant(&self, tenant_id: Uuid) -> u64 {
+    pub async fn invalidate_tenant(&self, tenant_id: TenantId) -> u64 {
         let mut deleted = 0u64;
         self.invalidate_local(tenant_id);
         if let Some(manager) = &self.redis {
-            let pattern = sanvi_cache::invalidation_pattern(tenant_id);
+            let pattern = format!("sanvi:{tenant_id}:*");
             let mut scan_conn = manager.clone();
             let mut conn = manager.clone();
             match scan_conn.scan_match::<_, String>(&pattern).await {
@@ -130,7 +130,7 @@ impl ResolvedThemeCache {
     /// The synchronous local invalidation (used by the publish path before
     /// its transaction commits; the cross-instance invalidation rides the
     /// outbox event).
-    pub fn invalidate_local(&self, tenant_id: Uuid) {
+    pub fn invalidate_local(&self, tenant_id: TenantId) {
         let prefix = format!("sanvi:{tenant_id}:theming:");
         let mut guard = self.local.write().expect("cache lock is not poisoned");
         guard.entries.retain(|key, _| !key.starts_with(&prefix));
@@ -195,7 +195,7 @@ mod tests {
     #[tokio::test]
     async fn local_cache_round_trips_and_invalidates() {
         let cache = ResolvedThemeCache::new(None);
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(1_000_001_i64).unwrap();
         cache.set(tenant, "en", &theme(1), 60).await;
         assert_eq!(cache.get(tenant, "en").await.unwrap().revision, 1);
         cache.invalidate_local(tenant);
@@ -205,8 +205,8 @@ mod tests {
     #[tokio::test]
     async fn local_invalidation_is_tenant_scoped() {
         let cache = ResolvedThemeCache::new(None);
-        let a = Uuid::now_v7();
-        let b = Uuid::now_v7();
+        let a = TenantId::try_from(1_000_001_i64).unwrap();
+        let b = TenantId::try_from(1_000_002_i64).unwrap();
         cache.set(a, "en", &theme(1), 60).await;
         cache.set(b, "en", &theme(2), 60).await;
         cache.invalidate_local(a);
@@ -217,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn local_cache_honors_the_requested_ttl() {
         let cache = ResolvedThemeCache::new(None);
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(1_000_001_i64).unwrap();
         cache.set(tenant, "en", &theme(1), 0).await;
         assert!(cache.get(tenant, "en").await.is_none());
     }

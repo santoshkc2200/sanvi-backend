@@ -1,20 +1,15 @@
-//! SQLx repositories for the domains context.
-//!
-//! RLS is never set here: tenant reads/writes arrive in a `ScopedTx` (the
-//! `TxManager::begin_for` guarantee), platform sweeps in a
-//! `PlatformScope`; hot-path pool reads (`find_live_by_hostname`) filter on
-//! the live-claim status set explicitly because unscoped pool connections
-//! see no tenant rows at all.
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use sanvi_kernel::{RawIdGenerator, TenantId, UserId};
 use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 
 use crate::domain::{
-    Certificate, CertificateStatus, CustomDomain, DnsRecord, DnsRecordType, DomainFailure,
-    DomainKind, DomainOrder, DomainRole, DomainStatus, DomainsError, Hostname, Money, OrderStatus,
-    RegistrantContact, VerificationChallenge,
+    Certificate, CertificateId, CertificateStatus, CustomDomain, CustomDomainId, DnsRecord,
+    DnsRecordType, DomainFailure, DomainKind, DomainOrder, DomainOrderId, DomainRole, DomainStatus,
+    DomainsError, Hostname, Money, OrderStatus, RegistrantContact, VerificationChallenge,
 };
 
 fn storage(err: impl std::fmt::Display) -> DomainsError {
@@ -42,8 +37,8 @@ impl SqlxCustomDomainRepository {
 #[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)]
 struct CustomDomainRow {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    tenant_id: i64,
     hostname: String,
     normalized_hostname: String,
     kind: String,
@@ -65,6 +60,8 @@ struct CustomDomainRow {
 }
 
 fn domain_from_row(row: CustomDomainRow) -> Result<CustomDomain, DomainsError> {
+    let id = CustomDomainId::try_from(row.id).map_err(storage)?;
+    let tenant_id = TenantId::try_from(row.tenant_id).map_err(storage)?;
     let hostname = hostname(&row.hostname)?;
     let challenge = match (
         row.challenge_token,
@@ -92,8 +89,8 @@ fn domain_from_row(row: CustomDomainRow) -> Result<CustomDomain, DomainsError> {
         _ => None,
     };
     Ok(CustomDomain {
-        id: row.id,
-        tenant_id: row.tenant_id,
+        id,
+        tenant_id,
         hostname,
         kind: DomainKind::parse(&row.kind).map_err(storage)?,
         role: DomainRole::parse(&row.role).map_err(storage)?,
@@ -124,8 +121,8 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
                 detected_registrar, verified_at, last_checked_at, next_check_at,
                 verification_attempts, failure_code, failure_detail, created_at, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)"#,
-            domain.id,
-            domain.tenant_id,
+            domain.id.as_i64(),
+            domain.tenant_id.as_i64(),
             domain.hostname.as_str(),
             domain.hostname.as_str(),
             domain.kind.as_str(),
@@ -157,8 +154,8 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: CustomDomainId,
     ) -> Result<Option<CustomDomain>, DomainsError> {
         let row = sqlx::query_as!(
             CustomDomainRow,
@@ -167,8 +164,8 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
              detected_registrar, verified_at, last_checked_at, next_check_at, \
              verification_attempts, failure_code, failure_detail, created_at, updated_at \
              FROM domains.custom_domains WHERE id = $1 AND tenant_id = $2",
-            id,
-            tenant_id
+            id.as_i64(),
+            tenant_id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -179,7 +176,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<CustomDomain>, DomainsError> {
         let rows = sqlx::query_as!(
             CustomDomainRow,
@@ -188,7 +185,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
              detected_registrar, verified_at, last_checked_at, next_check_at, \
              verification_attempts, failure_code, failure_detail, created_at, updated_at \
              FROM domains.custom_domains WHERE tenant_id = $1 ORDER BY created_at ASC",
-            tenant_id
+            tenant_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -199,7 +196,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
     async fn find_primary(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<CustomDomain>, DomainsError> {
         let row = sqlx::query_as!(
             CustomDomainRow,
@@ -209,7 +206,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
              verification_attempts, failure_code, failure_detail, created_at, updated_at \
              FROM domains.custom_domains \
              WHERE tenant_id = $1 AND role = 'primary' AND status <> 'removed'",
-            tenant_id
+            tenant_id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -231,7 +228,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
                  next_check_at = $12, verification_attempts = $13,
                  failure_code = $14, failure_detail = $15, updated_at = $16
                WHERE id = $1 AND tenant_id = $17"#,
-            domain.id,
+            domain.id.as_i64(),
             domain.kind.as_str(),
             domain.role.as_str(),
             domain.status.as_str(),
@@ -250,7 +247,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
                 .as_ref()
                 .map(|f| serde_json::Value::String(f.detail.clone())),
             domain.updated_at,
-            domain.tenant_id,
+            domain.tenant_id.as_i64(),
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -272,7 +269,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
                  next_check_at = $12, verification_attempts = $13,
                  failure_code = $14, failure_detail = $15, updated_at = $16
                WHERE id = $1"#,
-            domain.id,
+            domain.id.as_i64(),
             domain.kind.as_str(),
             domain.role.as_str(),
             domain.status.as_str(),
@@ -301,7 +298,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
     async fn find_active_by_hostname_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         normalized_hostname: &str,
     ) -> Result<Option<CustomDomain>, DomainsError> {
         let row = sqlx::query_as!(
@@ -312,7 +309,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
              verification_attempts, failure_code, failure_detail, created_at, updated_at \
              FROM domains.custom_domains \
              WHERE tenant_id = $1 AND normalized_hostname = $2 AND status <> 'removed'",
-            tenant_id,
+            tenant_id.as_i64(),
             normalized_hostname
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -356,17 +353,21 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
         .fetch_optional(pool)
         .await
         .map_err(storage)?;
-        Ok(row.map(|row| crate::domain::LiveHostRef {
-            tenant_id: row.tenant_id,
-            hostname: row.normalized_hostname,
-            status: row.status,
-        }))
+        row.map(|row| {
+            let tenant_id = TenantId::try_from(row.tenant_id).map_err(storage)?;
+            Ok(crate::domain::LiveHostRef {
+                tenant_id,
+                hostname: row.normalized_hostname,
+                status: row.status,
+            })
+        })
+        .transpose()
     }
 
     async fn upsert_live_host(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         hostname: &str,
         status: &str,
     ) -> Result<(), DomainsError> {
@@ -376,7 +377,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
              ON CONFLICT (normalized_hostname)
              DO UPDATE SET tenant_id = EXCLUDED.tenant_id, status = EXCLUDED.status, updated_at = now()",
             hostname,
-            tenant_id,
+            tenant_id.as_i64(),
             status,
         )
         .execute(&mut **scope.tx_mut().as_inner())
@@ -498,7 +499,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
              verification_attempts, failure_code, failure_detail, created_at, updated_at \
              FROM domains.custom_domains \
              WHERE normalized_hostname LIKE $1 OR hostname ILIKE $2 \
-             ORDER BY updated_at DESC LIMIT $3",
+             ORDER BY created_at DESC LIMIT $3",
             pattern,
             pattern,
             limit as i64
@@ -512,7 +513,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
     async fn platform_find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: CustomDomainId,
     ) -> Result<Option<CustomDomain>, DomainsError> {
         let row = sqlx::query_as!(
             CustomDomainRow,
@@ -521,7 +522,7 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
              detected_registrar, verified_at, last_checked_at, next_check_at, \
              verification_attempts, failure_code, failure_detail, created_at, updated_at \
              FROM domains.custom_domains WHERE id = $1",
-            id
+            id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -557,8 +558,8 @@ impl SqlxDomainOrderRepository {
 #[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)]
 struct OrderRow {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    tenant_id: i64,
     hostname: String,
     normalized_hostname: String,
     term_years: i32,
@@ -568,7 +569,7 @@ struct OrderRow {
     auto_renew: bool,
     whois_privacy: bool,
     registrant_contact: serde_json::Value,
-    ordered_by: Option<Uuid>,
+    ordered_by: Option<i64>,
     idempotency_key: Option<Uuid>,
     external_order_ref: Option<String>,
     charge_id: Option<String>,
@@ -582,12 +583,19 @@ struct OrderRow {
 }
 
 fn order_from_row(row: OrderRow) -> Result<DomainOrder, DomainsError> {
+    let id = DomainOrderId::try_from(row.id).map_err(storage)?;
+    let tenant_id = TenantId::try_from(row.tenant_id).map_err(storage)?;
+    let ordered_by = row
+        .ordered_by
+        .map(UserId::try_from)
+        .transpose()
+        .map_err(storage)?;
     let hostname = hostname(&row.hostname)?;
     let contact: RegistrantContact =
         serde_json::from_value(row.registrant_contact).map_err(storage)?;
     Ok(DomainOrder {
-        id: row.id,
-        tenant_id: row.tenant_id,
+        id,
+        tenant_id,
         hostname,
         term_years: row.term_years.max(0) as u8,
         price: Money::new(row.price_minor, row.currency),
@@ -595,7 +603,7 @@ fn order_from_row(row: OrderRow) -> Result<DomainOrder, DomainsError> {
         auto_renew: row.auto_renew,
         whois_privacy: row.whois_privacy,
         registrant_contact: contact,
-        ordered_by: row.ordered_by,
+        ordered_by,
         idempotency_key: row.idempotency_key,
         external_order_ref: row.external_order_ref,
         charge_id: row.charge_id,
@@ -623,8 +631,8 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
                 idempotency_key, external_order_ref, charge_id, registered_at, expires_at,
                 renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)"#,
-            order.id,
-            order.tenant_id,
+            order.id.as_i64(),
+            order.tenant_id.as_i64(),
             order.hostname.as_str(),
             order.hostname.as_str(),
             order.term_years as i32,
@@ -634,7 +642,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
             order.auto_renew,
             order.whois_privacy,
             serde_json::to_value(&order.registrant_contact).map_err(storage)?,
-            order.ordered_by,
+            order.ordered_by.map(|id| id.as_i64()),
             order.idempotency_key,
             order.external_order_ref.as_deref(),
             order.charge_id.as_deref(),
@@ -655,8 +663,8 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: DomainOrderId,
     ) -> Result<Option<DomainOrder>, DomainsError> {
         let row = sqlx::query_as!(
             OrderRow,
@@ -665,8 +673,8 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
              idempotency_key, external_order_ref, charge_id, registered_at, expires_at, \
              renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at \
              FROM domains.orders WHERE id = $1 AND tenant_id = $2",
-            id,
-            tenant_id
+            id.as_i64(),
+            tenant_id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -677,7 +685,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
     async fn find_by_key(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         idempotency_key: Uuid,
     ) -> Result<Option<DomainOrder>, DomainsError> {
         let row = sqlx::query_as!(
@@ -687,7 +695,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
              idempotency_key, external_order_ref, charge_id, registered_at, expires_at, \
              renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at \
              FROM domains.orders WHERE tenant_id = $1 AND idempotency_key = $2",
-            tenant_id,
+            tenant_id.as_i64(),
             idempotency_key
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -699,7 +707,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<DomainOrder>, DomainsError> {
         let rows = sqlx::query_as!(
             OrderRow,
@@ -708,7 +716,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
              idempotency_key, external_order_ref, charge_id, registered_at, expires_at, \
              renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at \
              FROM domains.orders WHERE tenant_id = $1 ORDER BY created_at DESC",
-            tenant_id
+            tenant_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -730,7 +738,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
                  renewal_attempts = $15, next_renewal_at = $16, failure_detail = $17,
                  updated_at = $18
                WHERE id = $1 AND tenant_id = $19"#,
-            order.id,
+            order.id.as_i64(),
             order.term_years as i32,
             order.price.minor,
             order.price.currency,
@@ -738,7 +746,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
             order.auto_renew,
             order.whois_privacy,
             serde_json::to_value(&order.registrant_contact).map_err(storage)?,
-            order.ordered_by,
+            order.ordered_by.map(|id| id.as_i64()),
             order.idempotency_key,
             order.external_order_ref.as_deref(),
             order.charge_id.as_deref(),
@@ -748,7 +756,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
             order.next_renewal_at,
             order.failure_detail,
             order.updated_at,
-            order.tenant_id,
+            order.tenant_id.as_i64(),
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -770,7 +778,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
                  renewal_attempts = $15, next_renewal_at = $16, failure_detail = $17,
                  updated_at = $18
                WHERE id = $1"#,
-            order.id,
+            order.id.as_i64(),
             order.term_years as i32,
             order.price.minor,
             order.price.currency,
@@ -778,7 +786,7 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
             order.auto_renew,
             order.whois_privacy,
             serde_json::to_value(&order.registrant_contact).map_err(storage)?,
-            order.ordered_by,
+            order.ordered_by.map(|id| id.as_i64()),
             order.idempotency_key,
             order.external_order_ref.as_deref(),
             order.charge_id.as_deref(),
@@ -882,9 +890,9 @@ impl SqlxCertificateRepository {
 
 #[derive(Debug, sqlx::FromRow)]
 struct CertificateRow {
-    id: Uuid,
-    domain_id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    domain_id: i64,
+    tenant_id: i64,
     hostname: String,
     issuer: String,
     serial: String,
@@ -897,10 +905,13 @@ struct CertificateRow {
 }
 
 fn certificate_from_row(row: CertificateRow) -> Result<Certificate, DomainsError> {
+    let id = CertificateId::try_from(row.id).map_err(storage)?;
+    let domain_id = CustomDomainId::try_from(row.domain_id).map_err(storage)?;
+    let tenant_id = TenantId::try_from(row.tenant_id).map_err(storage)?;
     Ok(Certificate {
-        id: row.id,
-        domain_id: row.domain_id,
-        tenant_id: row.tenant_id,
+        id,
+        domain_id,
+        tenant_id,
         hostname: hostname(&row.hostname)?,
         issuer: row.issuer,
         serial: row.serial,
@@ -925,9 +936,9 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
                (id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after,
                 renewed_at, expiry_warned_days, status, last_error)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#,
-            cert.id,
-            cert.domain_id,
-            cert.tenant_id,
+            cert.id.as_i64(),
+            cert.domain_id.as_i64(),
+            cert.tenant_id.as_i64(),
             cert.hostname.as_str(),
             cert.issuer,
             cert.serial,
@@ -954,9 +965,9 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
                (id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after,
                 renewed_at, expiry_warned_days, status, last_error)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#,
-            cert.id,
-            cert.domain_id,
-            cert.tenant_id,
+            cert.id.as_i64(),
+            cert.domain_id.as_i64(),
+            cert.tenant_id.as_i64(),
             cert.hostname.as_str(),
             cert.issuer,
             cert.serial,
@@ -983,7 +994,7 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
                  issuer = $2, serial = $3, not_before = $4, not_after = $5,
                  renewed_at = $6, expiry_warned_days = $7, status = $8, last_error = $9
                WHERE id = $1 AND tenant_id = $10"#,
-            cert.id,
+            cert.id.as_i64(),
             cert.issuer,
             cert.serial,
             cert.not_before,
@@ -992,7 +1003,7 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
             cert.expiry_warned_days.map(|days| days as i32),
             cert.status.as_str(),
             cert.last_error,
-            cert.tenant_id,
+            cert.tenant_id.as_i64(),
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -1010,7 +1021,7 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
                  issuer = $2, serial = $3, not_before = $4, not_after = $5,
                  renewed_at = $6, expiry_warned_days = $7, status = $8, last_error = $9
                WHERE id = $1"#,
-            cert.id,
+            cert.id.as_i64(),
             cert.issuer,
             cert.serial,
             cert.not_before,
@@ -1029,17 +1040,17 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
     async fn find_for_domain(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        domain_id: Uuid,
+        tenant_id: TenantId,
+        domain_id: CustomDomainId,
     ) -> Result<Option<Certificate>, DomainsError> {
         let row = sqlx::query_as!(
             CertificateRow,
             "SELECT id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after, \
-             renewed_at, expiry_warned_days, status, last_error \
-             FROM domains.certificates WHERE domain_id = $1 AND tenant_id = $2 \
-             ORDER BY not_after DESC LIMIT 1",
-            domain_id,
-            tenant_id
+              renewed_at, expiry_warned_days, status, last_error \
+              FROM domains.certificates WHERE domain_id = $1 AND tenant_id = $2 \
+              ORDER BY not_after DESC LIMIT 1",
+            domain_id.as_i64(),
+            tenant_id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -1050,15 +1061,15 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
     async fn find_for_domain_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<Option<Certificate>, DomainsError> {
         let row = sqlx::query_as!(
             CertificateRow,
             "SELECT id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after, \
-             renewed_at, expiry_warned_days, status, last_error \
-             FROM domains.certificates WHERE domain_id = $1 \
-             ORDER BY not_after DESC LIMIT 1",
-            domain_id
+              renewed_at, expiry_warned_days, status, last_error \
+              FROM domains.certificates WHERE domain_id = $1 \
+              ORDER BY not_after DESC LIMIT 1",
+            domain_id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -1077,10 +1088,10 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
         let rows = sqlx::query_as!(
             CertificateRow,
             "SELECT id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after, \
-             renewed_at, expiry_warned_days, status, last_error \
-             FROM domains.certificates \
-             WHERE status = 'active' AND not_after <= $1 \
-             ORDER BY not_after ASC LIMIT $2",
+              renewed_at, expiry_warned_days, status, last_error \
+              FROM domains.certificates \
+              WHERE status = 'active' AND not_after <= $1 \
+              ORDER BY not_after ASC LIMIT $2",
             threshold,
             limit as i64
         )
@@ -1098,9 +1109,9 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
         let rows = sqlx::query_as!(
             CertificateRow,
             "SELECT id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after, \
-             renewed_at, expiry_warned_days, status, last_error \
-             FROM domains.certificates WHERE status = 'active' \
-             ORDER BY not_after ASC LIMIT $1",
+              renewed_at, expiry_warned_days, status, last_error \
+              FROM domains.certificates WHERE status = 'active' \
+              ORDER BY not_after ASC LIMIT $1",
             limit as i64
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
@@ -1114,21 +1125,23 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
 // dns_records
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SqlxDnsRecordRepository;
+#[derive(Clone)]
+pub struct SqlxDnsRecordRepository {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl SqlxDnsRecordRepository {
-    pub const fn new() -> Self {
-        Self
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
     }
 }
 
 #[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)]
 struct DnsRecordRow {
-    id: Uuid,
-    domain_id: Option<Uuid>,
-    tenant_id: Uuid,
+    id: i64,
+    domain_id: Option<i64>,
+    tenant_id: i64,
     record_type: String,
     name: String,
     value: String,
@@ -1151,17 +1164,21 @@ impl crate::domain::DnsRecordRepository for SqlxDnsRecordRepository {
     async fn upsert(
         &self,
         scope: &mut ScopedTx<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
         records: &[DnsRecord],
     ) -> Result<(), DomainsError> {
         for record in records {
+            let record_id = self
+                .ids
+                .next_id()
+                .map_err(|err| DomainsError::Storage(err.to_string()))?;
             sqlx::query!(
                 r#"INSERT INTO domains.dns_records (id, domain_id, tenant_id, record_type, name, value, ttl, managed)
                    VALUES ($1, $2, (SELECT tenant_id FROM domains.custom_domains WHERE id = $2), $3, $4, $5, $6, true)
                    ON CONFLICT (domain_id, record_type, name)
                    DO UPDATE SET value = EXCLUDED.value, ttl = EXCLUDED.ttl"#,
-                Uuid::now_v7(),
-                domain_id,
+                record_id.as_i64(),
+                domain_id.as_i64(),
                 record.record_type.as_str(),
                 record.name,
                 record.value,
@@ -1177,14 +1194,14 @@ impl crate::domain::DnsRecordRepository for SqlxDnsRecordRepository {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        _tenant_id: Uuid,
-        domain_id: Uuid,
+        _tenant_id: TenantId,
+        domain_id: CustomDomainId,
     ) -> Result<Vec<DnsRecord>, DomainsError> {
         let rows = sqlx::query_as!(
             DnsRecordRow,
             "SELECT id, domain_id, tenant_id, record_type, name, value, ttl, managed \
-             FROM domains.dns_records WHERE domain_id = $1",
-            domain_id
+              FROM domains.dns_records WHERE domain_id = $1",
+            domain_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -1195,13 +1212,13 @@ impl crate::domain::DnsRecordRepository for SqlxDnsRecordRepository {
     async fn list_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<Vec<DnsRecord>, DomainsError> {
         let rows = sqlx::query_as!(
             DnsRecordRow,
             "SELECT id, domain_id, tenant_id, record_type, name, value, ttl, managed \
-             FROM domains.dns_records WHERE domain_id = $1",
-            domain_id
+              FROM domains.dns_records WHERE domain_id = $1",
+            domain_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -1212,11 +1229,11 @@ impl crate::domain::DnsRecordRepository for SqlxDnsRecordRepository {
     async fn remove_zone(
         &self,
         scope: &mut ScopedTx<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<(), DomainsError> {
         sqlx::query!(
             "DELETE FROM domains.dns_records WHERE domain_id = $1",
-            domain_id
+            domain_id.as_i64()
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -1227,11 +1244,11 @@ impl crate::domain::DnsRecordRepository for SqlxDnsRecordRepository {
     async fn remove_zone_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        domain_id: Uuid,
+        domain_id: CustomDomainId,
     ) -> Result<(), DomainsError> {
         sqlx::query!(
             "DELETE FROM domains.dns_records WHERE domain_id = $1",
-            domain_id
+            domain_id.as_i64()
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await

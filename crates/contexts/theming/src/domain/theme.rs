@@ -5,11 +5,17 @@ use chrono::{DateTime, Utc};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
+use sanvi_kernel::Id;
 
 use crate::domain::error::ThemingError;
 use crate::domain::manifest::Manifest;
 use crate::domain::tokens::{TokenNode, parse_token_document};
+
+pub enum ThemeTag {}
+pub type ThemeId = Id<ThemeTag>;
+
+pub enum ThemeVersionTag {}
+pub type ThemeVersionId = Id<ThemeVersionTag>;
 
 /// Who can see a theme in the catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -70,7 +76,8 @@ impl ThemeStatus {
 /// A registry entry (`theming.themes`).
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct Theme {
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: ThemeId,
     pub key: String,
     pub publisher: String,
     pub visibility: ThemeVisibility,
@@ -82,8 +89,8 @@ pub struct Theme {
 /// One immutable version of a theme (`theming.theme_versions`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeVersion {
-    pub id: Uuid,
-    pub theme_id: Uuid,
+    pub id: ThemeVersionId,
+    pub theme_id: ThemeId,
     pub semver: Version,
     pub theme_api_range: VersionReq,
     pub manifest: Manifest,
