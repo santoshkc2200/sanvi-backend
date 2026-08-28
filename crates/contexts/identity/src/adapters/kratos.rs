@@ -3,6 +3,7 @@
 //! `whoami` + session revocation, admin identity PATCH).
 
 use async_trait::async_trait;
+use reqwest::header;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -15,10 +16,15 @@ pub struct HttpKratosClient {
     http: reqwest::Client,
     public_url: String,
     admin_url: Option<String>,
+    session_cookie_name: String,
 }
 
 impl HttpKratosClient {
-    pub fn new(public_url: String, admin_url: Option<String>) -> Result<Self, IdentityError> {
+    pub fn new(
+        public_url: String,
+        admin_url: Option<String>,
+        session_cookie_name: String,
+    ) -> Result<Self, IdentityError> {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .build()
@@ -27,7 +33,33 @@ impl HttpKratosClient {
             http,
             public_url,
             admin_url,
+            session_cookie_name,
         })
+    }
+
+    /// The `whoami` request, built but not sent.
+    ///
+    /// The token arrives as either an API session token (sent via
+    /// `X-Session-Token`) or the raw browser cookie value, which Kratos only
+    /// accepts as a literal session cookie under its *configured* name.
+    /// They are not interchangeable: a cookie value sent as
+    /// `X-Session-Token` makes Kratos reject the whole request even when the
+    /// cookie header is valid, so exactly one channel goes out per call.
+    fn whoami_request(
+        &self,
+        session_token: &str,
+        channel: sanvi_http::SessionChannel,
+    ) -> reqwest::RequestBuilder {
+        let request = self
+            .http
+            .get(format!("{}/sessions/whoami", self.public_url));
+        match channel {
+            sanvi_http::SessionChannel::Bearer => request.header("X-Session-Token", session_token),
+            sanvi_http::SessionChannel::Cookie => request.header(
+                header::COOKIE,
+                format!("{}={session_token}", self.session_cookie_name),
+            ),
+        }
     }
 
     /// Parse an OIDC credentials identifier list into provider/subject pairs.
@@ -51,6 +83,11 @@ struct WhoamiResponse {
     id: String,
     #[serde(default)]
     authenticated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Kratos's own assurance level for the session — the source of truth
+    /// for aal (the per-method list starts with the FIRST factor, so a
+    /// naive first-method read would always report aal1).
+    #[serde(default)]
+    authenticator_assurance_level: Option<String>,
     identity: KratosIdentity,
     #[serde(default)]
     authentication_methods: Vec<AuthenticationMethod>,
@@ -134,10 +171,17 @@ impl WhoamiResponse {
             .flatten();
 
         let aal = self
-            .authentication_methods
-            .iter()
-            .find_map(|method| method.aal.clone())
-            .unwrap_or_else(|| "aal1".to_string());
+            .authenticator_assurance_level
+            .clone()
+            .filter(|level| !level.is_empty())
+            .unwrap_or_else(|| {
+                // Fall back to the strongest aal across the method list.
+                self.authentication_methods
+                    .iter()
+                    .filter_map(|method| method.aal.clone())
+                    .max()
+                    .unwrap_or_else(|| "aal1".to_string())
+            });
 
         let methods: Vec<String> = self
             .authentication_methods
@@ -243,11 +287,13 @@ pub mod kratos_client_impl {
 
 #[async_trait]
 impl KratosClient for HttpKratosClient {
-    async fn whoami(&self, session_token: &str) -> Result<Option<SessionInfo>, IdentityError> {
+    async fn whoami(
+        &self,
+        session_token: &str,
+        channel: sanvi_http::SessionChannel,
+    ) -> Result<Option<SessionInfo>, IdentityError> {
         let response = self
-            .http
-            .get(format!("{}/sessions/whoami", self.public_url))
-            .header("X-Session-Token", session_token)
+            .whoami_request(session_token, channel)
             .send()
             .await
             .map_err(|err| IdentityError::KratosUnreachable(err.to_string()))?;
@@ -468,5 +514,51 @@ mod tests {
             response.into_session_info(),
             Err(IdentityError::MalformedWebhook(_))
         ));
+    }
+
+    /// A cookie goes back out under the *configured* name. Hardcoding
+    /// `ory_kratos_session` here fails silently against a deployment that
+    /// renames the cookie: the token is extracted correctly, Kratos does
+    /// not recognise the name, and every browser session verifies as 401.
+    #[test]
+    fn the_cookie_channel_uses_the_configured_cookie_name() {
+        let client = HttpKratosClient::new(
+            "http://kratos.test".to_string(),
+            None,
+            "custom_session".to_string(),
+        )
+        .unwrap();
+
+        let request = client
+            .whoami_request("opaque", sanvi_http::SessionChannel::Cookie)
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get(header::COOKIE).unwrap(),
+            "custom_session=opaque"
+        );
+        assert!(request.headers().get("X-Session-Token").is_none());
+    }
+
+    /// The bearer channel never sends a cookie: Kratos rejects a request
+    /// carrying an API session token in the cookie header.
+    #[test]
+    fn the_bearer_channel_sends_only_the_session_token_header() {
+        let client = HttpKratosClient::new(
+            "http://kratos.test".to_string(),
+            None,
+            "custom_session".to_string(),
+        )
+        .unwrap();
+
+        let request = client
+            .whoami_request("ory_st_opaque", sanvi_http::SessionChannel::Bearer)
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get("X-Session-Token").unwrap(),
+            "ory_st_opaque"
+        );
+        assert!(request.headers().get(header::COOKIE).is_none());
     }
 }

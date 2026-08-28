@@ -156,6 +156,12 @@ fn build_cors(config: &CorsConfig) -> actix_cors::Cors {
             header::ORIGIN,
             header::HeaderName::from_static(REQUEST_ID_HEADER),
             header::HeaderName::from_static(SITE_KEY_HEADER),
+            // Sent by @sanvi/api-client on every tenant-scoped request and
+            // on localized/idempotent calls — a preflight requesting a
+            // header missing here fails, so these must match the client.
+            header::HeaderName::from_static("x-tenant-id"),
+            header::HeaderName::from_static("idempotency-key"),
+            header::ACCEPT_LANGUAGE,
         ])
         .max_age(config.max_age_secs as usize)
         .supports_credentials()

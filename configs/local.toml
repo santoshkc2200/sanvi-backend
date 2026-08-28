@@ -1,11 +1,42 @@
 # Local development overlay: everything points at docker-compose hostnames.
 # No secrets: local passwords come from .env (see .env.example).
 
+[server]
+port = 8081
+
 [server.cors]
-allowed_origins = ["http://localhost:5173", "http://localhost:4173"]
+# All four app dev origins (SvelteKit apps 5173/5174, SPA apps 5175/5176) plus
+# their playwright preview ports, both loopback spellings — the SPAs call the
+# API straight from the browser.
+allowed_origins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+  "http://localhost:5176",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+  "http://127.0.0.1:5175",
+  "http://127.0.0.1:5176",
+  "http://localhost:4173",
+  "http://localhost:4174",
+  "http://localhost:4175",
+  "http://localhost:4176",
+  # Tenant-host dev origins (admin/platform-admin browsed via acme.localhost)
+  "http://acme.localhost:5174",
+  "http://acme.localhost:5175",
+  "http://acme.localhost:5176",
+  "http://acme.localhost:4175",
+  "http://acme.localhost:4176",
+  "http://globex.localhost:5174",
+  "http://suspended-co.localhost:5174",
+  "http://127.0.0.1:4173",
+  "http://127.0.0.1:4174",
+  "http://127.0.0.1:4175",
+  "http://127.0.0.1:4176",
+]
 
 [tenancy]
-# Local hosts: acme.localhost:8080
+# Local hosts: acme.localhost:8081
 base_domain = "localhost"
 
 [telemetry]

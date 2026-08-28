@@ -618,7 +618,11 @@ impl sanvi_identity::domain::KratosClient for World {
         Ok(())
     }
 
-    async fn whoami(&self, _session_token: &str) -> Result<Option<SessionInfo>, IdentityError> {
+    async fn whoami(
+        &self,
+        _session_token: &str,
+        _channel: sanvi_http::SessionChannel,
+    ) -> Result<Option<SessionInfo>, IdentityError> {
         Ok(None)
     }
 

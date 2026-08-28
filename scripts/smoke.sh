@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Smoke test against a running API (default http://localhost:8080).
+# Smoke test against a running API (default http://localhost:8081).
 
 set -euo pipefail
 
-BASE_URL="${SANVI_BASE_URL:-http://localhost:8080}"
+BASE_URL="${SANVI_BASE_URL:-http://localhost:8081}"
 
 fail() {
     echo "SMOKE FAILED: $1" >&2

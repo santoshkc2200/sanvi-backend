@@ -601,10 +601,14 @@ impl Default for SchedulerConfig {
     }
 }
 
-/// Keto endpoints the access sync consumer needs.
+/// Ory endpoints the worker needs: Keto for the access sync consumer,
+/// Kratos for the identity privacy provider's erasure calls. Same
+/// `[ory]` section the api reads, so the two never drift.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct OryConfig {
+    pub kratos_public_url: String,
+    pub kratos_admin_url: String,
     pub keto_read_url: String,
     pub keto_write_url: String,
 }
@@ -612,6 +616,8 @@ pub struct OryConfig {
 impl Default for OryConfig {
     fn default() -> Self {
         Self {
+            kratos_public_url: "http://localhost:4433".to_string(),
+            kratos_admin_url: "http://localhost:4434".to_string(),
             keto_read_url: "http://localhost:4466".to_string(),
             keto_write_url: "http://localhost:4467".to_string(),
         }
@@ -629,6 +635,11 @@ pub struct WorkerConfig {
     pub tenancy: TenancyConfig,
     #[serde(default)]
     pub ory: OryConfig,
+    /// Read for `session_cookie_name`: the identity privacy provider talks
+    /// to Kratos, and a deployment that renames the cookie renames it for
+    /// every process, not just the api.
+    #[serde(default)]
+    pub identity: sanvi_identity::IdentityConfig,
     pub access: AccessConfig,
     pub audit: AuditConfig,
     pub billing: BillingConfig,
@@ -654,6 +665,7 @@ impl WorkerConfig {
         self.redis.validate()?;
         self.telemetry.validate()?;
         self.tenancy.validate()?;
+        self.identity.validate()?;
         self.access.validate()?;
         self.audit.validate()?;
         self.billing.validate()?;
@@ -1317,8 +1329,9 @@ async fn main() -> ExitCode {
                 ),
                 std::sync::Arc::new(
                     sanvi_identity::adapters::HttpKratosClient::new(
-                        "http://localhost:4433".to_string(),
-                        Some("http://localhost:4434".to_string()),
+                        config.ory.kratos_public_url.clone(),
+                        Some(config.ory.kratos_admin_url.clone()),
+                        config.identity.session_cookie_name.clone(),
                     )
                     .expect("kratos client construction is infallible"),
                 ),

@@ -341,8 +341,12 @@ domains_orders_interval_secs = 60
 payments_webhook_dispatch_interval_secs = 10
 payments_connection_sync_interval_secs = 3600
 payments_metrics_interval_secs = 60
+# 09.6: re-check tax registrations for tenants with automatic tax on.
+payments_tax_check_interval_secs = 86400
 # Phase 10: pre-create the next calendar month's event and metrics partitions.
 advertising_partition_maintenance_interval_secs = 86400
+# 10.3: nightly cross-tenant campaign reconciliation sweep (observes only).
+advertising_reconciliation_interval_secs = 86400
 
 [payments]
 # Phase 09: tenant payment providers (Stripe Connect, direct charges —

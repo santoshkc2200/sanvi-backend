@@ -34,10 +34,14 @@ impl ListSessions {
 
     /// The current session, from Kratos (the cache is not a source of truth
     /// for anything except subject resolution).
-    pub async fn execute(&self, session_token: &str) -> Result<Vec<SessionView>, IdentityError> {
+    pub async fn execute(
+        &self,
+        session_token: &str,
+        channel: sanvi_http::SessionChannel,
+    ) -> Result<Vec<SessionView>, IdentityError> {
         let session = self
             .kratos
-            .whoami(session_token)
+            .whoami(session_token, channel)
             .await?
             .ok_or(IdentityError::SessionNotFound)?;
         Ok(vec![SessionView {
@@ -85,10 +89,11 @@ impl RevokeSession {
         user_id: crate::domain::UserId,
         session_id: &str,
         session_token: &str,
+        channel: sanvi_http::SessionChannel,
     ) -> Result<(), IdentityError> {
         let session = self
             .kratos
-            .whoami(session_token)
+            .whoami(session_token, channel)
             .await?
             .ok_or(IdentityError::SessionNotFound)?;
         if session.session_id != session_id {

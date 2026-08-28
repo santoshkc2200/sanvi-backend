@@ -240,7 +240,11 @@ pub trait LinkIntentRepository: Send + Sync {
 pub trait KratosClient: Send + Sync {
     /// `GET /sessions/whoami` for a session token. `Ok(None)` = no such
     /// session (401); `Err` = backend trouble (fail closed).
-    async fn whoami(&self, session_token: &str) -> Result<Option<SessionInfo>, IdentityError>;
+    async fn whoami(
+        &self,
+        session_token: &str,
+        channel: sanvi_http::SessionChannel,
+    ) -> Result<Option<SessionInfo>, IdentityError>;
 
     /// `DELETE /admin/sessions/{id}` (the public API refuses to revoke the
     /// session a request is authenticated with; self-revocation goes

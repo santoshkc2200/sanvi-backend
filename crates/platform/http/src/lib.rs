@@ -27,7 +27,7 @@ pub mod tracing;
 
 pub use authn::{
     AuthnMiddleware, CurrentSubject, FreshAal2Policy, FreshAal2Required, OptionalSubject,
-    SessionToken, SessionVerifier, Subject,
+    SessionChannel, SessionToken, SessionVerifier, Subject,
 };
 pub use authz::{
     Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,

@@ -124,7 +124,7 @@ services:
       - "12112:12112"
 
   # stripe-cli: forwards test-mode Stripe webhooks to the API container.
-  # Usage: stripe listen --forward-to host.docker.internal:8080/internal/webhooks/stripe/platform
+  # Usage: stripe listen --forward-to host.docker.internal:8081/internal/webhooks/stripe/platform
   # (run with `docker compose run --rm stripe-cli ...` after docker login).
   stripe-cli:
     image: stripe/stripe-cli:v1.35.0
