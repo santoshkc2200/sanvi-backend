@@ -158,7 +158,11 @@ impl PlaceDomainOrder {
 
         // Idempotency: the same command returns the same order.
         if let Some(key) = command.idempotency_key {
-            let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
+            let mut scope = self
+                .tx
+                .begin_for(tenant_id.as_i64())
+                .await
+                .map_err(storage)?;
             if let Some(order) = self.orders.find_by_key(&mut scope, tenant_id, key).await? {
                 return Ok(OrderView::of(&order));
             }
@@ -213,7 +217,11 @@ impl PlaceDomainOrder {
 
         // Step 1: record the intent (order + event in one transaction).
         {
-            let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
+            let mut scope = self
+                .tx
+                .begin_for(tenant_id.as_i64())
+                .await
+                .map_err(storage)?;
             self.orders.insert(&mut scope, &order).await?;
             self.events
                 .publish_scoped(
@@ -337,8 +345,16 @@ impl PlaceDomainOrder {
         self.load_order(tenant_id, order_id).await
     }
 
-    async fn load_order(&self, tenant_id: TenantId, order_id: DomainOrderId) -> Result<OrderView, DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
+    async fn load_order(
+        &self,
+        tenant_id: TenantId,
+        order_id: DomainOrderId,
+    ) -> Result<OrderView, DomainsError> {
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(storage)?;
         let order = self
             .orders
             .find(&mut scope, tenant_id, order_id)
@@ -357,7 +373,11 @@ impl PlaceDomainOrder {
         order: &DomainOrder,
         hostname: &Hostname,
     ) -> Result<(), DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(storage)?;
 
         // Re-read inside the transaction: a retry may race a success.
         let order = self
@@ -483,7 +503,11 @@ impl PlaceDomainOrder {
         tenant_id: TenantId,
         order: &DomainOrder,
     ) -> Result<(), DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(storage)?;
         self.orders.update(&mut scope, order).await?;
         scope.commit().await.map_err(storage)
     }
@@ -494,7 +518,11 @@ impl PlaceDomainOrder {
         tenant_id: TenantId,
         detail: &str,
     ) -> Result<(), DomainsError> {
-        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(storage)?;
         self.orders.update(&mut scope, order).await?;
         self.events
             .publish_scoped(
@@ -517,7 +545,11 @@ impl PlaceDomainOrder {
     ) -> Result<(), DomainsError> {
         // Same as persist_failed but keeps `refund_error` in the failure
         // detail for the order sweep to retry.
-        let mut scope = self.tx.begin_for(tenant_id.as_i64()).await.map_err(storage)?;
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(storage)?;
         self.orders.update(&mut scope, order).await?;
         self.events
             .publish_scoped(

@@ -4,9 +4,7 @@ use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::application::views::CustomDomainView;
-use crate::domain::{
-    Clock, CustomDomainId, CustomDomainRepository, DomainStatus, DomainsError,
-};
+use crate::domain::{Clock, CustomDomainId, CustomDomainRepository, DomainStatus, DomainsError};
 
 pub struct RequestVerification {
     domains: Arc<dyn CustomDomainRepository>,

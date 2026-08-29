@@ -9,7 +9,6 @@ use utoipa::ToSchema;
 use crate::domain::AccessError;
 use crate::domain::permissions::PermissionScope;
 
-
 /// Where a role applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

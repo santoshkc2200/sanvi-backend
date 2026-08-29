@@ -1,5 +1,5 @@
-use thiserror::Error;
 use sanvi_kernel::IdGenerationError;
+use thiserror::Error;
 
 /// Domain errors for the `access` context.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

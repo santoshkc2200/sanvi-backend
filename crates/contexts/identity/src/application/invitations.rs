@@ -390,10 +390,7 @@ impl ListInvitations {
         }
     }
 
-    pub async fn execute(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<Vec<InvitationView>, IdentityError> {
+    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<InvitationView>, IdentityError> {
         let mut scope = self
             .tx_manager
             .begin_for(tenant_id.as_i64())

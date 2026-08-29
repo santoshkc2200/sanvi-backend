@@ -26,7 +26,9 @@ fn data(action: &str, tenant_id: Option<TenantId>) -> AuditEntryData {
     AuditEntryData {
         occurred_at: chrono::Utc::now(),
         actor_type: ActorType::PlatformAdmin,
-        actor_id: Some(sanvi_kernel::UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap())),
+        actor_id: Some(sanvi_kernel::UserId::from_snowflake(
+            sanvi_testsupport::test_ids().next_id().unwrap(),
+        )),
         on_behalf_of: None,
         tenant_id,
         action: action.to_string(),
@@ -235,7 +237,10 @@ async fn audit_rows_are_rls_isolated_between_tenants() {
 
     // A tenant-scoped transaction must see only its own rows (raw SQL:
     // the reader port is platform-scoped by design).
-    let mut scoped = tx_manager.begin_for(tenant_a.as_i64()).await.expect("scoped tx");
+    let mut scoped = tx_manager
+        .begin_for(tenant_a.as_i64())
+        .await
+        .expect("scoped tx");
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit.entries WHERE tenant_id = $1")
         .bind(tenant_a.as_i64())
         .fetch_one(&mut **scoped.tx_mut().as_inner())

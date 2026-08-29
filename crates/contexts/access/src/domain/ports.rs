@@ -364,7 +364,11 @@ pub trait ApprovalGate: Send + Sync {
 /// `is_enabled` for booleans, `remaining`/`consume` for quotas.
 #[async_trait]
 pub trait FeatureGate: Send + Sync {
-    async fn is_enabled(&self, tenant_id: TenantId, feature: &FeatureKey) -> Result<bool, AccessError>;
+    async fn is_enabled(
+        &self,
+        tenant_id: TenantId,
+        feature: &FeatureKey,
+    ) -> Result<bool, AccessError>;
 
     /// Units left in the current period (`None` for boolean features or
     /// unlimited quotas).

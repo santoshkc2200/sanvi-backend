@@ -317,12 +317,7 @@ pub async fn delete_role(
     let role_id = role_id(&path)?;
     state
         .delete_role
-        .execute(
-            actor,
-            on_behalf_of,
-            tenant.0.tenant_id,
-            role_id,
-        )
+        .execute(actor, on_behalf_of, tenant.0.tenant_id, role_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::NoContent())

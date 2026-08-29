@@ -24,15 +24,23 @@ pub struct SystemIdGenerator {
 }
 
 impl SystemIdGenerator {
-    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self { Self { ids } }
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
 }
 
 impl IdGenerator for SystemIdGenerator {
     fn next_grant_id(&self) -> Result<ImpersonationGrantId, crate::domain::PlatformAdminError> {
-        self.ids.next_id().map(ImpersonationGrantId::from_snowflake).map_err(Into::into)
+        self.ids
+            .next_id()
+            .map(ImpersonationGrantId::from_snowflake)
+            .map_err(Into::into)
     }
 
     fn next_approval_id(&self) -> Result<ApprovalId, crate::domain::PlatformAdminError> {
-        self.ids.next_id().map(ApprovalId::from_snowflake).map_err(Into::into)
+        self.ids
+            .next_id()
+            .map(ApprovalId::from_snowflake)
+            .map_err(Into::into)
     }
 }

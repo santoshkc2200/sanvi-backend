@@ -165,7 +165,11 @@ impl EntitlementFeatureGate {
 
 #[async_trait::async_trait]
 impl FeatureGate for EntitlementFeatureGate {
-    async fn is_enabled(&self, tenant_id: TenantId, feature: &FeatureKey) -> Result<bool, AccessError> {
+    async fn is_enabled(
+        &self,
+        tenant_id: TenantId,
+        feature: &FeatureKey,
+    ) -> Result<bool, AccessError> {
         let set = self.resolver.resolve(tenant_id).await?;
         let entry = set
             .find(feature)

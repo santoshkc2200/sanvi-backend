@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 use sanvi_kernel::{TenantId, UserId};
+use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 

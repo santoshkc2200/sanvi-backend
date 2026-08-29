@@ -360,7 +360,8 @@ fn build_harness(
         "sandbox".to_string(),
         &DomainsConfig::default().registrar.tlds,
     ));
-    let ca: Arc<dyn CertificateAuthorityPort> = Arc::new(SandboxCertificateAuthority::new(90, ids.clone()));
+    let ca: Arc<dyn CertificateAuthorityPort> =
+        Arc::new(SandboxCertificateAuthority::new(90, ids.clone()));
     let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(ids.clone()));
     Harness {
         tx,
@@ -418,7 +419,12 @@ fn cert_sweep(harness: &Harness) -> Arc<RunCertIssuanceSweep> {
     ))
 }
 
-async fn claim(harness: &Harness, tenant_id: TenantId, hostname: &str, role: Option<&str>) -> CustomDomainId {
+async fn claim(
+    harness: &Harness,
+    tenant_id: TenantId,
+    hostname: &str,
+    role: Option<&str>,
+) -> CustomDomainId {
     let gate = Arc::new(FakeGate { enabled: true });
     let use_case = claim_use_case(harness, gate);
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
@@ -829,8 +835,10 @@ async fn renewal_failure_escalates_and_expiry_warnings_fire() {
     // the T-30 expiry warning fires (a simulated renewal failure pages
     // before expiry).
     clock.set(clock.now() + Duration::days(61));
-    let failing_ca =
-        Arc::new(SandboxCertificateAuthority::new(90, harness.ids.clone()).with_renewal_error("simulated CA outage"));
+    let failing_ca = Arc::new(
+        SandboxCertificateAuthority::new(90, harness.ids.clone())
+            .with_renewal_error("simulated CA outage"),
+    );
     let renewal = Arc::new(RunRenewalSweep::new(
         harness.domains.clone(),
         harness.certs.clone(),

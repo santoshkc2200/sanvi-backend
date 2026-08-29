@@ -167,9 +167,7 @@ impl MembershipRepository for SqlxMembershipRepository {
                     row.invited_by
                         .map(UserId::try_from)
                         .transpose()
-                        .map_err(|err| {
-                            IdentityError::Storage(format!("invalid user id: {err}"))
-                        })?,
+                        .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
                     row.created_at,
                 ),
                 email,
@@ -242,9 +240,8 @@ impl MembershipRepository for SqlxMembershipRepository {
 
         rows.into_iter()
             .map(|row| {
-                let tenant_id = TenantId::try_from(row.tenant_id).map_err(|err| {
-                    IdentityError::Storage(format!("invalid tenant id: {err}"))
-                })?;
+                let tenant_id = TenantId::try_from(row.tenant_id)
+                    .map_err(|err| IdentityError::Storage(format!("invalid tenant id: {err}")))?;
                 let user_id = UserId::try_from(row.user_id)
                     .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?;
                 let roles = roles_by_member
@@ -262,9 +259,7 @@ impl MembershipRepository for SqlxMembershipRepository {
                     row.invited_by
                         .map(UserId::try_from)
                         .transpose()
-                        .map_err(|err| {
-                            IdentityError::Storage(format!("invalid user id: {err}"))
-                        })?,
+                        .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
                     row.created_at,
                 ))
             })
@@ -304,9 +299,8 @@ impl MembershipRepository for SqlxMembershipRepository {
 
         rows.into_iter()
             .map(|row| {
-                let tenant_id = TenantId::try_from(row.tenant_id).map_err(|err| {
-                    IdentityError::Storage(format!("invalid tenant id: {err}"))
-                })?;
+                let tenant_id = TenantId::try_from(row.tenant_id)
+                    .map_err(|err| IdentityError::Storage(format!("invalid tenant id: {err}")))?;
                 let roles = roles_by_tenant
                     .remove(&row.tenant_id)
                     .unwrap_or_default()
@@ -323,9 +317,7 @@ impl MembershipRepository for SqlxMembershipRepository {
                     row.invited_by
                         .map(UserId::try_from)
                         .transpose()
-                        .map_err(|err| {
-                            IdentityError::Storage(format!("invalid user id: {err}"))
-                        })?,
+                        .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
                     row.created_at,
                 ))
             })

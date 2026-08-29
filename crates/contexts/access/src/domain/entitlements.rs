@@ -5,9 +5,9 @@
 //! and billing can undercut a feature default without touching operators.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use sanvi_kernel::{TenantId, UserId};
 
 use crate::domain::AccessError;
 use crate::domain::features::{Feature, FeatureKey, FeatureKind};

@@ -1,6 +1,6 @@
-use thiserror::Error;
-use sanvi_kernel::{IdGenerationError, TenantId, UserId};
 use crate::domain::{ApprovalId, ImpersonationGrantId};
+use sanvi_kernel::{IdGenerationError, TenantId, UserId};
+use thiserror::Error;
 
 /// Domain errors for the `platform_admin` context.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -24,7 +24,10 @@ pub enum PlatformAdminError {
     GrantExpired { id: ImpersonationGrantId },
 
     #[error("impersonation target {user_id} is not an active member of tenant {tenant_id}")]
-    TargetNotMember { user_id: UserId, tenant_id: TenantId },
+    TargetNotMember {
+        user_id: UserId,
+        tenant_id: TenantId,
+    },
 
     #[error("impersonation is refused: tenant {tenant_id} has an active privacy lock")]
     PrivacyLocked { tenant_id: TenantId },

@@ -83,8 +83,9 @@ async fn wire(
     let features: Arc<dyn FeatureRepository> = Arc::new(SqlxFeatureRepository::new());
     let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
     let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());
-    let events: Arc<dyn sanvi_access::domain::EventPublisher> =
-        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new(ids.clone()));
+    let events: Arc<dyn sanvi_access::domain::EventPublisher> = Arc::new(
+        sanvi_access::adapters::OutboxEventPublisher::new(ids.clone()),
+    );
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let cache: Arc<dyn EntitlementCache> = Arc::new(NoopEntitlementCache);
     let audit: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new(ids));

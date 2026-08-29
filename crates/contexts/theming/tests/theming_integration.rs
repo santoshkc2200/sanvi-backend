@@ -57,11 +57,7 @@ struct TestGate {
 
 #[async_trait::async_trait]
 impl ThemeFeatureGate for TestGate {
-    async fn is_enabled(
-        &self,
-        _tenant_id: TenantId,
-        feature: &str,
-    ) -> Result<bool, ThemingError> {
+    async fn is_enabled(&self, _tenant_id: TenantId, feature: &str) -> Result<bool, ThemingError> {
         Ok(self.enabled.contains(&feature))
     }
 }
@@ -766,7 +762,8 @@ async fn brand_asset_upload_validates_and_stores() {
     let store: Arc<dyn BrandAssetStore> = Arc::new(LocalFileStore::new(root.clone()));
     let themes: Arc<dyn ThemeRepository> = Arc::new(SqlxThemeRepository::new());
     let tenants: Arc<dyn TenantThemeRepository> = Arc::new(SqlxTenantThemeRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
+    let events: Arc<dyn EventPublisher> =
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let upload = sanvi_theming::application::UploadBrandAsset::new(
         tenants.clone(),

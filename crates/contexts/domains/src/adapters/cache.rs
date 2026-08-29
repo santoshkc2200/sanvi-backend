@@ -140,7 +140,10 @@ mod tests {
         // TTL 0: every entry is immediately stale, so reads fall through.
         let expiring = LiveDomainCache::new(None, 0);
         expiring
-            .put("shop.example.com".to_string(), Some(TenantId::try_from(2i64).unwrap()))
+            .put(
+                "shop.example.com".to_string(),
+                Some(TenantId::try_from(2i64).unwrap()),
+            )
             .await;
         assert!(expiring.get("shop.example.com").await.is_none());
         assert!(expiring.local.lock().await.is_empty());

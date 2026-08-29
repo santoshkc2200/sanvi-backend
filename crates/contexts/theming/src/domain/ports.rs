@@ -149,7 +149,12 @@ pub trait BrandAssetStore: Send + Sync {
         bytes: &[u8],
     ) -> Result<(), ThemingError>;
 
-    async fn delete(&self, tenant_id: TenantId, digest: &str, ext: &str) -> Result<(), ThemingError>;
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        digest: &str,
+        ext: &str,
+    ) -> Result<(), ThemingError>;
 }
 
 /// Storage for published theme artifacts (content-addressed zips).

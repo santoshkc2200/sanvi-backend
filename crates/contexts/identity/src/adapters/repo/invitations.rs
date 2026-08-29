@@ -1,9 +1,9 @@
 //! Tenant-scoped invitation storage (`identity.invitations`).
 
 use async_trait::async_trait;
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use sqlx::FromRow;
-use sanvi_kernel::{RoleId, TenantId};
 
 use crate::domain::invitation::{Invitation, InvitationId};
 use crate::domain::user::UserId;
@@ -34,12 +34,21 @@ struct InvitationRow {
 
 fn invitation_from_row(row: InvitationRow) -> Result<Invitation, IdentityError> {
     Ok(Invitation::from_parts(
-        InvitationId::try_from(row.id).map_err(|err| IdentityError::Storage(format!("invalid invitation id: {err}")))?,
-        TenantId::try_from(row.tenant_id).map_err(|err| IdentityError::Storage(format!("invalid tenant id: {err}")))?,
+        InvitationId::try_from(row.id)
+            .map_err(|err| IdentityError::Storage(format!("invalid invitation id: {err}")))?,
+        TenantId::try_from(row.tenant_id)
+            .map_err(|err| IdentityError::Storage(format!("invalid tenant id: {err}")))?,
         Email::parse(&row.email)?,
-        row.role_ids.into_iter().map(RoleId::try_from).collect::<Result<Vec<_>, _>>().map_err(|err| IdentityError::Storage(format!("invalid role id: {err}")))?,
+        row.role_ids
+            .into_iter()
+            .map(RoleId::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| IdentityError::Storage(format!("invalid role id: {err}")))?,
         row.token_hash,
-        row.invited_by.map(UserId::try_from).transpose().map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
+        row.invited_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
         row.created_at,
         row.expires_at,
         row.accepted_at,
@@ -67,7 +76,11 @@ impl InvitationRepository for SqlxInvitationRepository {
             invitation.id().as_i64(),
             invitation.tenant_id().as_i64(),
             invitation.email().as_str(),
-            &invitation.role_ids().iter().map(|id| id.as_i64()).collect::<Vec<_>>(),
+            &invitation
+                .role_ids()
+                .iter()
+                .map(|id| id.as_i64())
+                .collect::<Vec<_>>(),
             invitation.token_hash(),
             invitation.invited_by().map(|id| id.as_i64()),
             invitation.created_at(),

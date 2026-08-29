@@ -318,7 +318,10 @@ impl ListTenantEntitlements {
         Self { resolver }
     }
 
-    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<ResolvedEntitlement>, AccessError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ResolvedEntitlement>, AccessError> {
         let set = self.resolver.resolve(tenant_id).await?;
         Ok(match set {
             crate::application::feature_gate::ResolvedSet::Fresh(entries)

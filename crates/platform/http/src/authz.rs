@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use actix_web::HttpMessage;
-use serde::{Deserialize, Serialize};
 use sanvi_kernel::{TenantId, UserId};
+use serde::{Deserialize, Serialize};
 
 use crate::authn::Subject;
 use crate::error::ApiError;

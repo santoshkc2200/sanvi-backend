@@ -4,8 +4,8 @@
 //! convention as tenancy) so the access context can sync Keto tuples
 //! without parsing every payload.
 
-use sanvi_kernel::{EventEnvelope, EventId, RoleId, TenantId};
 use crate::domain::InvitationId;
+use sanvi_kernel::{EventEnvelope, EventId, RoleId, TenantId};
 use serde::Serialize;
 
 use crate::domain::user::{LinkedVia, UserId};
@@ -163,14 +163,16 @@ impl IdentityEvent {
     /// The outbox envelope for this event.
     pub fn envelope(&self, id: EventId) -> EventEnvelope {
         let payload = serde_json::to_value(self).expect("identity events serialize infallibly");
-        let aggregate_id = self
-            .user_id()
-            .map(|id| id.as_snowflake())
-            .unwrap_or_else(|| match self {
-                Self::InvitationSent { invitation_id, .. }
-                | Self::InvitationAccepted { invitation_id, .. } => invitation_id.as_snowflake(),
-                _ => sanvi_kernel::SnowflakeId::try_from(1_i64).expect("seed aggregate ID"),
-            });
+        let aggregate_id =
+            self.user_id()
+                .map(|id| id.as_snowflake())
+                .unwrap_or_else(|| match self {
+                    Self::InvitationSent { invitation_id, .. }
+                    | Self::InvitationAccepted { invitation_id, .. } => {
+                        invitation_id.as_snowflake()
+                    }
+                    _ => sanvi_kernel::SnowflakeId::try_from(1_i64).expect("seed aggregate ID"),
+                });
         let mut envelope = EventEnvelope::new(
             id,
             IdentityEventName::AGGREGATE,

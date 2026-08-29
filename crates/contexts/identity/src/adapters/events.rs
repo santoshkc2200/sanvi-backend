@@ -16,7 +16,9 @@ use crate::domain::{Clock, EventPublisher, IdGenerator, IdentityError};
 /// Publishes identity events into the transactional outbox (same transaction
 /// as the state change they describe).
 #[derive(Clone)]
-pub struct OutboxEventPublisher { ids: Arc<dyn RawIdGenerator> }
+pub struct OutboxEventPublisher {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl OutboxEventPublisher {
     pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
@@ -71,7 +73,11 @@ impl EventPublisher for OutboxEventPublisher {
 
 impl OutboxEventPublisher {
     fn envelope(&self, event: &IdentityEvent) -> Result<EventEnvelope, IdentityError> {
-        self.ids.next_id().map(EventId::from_snowflake).map(|id| event.envelope(id)).map_err(Into::into)
+        self.ids
+            .next_id()
+            .map(EventId::from_snowflake)
+            .map(|id| event.envelope(id))
+            .map_err(Into::into)
     }
 }
 
@@ -82,16 +88,24 @@ pub struct SystemIdGenerator {
 }
 
 impl SystemIdGenerator {
-    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self { Self { ids } }
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
 }
 
 impl IdGenerator for SystemIdGenerator {
     fn next_user_id(&self) -> Result<UserId, IdentityError> {
-        self.ids.next_id().map(UserId::from_snowflake).map_err(IdentityError::from)
+        self.ids
+            .next_id()
+            .map(UserId::from_snowflake)
+            .map_err(IdentityError::from)
     }
 
     fn next_invitation_id(&self) -> Result<InvitationId, IdentityError> {
-        self.ids.next_id().map(InvitationId::from_snowflake).map_err(IdentityError::from)
+        self.ids
+            .next_id()
+            .map(InvitationId::from_snowflake)
+            .map_err(IdentityError::from)
     }
 }
 

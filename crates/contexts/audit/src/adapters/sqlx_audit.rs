@@ -128,10 +128,9 @@ impl AuditWriter for SqlxAuditWriter {
                 .map_err(|_| AuditError::Storage("tail hash is not 32 bytes".to_string()))?,
             None => GENESIS_HASH,
         };
-        let id = self
-            .ids
-            .next_id()
-            .map_err(|err| AuditError::Storage(format!("failed to generate audit entry id: {err}")))?;
+        let id = self.ids.next_id().map_err(|err| {
+            AuditError::Storage(format!("failed to generate audit entry id: {err}"))
+        })?;
         let entry = AuditEntry::new(id, data.clone(), prev_hash)?;
 
         let seq: i64 = sqlx::query_scalar(

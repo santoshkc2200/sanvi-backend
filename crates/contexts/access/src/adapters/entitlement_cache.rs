@@ -227,7 +227,12 @@ mod tests {
         cache.put(TenantId::try_from(2_i64).unwrap(), &[], 60).await;
         cache.put(TenantId::try_from(3_i64).unwrap(), &[], 60).await;
         // Eviction happened; still usable.
-        assert!(cache.get(TenantId::try_from(1_i64).unwrap()).await.is_none());
+        assert!(
+            cache
+                .get(TenantId::try_from(1_i64).unwrap())
+                .await
+                .is_none()
+        );
     }
 
     #[test]

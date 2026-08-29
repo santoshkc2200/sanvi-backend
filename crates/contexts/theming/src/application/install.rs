@@ -99,24 +99,25 @@ impl InstallThemeVersion {
         let visibility = ThemeVisibility::parse(&command.visibility)?;
 
         // 4. New theme? Create the registry row; otherwise reuse it.
-        let (theme_id, theme_to_insert) = match self.themes.get_by_key(&self.pool, &manifest.id).await? {
-            Some(existing) => (existing.id, None),
-            None => {
-                let id = ThemeId::from_snowflake(self.ids.next_id()?);
-                (
-                    id,
-                    Some(Theme {
+        let (theme_id, theme_to_insert) =
+            match self.themes.get_by_key(&self.pool, &manifest.id).await? {
+                Some(existing) => (existing.id, None),
+                None => {
+                    let id = ThemeId::from_snowflake(self.ids.next_id()?);
+                    (
                         id,
-                        key: manifest.id.clone(),
-                        publisher: command.publisher.clone(),
-                        visibility,
-                        required_feature: command.required_feature.clone(),
-                        status: ThemeStatus::Active,
-                        created_at: self.clock.now(),
-                    }),
-                )
-            }
-        };
+                        Some(Theme {
+                            id,
+                            key: manifest.id.clone(),
+                            publisher: command.publisher.clone(),
+                            visibility,
+                            required_feature: command.required_feature.clone(),
+                            status: ThemeStatus::Active,
+                            created_at: self.clock.now(),
+                        }),
+                    )
+                }
+            };
 
         // 5. Immutable version row (the trigger enforces this too).
         let exists = self

@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use sanvi_kernel::{TenantId, UserId};
 use utoipa::ToSchema;
 
 use crate::domain::error::ThemingError;

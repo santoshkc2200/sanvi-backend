@@ -20,7 +20,10 @@ impl OutboxEventPublisher {
         Self { ids }
     }
 
-    fn envelope(&self, event: &ThemingEvent) -> Result<sanvi_kernel::events::EventEnvelope, ThemingError> {
+    fn envelope(
+        &self,
+        event: &ThemingEvent,
+    ) -> Result<sanvi_kernel::events::EventEnvelope, ThemingError> {
         let id = self.ids.next_id().map(EventId::from_snowflake)?;
         Ok(event.envelope(id))
     }

@@ -42,9 +42,9 @@ use sanvi_access::{
 use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
-        FakeAdPlatform,
-        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
-        SqlxCreativeRepository, SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
+        FakeAdPlatform, SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
+        SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
+        SqlxTenantEnvelopeCrypto,
     },
     application::{
         AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,

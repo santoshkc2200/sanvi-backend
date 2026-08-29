@@ -281,11 +281,7 @@ pub async fn complete_link_challenge(
         })
         .unwrap_or_default();
 
-    let user = match state
-        .get_me
-        .execute(subject.0.user_id)
-        .await
-    {
+    let user = match state.get_me.execute(subject.0.user_id).await {
         Ok(user) => user,
         Err(err) => {
             let error = api_error(err);
@@ -560,11 +556,7 @@ pub async fn accept_invitation(
     body: web::Json<crate::application::AcceptInvitationCommand>,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let email = match state
-        .get_me
-        .execute(subject.0.user_id)
-        .await
-    {
+    let email = match state.get_me.execute(subject.0.user_id).await {
         Ok(user) => match crate::domain::Email::parse(&user.email) {
             Ok(email) => email,
             Err(err) => {

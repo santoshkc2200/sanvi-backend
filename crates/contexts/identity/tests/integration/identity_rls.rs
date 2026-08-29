@@ -172,7 +172,10 @@ async fn raw_sql_cannot_bypass_rls_either() {
     let (pool, _db) = prepare().await;
     let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
-    let mut scope = tx.begin_for(TenantId::try_from(103_i64).unwrap().as_i64()).await.unwrap();
+    let mut scope = tx
+        .begin_for(TenantId::try_from(103_i64).unwrap().as_i64())
+        .await
+        .unwrap();
     // FORCE RLS: a bare SELECT from the NOBYPASSRLS role sees nothing for
     // this tenant (the WHERE clause alone cannot override the policy).
     let count: i64 =

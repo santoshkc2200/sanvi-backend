@@ -15,11 +15,7 @@ pub struct AlwaysDisabledGate;
 
 #[async_trait]
 impl DomainFeatureGate for AlwaysDisabledGate {
-    async fn is_enabled(
-        &self,
-        _tenant_id: TenantId,
-        _feature: &str,
-    ) -> Result<bool, DomainsError> {
+    async fn is_enabled(&self, _tenant_id: TenantId, _feature: &str) -> Result<bool, DomainsError> {
         Ok(false)
     }
 }

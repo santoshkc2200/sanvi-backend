@@ -100,7 +100,12 @@ impl BrandAssetStore for LocalFileStore {
         self.write_file(&path, bytes).await
     }
 
-    async fn delete(&self, tenant_id: TenantId, digest: &str, ext: &str) -> Result<(), ThemingError> {
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        digest: &str,
+        ext: &str,
+    ) -> Result<(), ThemingError> {
         let path = self.brand_path(tenant_id, digest, ext);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),

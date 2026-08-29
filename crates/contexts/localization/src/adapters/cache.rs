@@ -6,6 +6,7 @@
 //! invalidation on the instance that made the change; the worker consumes
 //! the same events and invalidates its own copy.
 
+use sanvi_kernel::{TenantId, UserId};
 use std::{
     collections::HashMap,
     sync::{
@@ -14,9 +15,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use sanvi_kernel::{TenantId, UserId};
-
-
 
 use crate::adapters::catalog::MergedCatalog;
 use crate::domain::{LocaleSet, TenantLocaleSettings};

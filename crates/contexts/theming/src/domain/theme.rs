@@ -2,10 +2,10 @@
 //! and their immutable versions.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::Id;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use sanvi_kernel::Id;
 
 use crate::domain::error::ThemingError;
 use crate::domain::manifest::Manifest;

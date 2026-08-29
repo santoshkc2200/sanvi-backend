@@ -152,7 +152,8 @@ impl ResolveThemeService {
 
     /// The platform default: the base theme for hosts without a tenant.
     async fn platform_default(&self, locale: &str) -> Result<ResolvedTheme, ThemingError> {
-        self.default_theme(TenantId::try_from(1_i64).unwrap(), locale).await
+        self.default_theme(TenantId::try_from(1_i64).unwrap(), locale)
+            .await
     }
 
     /// A tenant with no live row: the base theme at its latest version.

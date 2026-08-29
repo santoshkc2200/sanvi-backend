@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use sanvi_persistence::{PgPool, TxManager};
 use sanvi_kernel::TenantId;
+use sanvi_persistence::{PgPool, TxManager};
 
 use crate::LocalizationConfig;
 use crate::adapters::{LocalizationService, SqlxTenantLocaleRepository};

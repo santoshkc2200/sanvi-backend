@@ -46,7 +46,11 @@ pub struct BrandAssetUrls {
 }
 
 impl BrandAssetUrls {
-    pub fn resolve(assets: &BrandAssets, base_url: &str, tenant_id: sanvi_kernel::TenantId) -> Self {
+    pub fn resolve(
+        assets: &BrandAssets,
+        base_url: &str,
+        tenant_id: sanvi_kernel::TenantId,
+    ) -> Self {
         let url = |asset: Option<&BrandAsset>| {
             asset.map(|asset| {
                 format!(

@@ -4,8 +4,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sanvi_persistence::{PgPool, ScopedTx};
 use sanvi_kernel::TenantId;
+use sanvi_persistence::{PgPool, ScopedTx};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 

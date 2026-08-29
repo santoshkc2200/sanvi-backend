@@ -6,8 +6,8 @@
 //! RLS; platform rows are public to read (they are public copy) and
 //! writable only from the audited platform scope.
 
-use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 use sanvi_kernel::{TenantId, UserId};
+use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 use sqlx::FromRow;
 
 use crate::domain::catalog::Translation;

@@ -11,9 +11,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
 
-
-use sanvi_persistence::{PgPool, TxManager};
 use sanvi_kernel::TenantId;
+use sanvi_persistence::{PgPool, TxManager};
 
 use crate::adapters::cache::LocalizationCache;
 use crate::adapters::metrics::LocalizationMetrics;

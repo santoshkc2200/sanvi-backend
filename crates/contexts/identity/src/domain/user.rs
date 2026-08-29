@@ -13,7 +13,6 @@ use utoipa::ToSchema;
 use crate::domain::IdentityError;
 use crate::domain::values::{Email, Locale, ProviderId, ProviderSubject};
 
-
 /// Lifecycle of a projected user. Deactivated is terminal; the email is
 /// released for reuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]

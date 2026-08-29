@@ -37,7 +37,8 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
 
         row.map(|row| {
             Ok(LinkedAccount::new(
-                UserId::try_from(row.user_id).map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
+                UserId::try_from(row.user_id)
+                    .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
                 ProviderId::parse(&row.provider)?,
                 ProviderSubject::new(row.subject),
                 LinkedVia::parse(&row.linked_via)?,
@@ -97,7 +98,8 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
         rows.into_iter()
             .map(|row| {
                 Ok(LinkedAccount::new(
-                    UserId::try_from(row.user_id).map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
+                    UserId::try_from(row.user_id)
+                        .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
                     ProviderId::parse(&row.provider)?,
                     ProviderSubject::new(row.subject),
                     LinkedVia::parse(&row.linked_via)?,

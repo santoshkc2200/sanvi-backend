@@ -53,9 +53,7 @@ async fn apply_event(
     store: &std::sync::Arc<dyn PermissionStore>,
     envelope: EventEnvelope,
     role_key_resolver: &std::sync::Arc<
-        impl Fn(
-            RoleId,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        impl Fn(RoleId) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         + Send
         + Sync
         + 'static,
@@ -144,9 +142,7 @@ async fn membership_tuples(
     user_id: UserId,
     role_ids: &[RoleId],
     role_key_resolver: &std::sync::Arc<
-        impl Fn(
-            RoleId,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        impl Fn(RoleId) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         + Send
         + Sync
         + 'static,

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_localization::{
     LocalizationConfig,
     adapters::{
@@ -16,7 +17,6 @@ use sanvi_localization::{
         TenantLocaleSettings, Translation, TranslationRepository, Translator,
     },
 };
-use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use sanvi_testsupport::TestDb;
 
@@ -207,7 +207,9 @@ async fn platform_translation_put_replaces_rows_omitted_from_the_request() {
     let repo = Arc::new(SqlxTranslationRepository::new());
     let update = UpdatePlatformTranslations::new(
         repo.clone(),
-        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new(
+            sanvi_testsupport::test_ids(),
+        )),
         Arc::new(sanvi_localization::adapters::SystemClock),
     );
 
@@ -355,7 +357,9 @@ async fn overrides_reject_unknown_keys_and_broken_patterns() {
     }];
     let updates = UpdateTenantOverrides::new(
         Arc::new(repo),
-        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+        Arc::new(sanvi_localization::adapters::OutboxEventPublisher::new(
+            sanvi_testsupport::test_ids(),
+        )),
         Arc::new(sanvi_localization::adapters::SystemClock),
     );
     let mut scope = tx.begin_for(tenant.as_i64()).await.unwrap();

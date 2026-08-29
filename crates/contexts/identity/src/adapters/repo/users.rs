@@ -29,7 +29,8 @@ impl UserRow {
             None => None,
         };
         Ok(User::from_parts(
-            UserId::try_from(self.id).map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")) )?,
+            UserId::try_from(self.id)
+                .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
             self.kratos_identity_id,
             Email::parse(&self.primary_email)?,
             self.email_verified,

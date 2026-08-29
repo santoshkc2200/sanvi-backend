@@ -74,7 +74,13 @@ impl ResolvedThemeCache {
         None
     }
 
-    pub async fn set(&self, tenant_id: TenantId, locale: &str, theme: &ResolvedTheme, ttl_secs: u64) {
+    pub async fn set(
+        &self,
+        tenant_id: TenantId,
+        locale: &str,
+        theme: &ResolvedTheme,
+        ttl_secs: u64,
+    ) {
         let key = Self::key(tenant_id, locale);
         if let Some(manager) = &self.redis {
             let mut conn = manager.clone();

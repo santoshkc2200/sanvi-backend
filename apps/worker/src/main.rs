@@ -879,10 +879,7 @@ async fn main() -> ExitCode {
                         return None;
                     }
                 };
-                let key = match roles
-                    .find_by_id(&mut scope, role_id)
-                    .await
-                {
+                let key = match roles.find_by_id(&mut scope, role_id).await {
                     Ok(Some(role)) => Some(role.key().to_string()),
                     Ok(None) => None,
                     Err(err) => {
@@ -1031,8 +1028,9 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(PaymentsWebhookEvents::new());
     let payments_events: std::sync::Arc<dyn PaymentsEventPublisher> =
         std::sync::Arc::new(PaymentsEvents::new(ids.clone()));
-    let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> =
-        std::sync::Arc::new(sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()));
+    let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> = std::sync::Arc::new(
+        sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()),
+    );
     let payments_notifier: std::sync::Arc<dyn PaymentsConnectionNotifier> =
         std::sync::Arc::new(WorkerPaymentsNotifications {
             localizer: notification_localizer.clone(),

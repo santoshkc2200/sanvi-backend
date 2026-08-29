@@ -13,7 +13,9 @@ use crate::domain::events::PlatformAdminEvent;
 use crate::domain::ports::EventPublisher;
 
 #[derive(Clone)]
-pub struct OutboxEventPublisher { ids: Arc<dyn RawIdGenerator> }
+pub struct OutboxEventPublisher {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl OutboxEventPublisher {
     pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
@@ -39,7 +41,14 @@ impl EventPublisher for OutboxEventPublisher {
 }
 
 impl OutboxEventPublisher {
-    fn envelope(&self, event: &PlatformAdminEvent) -> Result<sanvi_kernel::EventEnvelope, PlatformAdminError> {
-        self.ids.next_id().map(EventId::from_snowflake).map(|id| event.envelope(id)).map_err(Into::into)
+    fn envelope(
+        &self,
+        event: &PlatformAdminEvent,
+    ) -> Result<sanvi_kernel::EventEnvelope, PlatformAdminError> {
+        self.ids
+            .next_id()
+            .map(EventId::from_snowflake)
+            .map(|id| event.envelope(id))
+            .map_err(Into::into)
     }
 }

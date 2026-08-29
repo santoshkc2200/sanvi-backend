@@ -87,8 +87,8 @@ impl CertificateAuthorityPort for SandboxCertificateAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sanvi_kernel::TenantId;
     use crate::domain::{CustomDomainId, DomainKind, DomainRole, Hostname};
+    use sanvi_kernel::TenantId;
 
     fn domain() -> CustomDomain {
         CustomDomain::claim(
@@ -114,7 +114,8 @@ mod tests {
 
     #[tokio::test]
     async fn injected_renewal_failure_escalates() {
-        let ca = SandboxCertificateAuthority::new(90, sanvi_testsupport::test_ids()).with_renewal_error("simulated outage");
+        let ca = SandboxCertificateAuthority::new(90, sanvi_testsupport::test_ids())
+            .with_renewal_error("simulated outage");
         let cert = ca.issue(&domain()).await.unwrap();
         assert!(matches!(
             ca.renew(&cert, &domain()).await,

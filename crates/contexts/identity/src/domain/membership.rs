@@ -176,7 +176,10 @@ mod tests {
     use super::*;
 
     fn role_ids() -> Vec<RoleId> {
-        vec![RoleId::try_from(101_i64).unwrap(), RoleId::try_from(102_i64).unwrap()]
+        vec![
+            RoleId::try_from(101_i64).unwrap(),
+            RoleId::try_from(102_i64).unwrap(),
+        ]
     }
 
     #[test]
@@ -212,8 +215,14 @@ mod tests {
     #[test]
     fn suspend_resume_roundtrip() {
         let now = Utc::now();
-        let mut membership =
-            Membership::grant(TenantId::try_from(103_i64).unwrap(), UserId::try_from(104_i64).unwrap(), role_ids(), None, now).unwrap();
+        let mut membership = Membership::grant(
+            TenantId::try_from(103_i64).unwrap(),
+            UserId::try_from(104_i64).unwrap(),
+            role_ids(),
+            None,
+            now,
+        )
+        .unwrap();
         membership.suspend().unwrap();
         assert_eq!(membership.status(), MembershipStatus::Suspended);
         assert!(membership.suspend().is_err());

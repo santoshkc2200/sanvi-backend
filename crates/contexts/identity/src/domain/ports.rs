@@ -363,7 +363,8 @@ pub trait TenantCatalog: Send + Sync {
     /// batch through this rather than looping single lookups, since each
     /// call opens the audited unscoped-transaction escape hatch exactly
     /// once regardless of `tenant_ids.len()`.
-    async fn summaries(&self, tenant_ids: &[TenantId]) -> Result<Vec<TenantSummary>, IdentityError>;
+    async fn summaries(&self, tenant_ids: &[TenantId])
+    -> Result<Vec<TenantSummary>, IdentityError>;
 }
 
 /// The subset of a tenant's identity a membership listing needs to render.

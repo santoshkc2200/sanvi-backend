@@ -93,10 +93,7 @@ impl RebuildAccessTuples {
                     } else {
                         role.tuple_object()
                     };
-                    tuples.push(Tuple::role_membership(
-                        &object,
-                        membership.user_id(),
-                    ));
+                    tuples.push(Tuple::role_membership(&object, membership.user_id()));
                 } else {
                     warn!(role_id = %role_id, "membership references a deleted role; skipping tuple");
                 }
