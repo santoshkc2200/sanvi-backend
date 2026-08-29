@@ -28,6 +28,9 @@ pub type AdGroupId = Id<AdGroupTag>;
 pub enum AdTag {}
 pub type AdId = Id<AdTag>;
 
+pub enum AudienceTag {}
+pub type AudienceId = Id<AudienceTag>;
+
 /// Adapter-owned identifier. Domain code never switches on a platform name.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, utoipa::ToSchema,
@@ -384,4 +387,32 @@ fn default_subject_key() -> SubjectKeyRef {
 pub struct ConversionDiagnostics {
     pub event: ConversionEvent,
     pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AudienceStatus {
+    Building,
+    Active,
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct Audience {
+    #[schema(value_type = String)]
+    pub id: AudienceId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
+    pub platform: PlatformKey,
+    pub name: String,
+    pub status: AudienceStatus,
+    pub external_ref: Option<String>,
+    pub included_identifiers: Vec<HashedIdentifier>,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AudienceSyncReceipt {
+    pub external_ref: String,
 }

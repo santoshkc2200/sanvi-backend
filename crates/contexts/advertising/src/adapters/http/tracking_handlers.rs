@@ -22,7 +22,8 @@ use super::handlers::api_error;
 use crate::adapters::http::AdvertisingState;
 use crate::application::tracking::capture::TrackConversionCommand;
 use crate::domain::{
-    ClickIds, ConversionDiagnostics, ConversionEvent, PlatformKey, TrackingSettings,
+    Audience, AudienceId, ClickIds, ConversionDiagnostics, ConversionEvent, PlatformKey,
+    TrackingSettings,
 };
 
 #[derive(serde::Deserialize, ToSchema)]
@@ -484,33 +485,33 @@ pub async fn retry_conversion(
     Ok(HttpResponse::Ok().json(event))
 }
 
+#[derive(Debug, Clone, serde::Deserialize, ToSchema)]
+pub struct CreateAudienceRequest {
+    pub name: String,
+    pub platform: PlatformKey,
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/audiences",
     tag = "advertising",
     operation_id = "list_audiences",
     responses(
-        (status = 501, description = "Audience sync is not implemented yet", body = ProblemDetail),
+        (status = 200, description = "Every audience owned by the tenant", body = Vec<Audience>),
         (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
     )
 )]
 pub async fn list_audiences(
-    _tenant: CurrentTenant,
+    tenant: CurrentTenant,
     _permission: RequiredPermission,
-    _state: web::Data<AdvertisingState>,
+    state: web::Data<AdvertisingState>,
 ) -> Result<HttpResponse, ApiError> {
-    let problem = ProblemDetail {
-        r#type: format!("{}/not-implemented", sanvi_http::PROBLEM_TYPE_BASE),
-        title: "not_implemented".to_string(),
-        status: 501,
-        detail: "audience listing is not implemented yet; audience sync ships in a later task"
-            .to_string(),
-        instance: None,
-        trace_id: None,
-        reason: None,
-        extensions: None,
-    };
-    Ok(HttpResponse::NotImplemented().json(problem))
+    let audiences = state
+        .list_audiences
+        .execute(tenant.0.tenant_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(audiences))
 }
 
 #[utoipa::path(
@@ -518,28 +519,53 @@ pub async fn list_audiences(
     path = "/api/v1/tenant/ads/audiences",
     tag = "advertising",
     operation_id = "create_audience",
+    request_body = CreateAudienceRequest,
     responses(
-        (status = 501, description = "Audience sync is not implemented yet", body = ProblemDetail),
+        (status = 201, description = "Draft audience created", body = Audience),
+        (status = 400, description = "Invalid audience parameters", body = ProblemDetail),
         (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail)
     )
 )]
 pub async fn create_audience(
-    _tenant: CurrentTenant,
+    tenant: CurrentTenant,
     _permission: RequiredPermission,
-    _state: web::Data<AdvertisingState>,
+    state: web::Data<AdvertisingState>,
+    body: web::Json<CreateAudienceRequest>,
 ) -> Result<HttpResponse, ApiError> {
-    let problem = ProblemDetail {
-        r#type: format!("{}/not-implemented", sanvi_http::PROBLEM_TYPE_BASE),
-        title: "not_implemented".to_string(),
-        status: 501,
-        detail: "audience creation is not implemented yet; audience sync ships in a later task"
-            .to_string(),
-        instance: None,
-        trace_id: None,
-        reason: None,
-        extensions: None,
-    };
-    Ok(HttpResponse::NotImplemented().json(problem))
+    let audience = state
+        .create_audience
+        .execute(tenant.0.tenant_id, body.name.clone(), body.platform.clone())
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Created().json(audience))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/audiences/{id}/refresh",
+    tag = "advertising",
+    operation_id = "refresh_audience",
+    params(
+        ("id" = String, Path, description = "The audience ID to refresh")
+    ),
+    responses(
+        (status = 200, description = "Audience refreshed", body = Audience),
+        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail),
+        (status = 404, description = "Audience not found", body = ProblemDetail)
+    )
+)]
+pub async fn refresh_audience(
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    path: web::Path<AudienceId>,
+    state: web::Data<AdvertisingState>,
+) -> Result<HttpResponse, ApiError> {
+    let audience = state
+        .refresh_audience
+        .execute(tenant.0.tenant_id, path.into_inner())
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(audience))
 }
 
 #[cfg(test)]

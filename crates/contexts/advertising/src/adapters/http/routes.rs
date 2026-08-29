@@ -484,4 +484,10 @@ pub fn tracking_tenant_routes(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(super::tracking_handlers::list_audiences))
             .route(web::post().to(super::tracking_handlers::create_audience)),
     );
+    cfg.service(
+        web::resource("/ads/audiences/{id}/refresh")
+            .app_data(PermissionMap::new(vec![(Method::POST, write)]))
+            .app_data(feature_gate())
+            .route(web::post().to(super::tracking_handlers::refresh_audience)),
+    );
 }

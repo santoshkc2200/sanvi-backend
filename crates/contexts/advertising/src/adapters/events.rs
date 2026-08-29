@@ -97,4 +97,9 @@ impl crate::domain::IdGenerator for SystemIdGenerator {
     fn next_ad_id(&self) -> Result<crate::domain::model::AdId, AdvertisingError> {
         self.next().map(crate::domain::model::AdId::from_snowflake)
     }
+
+    fn next_audience_id(&self) -> Result<crate::domain::model::AudienceId, AdvertisingError> {
+        self.next()
+            .map(crate::domain::model::AudienceId::from_snowflake)
+    }
 }

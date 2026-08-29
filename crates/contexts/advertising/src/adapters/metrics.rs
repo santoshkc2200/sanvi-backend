@@ -10,6 +10,7 @@ pub struct AdvertisingMetrics {
     conversion_suppressed_total: prometheus::IntCounterVec,
     conversion_upload_lag_seconds: prometheus::Histogram,
     conversion_dlq_depth: prometheus::IntGauge,
+    audience_sync_total: prometheus::IntCounterVec,
 }
 
 impl AdvertisingMetrics {
@@ -45,16 +46,27 @@ impl AdvertisingMetrics {
         )
         .expect("conversion dlq depth gauge construction is infallible");
 
+        let audience_sync_total = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "audience_sync_total",
+                "Total advertising audience sync attempts by platform and result",
+            ),
+            &["platform", "result"],
+        )
+        .expect("audience sync counter construction is infallible");
+
         let _ = registry.register(Box::new(conversion_upload_total.clone()));
         let _ = registry.register(Box::new(conversion_suppressed_total.clone()));
         let _ = registry.register(Box::new(conversion_upload_lag_seconds.clone()));
         let _ = registry.register(Box::new(conversion_dlq_depth.clone()));
+        let _ = registry.register(Box::new(audience_sync_total.clone()));
 
         Self {
             conversion_upload_total,
             conversion_suppressed_total,
             conversion_upload_lag_seconds,
             conversion_dlq_depth,
+            audience_sync_total,
         }
     }
 
@@ -72,6 +84,10 @@ impl AdvertisingMetrics {
 
     pub fn conversion_dlq_depth(&self) -> &prometheus::IntGauge {
         &self.conversion_dlq_depth
+    }
+
+    pub fn audience_sync_total(&self) -> &prometheus::IntCounterVec {
+        &self.audience_sync_total
     }
 
     /// Observe the lag of one successfully uploaded conversion event.

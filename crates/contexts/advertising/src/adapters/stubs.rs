@@ -12,11 +12,12 @@ use crate::{
     CapabilityMatrix, ConnectionHandle, Objective, PlatformKey,
     application::PlatformRegistry,
     domain::{
-        AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
-        AuthorizationStart, BudgetType, Campaign, CampaignStatus, ConversionEvent,
-        ConversionSinkPort, CreativeAssetSpec, CreativePlacement, ExchangedAuthorization,
-        MetricPoint, MetricQuery, Money, PlatformAccount, PlatformDescriptor, ScheduleGranularity,
-        TargetingDimension, UploadReceipt, UploadedConversion,
+        AdPlatformPort, AdvertisingError, AudienceSyncPort, AudienceSyncReceipt,
+        AuthorizationExchange, AuthorizationRequest, AuthorizationStart, BudgetType, Campaign,
+        CampaignStatus, ConversionEvent, ConversionSinkPort, CreativeAssetSpec, CreativePlacement,
+        ExchangedAuthorization, HashedIdentifier, MetricPoint, MetricQuery, Money, PlatformAccount,
+        PlatformDescriptor, ScheduleGranularity, TargetingDimension, UploadReceipt,
+        UploadedConversion, ValidationViolation,
     },
 };
 
@@ -571,6 +572,102 @@ impl ConversionSinkPort for FakeConversionSink {
             .push((connection.clone(), event.clone()));
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FakeAudienceSyncCall {
+    pub connection: ConnectionHandle,
+    pub external_ref: Option<String>,
+    pub included: Vec<HashedIdentifier>,
+    pub removed: Vec<HashedIdentifier>,
+}
+
+#[derive(Clone)]
+pub struct FakeAudienceSync {
+    descriptor: PlatformDescriptor,
+    sync_calls: Arc<Mutex<Vec<FakeAudienceSyncCall>>>,
+    sync_error: Arc<Mutex<Option<AdvertisingError>>>,
+    unsupported_removal: Arc<Mutex<bool>>,
+}
+
+impl FakeAudienceSync {
+    pub fn new(descriptor: PlatformDescriptor) -> Self {
+        Self {
+            descriptor,
+            sync_calls: Arc::new(Mutex::new(Vec::new())),
+            sync_error: Arc::new(Mutex::new(None)),
+            unsupported_removal: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    pub fn with_sync_error(self, error: AdvertisingError) -> Self {
+        *self.sync_error.lock().unwrap() = Some(error);
+        self
+    }
+
+    pub fn with_unsupported_removal(self, unsupported: bool) -> Self {
+        *self.unsupported_removal.lock().unwrap() = unsupported;
+        self
+    }
+
+    pub fn set_sync_error(&self, error: Option<AdvertisingError>) {
+        *self.sync_error.lock().unwrap() = error;
+    }
+
+    pub fn set_unsupported_removal(&self, unsupported: bool) {
+        *self.unsupported_removal.lock().unwrap() = unsupported;
+    }
+
+    pub fn sync_calls(&self) -> Vec<FakeAudienceSyncCall> {
+        self.sync_calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl AudienceSyncPort for FakeAudienceSync {
+    fn descriptor(&self) -> PlatformDescriptor {
+        self.descriptor.clone()
+    }
+
+    async fn sync_audience(
+        &self,
+        connection: &ConnectionHandle,
+        external_ref: Option<&str>,
+        included: &[HashedIdentifier],
+        removed: &[HashedIdentifier],
+    ) -> Result<AudienceSyncReceipt, AdvertisingError> {
+        if let Some(err) = self.sync_error.lock().unwrap().clone() {
+            return Err(err);
+        }
+
+        if *self.unsupported_removal.lock().unwrap() && !removed.is_empty() {
+            return Err(AdvertisingError::Validation(vec![
+                ValidationViolation::unsupported(
+                    "removed",
+                    "this platform does not support active member removal",
+                ),
+            ]));
+        }
+
+        let ref_val = external_ref.map(ToString::to_string).unwrap_or_else(|| {
+            format!(
+                "aud-{}-{}",
+                self.descriptor.key.as_str(),
+                uuid::Uuid::now_v7()
+            )
+        });
+
+        self.sync_calls.lock().unwrap().push(FakeAudienceSyncCall {
+            connection: connection.clone(),
+            external_ref: external_ref.map(ToString::to_string),
+            included: included.to_vec(),
+            removed: removed.to_vec(),
+        });
+
+        Ok(AudienceSyncReceipt {
+            external_ref: ref_val,
+        })
     }
 }
 

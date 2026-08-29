@@ -2942,8 +2942,48 @@ pub async fn build_advertising_state(
     let retry_conversion = std::sync::Arc::new(
         sanvi_advertising::application::tracking::retry::RetryConversion::new(
             tx.clone(),
+            conversion_repo.clone(),
+            directive_resolver.clone(),
+        ),
+    );
+    let audience_repo: std::sync::Arc<dyn sanvi_advertising::domain::AudienceRepository> =
+        std::sync::Arc::new(SqlxCampaignRepository::new());
+    let mut audience_sinks: std::collections::BTreeMap<
+        sanvi_advertising::domain::PlatformKey,
+        std::sync::Arc<dyn sanvi_advertising::domain::AudienceSyncPort>,
+    > = std::collections::BTreeMap::new();
+    for descriptor in sanvi_advertising::adapters::FakeAdPlatform::fixtures() {
+        audience_sinks.insert(
+            descriptor.key.clone(),
+            std::sync::Arc::new(sanvi_advertising::adapters::FakeAudienceSync::new(
+                descriptor,
+            )),
+        );
+    }
+    let advertising_metrics =
+        std::sync::Arc::new(sanvi_advertising::adapters::AdvertisingMetrics::default());
+    let create_audience = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::audiences::CreateAudience::new(
+            tx.clone(),
+            audience_repo.clone(),
+            advertising_ids.clone(),
+        ),
+    );
+    let list_audiences = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::audiences::ListAudiences::new(
+            tx.clone(),
+            audience_repo.clone(),
+        ),
+    );
+    let refresh_audience = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::audiences::RefreshAudience::new(
+            tx.clone(),
+            audience_repo,
             conversion_repo,
+            connections.clone(),
             directive_resolver,
+            audience_sinks,
+            advertising_metrics,
         ),
     );
 
@@ -3100,6 +3140,9 @@ pub async fn build_advertising_state(
         list_conversions,
         get_conversion_diagnostics,
         retry_conversion,
+        create_audience,
+        list_audiences,
+        refresh_audience,
     })
 }
 

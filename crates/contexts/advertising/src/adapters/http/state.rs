@@ -64,4 +64,9 @@ pub struct AdvertisingState {
     pub get_conversion_diagnostics:
         Arc<crate::application::tracking::conversions::GetConversionDiagnostics>,
     pub retry_conversion: Arc<crate::application::tracking::retry::RetryConversion>,
+
+    /// Audience management and sync (TASK-015, 10.6).
+    pub create_audience: Arc<crate::application::tracking::audiences::CreateAudience>,
+    pub list_audiences: Arc<crate::application::tracking::audiences::ListAudiences>,
+    pub refresh_audience: Arc<crate::application::tracking::audiences::RefreshAudience>,
 }

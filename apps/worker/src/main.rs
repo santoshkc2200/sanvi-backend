@@ -36,13 +36,15 @@ use sanvi_access::{
     },
 };
 use sanvi_advertising::{
-    ConversionSinkPort, PlatformKey,
+    AudienceRepository, AudienceSyncPort, ConversionSinkPort, PlatformKey,
     adapters::{
-        AdvertisingMetrics, FakeAdPlatform, FakeConversionSink,
+        AdvertisingMetrics, FakeAdPlatform, FakeAudienceSync, FakeConversionSink,
         OutboxEventPublisher as AdvertisingEventPublisher, SqlxAdvertisingConnectionRepository,
         SqlxCampaignRepository,
     },
-    application::{ReconcileCampaign, ReconcileDueCampaigns, UploadPendingConversions},
+    application::{
+        ReconcileCampaign, ReconcileDueCampaigns, SyncAudiences, UploadPendingConversions,
+    },
     domain::AdvertisingConnectionRepository,
     domain::CampaignRepository as AdvertisingCampaignRepository,
     domain::ConversionEventRepository,
@@ -574,6 +576,8 @@ pub struct SchedulerConfig {
     pub advertising_reconciliation_interval_secs: u64,
     /// Conversion upload worker sweep (TASK-015, 10.6).
     pub advertising_conversion_upload_interval_secs: u64,
+    /// Audience sync worker sweep (TASK-015, 10.6).
+    pub advertising_audience_sync_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -607,6 +611,7 @@ impl Default for SchedulerConfig {
             advertising_partition_maintenance_interval_secs: 86_400,
             advertising_reconciliation_interval_secs: 86_400,
             advertising_conversion_upload_interval_secs: 60,
+            advertising_audience_sync_interval_secs: 3600,
         }
     }
 }
@@ -1585,11 +1590,33 @@ async fn main() -> ExitCode {
     let advertising_metrics = Arc::new(AdvertisingMetrics::new(registry));
     let advertising_conversion_upload_sweep = Arc::new(UploadPendingConversions::new(
         tx_manager.clone(),
+        advertising_conversion_events.clone(),
+        advertising_connections.clone(),
+        privacy_directive_resolver.clone(),
+        advertising_conversion_sinks,
+        advertising_metrics.clone(),
+    ));
+
+    let mut advertising_audience_sinks: std::collections::BTreeMap<
+        PlatformKey,
+        Arc<dyn AudienceSyncPort>,
+    > = std::collections::BTreeMap::new();
+    for descriptor in FakeAdPlatform::fixtures().into_iter().take(2) {
+        advertising_audience_sinks.insert(
+            descriptor.key.clone(),
+            Arc::new(FakeAudienceSync::new(descriptor)),
+        );
+    }
+    let advertising_audiences: Arc<dyn AudienceRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let advertising_audience_sync_sweep = Arc::new(SyncAudiences::new(
+        tx_manager.clone(),
+        advertising_audiences,
         advertising_conversion_events,
         advertising_connections,
         privacy_directive_resolver,
-        advertising_conversion_sinks,
-        advertising_metrics.clone(),
+        advertising_audience_sinks,
+        advertising_metrics,
     ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
@@ -1661,6 +1688,33 @@ async fn main() -> ExitCode {
                                 parked = report.parked,
                                 suppressed_late = report.suppressed_late,
                                 "advertising conversion upload sweep pass"
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "advertising.audience_sync",
+            Duration::from_secs(config.scheduler.advertising_audience_sync_interval_secs),
+            {
+                let sweep = advertising_audience_sync_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(3600, 200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                synced = report.synced,
+                                failed = report.failed,
+                                removed_identifiers = report.removed_identifiers,
+                                unpropagated_removals = report.unpropagated_removals,
+                                "advertising audience sync sweep pass"
                             );
                         }
                         Ok(())

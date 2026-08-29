@@ -8,11 +8,12 @@ use sanvi_advertising::adapters::http::handlers::{
     StartOAuthResponse, ValidationResultView,
 };
 use sanvi_advertising::adapters::http::tracking_handlers::{
-    TestTrackingEventResponse, TrackConversionRequest,
+    CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest,
 };
 use sanvi_advertising::domain::{
-    ClickIds, ConsentSnapshot, ConversionDiagnostics, ConversionEvent, HashedIdentifier,
-    Money as AdvertisingMoney, TrackingSettings, UploadReceipt, UploadState, ValueSource,
+    Audience, AudienceStatus, ClickIds, ConsentSnapshot, ConversionDiagnostics, ConversionEvent,
+    HashedIdentifier, Money as AdvertisingMoney, TrackingSettings, UploadReceipt, UploadState,
+    ValueSource,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -213,6 +214,7 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::tracking_handlers::retry_conversion,
         sanvi_advertising::adapters::http::tracking_handlers::list_audiences,
         sanvi_advertising::adapters::http::tracking_handlers::create_audience,
+        sanvi_advertising::adapters::http::tracking_handlers::refresh_audience,
     ),
     components(schemas(
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
@@ -225,7 +227,8 @@ use utoipa::OpenApi;
         CreateCreativeRequest, CreativeView, CreativesView, CreativePreviewView, CreativePreviewsView,
         TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, ConversionEvent,
         ConversionDiagnostics, ConsentSnapshot, ClickIds, ValueSource,
-        UploadReceipt, UploadState, AdvertisingMoney, HashedIdentifier
+        UploadReceipt, UploadState, AdvertisingMoney, HashedIdentifier,
+        CreateAudienceRequest, Audience, AudienceStatus
     )),
     tags(
         (name = "system", description = "System, health and build information"),
