@@ -42,7 +42,10 @@ use sanvi_advertising::{
         OutboxEventPublisher as AdvertisingEventPublisher, SqlxAdvertisingConnectionRepository,
         SqlxCampaignRepository,
     },
-    application::{ReconcileCampaign, ReconcileDueCampaigns, UploadPendingConversions},
+    application::{
+        ReconcileCampaign, ReconcileDueCampaigns, RetractWithdrawnConversions,
+        UploadPendingConversions,
+    },
     domain::AdvertisingConnectionRepository,
     domain::CampaignRepository as AdvertisingCampaignRepository,
     domain::ConversionEventRepository,
@@ -574,6 +577,8 @@ pub struct SchedulerConfig {
     pub advertising_reconciliation_interval_secs: u64,
     /// Conversion upload worker sweep (TASK-015, 10.6).
     pub advertising_conversion_upload_interval_secs: u64,
+    /// Conversion retraction worker sweep (TASK-015, 10.6).
+    pub advertising_conversion_retraction_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -607,6 +612,7 @@ impl Default for SchedulerConfig {
             advertising_partition_maintenance_interval_secs: 86_400,
             advertising_reconciliation_interval_secs: 86_400,
             advertising_conversion_upload_interval_secs: 60,
+            advertising_conversion_retraction_interval_secs: 60,
         }
     }
 }
@@ -1585,11 +1591,19 @@ async fn main() -> ExitCode {
     let advertising_metrics = Arc::new(AdvertisingMetrics::new(registry));
     let advertising_conversion_upload_sweep = Arc::new(UploadPendingConversions::new(
         tx_manager.clone(),
+        advertising_conversion_events.clone(),
+        advertising_connections.clone(),
+        privacy_directive_resolver.clone(),
+        advertising_conversion_sinks.clone(),
+        advertising_metrics.clone(),
+    ));
+    let advertising_conversion_retraction_sweep = Arc::new(RetractWithdrawnConversions::new(
+        tx_manager.clone(),
         advertising_conversion_events,
         advertising_connections,
         privacy_directive_resolver,
         advertising_conversion_sinks,
-        advertising_metrics.clone(),
+        advertising_metrics,
     ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
@@ -1661,6 +1675,32 @@ async fn main() -> ExitCode {
                                 parked = report.parked,
                                 suppressed_late = report.suppressed_late,
                                 "advertising conversion upload sweep pass"
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "advertising.conversion_retraction",
+            Duration::from_secs(config.scheduler.advertising_conversion_retraction_interval_secs),
+            {
+                let sweep = advertising_conversion_retraction_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                retracted = report.retracted,
+                                unpropagated = report.unpropagated,
+                                failed = report.failed,
+                                "advertising conversion retraction sweep pass"
                             );
                         }
                         Ok(())

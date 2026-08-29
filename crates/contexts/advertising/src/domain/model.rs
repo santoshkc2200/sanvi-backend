@@ -309,6 +309,10 @@ pub enum UploadState {
         reason: String,
         attempts: u32,
     },
+    Retracted,
+    Unpropagated {
+        reason: String,
+    },
 }
 
 impl Default for UploadState {

@@ -308,6 +308,14 @@ pub trait ConversionEventRepository: Send + Sync {
         limit: i64,
     ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
 
+    /// Cross-tenant batch fetch: events across all tenants that have at least
+    /// one platform in `uploaded` state, oldest `occurred_at` first, capped at `limit`.
+    async fn list_uploaded(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
+
     /// Cross-tenant count of conversion events that currently have at least one platform parked.
     async fn count_parked(&self, scope: &mut PlatformScope<'_>) -> Result<i64, AdvertisingError>;
 }
