@@ -138,9 +138,7 @@ impl PendingApproval {
         now: DateTime<Utc>,
     ) -> Result<(), PlatformAdminError> {
         if self.status != ApprovalStatus::Pending {
-            return Err(PlatformAdminError::ApprovalNotPending {
-                id: self.id.as_i64(),
-            });
+            return Err(PlatformAdminError::ApprovalNotPending { id: self.id });
         }
         if decided_by == self.requested_by {
             return Err(PlatformAdminError::SelfApproval);
@@ -158,9 +156,7 @@ impl PendingApproval {
     /// Mark the approved action as executed (after the executor ran it).
     pub fn mark_executed(&mut self, now: DateTime<Utc>) -> Result<(), PlatformAdminError> {
         if self.status != ApprovalStatus::Approved {
-            return Err(PlatformAdminError::ApprovalNotPending {
-                id: self.id.as_i64(),
-            });
+            return Err(PlatformAdminError::ApprovalNotPending { id: self.id });
         }
         self.status = ApprovalStatus::Executed;
         self.decided_at = Some(now);
@@ -200,7 +196,7 @@ mod tests {
     #[test]
     fn a_second_pair_of_eyes_decides() {
         let mut approval = approval();
-        let decider = Uuid::now_v7();
+        let decider = UserId::try_from(103_i64).unwrap();
         assert_ne!(decider, approval.requested_by());
         approval.decide(decider, true, Utc::now()).unwrap();
         assert_eq!(approval.status(), ApprovalStatus::Approved);
@@ -220,9 +216,11 @@ mod tests {
     #[test]
     fn decided_requests_cannot_be_decided_again() {
         let mut approval = approval();
-        approval.decide(Uuid::now_v7(), false, Utc::now()).unwrap();
+        approval
+            .decide(UserId::try_from(103_i64).unwrap(), false, Utc::now())
+            .unwrap();
         assert!(matches!(
-            approval.decide(Uuid::now_v7(), true, Utc::now()),
+            approval.decide(UserId::try_from(104_i64).unwrap(), true, Utc::now()),
             Err(PlatformAdminError::ApprovalNotPending { .. })
         ));
     }
@@ -231,7 +229,9 @@ mod tests {
     fn only_approved_requests_can_execute() {
         let mut approval = approval();
         assert!(approval.mark_executed(Utc::now()).is_err());
-        approval.decide(Uuid::now_v7(), true, Utc::now()).unwrap();
+        approval
+            .decide(UserId::try_from(103_i64).unwrap(), true, Utc::now())
+            .unwrap();
         approval.mark_executed(Utc::now()).unwrap();
         assert_eq!(approval.status(), ApprovalStatus::Executed);
     }

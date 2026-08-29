@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sanvi_persistence::PlatformScope;
 use sanvi_kernel::{TenantId, UserId};
+use sanvi_persistence::PlatformScope;
 
 use crate::domain::approvals::{ApprovalId, PendingApproval};
 use crate::domain::error::PlatformAdminError;
@@ -141,7 +141,7 @@ pub trait TenantAdminViewRepository: Send + Sync {
 /// into a locked tenant is refused.
 #[async_trait]
 pub trait PrivacyLock: Send + Sync {
-    async fn is_locked(&self, tenant_id: Uuid) -> Result<bool, PlatformAdminError>;
+    async fn is_locked(&self, tenant_id: TenantId) -> Result<bool, PlatformAdminError>;
 }
 
 /// Publishes platform-admin events into the transactional outbox.
@@ -175,8 +175,8 @@ pub trait EntitlementAdmin: Send + Sync {
     /// four-eyes policy).
     async fn grant_override(
         &self,
-        actor_id: Uuid,
-        tenant_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
         feature_key: String,
         enabled: bool,
         limit: Option<i64>,
@@ -187,8 +187,8 @@ pub trait EntitlementAdmin: Send + Sync {
     /// The approval-execution path: re-run a grant with four-eyes skipped.
     async fn grant_override_approved(
         &self,
-        requested_by: Uuid,
-        tenant_id: Uuid,
+        requested_by: UserId,
+        tenant_id: TenantId,
         feature_key: String,
         enabled: bool,
         limit: Option<i64>,
@@ -198,22 +198,22 @@ pub trait EntitlementAdmin: Send + Sync {
 
     async fn revoke_override(
         &self,
-        actor_id: Uuid,
-        tenant_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
         feature_key: String,
     ) -> Result<(), PlatformAdminError>;
 
     /// The tenant's stored override rows (operator console).
     async fn list_overrides(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<sanvi_access::domain::Entitlement>, PlatformAdminError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantOverrideOutcome {
     Granted,
-    ApprovalRequired { approval_id: Uuid },
+    ApprovalRequired { approval_id: ApprovalId },
 }
 
 /// The platform's per-tenant application-fee administration (09.6). The
@@ -225,7 +225,7 @@ pub trait ApplicationFeeAdmin: Send + Sync {
     /// fees off).
     async fn get(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<crate::domain::fees::ApplicationFeeConfig>, PlatformAdminError>;
 
     /// Create or update the configuration (audited). Validates before
@@ -233,15 +233,15 @@ pub trait ApplicationFeeAdmin: Send + Sync {
     async fn set(
         &self,
         config: crate::domain::fees::ApplicationFeeConfig,
-        actor_id: Option<Uuid>,
+        actor_id: Option<UserId>,
         reason: Option<String>,
     ) -> Result<(), PlatformAdminError>;
 
     /// Disable (the rollback path: data, no deploy). Audited.
     async fn disable(
         &self,
-        tenant_id: Uuid,
-        actor_id: Option<Uuid>,
+        tenant_id: TenantId,
+        actor_id: Option<UserId>,
         reason: Option<String>,
     ) -> Result<(), PlatformAdminError>;
 }

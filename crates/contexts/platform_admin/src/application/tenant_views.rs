@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::PlatformAdminError;
@@ -56,7 +56,7 @@ impl GetTenantAdminView {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<TenantAdminView>, PlatformAdminError> {
         let mut scope = self
             .tx_manager

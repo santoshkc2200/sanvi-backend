@@ -102,7 +102,7 @@ mod tests {
         };
         let envelope = event.envelope(EventId::try_from(105_i64).unwrap());
         assert_eq!(envelope.aggregate, "platform_admin.impersonation");
-        assert_eq!(envelope.aggregate_id, grant_id);
+        assert_eq!(envelope.aggregate_id, grant_id.as_snowflake());
         assert_eq!(envelope.metadata["tenant_id"], tenant_id.to_string());
         assert_eq!(envelope.event_type, "platform_admin.impersonation_started");
     }

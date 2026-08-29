@@ -11,14 +11,14 @@
 //! JPY minor units are whole yen). Rounding lives with the computation,
 //! in the payments context; nothing here duplicates it.
 
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use crate::domain::error::PlatformAdminError;
 
 /// One tenant's stored fee configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplicationFeeConfig {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     /// Basis points of the charge total (100 = 1%). Absent = no
     /// percentage component.
     pub basis_points: Option<u32>,
@@ -82,7 +82,7 @@ mod tests {
 
     fn valid() -> ApplicationFeeConfig {
         ApplicationFeeConfig {
-            tenant_id: Uuid::now_v7(),
+            tenant_id: TenantId::try_from(101_i64).unwrap(),
             basis_points: Some(250),
             fixed_amount_minor: None,
             fixed_currency: None,

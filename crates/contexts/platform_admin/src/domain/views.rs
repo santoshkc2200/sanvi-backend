@@ -3,14 +3,15 @@
 //! summaries.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 /// One row of the platform admin tenant search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct TenantAdminView {
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     pub slug: String,
     pub display_name: String,
     pub status: String,
@@ -38,5 +39,5 @@ pub struct TenantViewSearch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TenantViewCursor {
     pub created_at: DateTime<Utc>,
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
 }

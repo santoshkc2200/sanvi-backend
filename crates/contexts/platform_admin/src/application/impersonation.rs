@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
-use sanvi_identity::domain::{MembershipRepository, UserId};
+use sanvi_identity::domain::MembershipRepository;
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use serde::Serialize;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::application::tenant_views::MAX_PAGE_LIMIT;
@@ -27,8 +27,8 @@ use crate::domain::ports::{
 
 #[derive(Debug, Clone)]
 pub struct CreateImpersonationCommand {
-    pub tenant_id: Uuid,
-    pub target_user_id: Uuid,
+    pub tenant_id: TenantId,
+    pub target_user_id: UserId,
     pub reason: String,
     pub mode: ImpersonationMode,
     pub duration_minutes: u32,
@@ -37,22 +37,27 @@ pub struct CreateImpersonationCommand {
 /// One grant as exposed by the API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ImpersonationGrantView {
-    pub id: Uuid,
-    pub actor_id: Uuid,
-    pub tenant_id: Uuid,
-    pub target_user_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: ImpersonationGrantId,
+    #[schema(value_type = String)]
+    pub actor_id: UserId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
+    #[schema(value_type = String)]
+    pub target_user_id: UserId,
     pub reason: String,
     pub mode: ImpersonationMode,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
-    pub revoked_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub revoked_by: Option<UserId>,
 }
 
 impl From<&ImpersonationGrant> for ImpersonationGrantView {
     fn from(grant: &ImpersonationGrant) -> Self {
         Self {
-            id: grant.id().as_i64(),
+            id: grant.id(),
             actor_id: grant.actor_id(),
             tenant_id: grant.tenant_id(),
             target_user_id: grant.target_user_id(),
@@ -106,8 +111,8 @@ impl CreateImpersonation {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: CreateImpersonationCommand,
     ) -> Result<ImpersonationGrantView, PlatformAdminError> {
         // Impersonation into a tenant with an active privacy lock is
@@ -122,16 +127,12 @@ impl CreateImpersonation {
         let membership = {
             let mut scope = self
                 .tx_manager
-                .begin_for(cmd.tenant_id)
+                .begin_for(cmd.tenant_id.as_i64())
                 .await
                 .map_err(storage)?;
             let membership = self
                 .memberships
-                .find(
-                    &mut scope,
-                    cmd.tenant_id,
-                    UserId::from_uuid(cmd.target_user_id),
-                )
+                .find(&mut scope, cmd.tenant_id, cmd.target_user_id)
                 .await
                 .map_err(storage)?;
             scope.commit().await.map_err(storage)?;
@@ -171,7 +172,7 @@ impl CreateImpersonation {
             .publish(
                 &mut scope,
                 &[PlatformAdminEvent::ImpersonationStarted {
-                    grant_id: grant.id().as_i64(),
+                    grant_id: grant.id(),
                     actor_id: actor,
                     tenant_id: cmd.tenant_id,
                     target_user_id: cmd.target_user_id,
@@ -234,7 +235,7 @@ impl ListImpersonations {
 
     pub async fn execute(
         &self,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
         limit: u32,
     ) -> Result<Vec<ImpersonationGrantView>, PlatformAdminError> {
         let mut scope = self
@@ -285,8 +286,8 @@ impl RevokeImpersonation {
     /// the next exchange fails. Idempotent.
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         grant_id: ImpersonationGrantId,
     ) -> Result<ImpersonationGrantView, PlatformAdminError> {
         let now = self.clock.now();
@@ -295,18 +296,18 @@ impl RevokeImpersonation {
             .begin_unscoped("revoke_impersonation", "platform-admin")
             .await
             .map_err(storage)?;
-        let mut grant = self.grants.find_by_id(&mut scope, grant_id).await?.ok_or(
-            PlatformAdminError::GrantNotFound {
-                id: grant_id.as_i64(),
-            },
-        )?;
+        let mut grant = self
+            .grants
+            .find_by_id(&mut scope, grant_id)
+            .await?
+            .ok_or(PlatformAdminError::GrantNotFound { id: grant_id })?;
         grant.revoke(actor, now);
         self.grants.save(&mut scope, &grant).await?;
         self.events
             .publish(
                 &mut scope,
                 &[PlatformAdminEvent::ImpersonationEnded {
-                    grant_id: grant.id().as_i64(),
+                    grant_id: grant.id(),
                     actor_id: grant.actor_id(),
                     tenant_id: grant.tenant_id(),
                     target_user_id: grant.target_user_id(),

@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use serde::Serialize;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::PlatformAdminError;
@@ -20,20 +20,23 @@ use crate::domain::ports::{Clock, EntitlementAdmin, IdGenerator, PendingApproval
 /// One approval request as exposed by the API.
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct ApprovalView {
-    pub id: Uuid,
-    pub requested_by: Uuid,
+    #[schema(value_type = String)]
+    pub id: ApprovalId,
+    #[schema(value_type = String)]
+    pub requested_by: UserId,
     pub action_type: String,
     pub payload: serde_json::Value,
     pub status: ApprovalStatus,
     pub requested_at: DateTime<Utc>,
-    pub decided_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub decided_by: Option<UserId>,
     pub decided_at: Option<DateTime<Utc>>,
 }
 
 impl From<&PendingApproval> for ApprovalView {
     fn from(approval: &PendingApproval) -> Self {
         Self {
-            id: approval.id().as_i64(),
+            id: approval.id(),
             requested_by: approval.requested_by(),
             action_type: approval.action_type().to_string(),
             payload: approval.payload().clone(),
@@ -124,8 +127,8 @@ impl DecideApproval {
 impl ApproveRequest {
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: DecideApprovalCommand,
     ) -> Result<ApprovalView, PlatformAdminError> {
         self.inner
@@ -137,8 +140,8 @@ impl ApproveRequest {
 impl RejectRequest {
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: DecideApprovalCommand,
     ) -> Result<ApprovalView, PlatformAdminError> {
         self.inner
@@ -150,8 +153,8 @@ impl RejectRequest {
 impl DecideApproval {
     async fn execute_decision(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: DecideApprovalCommand,
         approve: bool,
     ) -> Result<ApprovalView, PlatformAdminError> {
@@ -166,7 +169,7 @@ impl DecideApproval {
             .find_by_id(&mut scope, cmd.approval_id)
             .await?
             .ok_or(PlatformAdminError::ApprovalNotFound {
-                id: cmd.approval_id.as_i64(),
+                id: cmd.approval_id,
             })?;
         approval.decide(actor, approve, now)?;
 
@@ -223,7 +226,7 @@ impl DecideApproval {
                 let tenant_id = payload
                     .get("tenant_id")
                     .and_then(|value| value.as_str())
-                    .and_then(|value| value.parse::<Uuid>().ok())
+                    .and_then(|value| value.parse::<TenantId>().ok())
                     .ok_or_else(|| {
                         PlatformAdminError::InvalidSearch(
                             "approval payload has no tenant_id".to_string(),
@@ -309,10 +312,10 @@ impl RecordApprovalRequest {
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
-        requested_by: Uuid,
+        requested_by: UserId,
         action_type: &str,
         payload: serde_json::Value,
-    ) -> Result<Uuid, PlatformAdminError> {
+    ) -> Result<ApprovalId, PlatformAdminError> {
         let approval = PendingApproval::new(
             self.ids.next_approval_id()?,
             requested_by,
@@ -320,7 +323,7 @@ impl RecordApprovalRequest {
             payload,
             self.clock.now(),
         )?;
-        let id = approval.id().as_i64();
+        let id = approval.id();
         self.approvals.save(scope, &approval).await?;
         Ok(id)
     }
