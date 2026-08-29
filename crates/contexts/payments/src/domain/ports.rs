@@ -18,7 +18,9 @@ use super::dispute::{DisputeId, DisputeRecord, DisputeStatus};
 use super::error::PaymentsError;
 use super::fees::FeeConfiguration;
 use super::money::{Currency, Money};
-use super::payment::{PaymentId, PaymentRecord, PaymentStatus, RefundId, RefundRecord, RefundStatus};
+use super::payment::{
+    PaymentId, PaymentRecord, PaymentStatus, RefundId, RefundRecord, RefundStatus,
+};
 use super::payout::{PayoutId, PayoutRecord};
 use super::provider::{ConnectionStatus, CountryCode, ProviderKind};
 

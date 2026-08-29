@@ -371,10 +371,10 @@ impl WebhookEventRepository for SqlxWebhookEventRepository {
     ) -> Result<bool, PaymentsError> {
         let rows_affected = sqlx::query(
             "INSERT INTO payments.webhook_events
-               (stripe_event_id, account_id, event_type, api_version,
-                payload, received_at, attempts)
-             VALUES ($1, $2, $3, $4, $5, $6, 0)
-             ON CONFLICT (stripe_event_id) DO NOTHING",
+               (stripe_event_id, account_id, type, api_version,
+                 payload, received_at, attempts)
+              VALUES ($1, $2, $3, $4, $5, $6, 0)
+              ON CONFLICT (stripe_event_id) DO NOTHING",
         )
         .bind(&record.stripe_event_id)
         .bind(&record.account_id)
@@ -395,7 +395,7 @@ impl WebhookEventRepository for SqlxWebhookEventRepository {
         limit: u32,
     ) -> Result<Vec<WebhookEventRecord>, PaymentsError> {
         let rows = sqlx::query_as::<_, WebhookEventRow>(
-            "SELECT stripe_event_id, account_id, event_type, api_version,
+            "SELECT stripe_event_id, account_id, type AS event_type, api_version,
                     payload, received_at, attempts, error
              FROM payments.webhook_events
              WHERE processed_at IS NULL AND attempts < 5
@@ -429,7 +429,7 @@ impl WebhookEventRepository for SqlxWebhookEventRepository {
     ) -> Result<(), PaymentsError> {
         sqlx::query(
             "UPDATE payments.webhook_events
-             SET processed_at = now(), updated_at = now()
+             SET processed_at = now()
              WHERE stripe_event_id = $1",
         )
         .bind(stripe_event_id)
@@ -447,7 +447,7 @@ impl WebhookEventRepository for SqlxWebhookEventRepository {
     ) -> Result<(), PaymentsError> {
         sqlx::query(
             "UPDATE payments.webhook_events
-             SET attempts = attempts + 1, error = $2, updated_at = now()
+             SET attempts = attempts + 1, error = $2
              WHERE stripe_event_id = $1",
         )
         .bind(stripe_event_id)
@@ -486,7 +486,7 @@ impl WebhookEventRepository for SqlxWebhookEventRepository {
         limit: u32,
     ) -> Result<Vec<WebhookEventRecord>, PaymentsError> {
         let rows = sqlx::query_as::<_, WebhookEventRow>(
-            "SELECT stripe_event_id, account_id, event_type, api_version,
+            "SELECT stripe_event_id, account_id, type AS event_type, api_version,
                     payload, received_at, attempts, error
              FROM payments.webhook_events
              WHERE processed_at IS NULL AND attempts >= 5
@@ -520,7 +520,7 @@ impl WebhookEventRepository for SqlxWebhookEventRepository {
     ) -> Result<bool, PaymentsError> {
         let rows_affected = sqlx::query(
             "UPDATE payments.webhook_events
-             SET attempts = 0, error = NULL, updated_at = now()
+             SET attempts = 0, error = NULL
              WHERE stripe_event_id = $1 AND processed_at IS NULL AND attempts >= 5",
         )
         .bind(stripe_event_id)
@@ -814,7 +814,11 @@ impl TryFrom<PaymentRow> for PaymentRecord {
         Ok(Self {
             id: PaymentId::try_from(row.id).map_err(storage_id)?,
             tenant_id: TenantId::try_from(row.tenant_id).map_err(storage_id)?,
-            checkout_id: row.checkout_id.map(CheckoutId::try_from).transpose().map_err(storage_id)?,
+            checkout_id: row
+                .checkout_id
+                .map(CheckoutId::try_from)
+                .transpose()
+                .map_err(storage_id)?,
             external_payment_id: row.external_payment_id,
             status,
             amount,
@@ -1098,7 +1102,11 @@ impl TryFrom<RefundRow> for crate::domain::payment::RefundRecord {
             amount,
             reason: row.reason,
             status,
-            created_by: row.created_by.map(UserId::try_from).transpose().map_err(storage_id)?,
+            created_by: row
+                .created_by
+                .map(UserId::try_from)
+                .transpose()
+                .map_err(storage_id)?,
             created_at: row.created_at,
             idempotency_key: row.idempotency_key,
         })
@@ -1824,7 +1832,11 @@ fn row_to_payout(row: PayoutRow) -> Result<crate::domain::payout::PayoutRecord, 
     Ok(crate::domain::payout::PayoutRecord {
         id: PayoutId::try_from(row.id).map_err(storage_id)?,
         tenant_id: TenantId::try_from(row.tenant_id).map_err(storage_id)?,
-        connection_id: row.connection_id.map(ConnectionId::try_from).transpose().map_err(storage_id)?,
+        connection_id: row
+            .connection_id
+            .map(ConnectionId::try_from)
+            .transpose()
+            .map_err(storage_id)?,
         external_payout_id: row.external_payout_id,
         amount: Money::new(row.amount_minor, &row.currency)?,
         status,

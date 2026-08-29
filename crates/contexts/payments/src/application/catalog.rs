@@ -140,7 +140,10 @@ mod tests {
     #[tokio::test]
     async fn the_empty_catalog_answers_an_empty_envelope() {
         let use_case = ListProviders::new(Arc::new(EmptyProviderCatalog));
-        let view = use_case.execute(TenantId::try_from(1_000_001_i64).unwrap(), None).await.unwrap();
+        let view = use_case
+            .execute(TenantId::try_from(1_000_001_i64).unwrap(), None)
+            .await
+            .unwrap();
         assert!(view.providers.is_empty());
     }
 
@@ -151,7 +154,10 @@ mod tests {
         let catalog =
             RegistryProviderCatalog::new(Arc::new(registry), RuntimeEnvironment::NonProduction);
 
-        let view = catalog.list(TenantId::try_from(1_000_001_i64).unwrap(), None).await.unwrap();
+        let view = catalog
+            .list(TenantId::try_from(1_000_001_i64).unwrap(), None)
+            .await
+            .unwrap();
         assert_eq!(view.providers.len(), 1);
         let entry = &view.providers[0];
         assert_eq!(entry.kind, "fake");
@@ -173,7 +179,10 @@ mod tests {
         let catalog =
             RegistryProviderCatalog::new(Arc::new(registry), RuntimeEnvironment::Production);
 
-        let view = catalog.list(TenantId::try_from(1_000_001_i64).unwrap(), None).await.unwrap();
+        let view = catalog
+            .list(TenantId::try_from(1_000_001_i64).unwrap(), None)
+            .await
+            .unwrap();
         assert!(
             view.providers.is_empty(),
             "production must list no fake entry"
@@ -190,13 +199,19 @@ mod tests {
         // The fake supports US/JP: a JP tenant connects, a GB tenant sees
         // the unavailable state.
         let jp = catalog
-            .list(TenantId::try_from(1_000_001_i64).unwrap(), Some(CountryCode::parse("JP").unwrap()))
+            .list(
+                TenantId::try_from(1_000_001_i64).unwrap(),
+                Some(CountryCode::parse("JP").unwrap()),
+            )
             .await
             .unwrap();
         assert!(jp.providers[0].available);
 
         let gb = catalog
-            .list(TenantId::try_from(1_000_001_i64).unwrap(), Some(CountryCode::parse("GB").unwrap()))
+            .list(
+                TenantId::try_from(1_000_001_i64).unwrap(),
+                Some(CountryCode::parse("GB").unwrap()),
+            )
             .await
             .unwrap();
         assert!(!gb.providers[0].available);

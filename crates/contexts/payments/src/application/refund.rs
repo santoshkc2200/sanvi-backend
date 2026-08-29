@@ -642,4 +642,3 @@ mod payload_tests {
         assert!(!payload_matches(&existing, &None, "goodwill"));
     }
 }
-

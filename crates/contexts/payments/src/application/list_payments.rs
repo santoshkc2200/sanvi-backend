@@ -420,4 +420,3 @@ mod tests {
         assert_eq!(closed.detail.as_deref(), Some("won"));
     }
 }
-

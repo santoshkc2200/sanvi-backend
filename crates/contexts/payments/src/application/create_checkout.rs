@@ -649,10 +649,12 @@ mod tests {
         // While fees are off no amount shape can conjure a fee.
         assert_eq!(
             NoApplicationFee
-                .application_fee(TenantId::try_from(100).unwrap(), &Money::new(2000, "JPY").unwrap())
+                .application_fee(
+                    TenantId::try_from(100).unwrap(),
+                    &Money::new(2000, "JPY").unwrap()
+                )
                 .await,
             None
         );
     }
 }
-

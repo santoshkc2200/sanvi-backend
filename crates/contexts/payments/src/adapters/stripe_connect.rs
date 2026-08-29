@@ -1607,8 +1607,12 @@ mod tests {
         );
         assert_eq!(
             call.idempotency_key.as_deref(),
-            Some(command.checkout.id.to_string().as_str()),
-            "provider-side idempotency key is our checkout id (crash adoption)"
+            command
+                .checkout
+                .idempotency_key
+                .map(|key| key.to_string())
+                .as_deref(),
+            "provider-side idempotency key is our checkout's idempotency key (crash adoption)"
         );
 
         let form = call.form();

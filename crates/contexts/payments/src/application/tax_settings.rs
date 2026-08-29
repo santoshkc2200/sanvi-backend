@@ -438,4 +438,3 @@ pub struct ComplianceReport {
     /// Rows that could not be resolved to a live connection/provider.
     pub skipped: u32,
 }
-
