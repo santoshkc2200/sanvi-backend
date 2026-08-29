@@ -40,7 +40,7 @@ use sanvi_payments::domain::ports::{CreateAccountRequest, PaymentProviderPort};
 use sanvi_payments::domain::provider::{ConnectionStatus, ProviderKind};
 use sanvi_payments::domain::{
     CheckoutId, ConnectionId, DisputeId, Money, PaymentId, PayoutId, ProviderConnection,
-    ProviderConnectionRepository, RefundId,
+    ProviderConnectionRepository,
 };
 use sanvi_payments::routes::payments_tenant_scope_routes;
 use sanvi_persistence::{Migrator, TxManager};

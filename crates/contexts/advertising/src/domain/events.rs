@@ -132,7 +132,7 @@ pub trait EventPublisher: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sanvi_kernel::{Id, TenantId};
+    use sanvi_kernel::TenantId;
 
     #[test]
     fn registered_events_round_trip_through_json_and_outbox_envelopes() {
