@@ -948,15 +948,17 @@ async fn main() -> ExitCode {
     let billing_webhooks: std::sync::Arc<dyn WebhookEventRepository> =
         std::sync::Arc::new(SqlxWebhookEventRepository::new());
     let billing_events: std::sync::Arc<dyn BillingEvents> =
-        std::sync::Arc::new(BillingEventPublisher::new());
+        std::sync::Arc::new(BillingEventPublisher::new(ids.clone()));
     let billing_notifications: std::sync::Arc<dyn Notifications> =
         std::sync::Arc::new(WorkerBillingNotifications {
             localizer: notification_localizer.clone(),
         });
-    let billing_ids: std::sync::Arc<dyn BillingIds> = std::sync::Arc::new(SystemIdGenerator);
+    let billing_ids: std::sync::Arc<dyn BillingIds> =
+        std::sync::Arc::new(SystemIdGenerator::new(ids.clone()));
     let billing_clock: std::sync::Arc<dyn BillingClock> = std::sync::Arc::new(SystemClock);
-    let billing_syncer: std::sync::Arc<dyn EntitlementSyncer> =
-        std::sync::Arc::new(AccessEntitlementSyncer::new(entitlements.clone()));
+    let billing_syncer: std::sync::Arc<dyn EntitlementSyncer> = std::sync::Arc::new(
+        AccessEntitlementSyncer::new(entitlements.clone(), ids.clone()),
+    );
     let billing_lifecycle: std::sync::Arc<dyn sanvi_billing::domain::TenantLifecycle> =
         std::sync::Arc::new(TenancyTenantLifecycle::new(
             billing_tx.clone(),
@@ -1520,7 +1522,11 @@ async fn main() -> ExitCode {
     // ReconcileCampaign → never write back) end to end.
     let advertising_campaigns: Arc<dyn AdvertisingCampaignRepository> =
         Arc::new(SqlxCampaignRepository::new());
-    let advertising_events: Arc<dyn AdvertisingEvents> = Arc::new(AdvertisingEventPublisher::new());
+    let advertising_events: Arc<dyn AdvertisingEvents> =
+        Arc::new(AdvertisingEventPublisher::new(ids.clone()));
+    let advertising_ids: Arc<dyn sanvi_advertising::domain::IdGenerator> = Arc::new(
+        sanvi_advertising::adapters::SystemIdGenerator::new(ids.clone()),
+    );
     let advertising_platforms = Arc::new(sanvi_advertising::adapters::rate_limited_registry(
         &FakeAdPlatform::registered_catalog(),
         |platform| match platform.as_str() {
@@ -1535,6 +1541,7 @@ async fn main() -> ExitCode {
         tx_manager.clone(),
         advertising_campaigns.clone(),
         advertising_events,
+        advertising_ids,
     ));
     let advertising_reconciliation_sweep = Arc::new(ReconcileDueCampaigns::new(
         tx_manager.clone(),

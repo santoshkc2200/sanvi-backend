@@ -1,13 +1,17 @@
 use async_trait::async_trait;
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::{
     AdvertisingConnection, Campaign, CapabilityMatrix, ConnectionHandle, HashedIds, PlatformKey,
     ValidationViolation,
 };
-use crate::domain::model::ConsentSnapshot;
+use crate::domain::model::{
+    AdGroupId, AdId, CampaignChangeId, CampaignId, ConnectionId, ConsentSnapshot, ConversionId,
+    CreativeId,
+};
 use sanvi_persistence::ScopedTx;
-use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdvertisingError {
@@ -41,6 +45,24 @@ pub enum AdvertisingError {
     EncryptionUnconfigured,
     #[error("advertising token encryption failure: {0}")]
     EncryptionFailure(String),
+    #[error("advertising id generation failed: {0}")]
+    IdGeneration(String),
+}
+
+impl From<sanvi_kernel::IdGenerationError> for AdvertisingError {
+    fn from(err: sanvi_kernel::IdGenerationError) -> Self {
+        Self::IdGeneration(err.to_string())
+    }
+}
+
+pub trait IdGenerator: Send + Sync {
+    fn next_connection_id(&self) -> Result<ConnectionId, AdvertisingError>;
+    fn next_campaign_id(&self) -> Result<CampaignId, AdvertisingError>;
+    fn next_campaign_change_id(&self) -> Result<CampaignChangeId, AdvertisingError>;
+    fn next_conversion_id(&self) -> Result<ConversionId, AdvertisingError>;
+    fn next_creative_id(&self) -> Result<CreativeId, AdvertisingError>;
+    fn next_ad_group_id(&self) -> Result<AdGroupId, AdvertisingError>;
+    fn next_ad_id(&self) -> Result<AdId, AdvertisingError>;
 }
 
 #[async_trait]
@@ -73,13 +95,13 @@ pub trait AdvertisingConnectionRepository: Send + Sync {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<Option<AdvertisingConnection>, AdvertisingError>;
 }
 
@@ -245,14 +267,14 @@ pub trait ConversionEventRepository: Send + Sync {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
 
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: ConversionId,
     ) -> Result<Option<super::model::ConversionEvent>, AdvertisingError>;
 }
 
@@ -270,7 +292,7 @@ pub trait PaymentLookupPort: Send + Sync {
     async fn lookup_payment_value(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         order_ref: &str,
     ) -> Result<Option<PaymentLookup>, AdvertisingError>;
 }
@@ -279,7 +301,8 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TrackingSettings {
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     /// event name -> (platform key -> the platform's conversion action)
     pub mappings: BTreeMap<String, BTreeMap<String, String>>,
 }
@@ -289,7 +312,7 @@ pub trait TrackingSettingsRepository: Send + Sync {
     async fn get(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<TrackingSettings>, AdvertisingError>;
 
     async fn upsert(
@@ -315,9 +338,9 @@ pub trait VendorRolePort: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredCreative {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub connection_id: Uuid,
+    pub id: CreativeId,
+    pub tenant_id: TenantId,
+    pub connection_id: ConnectionId,
     pub platform: PlatformKey,
     pub external_id: Option<String>,
     pub creative: super::Creative,
@@ -337,20 +360,20 @@ pub trait CreativeRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        creative_id: Uuid,
+        tenant_id: TenantId,
+        creative_id: CreativeId,
     ) -> Result<Option<StoredCreative>, AdvertisingError>;
 
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<StoredCreative>, AdvertisingError>;
 
     async fn delete(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        creative_id: Uuid,
+        tenant_id: TenantId,
+        creative_id: CreativeId,
     ) -> Result<bool, AdvertisingError>;
 }

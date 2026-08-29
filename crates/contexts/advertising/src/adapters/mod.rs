@@ -13,7 +13,7 @@ pub mod stubs;
 pub mod token_vault;
 pub mod vendor_role;
 
-pub use events::OutboxEventPublisher;
+pub use events::{OutboxEventPublisher, SystemIdGenerator};
 pub use oauth_state_store::SqlxOAuthStateStore;
 pub use payment_lookup::CheckoutPaymentLookup;
 pub use privacy_provider::AdvertisingPrivacyProvider;

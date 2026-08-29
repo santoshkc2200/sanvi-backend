@@ -24,9 +24,11 @@ pub use matrix::{
     AssetMetadata, CapabilityMatrix, CreativeAssetSpec, CreativePlacement, ScheduleGranularity,
 };
 pub use model::{
-    Ad, AdGroup, BidSettings, Budget, BudgetType, Campaign, CampaignStatus, ConnectionHandle,
-    ConnectionState, ConsentSnapshot, Creative, CreativeText, DriftState, HashedIds, Money,
-    Objective, PlatformKey, Schedule, Targeting, TargetingDimension,
+    Ad, AdGroup, AdGroupId, AdGroupTag, AdId, AdTag, BidSettings, Budget, BudgetType, Campaign,
+    CampaignChangeId, CampaignChangeTag, CampaignId, CampaignStatus, CampaignTag, ConnectionHandle,
+    ConnectionId, ConnectionState, ConnectionTag, ConsentSnapshot, ConversionId, ConversionTag,
+    Creative, CreativeId, CreativeTag, CreativeText, DriftState, HashedIds, Money, Objective,
+    PlatformKey, Schedule, Targeting, TargetingDimension,
 };
 pub use oauth_state::{
     InMemoryOAuthStateStore, OAuthStateClaims, OAuthStateError, OAuthStateManager, OAuthStateStore,
@@ -34,7 +36,7 @@ pub use oauth_state::{
 pub use ports::{
     AdPlatformPort, AdvertisingConnectionRepository, AdvertisingError, AuthorizationExchange,
     AuthorizationRequest, AuthorizationStart, CreativeRepository, ExchangedAuthorization,
-    MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor, StoredCreative,
+    IdGenerator, MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor, StoredCreative,
     UploadedConversion,
 };
 pub use reconciliation::{CampaignReconciliationState, ReconciliationResult};

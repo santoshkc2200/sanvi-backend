@@ -6,9 +6,11 @@
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use uuid::Uuid;
 
+use crate::domain::model::ConnectionId;
 use crate::{
     application::PlatformRegistry,
     domain::{
@@ -24,10 +26,12 @@ const OAUTH_STATE_TTL_MINUTES: i64 = 10;
 /// parity with every other port method, but neither call has a persisted
 /// connection yet — a fresh id is a harmless placeholder no adapter is
 /// expected to interpret as anything durable.
-fn transient_handle() -> ConnectionHandle {
-    ConnectionHandle {
-        id: Uuid::now_v7().to_string(),
-    }
+fn transient_handle(
+    ids: &dyn crate::domain::IdGenerator,
+) -> Result<ConnectionHandle, crate::domain::AdvertisingError> {
+    Ok(ConnectionHandle {
+        id: ids.next_connection_id()?.to_string(),
+    })
 }
 
 /// Redirect the tenant to the platform's consent screen. Returns the URL and
@@ -36,19 +40,25 @@ fn transient_handle() -> ConnectionHandle {
 pub struct StartAuthorization {
     platforms: Arc<PlatformRegistry>,
     oauth_state: OAuthStateManager,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl StartAuthorization {
-    pub fn new(platforms: Arc<PlatformRegistry>, oauth_state: OAuthStateManager) -> Self {
+    pub fn new(
+        platforms: Arc<PlatformRegistry>,
+        oauth_state: OAuthStateManager,
+        ids: Arc<dyn crate::domain::IdGenerator>,
+    ) -> Self {
         Self {
             platforms,
             oauth_state,
+            ids,
         }
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         platform: PlatformKey,
         redirect_uri: String,
     ) -> Result<(String, String), AdvertisingError> {
@@ -69,7 +79,7 @@ impl StartAuthorization {
             .await?;
         let start = adapter
             .begin_authorization(
-                &transient_handle(),
+                &transient_handle(self.ids.as_ref())?,
                 &AuthorizationRequest {
                     redirect_uri,
                     state: state.clone(),
@@ -90,6 +100,7 @@ pub struct HandleCallback {
     platforms: Arc<PlatformRegistry>,
     oauth_state: OAuthStateManager,
     tokens: Arc<TokenVault>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl HandleCallback {
@@ -99,6 +110,7 @@ impl HandleCallback {
         platforms: Arc<PlatformRegistry>,
         oauth_state: OAuthStateManager,
         tokens: Arc<TokenVault>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
@@ -106,17 +118,18 @@ impl HandleCallback {
             platforms,
             oauth_state,
             tokens,
+            ids,
         }
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         platform: PlatformKey,
         state: &str,
         code: String,
         redirect_uri: String,
-        actor_id: Option<Uuid>,
+        actor_id: Option<UserId>,
     ) -> Result<AdvertisingConnection, AdvertisingError> {
         self.oauth_state
             .redeem(state, tenant_id, &platform, Utc::now())
@@ -126,10 +139,10 @@ impl HandleCallback {
             .exchange_authorization(&AuthorizationExchange { code, redirect_uri })
             .await?;
 
-        let connection_id = Uuid::now_v7();
+        let connection_id = self.ids.next_connection_id()?;
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let token_ref = self
@@ -177,15 +190,15 @@ impl CreateConnection {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         chosen_external_id: &str,
         currency: String,
         timezone: String,
     ) -> Result<AdvertisingConnection, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let mut connection = self
@@ -250,11 +263,11 @@ impl ListConnections {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<(AdvertisingConnection, ConnectionHealth)>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let connections = self.connections.list(&mut scope, tenant_id).await?;
@@ -288,12 +301,12 @@ impl DeleteConnection {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<(), AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let mut connection = self
@@ -315,7 +328,9 @@ impl DeleteConnection {
 mod tests {
     use std::sync::Arc;
 
+    use crate::domain::model::ConnectionId;
     use chrono::Utc;
+    use sanvi_kernel::{TenantId, UserId};
     use sanvi_persistence::TxManager;
     use uuid::Uuid;
 
@@ -333,10 +348,15 @@ mod tests {
             .unwrap();
         let registry = Arc::new(FakeAdPlatform::registered_catalog());
         let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
-        let list = ListConnections::new(TxManager::new(pool), connections, registry.clone());
+        let list = ListConnections::new(
+            TxManager::new(pool, sanvi_testsupport::test_ids()),
+            connections,
+            registry.clone(),
+        );
         let key = registry.adapters().first().unwrap().descriptor().key;
         let mut connection = AdvertisingConnection::new(
-            Uuid::now_v7(),
+            crate::domain::model::ConnectionId::try_from(1_000_100_i64).unwrap(),
+            sanvi_kernel::TenantId::try_from(1_000_101_i64).unwrap(),
             key,
             "123-456-7890",
             "JPY",

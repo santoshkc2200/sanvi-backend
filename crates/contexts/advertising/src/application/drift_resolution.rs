@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
+use crate::domain::model::CampaignId;
 use chrono::Utc;
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -39,6 +41,7 @@ pub struct ResolveCampaignDrift {
     campaigns: Arc<dyn CampaignRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl ResolveCampaignDrift {
@@ -47,12 +50,14 @@ impl ResolveCampaignDrift {
         campaigns: Arc<dyn CampaignRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
             campaigns,
             events,
             platforms,
+            ids,
         }
     }
 
@@ -61,16 +66,16 @@ impl ResolveCampaignDrift {
     /// from resolving a newer drift observation.
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         expected_revision: i64,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         resolution: DriftResolution,
     ) -> Result<ResolvedCampaignDrift, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
 
@@ -134,7 +139,7 @@ impl ResolveCampaignDrift {
             .append_change(
                 &mut scope,
                 &CampaignChange {
-                    id: Uuid::now_v7(),
+                    id: self.ids.next_campaign_change_id()?,
                     tenant_id,
                     campaign_id,
                     revision: updated.revision,

@@ -440,6 +440,7 @@ async fn main() -> ExitCode {
             Arc::new(sanvi_privacy::adapters::SqlxSubProcessorRepository::new());
         match build_advertising_state(
             pool.clone(),
+            ids.clone(),
             &config.advertising,
             directive_resolver,
             subprocessors,

@@ -8,7 +8,10 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
+use crate::domain::model::{CampaignChangeId, CampaignId, ConnectionId, ConversionId, CreativeId};
 use chrono::Utc;
+use sanvi_kernel::Id;
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use uuid::Uuid;
 
@@ -67,8 +70,8 @@ fn apply_fields(mut campaign: Campaign, fields: &CampaignFields) -> Campaign {
 async fn load_active_connection(
     scope: &mut sanvi_persistence::ScopedTx<'_>,
     connections: &dyn AdvertisingConnectionRepository,
-    tenant_id: Uuid,
-    connection_id: Uuid,
+    tenant_id: TenantId,
+    connection_id: ConnectionId,
 ) -> Result<crate::domain::AdvertisingConnection, AdvertisingError> {
     let connection = connections
         .find_by_id(scope, tenant_id, connection_id)
@@ -80,7 +83,7 @@ async fn load_active_connection(
     Ok(connection)
 }
 
-fn connection_handle(connection_id: Uuid) -> ConnectionHandle {
+fn connection_handle(connection_id: ConnectionId) -> ConnectionHandle {
     ConnectionHandle {
         id: connection_id.to_string(),
     }
@@ -95,6 +98,7 @@ pub struct CreateCampaign {
     connections: Arc<dyn AdvertisingConnectionRepository>,
     platforms: Arc<PlatformRegistry>,
     events: Arc<dyn EventPublisher>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl CreateCampaign {
@@ -104,6 +108,7 @@ impl CreateCampaign {
         connections: Arc<dyn AdvertisingConnectionRepository>,
         platforms: Arc<PlatformRegistry>,
         events: Arc<dyn EventPublisher>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
@@ -111,20 +116,21 @@ impl CreateCampaign {
             connections,
             platforms,
             events,
+            ids,
         }
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         fields: NewCampaignFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let connection = load_active_connection(
@@ -136,7 +142,7 @@ impl CreateCampaign {
         .await?;
         let adapter = self.platforms.adapter(connection.platform())?;
 
-        let id = Uuid::now_v7();
+        let id = self.ids.next_campaign_id()?;
         let draft = Campaign {
             id: id.to_string(),
             name: fields.name,
@@ -170,7 +176,7 @@ impl CreateCampaign {
             .append_change(
                 &mut scope,
                 &CampaignChange {
-                    id: Uuid::now_v7(),
+                    id: self.ids.next_campaign_change_id()?,
                     tenant_id,
                     campaign_id: id,
                     revision: 1,
@@ -200,12 +206,12 @@ impl CreateCampaign {
 
     pub async fn platform_for_connection(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<crate::domain::PlatformKey, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let connection = load_active_connection(
@@ -237,12 +243,12 @@ impl GetCampaign {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let stored = self
@@ -269,10 +275,13 @@ impl ListCampaigns {
         Self { tx, campaigns }
     }
 
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<Vec<StoredCampaign>, AdvertisingError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let campaigns = self.campaigns.list_by_tenant(&mut scope, tenant_id).await?;
@@ -311,13 +320,13 @@ impl ValidateCampaign {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         fields: CampaignFields,
     ) -> Result<Vec<ValidationViolation>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let stored = self
@@ -374,7 +383,7 @@ async fn creative_dry_run_violations(
     creatives: &dyn CreativeRepository,
     matrix: &crate::domain::CapabilityMatrix,
     campaign_platform: &crate::domain::PlatformKey,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     group_index: usize,
     ad_index: usize,
     ad: &mut Ad,
@@ -422,11 +431,12 @@ async fn apply_mutation<F>(
     campaigns: &dyn CampaignRepository,
     events: &dyn EventPublisher,
     platforms: &PlatformRegistry,
-    tenant_id: Uuid,
-    campaign_id: Uuid,
+    ids: &dyn crate::domain::IdGenerator,
+    tenant_id: TenantId,
+    campaign_id: CampaignId,
     expected_revision: i64,
     mutation_id: Uuid,
-    actor_id: Uuid,
+    actor_id: UserId,
     changed_fields: Vec<String>,
     mutate: F,
 ) -> Result<StoredCampaign, AdvertisingError>
@@ -440,7 +450,7 @@ where
         -> Pin<Box<dyn Future<Output = Result<(), AdvertisingError>> + Send + 'a>>,
 {
     let mut scope = tx
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
     let stored = campaigns
@@ -500,7 +510,7 @@ where
         .append_change(
             &mut scope,
             &CampaignChange {
-                id: Uuid::now_v7(),
+                id: ids.next_campaign_change_id()?,
                 tenant_id,
                 campaign_id,
                 revision: updated.revision,
@@ -536,6 +546,7 @@ pub struct PatchCampaign {
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl PatchCampaign {
@@ -545,6 +556,7 @@ impl PatchCampaign {
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
@@ -552,16 +564,17 @@ impl PatchCampaign {
             creatives,
             events,
             platforms,
+            ids,
         }
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         expected_revision: i64,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         fields: CampaignFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let creatives = self.creatives.clone();
@@ -571,6 +584,7 @@ impl PatchCampaign {
             self.campaigns.as_ref(),
             self.events.as_ref(),
             &self.platforms,
+            self.ids.as_ref(),
             tenant_id,
             campaign_id,
             expected_revision,
@@ -653,6 +667,7 @@ pub struct AddAdGroup {
     campaigns: Arc<dyn CampaignRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl AddAdGroup {
@@ -661,30 +676,34 @@ impl AddAdGroup {
         campaigns: Arc<dyn CampaignRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
             campaigns,
             events,
             platforms,
+            ids,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         expected_revision: i64,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         fields: NewAdGroupFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
+        let ad_group_id = self.ids.next_ad_group_id()?.to_string();
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
             self.events.as_ref(),
             &self.platforms,
+            self.ids.as_ref(),
             tenant_id,
             campaign_id,
             expected_revision,
@@ -694,7 +713,7 @@ impl AddAdGroup {
             move |campaign, _scope, _matrix, _platform| {
                 Box::pin(async move {
                     campaign.ad_groups.push(AdGroup {
-                        id: Uuid::now_v7().to_string(),
+                        id: ad_group_id,
                         name: fields.name,
                         targeting: fields.targeting,
                         bid: fields.bid,
@@ -714,6 +733,7 @@ pub struct UpdateAdGroup {
     campaigns: Arc<dyn CampaignRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl UpdateAdGroup {
@@ -722,24 +742,26 @@ impl UpdateAdGroup {
         campaigns: Arc<dyn CampaignRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
             campaigns,
             events,
             platforms,
+            ids,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         ad_group_id: String,
         expected_revision: i64,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         fields: AdGroupFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
         apply_mutation(
@@ -747,6 +769,7 @@ impl UpdateAdGroup {
             self.campaigns.as_ref(),
             self.events.as_ref(),
             &self.platforms,
+            self.ids.as_ref(),
             tenant_id,
             campaign_id,
             expected_revision,
@@ -801,15 +824,17 @@ async fn validate_and_hydrate_ad_creative(
     creatives: &dyn CreativeRepository,
     matrix: &crate::domain::CapabilityMatrix,
     campaign_platform: &crate::domain::PlatformKey,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     group_index: usize,
     ad_index: usize,
     ad: &mut Ad,
 ) -> Result<(), AdvertisingError> {
-    let creative_uuid = Uuid::parse_str(&ad.creative.id)
-        .map_err(|error| AdvertisingError::InvalidInput(format!("invalid creative id: {error}")))?;
+    let creative_id =
+        ad.creative.id.parse::<CreativeId>().map_err(|error| {
+            AdvertisingError::InvalidInput(format!("invalid creative id: {error}"))
+        })?;
     let stored_creative = creatives
-        .find(scope, tenant_id, creative_uuid)
+        .find(scope, tenant_id, creative_id)
         .await?
         .ok_or(AdvertisingError::CreativeNotFound)?;
     if &stored_creative.platform != campaign_platform {
@@ -850,7 +875,7 @@ async fn validate_and_hydrate_ad_creative(
 async fn verify_ad_creatives_exist(
     scope: &mut sanvi_persistence::ScopedTx<'_>,
     creatives: &dyn CreativeRepository,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     campaign: &Campaign,
 ) -> Result<(), AdvertisingError> {
     for group in &campaign.ad_groups {
@@ -864,13 +889,14 @@ async fn verify_ad_creatives_exist(
 async fn verify_ad_creative_exists(
     scope: &mut sanvi_persistence::ScopedTx<'_>,
     creatives: &dyn CreativeRepository,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     creative_id_str: &str,
 ) -> Result<(), AdvertisingError> {
-    let creative_uuid = Uuid::parse_str(creative_id_str)
+    let creative_id = creative_id_str
+        .parse::<CreativeId>()
         .map_err(|error| AdvertisingError::InvalidInput(format!("invalid creative id: {error}")))?;
     if creatives
-        .find(scope, tenant_id, creative_uuid)
+        .find(scope, tenant_id, creative_id)
         .await?
         .is_none()
     {
@@ -886,6 +912,7 @@ pub struct AddAd {
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl AddAd {
@@ -895,6 +922,7 @@ impl AddAd {
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
@@ -902,26 +930,29 @@ impl AddAd {
             creatives,
             events,
             platforms,
+            ids,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         ad_group_id: String,
         expected_revision: i64,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         fields: NewAdFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let creatives = self.creatives.clone();
+        let ad_id = self.ids.next_ad_id()?.to_string();
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
             self.events.as_ref(),
             &self.platforms,
+            self.ids.as_ref(),
             tenant_id,
             campaign_id,
             expected_revision,
@@ -938,7 +969,7 @@ impl AddAd {
                         .ok_or(AdvertisingError::AdGroupNotFound)?;
                     let ad_index = group.ads.len();
                     let mut ad = Ad {
-                        id: Uuid::now_v7().to_string(),
+                        id: ad_id,
                         creative: fields.creative,
                         landing_url: fields.landing_url,
                         tracking_template: fields.tracking_template,
@@ -970,6 +1001,7 @@ pub struct UpdateAd {
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl UpdateAd {
@@ -979,6 +1011,7 @@ impl UpdateAd {
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
@@ -986,19 +1019,20 @@ impl UpdateAd {
             creatives,
             events,
             platforms,
+            ids,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         ad_group_id: String,
         ad_id: String,
         expected_revision: i64,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         fields: AdFields,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let creatives = self.creatives.clone();
@@ -1007,6 +1041,7 @@ impl UpdateAd {
             self.campaigns.as_ref(),
             self.events.as_ref(),
             &self.platforms,
+            self.ids.as_ref(),
             tenant_id,
             campaign_id,
             expected_revision,
@@ -1080,6 +1115,7 @@ pub struct PublishCampaign {
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl PublishCampaign {
@@ -1089,6 +1125,7 @@ impl PublishCampaign {
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
@@ -1096,19 +1133,20 @@ impl PublishCampaign {
             creatives,
             events,
             platforms,
+            ids,
         }
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let stored = self
@@ -1167,7 +1205,7 @@ impl PublishCampaign {
             .append_change(
                 &mut scope,
                 &CampaignChange {
-                    id: Uuid::now_v7(),
+                    id: self.ids.next_campaign_change_id()?,
                     tenant_id,
                     campaign_id,
                     revision: updated.revision,
@@ -1208,20 +1246,21 @@ struct SetCampaignRunState {
     campaigns: Arc<dyn CampaignRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl SetCampaignRunState {
     async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
         direction: PauseOrResume,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let stored = self
@@ -1264,7 +1303,7 @@ impl SetCampaignRunState {
             .append_change(
                 &mut scope,
                 &CampaignChange {
-                    id: Uuid::now_v7(),
+                    id: self.ids.next_campaign_change_id()?,
                     tenant_id,
                     campaign_id,
                     revision: updated.revision,
@@ -1297,21 +1336,23 @@ impl PauseCampaign {
         campaigns: Arc<dyn CampaignRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self(SetCampaignRunState {
             tx,
             campaigns,
             events,
             platforms,
+            ids,
         })
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
     ) -> Result<StoredCampaign, AdvertisingError> {
         self.0
             .execute(
@@ -1333,21 +1374,23 @@ impl ResumeCampaign {
         campaigns: Arc<dyn CampaignRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self(SetCampaignRunState {
             tx,
             campaigns,
             events,
             platforms,
+            ids,
         })
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         mutation_id: Uuid,
-        actor_id: Uuid,
+        actor_id: UserId,
     ) -> Result<StoredCampaign, AdvertisingError> {
         self.0
             .execute(
@@ -1375,13 +1418,13 @@ impl ListCampaignChanges {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         limit: i64,
     ) -> Result<Vec<CampaignChange>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         // 404 rather than an empty list when the campaign itself is missing

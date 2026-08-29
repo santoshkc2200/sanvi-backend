@@ -6,11 +6,13 @@ use sanvi_http::{
     ApiError, CurrentSubject, CurrentTenant, FreshAal2Required, PROBLEM_TYPE_BASE, ProblemDetail,
     RequiredAnyFeature, RequiredPermission,
 };
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::AdvertisingState;
+use crate::domain::model::{CampaignId, ConnectionId, CreativeId};
 use crate::{
     CapabilityMatrix,
     application::{
@@ -228,12 +230,18 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
             tracing::error!(error = %detail, "advertising token encryption failure");
             ApiError::internal("advertising connection could not be completed")
         }
+        AdvertisingError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "advertising id generation failure");
+            ApiError::ServiceUnavailable {
+                detail: "advertising service temporarily unavailable".to_string(),
+            }
+        }
     }
 }
 
 async fn require_platform_entitlement(
     state: &AdvertisingState,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     platform: &crate::domain::PlatformKey,
     feature_gate: &Arc<dyn sanvi_http::FeatureGate>,
 ) -> Result<(), ApiError> {
@@ -259,8 +267,8 @@ async fn require_platform_entitlement(
 
 async fn require_campaign_write_entitlement(
     state: &AdvertisingState,
-    tenant_id: Uuid,
-    campaign_id: Uuid,
+    tenant_id: TenantId,
+    campaign_id: CampaignId,
     feature_gate: &Arc<dyn sanvi_http::FeatureGate>,
 ) -> Result<(), ApiError> {
     let stored = state
@@ -308,7 +316,7 @@ fn campaign_validation_problem(violations: Vec<ValidationViolation>) -> actix_we
     operation_id = "resolve_campaign_drift",
     request_body = ResolveCampaignDriftRequest,
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("Idempotency-Key" = Uuid, Header, description = "Required. A retry of this drift resolution returns its original result.")
     ),
     responses(
@@ -324,7 +332,7 @@ pub async fn resolve_campaign_drift(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     req: HttpRequest,
     body: web::Json<ResolveCampaignDriftRequest>,
     _permission: RequiredPermission,
@@ -428,8 +436,10 @@ fn drift_view(
 /// published.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CampaignView {
-    pub id: Uuid,
-    pub connection_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: CampaignId,
+    #[schema(value_type = String)]
+    pub connection_id: ConnectionId,
     #[schema(example = "google_ads")]
     pub platform: String,
     pub external_id: Option<String>,
@@ -468,7 +478,8 @@ pub struct CampaignChangesView {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateCampaignRequest {
-    pub connection_id: Uuid,
+    #[schema(value_type = String)]
+    pub connection_id: ConnectionId,
     pub name: String,
     #[schema(example = "sales")]
     pub objective: String,
@@ -682,7 +693,7 @@ pub async fn list_campaigns(
     path = "/api/v1/tenant/ads/campaigns/{campaign_id}",
     tag = "advertising",
     operation_id = "get_campaign",
-    params(("campaign_id" = Uuid, Path, description = "Campaign UUID")),
+    params(("campaign_id" = String, Path, description = "Campaign UUID")),
     responses(
         (status = 200, description = "The campaign's current intent and revision", body = CampaignView),
         (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
@@ -692,7 +703,7 @@ pub async fn list_campaigns(
 pub async fn get_campaign(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     _permission: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let stored = state
@@ -710,7 +721,7 @@ pub async fn get_campaign(
     operation_id = "patch_campaign",
     request_body = PatchCampaignRequest,
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("If-Match" = String, Header, description = "Required. The campaign's current revision; a stale value returns 409 with the current state."),
         ("Idempotency-Key" = Uuid, Header, description = "Required. A retry with the same key returns the original result.")
     ),
@@ -727,7 +738,7 @@ pub async fn patch_campaign(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     req: HttpRequest,
     body: web::Json<PatchCampaignRequest>,
     _permission: RequiredPermission,
@@ -780,7 +791,7 @@ pub async fn patch_campaign(
     tag = "advertising",
     operation_id = "validate_campaign",
     request_body(content = PatchCampaignRequest, description = "Fields to validate; omitted fields keep the stored value. An empty body validates the campaign as stored.", content_type = "application/json"),
-    params(("campaign_id" = Uuid, Path, description = "Campaign UUID")),
+    params(("campaign_id" = String, Path, description = "Campaign UUID")),
     responses(
         (status = 200, description = "Field-addressed violations; empty means valid. Never writes.", body = ValidationResultView),
         (status = 400, description = "Invalid objective in the candidate body", body = ProblemDetail),
@@ -791,7 +802,7 @@ pub async fn patch_campaign(
 pub async fn validate_campaign(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     body: Option<web::Json<PatchCampaignRequest>>,
     _permission: RequiredPermission,
     feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
@@ -822,7 +833,7 @@ pub async fn validate_campaign(
     tag = "advertising",
     operation_id = "publish_campaign",
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("Idempotency-Key" = Uuid, Header, description = "Required. A retry after a timeout returns the one campaign that was created, never a second.")
     ),
     responses(
@@ -838,7 +849,7 @@ pub async fn publish_campaign(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     req: HttpRequest,
     _permission: RequiredPermission,
     feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
@@ -880,7 +891,7 @@ pub async fn publish_campaign(
     tag = "advertising",
     operation_id = "pause_campaign",
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("Idempotency-Key" = Uuid, Header, description = "Required.")
     ),
     responses(
@@ -896,7 +907,7 @@ pub async fn pause_campaign(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     req: HttpRequest,
     _permission: RequiredPermission,
     feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
@@ -933,7 +944,7 @@ pub async fn pause_campaign(
     tag = "advertising",
     operation_id = "resume_campaign",
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("Idempotency-Key" = Uuid, Header, description = "Required.")
     ),
     responses(
@@ -949,7 +960,7 @@ pub async fn resume_campaign(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     req: HttpRequest,
     _permission: RequiredPermission,
     feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
@@ -985,7 +996,7 @@ pub async fn resume_campaign(
     path = "/api/v1/tenant/ads/campaigns/{campaign_id}/changes",
     tag = "advertising",
     operation_id = "list_campaign_changes",
-    params(("campaign_id" = Uuid, Path, description = "Campaign UUID")),
+    params(("campaign_id" = String, Path, description = "Campaign UUID")),
     responses(
         (status = 200, description = "Newest-first attributed change log: actor, source (sanvi|platform), before/after state", body = CampaignChangesView),
         (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
@@ -995,7 +1006,7 @@ pub async fn resume_campaign(
 pub async fn list_campaign_changes(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     _permission: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let changes = state
@@ -1050,7 +1061,7 @@ pub struct PatchAdRequest {
     operation_id = "add_ad_group",
     request_body = CreateAdGroupRequest,
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("If-Match" = String, Header, description = "Required. The campaign's current revision."),
         ("Idempotency-Key" = Uuid, Header, description = "Required. A retry with the same key returns the original result.")
     ),
@@ -1067,7 +1078,7 @@ pub async fn add_ad_group(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<CampaignId>,
     req: HttpRequest,
     body: web::Json<CreateAdGroupRequest>,
     _permission: RequiredPermission,
@@ -1126,7 +1137,7 @@ pub async fn add_ad_group(
     operation_id = "update_ad_group",
     request_body = PatchAdGroupRequest,
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("ad_group_id" = String, Path, description = "Ad group id"),
         ("If-Match" = String, Header, description = "Required. The campaign's current revision."),
         ("Idempotency-Key" = Uuid, Header, description = "Required. A retry with the same key returns the original result.")
@@ -1144,7 +1155,7 @@ pub async fn update_ad_group(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<(Uuid, String)>,
+    path: web::Path<(CampaignId, String)>,
     req: HttpRequest,
     body: web::Json<PatchAdGroupRequest>,
     _permission: RequiredPermission,
@@ -1204,7 +1215,7 @@ pub async fn update_ad_group(
     operation_id = "add_ad",
     request_body = CreateAdRequest,
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("ad_group_id" = String, Path, description = "Ad group id"),
         ("If-Match" = String, Header, description = "Required. The campaign's current revision."),
         ("Idempotency-Key" = Uuid, Header, description = "Required. A retry with the same key returns the original result.")
@@ -1222,7 +1233,7 @@ pub async fn add_ad(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<(Uuid, String)>,
+    path: web::Path<(CampaignId, String)>,
     req: HttpRequest,
     body: web::Json<CreateAdRequest>,
     _permission: RequiredPermission,
@@ -1282,7 +1293,7 @@ pub async fn add_ad(
     operation_id = "update_ad",
     request_body = PatchAdRequest,
     params(
-        ("campaign_id" = Uuid, Path, description = "Campaign UUID"),
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
         ("ad_group_id" = String, Path, description = "Ad group id"),
         ("ad_id" = String, Path, description = "Ad id"),
         ("If-Match" = String, Header, description = "Required. The campaign's current revision."),
@@ -1301,7 +1312,7 @@ pub async fn update_ad(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<(Uuid, String, String)>,
+    path: web::Path<(CampaignId, String, String)>,
     req: HttpRequest,
     body: web::Json<PatchAdRequest>,
     _permission: RequiredPermission,
@@ -1431,8 +1442,8 @@ impl From<PlatformAccount> for AccountView {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PendingConnectionView {
-    #[schema(value_type = String, format = Uuid)]
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: ConnectionId,
     pub platform: String,
     pub status: String,
     pub accounts: Vec<AccountView>,
@@ -1495,8 +1506,8 @@ pub async fn oauth_callback(
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateConnectionRequest {
-    #[schema(value_type = String, format = Uuid)]
-    pub connection_id: Uuid,
+    #[schema(value_type = String)]
+    pub connection_id: ConnectionId,
     pub external_account_id: String,
     #[schema(example = "JPY")]
     pub currency: String,
@@ -1531,8 +1542,8 @@ impl From<ConnectionHealth> for ConnectionHealthView {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ConnectionView {
-    #[schema(value_type = String, format = Uuid)]
-    pub id: Uuid,
+    #[schema(value_type = String)]
+    pub id: ConnectionId,
     pub platform: String,
     pub external_account_id: String,
     pub account_name: Option<String>,
@@ -1634,7 +1645,7 @@ pub async fn list_connections(
     path = "/api/v1/tenant/ads/connections/{connection_id}",
     tag = "advertising",
     operation_id = "delete_connection",
-    params(("connection_id" = Uuid, Path, description = "Connection UUID")),
+    params(("connection_id" = String, Path, description = "Connection UUID")),
     responses(
         (status = 204, description = "Disconnected in Sanvi; the platform side is untouched"),
         (status = 403, description = "Missing advertising.connect permission or fresh MFA missing", body = ProblemDetail),
@@ -1644,7 +1655,7 @@ pub async fn list_connections(
 pub async fn delete_connection(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<ConnectionId>,
     _permission: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -1660,8 +1671,8 @@ pub async fn delete_connection(
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CreativeView {
-    pub id: Uuid,
-    pub connection_id: Uuid,
+    pub id: String,
+    pub connection_id: String,
     pub platform: String,
     pub external_id: Option<String>,
     pub creative: Creative,
@@ -1674,8 +1685,8 @@ pub struct CreativeView {
 impl From<StoredCreative> for CreativeView {
     fn from(stored: StoredCreative) -> Self {
         Self {
-            id: stored.id,
-            connection_id: stored.connection_id,
+            id: stored.id.to_string(),
+            connection_id: stored.connection_id.to_string(),
             platform: stored.platform.as_str().to_string(),
             external_id: stored.external_id,
             creative: stored.creative,
@@ -1693,7 +1704,8 @@ pub struct CreativesView {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateCreativeRequest {
-    pub connection_id: Uuid,
+    #[schema(value_type = String)]
+    pub connection_id: ConnectionId,
     pub placement: String,
     pub texts: Vec<CreativeText>,
     pub asset_references: Vec<String>,
@@ -1810,7 +1822,7 @@ pub async fn create_creative(
     path = "/api/v1/tenant/ads/creatives/{creative_id}",
     tag = "advertising",
     operation_id = "get_creative",
-    params(("creative_id" = Uuid, Path, description = "Creative UUID")),
+    params(("creative_id" = String, Path, description = "Creative UUID")),
     responses(
         (status = 200, description = "Stored creative specification and metadata", body = CreativeView),
         (status = 403, description = "Missing advertising.read permission or platform entitlement", body = ProblemDetail),
@@ -1820,7 +1832,7 @@ pub async fn create_creative(
 pub async fn get_creative(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CreativeId>,
     _permission: RequiredPermission,
     _entitlement: RequiredAnyFeature,
     feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
@@ -1888,7 +1900,7 @@ pub async fn list_creatives(
     path = "/api/v1/tenant/ads/creatives/{creative_id}",
     tag = "advertising",
     operation_id = "delete_creative",
-    params(("creative_id" = Uuid, Path, description = "Creative UUID")),
+    params(("creative_id" = String, Path, description = "Creative UUID")),
     responses(
         (status = 204, description = "Creative deleted"),
         (status = 403, description = "Missing advertising.campaign.write permission or platform entitlement", body = ProblemDetail),
@@ -1898,7 +1910,7 @@ pub async fn list_creatives(
 pub async fn delete_creative(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CreativeId>,
     _permission: RequiredPermission,
     _entitlement: RequiredAnyFeature,
     feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
@@ -1929,7 +1941,7 @@ pub async fn delete_creative(
     tag = "advertising",
     operation_id = "get_creative_previews",
     params(
-        ("creative_id" = Uuid, Path, description = "Creative UUID"),
+        ("creative_id" = String, Path, description = "Creative UUID"),
         CreativePreviewsQuery
     ),
     responses(
@@ -1941,7 +1953,7 @@ pub async fn delete_creative(
 pub async fn get_creative_previews(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CreativeId>,
     query: web::Query<CreativePreviewsQuery>,
     _permission: RequiredPermission,
     _entitlement: RequiredAnyFeature,

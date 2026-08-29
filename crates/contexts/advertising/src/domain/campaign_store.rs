@@ -1,17 +1,18 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use super::{AdvertisingError, Campaign, PlatformKey};
+use crate::domain::model::{CampaignChangeId, CampaignId, ConnectionId};
 use sanvi_persistence::ScopedTx;
 
 /// Persisted campaign intent plus the last version observed at the platform.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredCampaign {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub connection_id: Uuid,
+    pub id: CampaignId,
+    pub tenant_id: TenantId,
+    pub connection_id: ConnectionId,
     pub platform: PlatformKey,
     pub external_id: Option<String>,
     pub revision: i64,
@@ -37,12 +38,16 @@ impl ChangeSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CampaignChange {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub campaign_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: CampaignChangeId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
+    #[schema(value_type = String)]
+    pub campaign_id: CampaignId,
     pub revision: i64,
-    pub mutation_id: Option<Uuid>,
-    pub actor_id: Option<Uuid>,
+    pub mutation_id: Option<uuid::Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub actor_id: Option<UserId>,
     pub source: ChangeSource,
     pub changed_fields: Vec<String>,
     pub before_state: Campaign,
@@ -61,8 +66,8 @@ pub trait CampaignRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
     ) -> Result<Option<StoredCampaign>, AdvertisingError>;
 
     /// Newest-first. Callers needing a specific connection or platform filter
@@ -71,7 +76,7 @@ pub trait CampaignRepository: Send + Sync {
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<StoredCampaign>, AdvertisingError>;
 
     /// Cross-tenant, oldest-checked-first: the reconciliation sweep's feed.
@@ -90,7 +95,7 @@ pub trait CampaignRepository: Send + Sync {
     async fn mark_reconciled(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
     ) -> Result<(), AdvertisingError>;
 
     /// Compare-and-swap update. A zero-row update is a stale `If-Match`
@@ -111,9 +116,9 @@ pub trait CampaignRepository: Send + Sync {
     async fn find_change_by_mutation(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
-        mutation_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        mutation_id: uuid::Uuid,
     ) -> Result<Option<CampaignChange>, AdvertisingError>;
 
     /// Newest-first audit trail for one campaign. This is what answers a
@@ -121,8 +126,8 @@ pub trait CampaignRepository: Send + Sync {
     async fn list_changes(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         limit: i64,
     ) -> Result<Vec<CampaignChange>, AdvertisingError>;
 }

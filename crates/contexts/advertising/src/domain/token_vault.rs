@@ -13,10 +13,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use uuid::Uuid;
+use sanvi_kernel::Id;
+use sanvi_kernel::{TenantId, UserId};
+use sanvi_persistence::ScopedTx;
 
 use super::{AdvertisingError, SecretRef};
-use sanvi_persistence::ScopedTx;
+use crate::domain::model::{ConnectionId, ConnectionTag};
 
 #[derive(Debug, Clone)]
 pub struct TenantKeyRow {
@@ -32,7 +34,7 @@ pub trait TenantKeyRepository: Send + Sync {
     async fn get_or_create(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         candidate_wrapped_dek: Vec<u8>,
         kek_id: &str,
     ) -> Result<TenantKeyRow, AdvertisingError>;
@@ -44,15 +46,15 @@ pub trait ConnectionTokenRepository: Send + Sync {
     async fn upsert(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         ciphertext: Vec<u8>,
     ) -> Result<(), AdvertisingError>;
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<Option<Vec<u8>>, AdvertisingError>;
 }
 
@@ -63,13 +65,13 @@ pub trait TenantEnvelopeCrypto: Send + Sync {
     async fn encrypt_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plaintext: &[u8],
     ) -> Result<Vec<u8>, AdvertisingError>;
     async fn decrypt_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, AdvertisingError>;
 }
@@ -103,8 +105,8 @@ impl TokenVault {
     pub async fn store_refresh_token(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         refresh_token: &str,
     ) -> Result<SecretRef, AdvertisingError> {
         validate_refresh_token(refresh_token)?;
@@ -121,8 +123,8 @@ impl TokenVault {
     pub async fn resolve_refresh_token(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<String, AdvertisingError> {
         let ciphertext = self
             .tokens

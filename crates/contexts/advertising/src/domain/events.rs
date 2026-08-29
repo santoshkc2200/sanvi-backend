@@ -1,7 +1,9 @@
+use sanvi_kernel::{EventId, SnowflakeId, TenantId};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use sanvi_kernel::events::EventEnvelope;
+
+use crate::domain::model::{CampaignId, ConnectionId, ConversionId};
 
 /// Event names registered for the shared transactional outbox.
 pub const EVENT_TYPES: &[&str] = &[
@@ -23,42 +25,42 @@ pub const EVENT_TYPES: &[&str] = &[
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AdEvent {
     AccountConnected {
-        connection_id: Uuid,
+        connection_id: ConnectionId,
     },
     AccountDisconnected {
-        connection_id: Uuid,
+        connection_id: ConnectionId,
     },
     CampaignCreated {
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
     },
     CampaignUpdated {
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
     },
     CampaignPaused {
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
     },
     CampaignResumed {
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
     },
     CampaignDrifted {
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
         changed_fields: Vec<String>,
     },
     ConversionRecorded {
-        event_id: Uuid,
+        event_id: ConversionId,
     },
     ConversionUploaded {
-        event_id: Uuid,
+        event_id: ConversionId,
     },
     ConversionUploadFailed {
-        event_id: Uuid,
+        event_id: ConversionId,
         reason: String,
     },
     SpendThresholdReached {
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
     },
     MetricsIngested {
-        connection_id: Uuid,
+        connection_id: ConnectionId,
     },
 }
 
@@ -80,28 +82,33 @@ impl AdEvent {
         }
     }
 
-    fn aggregate(&self) -> (&'static str, Uuid) {
+    fn aggregate(&self) -> (&'static str, SnowflakeId) {
         match self {
             Self::AccountConnected { connection_id }
             | Self::AccountDisconnected { connection_id }
-            | Self::MetricsIngested { connection_id } => ("advertising.connection", *connection_id),
+            | Self::MetricsIngested { connection_id } => {
+                ("advertising.connection", connection_id.as_snowflake())
+            }
             Self::CampaignCreated { campaign_id }
             | Self::CampaignUpdated { campaign_id }
             | Self::CampaignPaused { campaign_id }
             | Self::CampaignResumed { campaign_id }
             | Self::CampaignDrifted { campaign_id, .. }
-            | Self::SpendThresholdReached { campaign_id } => ("advertising.campaign", *campaign_id),
+            | Self::SpendThresholdReached { campaign_id } => {
+                ("advertising.campaign", campaign_id.as_snowflake())
+            }
             Self::ConversionRecorded { event_id }
             | Self::ConversionUploaded { event_id }
             | Self::ConversionUploadFailed { event_id, .. } => {
-                ("advertising.conversion_event", *event_id)
+                ("advertising.conversion_event", event_id.as_snowflake())
             }
         }
     }
 
-    pub fn envelope(&self, tenant_id: Uuid) -> EventEnvelope {
+    pub fn envelope(&self, tenant_id: TenantId, event_id: EventId) -> EventEnvelope {
         let (aggregate, aggregate_id) = self.aggregate();
         EventEnvelope::new(
+            event_id,
             aggregate,
             aggregate_id,
             self.event_type(),
@@ -117,7 +124,7 @@ pub trait EventPublisher: Send + Sync {
     async fn publish_scoped(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         events: &[AdEvent],
     ) -> Result<(), super::AdvertisingError>;
 }
@@ -125,14 +132,19 @@ pub trait EventPublisher: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sanvi_kernel::{Id, TenantId};
 
     #[test]
     fn registered_events_round_trip_through_json_and_outbox_envelopes() {
-        let id = Uuid::now_v7();
-        let tenant_id = Uuid::now_v7();
+        let id = CampaignId::try_from(1_000_001_i64).unwrap();
+        let tenant_id = TenantId::try_from(1_000_002_i64).unwrap();
         let events = vec![
-            AdEvent::AccountConnected { connection_id: id },
-            AdEvent::AccountDisconnected { connection_id: id },
+            AdEvent::AccountConnected {
+                connection_id: ConnectionId::try_from(1_000_003_i64).unwrap(),
+            },
+            AdEvent::AccountDisconnected {
+                connection_id: ConnectionId::try_from(1_000_003_i64).unwrap(),
+            },
             AdEvent::CampaignCreated { campaign_id: id },
             AdEvent::CampaignUpdated { campaign_id: id },
             AdEvent::CampaignPaused { campaign_id: id },
@@ -141,21 +153,31 @@ mod tests {
                 campaign_id: id,
                 changed_fields: vec!["status".to_string()],
             },
-            AdEvent::ConversionRecorded { event_id: id },
-            AdEvent::ConversionUploaded { event_id: id },
+            AdEvent::ConversionRecorded {
+                event_id: ConversionId::try_from(1_000_004_i64).unwrap(),
+            },
+            AdEvent::ConversionUploaded {
+                event_id: ConversionId::try_from(1_000_004_i64).unwrap(),
+            },
             AdEvent::ConversionUploadFailed {
-                event_id: id,
+                event_id: ConversionId::try_from(1_000_004_i64).unwrap(),
                 reason: "rejected".to_string(),
             },
             AdEvent::SpendThresholdReached { campaign_id: id },
-            AdEvent::MetricsIngested { connection_id: id },
+            AdEvent::MetricsIngested {
+                connection_id: ConnectionId::try_from(1_000_003_i64).unwrap(),
+            },
         ];
         assert_eq!(events.len(), EVENT_TYPES.len());
         for event in events {
             assert!(EVENT_TYPES.contains(&event.event_type()));
             let json = serde_json::to_string(&event).unwrap();
             assert_eq!(serde_json::from_str::<AdEvent>(&json).unwrap(), event);
-            assert_eq!(event.envelope(tenant_id).event_type, event.event_type());
+            let eid = EventId::try_from(9_000_001_i64).unwrap();
+            assert_eq!(
+                event.envelope(tenant_id, eid).event_type,
+                event.event_type()
+            );
         }
     }
 }

@@ -6,12 +6,13 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Duration, Months, Utc};
+use sanvi_advertising::domain::{CampaignId, ConnectionId, ConversionId, CreativeId};
 use sanvi_advertising::{
     AdvertisingConnection, AdvertisingConnectionRepository, OAuthStateClaims, OAuthStateError,
     OAuthStateManager, OAuthStateStore, PlatformKey, SecretRef, SyncError,
     adapters::{
         FakeAdPlatform, OutboxEventPublisher, SqlxAdvertisingConnectionRepository,
-        SqlxCampaignRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
+        SqlxCampaignRepository, SqlxCreativeRepository, SqlxOAuthStateStore, SystemIdGenerator,
     },
     application::{
         AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign,
@@ -27,6 +28,7 @@ use sanvi_advertising::{
         Targeting, TargetingDimension, TenantEnvelopeCrypto,
     },
 };
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{Migrator, TxManager};
 use sqlx::{Postgres as SqlxPostgres, QueryBuilder};
 use uuid::Uuid;
@@ -40,13 +42,18 @@ fn migrations_dir() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("migrations"))
 }
 
-async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid {
-    let tenant_id = Uuid::now_v7();
+fn test_actor() -> UserId {
+    UserId::try_from(9_999_999_i64).unwrap()
+}
+
+async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> TenantId {
+    let tenant_id =
+        TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
     sqlx::query(
         "INSERT INTO tenancy.tenants (id, slug, display_name, status, region, default_locale)
          VALUES ($1, $2, $3, 'active', 'jp', 'en')",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(slug)
     .bind(format!("{slug} corp"))
     .execute(pool)
@@ -57,11 +64,11 @@ async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid {
 
 async fn insert_conversion_event(
     pool: &sanvi_persistence::PgPool,
-    tenant_id: Uuid,
-    connection_id: Uuid,
+    tenant_id: TenantId,
+    connection_id: ConnectionId,
 ) -> chrono::DateTime<Utc> {
-    let manager = TxManager::new(pool.clone());
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let tx = scope.tx_mut().as_inner();
     let event_id = format!("event-{}", Uuid::now_v7());
     let occurred_at = Utc::now();
@@ -71,9 +78,9 @@ async fn insert_conversion_event(
          (id, tenant_id, platform, external_account_id, currency, timezone, status, token_ref)
          VALUES ($1, $2, 'google_ads', $3, 'JPY', 'Asia/Tokyo', 'active', 'secret-ref')",
     )
-    .bind(connection_id)
-    .bind(tenant_id)
-    .bind(format!("acct-{}", connection_id.simple()))
+    .bind(connection_id.as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(format!("acct-{}", connection_id))
     .execute(&mut **tx)
     .await
     .unwrap();
@@ -82,9 +89,9 @@ async fn insert_conversion_event(
          (id, tenant_id, connection_id, platform, name, objective, status, budget)
          VALUES ($1, $2, $3, 'google_ads', 'Campaign', 'sales', 'draft', '{}'::jsonb)",
     )
-    .bind(Uuid::now_v7())
-    .bind(tenant_id)
-    .bind(connection_id)
+    .bind(sanvi_testsupport::test_ids().next_id().unwrap().as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(connection_id.as_i64())
     .execute(&mut **tx)
     .await
     .unwrap();
@@ -93,7 +100,7 @@ async fn insert_conversion_event(
            (tenant_id, event_id, dedupe_key, occurred_at)
          VALUES ($1, $2, $2, $3)",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(&event_id)
     .bind(occurred_at)
     .execute(&mut **tx)
@@ -104,8 +111,8 @@ async fn insert_conversion_event(
          (id, tenant_id, event_id, dedupe_key, name, occurred_at, consent)
          VALUES ($1, $2, $3, $3, 'purchase', $4, '{}'::jsonb)",
     )
-    .bind(Uuid::now_v7())
-    .bind(tenant_id)
+    .bind(sanvi_testsupport::test_ids().next_id().unwrap().as_i64())
+    .bind(tenant_id.as_i64())
     .bind(event_id)
     .bind(occurred_at)
     .execute(&mut **tx)
@@ -219,9 +226,16 @@ async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
     let tenant_a = seed_tenant(&pool, "advertising-alpha").await;
     let tenant_b = seed_tenant(&pool, "advertising-beta").await;
 
-    let occurred_at = insert_conversion_event(&pool, tenant_a, Uuid::now_v7()).await;
-    let oauth_store: Arc<dyn OAuthStateStore> =
-        Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool.clone())));
+    let occurred_at = insert_conversion_event(
+        &pool,
+        tenant_a,
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap()),
+    )
+    .await;
+    let oauth_store: Arc<dyn OAuthStateStore> = Arc::new(SqlxOAuthStateStore::new(TxManager::new(
+        pool.clone(),
+        sanvi_testsupport::test_ids(),
+    )));
     OAuthStateManager::with_store("x".repeat(32), oauth_store)
         .issue(
             tenant_a,
@@ -237,10 +251,10 @@ async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
         occurred_at.year(),
         occurred_at.month()
     );
-    let manager = TxManager::new(pool);
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
 
     {
-        let mut tenant_a_scope = manager.begin_for(tenant_a).await.unwrap();
+        let mut tenant_a_scope = manager.begin_for(tenant_a.as_i64()).await.unwrap();
         let tx = tenant_a_scope.tx_mut().as_inner();
         let connection_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM advertising.connections")
@@ -264,7 +278,7 @@ async fn tenant_scope_hides_other_tenants_connections_and_partition_rows() {
         tenant_a_scope.rollback().await.unwrap();
     }
 
-    let mut tenant_b_scope = manager.begin_for(tenant_b).await.unwrap();
+    let mut tenant_b_scope = manager.begin_for(tenant_b.as_i64()).await.unwrap();
     let tx = tenant_b_scope.tx_mut().as_inner();
     let connection_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM advertising.connections")
         .fetch_one(&mut **tx)
@@ -305,7 +319,10 @@ async fn oauth_state_survives_restart_and_is_consumed_once() {
     let pool = db.app_pool();
     let tenant_a = seed_tenant(&pool, "oauth-alpha").await;
     let tenant_b = seed_tenant(&pool, "oauth-beta").await;
-    let store: Arc<dyn OAuthStateStore> = Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool)));
+    let store: Arc<dyn OAuthStateStore> = Arc::new(SqlxOAuthStateStore::new(TxManager::new(
+        pool,
+        sanvi_testsupport::test_ids(),
+    )));
     let platform = PlatformKey::parse("google_ads").unwrap();
 
     let issuing_manager = OAuthStateManager::with_store("x".repeat(32), store.clone());
@@ -347,8 +364,10 @@ async fn oauth_state_store_rejects_row_with_mismatched_signed_expiry() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "oauth-expiry").await;
-    let store: Arc<dyn OAuthStateStore> =
-        Arc::new(SqlxOAuthStateStore::new(TxManager::new(pool.clone())));
+    let store: Arc<dyn OAuthStateStore> = Arc::new(SqlxOAuthStateStore::new(TxManager::new(
+        pool.clone(),
+        sanvi_testsupport::test_ids(),
+    )));
     let claims = OAuthStateClaims {
         tenant_id,
         platform: PlatformKey::parse("google_ads").unwrap(),
@@ -357,8 +376,8 @@ async fn oauth_state_store_rejects_row_with_mismatched_signed_expiry() {
     };
     store.issue(claims.clone()).await.unwrap();
 
-    let tx_manager = TxManager::new(pool);
-    let mut scope = tx_manager.begin_for(tenant_id).await.unwrap();
+    let tx_manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let mut scope = tx_manager.begin_for(tenant_id.as_i64()).await.unwrap();
     sqlx::query("UPDATE advertising.oauth_states SET expires_at = $2 WHERE nonce = $1")
         .bind(claims.nonce)
         .bind(claims.expires_at + Duration::minutes(1))
@@ -375,35 +394,37 @@ async fn reconnect_reuses_the_original_connection_row() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-reconnect").await;
-    let manager = TxManager::new(pool);
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
     let repository = SqlxAdvertisingConnectionRepository::new();
     let now = Utc::now();
 
     let first = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "123-456-7890",
         "JPY",
         "Asia/Tokyo",
         SecretRef::new("vault-ref-1"),
-        Some(Uuid::now_v7()),
+        Some(test_actor()),
         now,
     )
     .unwrap();
     let first_id = first.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let stored = repository.upsert(&mut scope, &first).await.unwrap();
     scope.commit().await.unwrap();
     assert_eq!(stored.id(), first_id);
 
     let mut reconnect = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "123-456-7890",
         "JPY",
         "Asia/Tokyo",
         SecretRef::new("vault-ref-2"),
-        Some(Uuid::now_v7()),
+        Some(test_actor()),
         now + Duration::minutes(1),
     )
     .unwrap();
@@ -432,12 +453,12 @@ async fn reconnect_reuses_the_original_connection_row() {
     );
     reconnect.mark_disconnected_notified(now + Duration::minutes(2));
     reconnect.mark_dependent_jobs_paused(now + Duration::minutes(2));
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let stored = repository.upsert(&mut scope, &reconnect).await.unwrap();
     let connections = repository.list(&mut scope, tenant_id).await.unwrap();
     let persisted_error: serde_json::Value =
         sqlx::query_scalar("SELECT last_error FROM advertising.connections WHERE id = $1")
-            .bind(first_id)
+            .bind(first_id.as_i64())
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .unwrap();
@@ -446,7 +467,7 @@ async fn reconnect_reuses_the_original_connection_row() {
             "SELECT disconnected_notified_at, dependent_jobs_paused_at
              FROM advertising.connections WHERE id = $1",
         )
-        .bind(first_id)
+        .bind(first_id.as_i64())
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .unwrap();
@@ -471,7 +492,7 @@ async fn selecting_a_reconnected_account_reuses_the_original_row_and_token() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-reconnect-selection").await;
-    let manager = TxManager::new(pool);
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
     let repository: Arc<dyn AdvertisingConnectionRepository> =
         Arc::new(SqlxAdvertisingConnectionRepository::new());
     let platform = PlatformKey::parse("google_ads").unwrap();
@@ -481,18 +502,19 @@ async fn selecting_a_reconnected_account_reuses_the_original_row_and_token() {
     };
 
     let existing = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         platform.clone(),
         account.external_id.clone(),
         "JPY",
         "Asia/Tokyo",
         SecretRef::new("existing-token"),
-        Some(Uuid::now_v7()),
+        Some(test_actor()),
         Utc::now(),
     )
     .unwrap();
     let existing_id = existing.id();
-    let pending_id = Uuid::now_v7();
+    let pending_id = ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let pending = AdvertisingConnection::new_pending(
         pending_id,
         tenant_id,
@@ -501,22 +523,22 @@ async fn selecting_a_reconnected_account_reuses_the_original_row_and_token() {
         vec!["ads.read".to_string()],
         None,
         vec![account.clone()],
-        Some(Uuid::now_v7()),
+        Some(test_actor()),
         Utc::now(),
     )
     .unwrap();
 
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     repository.upsert(&mut scope, &existing).await.unwrap();
     repository.upsert(&mut scope, &pending).await.unwrap();
     sqlx::query(
         "INSERT INTO advertising.connection_tokens (connection_id, tenant_id, ciphertext)
          VALUES ($1, $2, $3), ($4, $2, $5)",
     )
-    .bind(existing_id)
-    .bind(tenant_id)
+    .bind(existing_id.as_i64())
+    .bind(tenant_id.as_i64())
     .bind(b"old-token".as_slice())
-    .bind(pending_id)
+    .bind(pending_id.as_i64())
     .bind(b"new-token".as_slice())
     .execute(&mut **scope.tx_mut().as_inner())
     .await
@@ -536,26 +558,26 @@ async fn selecting_a_reconnected_account_reuses_the_original_row_and_token() {
         .unwrap();
 
     assert_eq!(stored.id(), existing_id);
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let connection_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM advertising.connections WHERE tenant_id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .unwrap();
     let token: Vec<u8> = sqlx::query_scalar(
         "SELECT ciphertext FROM advertising.connection_tokens WHERE tenant_id = $1 AND connection_id = $2",
     )
-    .bind(tenant_id)
-    .bind(existing_id)
+    .bind(tenant_id.as_i64())
+    .bind(existing_id.as_i64())
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
     let pending_token_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM advertising.connection_tokens WHERE tenant_id = $1 AND connection_id = $2",
     )
-    .bind(tenant_id)
-    .bind(pending_id)
+    .bind(tenant_id.as_i64())
+    .bind(pending_id.as_i64())
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -571,13 +593,13 @@ async fn existing_tenant_key_is_usable_after_process_restart() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-tenant-key-restart").await;
-    let manager = TxManager::new(pool);
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
 
     let first_process = sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto::new(
         [7u8; 32],
         "test-kek".to_string(),
     );
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     first_process
         .encrypt_for_tenant(&mut scope, tenant_id, b"first token")
         .await
@@ -588,7 +610,7 @@ async fn existing_tenant_key_is_usable_after_process_restart() {
         [7u8; 32],
         "test-kek".to_string(),
     );
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     restarted_process
         .encrypt_for_tenant(&mut scope, tenant_id, b"second token")
         .await
@@ -603,17 +625,18 @@ async fn rolling_back_pending_connections_converts_them_to_disconnected() {
     let migrator_pool = db.migrator_pool().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-pending-rollback").await;
-    let connection_id = Uuid::now_v7();
-    let manager = TxManager::new(pool.clone());
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let connection_id =
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     sqlx::query(
         "INSERT INTO advertising.connections
          (id, tenant_id, platform, external_account_id, currency, timezone, status, token_ref,
           pending_accounts)
          VALUES ($1, $2, 'google_ads', $3, 'XXX', 'UTC', 'pending', $4, '[]'::jsonb)",
     )
-    .bind(connection_id)
-    .bind(tenant_id)
+    .bind(connection_id.as_i64())
+    .bind(tenant_id.as_i64())
     .bind(format!("pending:{connection_id}"))
     .bind(connection_id.to_string())
     .execute(&mut **scope.tx_mut().as_inner())
@@ -626,13 +649,13 @@ async fn rolling_back_pending_connections_converts_them_to_disconnected() {
         .await
         .unwrap();
 
-    let manager = TxManager::new(pool);
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let status: String = sqlx::query_scalar(
         "SELECT status FROM advertising.connections WHERE tenant_id = $1 AND id = $2",
     )
-    .bind(tenant_id)
-    .bind(connection_id)
+    .bind(tenant_id.as_i64())
+    .bind(connection_id.as_i64())
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -649,11 +672,12 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-campaigns").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connections = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "123-456-7890",
@@ -665,7 +689,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connections.upsert(&mut scope, &connection).await.unwrap();
     scope.commit().await.unwrap();
 
@@ -673,7 +697,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
         Arc::new(SqlxCampaignRepository::new());
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connections);
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -682,6 +706,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let get = GetCampaign::new(manager.clone(), campaigns.clone());
     let list = ListCampaigns::new(manager.clone(), campaigns.clone());
@@ -698,6 +723,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
         creatives.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let publish = PublishCampaign::new(
         manager.clone(),
@@ -705,14 +731,22 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
         creatives.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let pause = PauseCampaign::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
-    let resume = ResumeCampaign::new(manager.clone(), campaigns.clone(), events.clone(), registry);
+    let resume = ResumeCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        events.clone(),
+        registry,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
     let changes = ListCampaignChanges::new(manager, campaigns);
 
     // Draft: never touches the platform.
@@ -855,11 +889,12 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-sweep").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "555-000-1111",
@@ -871,7 +906,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -882,7 +917,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
         Arc::new(SqlxCampaignRepository::new());
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -891,6 +926,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let publish = PublishCampaign::new(
         manager.clone(),
@@ -898,11 +934,13 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
         Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let reconcile = Arc::new(ReconcileCampaign::new(
         manager.clone(),
         campaigns.clone(),
         events,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     ));
     let sweep = ReconcileDueCampaigns::new(manager, campaigns, registry.clone(), reconcile);
 
@@ -963,11 +1001,12 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "advertising-ad-groups").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "777-000-2222",
@@ -979,7 +1018,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -991,7 +1030,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -1000,18 +1039,21 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let update_ad_group = UpdateAdGroup::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad = AddAd::new(
         manager.clone(),
@@ -1019,6 +1061,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
         creatives.clone(),
         events,
         registry,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
 
     let draft = create
@@ -1063,7 +1106,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     assert_eq!(with_group.revision, draft.revision + 1);
     let ad_group_id = with_group.intent.ad_groups[0].id.clone();
 
-    let creative_id = Uuid::now_v7();
+    let creative_id = CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let stored_creative = StoredCreative {
         id: creative_id,
         tenant_id,
@@ -1084,7 +1127,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives
         .insert(&mut scope, &stored_creative)
         .await
@@ -1162,12 +1205,13 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "meta-drift-sweep").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let meta_key = PlatformKey::parse("meta").unwrap();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         meta_key.clone(),
         "act_9988776655",
@@ -1179,7 +1223,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -1190,7 +1234,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
         Arc::new(SqlxCampaignRepository::new());
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -1199,6 +1243,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let publish = PublishCampaign::new(
         manager.clone(),
@@ -1206,17 +1251,20 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
         Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let reconcile = Arc::new(ReconcileCampaign::new(
         manager.clone(),
         campaigns.clone(),
         events,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     ));
     let sweep = ReconcileDueCampaigns::new(
         manager.clone(),
@@ -1301,7 +1349,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     assert_eq!(report.drifted, 1);
 
     // Verify stored state is drifted on ad_groups
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let stored = campaigns
         .find(&mut scope, tenant_id, draft.id)
         .await
@@ -1322,8 +1370,8 @@ async fn creative_crud_and_matrix_validation_lifecycle() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "creative-lifecycle").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
     let creative_repo = Arc::new(SqlxCreativeRepository::new());
@@ -1331,6 +1379,7 @@ async fn creative_crud_and_matrix_validation_lifecycle() {
 
     let meta_key = PlatformKey::parse("meta").unwrap();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         meta_key,
         "act_creative_test",
@@ -1342,7 +1391,7 @@ async fn creative_crud_and_matrix_validation_lifecycle() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -1354,6 +1403,7 @@ async fn creative_crud_and_matrix_validation_lifecycle() {
         creative_repo.clone(),
         connection_repo.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     assert_eq!(
         create_creative
@@ -1525,11 +1575,12 @@ async fn add_ad_rejects_missing_creative_id() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "ad-missing-creative").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "777-000-3333",
@@ -1541,7 +1592,7 @@ async fn add_ad_rejects_missing_creative_id() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -1553,7 +1604,7 @@ async fn add_ad_rejects_missing_creative_id() {
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -1562,14 +1613,23 @@ async fn add_ad_rejects_missing_creative_id() {
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
-    let add_ad = AddAd::new(manager.clone(), campaigns, creatives, events, registry);
+    let add_ad = AddAd::new(
+        manager.clone(),
+        campaigns,
+        creatives,
+        events,
+        registry,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
 
     let draft = create
         .execute(
@@ -1611,7 +1671,8 @@ async fn add_ad_rejects_missing_creative_id() {
     let ad_group_id = with_group.intent.ad_groups[0].id.clone();
 
     // 1. Non-existent UUID creative id -> CreativeNotFound
-    let unpersisted_creative_id = Uuid::now_v7();
+    let unpersisted_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let err = add_ad
         .execute(
             tenant_id,
@@ -1677,11 +1738,12 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "ad-creative-fit").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "777-000-4444",
@@ -1693,7 +1755,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -1705,7 +1767,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -1714,12 +1776,14 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad = AddAd::new(
         manager.clone(),
@@ -1727,6 +1791,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
         creatives.clone(),
         events,
         registry,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
 
     let draft = create
@@ -1771,7 +1836,8 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     // 1. Creative has placement "reels", which Google Ads does not support (only feed and stories).
     //    The creative sits on the campaign's own platform so this exercises the placement
     //    check rather than the platform-mismatch check, which runs first.
-    let reels_creative_id = Uuid::now_v7();
+    let reels_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let reels_creative = StoredCreative {
         id: reels_creative_id,
         tenant_id,
@@ -1792,7 +1858,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives.insert(&mut scope, &reels_creative).await.unwrap();
     scope.commit().await.unwrap();
 
@@ -1833,7 +1899,8 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     }
 
     // 2. Creative has stored placement "feed", but payload spoofs "stories" (placement mismatch).
-    let feed_creative_id = Uuid::now_v7();
+    let feed_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let feed_creative = StoredCreative {
         id: feed_creative_id,
         tenant_id,
@@ -1854,7 +1921,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives.insert(&mut scope, &feed_creative).await.unwrap();
     scope.commit().await.unwrap();
 
@@ -1900,11 +1967,12 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "ad-platform-overlap").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "777-000-5555",
@@ -1916,7 +1984,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -1928,7 +1996,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -1937,12 +2005,14 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad = AddAd::new(
         manager.clone(),
@@ -1950,6 +2020,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
         creatives.clone(),
         events,
         registry,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
 
     let draft = create
@@ -1992,7 +2063,8 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     let ad_group_id = with_group.intent.ad_groups[0].id.clone();
 
     // Construct a Meta creative with placement "feed" (valid placement in both meta and google_ads).
-    let meta_creative_id = Uuid::now_v7();
+    let meta_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let meta_creative = StoredCreative {
         id: meta_creative_id,
         tenant_id,
@@ -2013,7 +2085,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives.insert(&mut scope, &meta_creative).await.unwrap();
     scope.commit().await.unwrap();
 
@@ -2066,11 +2138,12 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "ad-authoritative-copy").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "777-000-6666",
@@ -2082,7 +2155,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -2094,7 +2167,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -2103,12 +2176,14 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let add_ad = AddAd::new(
         manager.clone(),
@@ -2116,6 +2191,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
         creatives.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let update_ad = UpdateAd::new(
         manager.clone(),
@@ -2123,6 +2199,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
         creatives.clone(),
         events,
         registry,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
 
     let draft = create
@@ -2165,7 +2242,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let ad_group_id = with_group.intent.ad_groups[0].id.clone();
 
     // 1. Insert stored creative 1.
-    let creative1_id = Uuid::now_v7();
+    let creative1_id = CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let stored1 = StoredCreative {
         id: creative1_id,
         tenant_id,
@@ -2186,7 +2263,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives.insert(&mut scope, &stored1).await.unwrap();
     scope.commit().await.unwrap();
 
@@ -2230,7 +2307,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let ad_id = persisted_ad.id.clone();
 
     // 2. Insert stored creative 2.
-    let creative2_id = Uuid::now_v7();
+    let creative2_id = CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let stored2 = StoredCreative {
         id: creative2_id,
         tenant_id,
@@ -2251,7 +2328,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives.insert(&mut scope, &stored2).await.unwrap();
     scope.commit().await.unwrap();
 
@@ -2300,11 +2377,12 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "patch-campaign-creatives").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "777-000-7777",
@@ -2316,7 +2394,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -2328,7 +2406,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -2337,6 +2415,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let patch = PatchCampaign::new(
         manager.clone(),
@@ -2344,6 +2423,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
         creatives.clone(),
         events,
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let validate = ValidateCampaign::new(manager.clone(), campaigns, creatives.clone(), registry);
 
@@ -2404,8 +2484,8 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
         Err(sanvi_advertising::domain::AdvertisingError::InvalidInput(_))
     ));
 
-    // 2. Unpersisted UUID creative id -> CreativeNotFound.
-    let missing_uuid = Uuid::now_v7();
+    // 2. Unpersisted snowflake creative id -> CreativeNotFound.
+    let missing_uuid = CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let err_missing = patch
         .execute(
             tenant_id,
@@ -2444,7 +2524,8 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     ));
 
     // 3. Platform mismatch in PATCH ad_groups -> Validation error with indexed path.
-    let meta_creative_id = Uuid::now_v7();
+    let meta_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let meta_creative = StoredCreative {
         id: meta_creative_id,
         tenant_id,
@@ -2465,7 +2546,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives.insert(&mut scope, &meta_creative).await.unwrap();
     scope.commit().await.unwrap();
 
@@ -2514,7 +2595,8 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     }
 
     // 4. Valid creative attached via PATCH is validated and authoritatively hydrated.
-    let google_creative_id = Uuid::now_v7();
+    let google_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let google_creative = StoredCreative {
         id: google_creative_id,
         tenant_id,
@@ -2535,7 +2617,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives
         .insert(&mut scope, &google_creative)
         .await
@@ -2592,7 +2674,8 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     //    valid that the patch above would reject. An unknown creative and a
     //    cross-platform one are both reported as violations rather than as the
     //    404/400 the write path raises.
-    let unknown_creative_id = Uuid::now_v7();
+    let unknown_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let dry_run_violations = validate
         .execute(
             tenant_id,
@@ -2669,11 +2752,12 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "dry-run-patch-agreement").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "888-000-8888",
@@ -2685,7 +2769,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -2697,7 +2781,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -2706,6 +2790,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let patch = PatchCampaign::new(
         manager.clone(),
@@ -2713,11 +2798,13 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
         creatives.clone(),
         events,
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let validate = ValidateCampaign::new(manager.clone(), campaigns, creatives.clone(), registry);
 
     // Seed 1: A valid stored creative with a headline well within limits (<= 30 chars for Google Ads).
-    let valid_creative_id = Uuid::now_v7();
+    let valid_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let valid_creative = StoredCreative {
         id: valid_creative_id,
         tenant_id,
@@ -2740,7 +2827,8 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
     };
 
     // Seed 2: An invalid stored creative whose headline exceeds Google Ads limit (> 30 chars).
-    let invalid_creative_id = Uuid::now_v7();
+    let invalid_creative_id =
+        CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let invalid_creative = StoredCreative {
         id: invalid_creative_id,
         tenant_id,
@@ -2762,7 +2850,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
         updated_at: Utc::now(),
     };
 
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives.insert(&mut scope, &valid_creative).await.unwrap();
     creatives
         .insert(&mut scope, &invalid_creative)
@@ -2918,11 +3006,12 @@ async fn deleting_referenced_creative_fails_publish() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "delete-creative-publish-fail").await;
-    let manager = TxManager::new(pool);
-    let actor_id = Uuid::now_v7();
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
 
     let connection_repo = SqlxAdvertisingConnectionRepository::new();
     let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         PlatformKey::parse("google_ads").unwrap(),
         "999-000-9999",
@@ -2934,7 +3023,7 @@ async fn deleting_referenced_creative_fails_publish() {
     )
     .unwrap();
     let connection_id = connection.id();
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connection_repo
         .upsert(&mut scope, &connection)
         .await
@@ -2946,7 +3035,7 @@ async fn deleting_referenced_creative_fails_publish() {
     let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
     let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
     let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        Arc::new(OutboxEventPublisher::new());
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let registry = Arc::new(FakeAdPlatform::registered_catalog());
 
     let create = CreateCampaign::new(
@@ -2955,6 +3044,7 @@ async fn deleting_referenced_creative_fails_publish() {
         connections,
         registry.clone(),
         events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let patch = PatchCampaign::new(
         manager.clone(),
@@ -2962,6 +3052,7 @@ async fn deleting_referenced_creative_fails_publish() {
         creatives.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let publish = PublishCampaign::new(
         manager.clone(),
@@ -2969,6 +3060,7 @@ async fn deleting_referenced_creative_fails_publish() {
         creatives.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
     let delete_creative = DeleteCreative::new(manager.clone(), creatives.clone());
     let update_ad = UpdateAd::new(
@@ -2977,10 +3069,11 @@ async fn deleting_referenced_creative_fails_publish() {
         creatives.clone(),
         events.clone(),
         registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     );
 
     // 1. Create creative and campaign draft.
-    let creative_id = Uuid::now_v7();
+    let creative_id = CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let stored_creative = StoredCreative {
         id: creative_id,
         tenant_id,
@@ -3001,7 +3094,7 @@ async fn deleting_referenced_creative_fails_publish() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     creatives
         .insert(&mut scope, &stored_creative)
         .await

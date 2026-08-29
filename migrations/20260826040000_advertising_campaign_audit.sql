@@ -15,7 +15,7 @@ CREATE TABLE advertising.campaign_changes (
   tenant_id bigint NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   campaign_id bigint NOT NULL,
   revision bigint NOT NULL CHECK (revision > 0),
-  mutation_id bigint,
+  mutation_id uuid,
   actor_id bigint,
   source text NOT NULL CHECK (source IN ('sanvi', 'platform')),
   changed_fields jsonb NOT NULL DEFAULT '[]'::jsonb,

@@ -16,6 +16,7 @@ use actix_web::{App, http::StatusCode, test, web};
 use async_trait::async_trait;
 use chrono::Utc;
 use sanvi_advertising::AdvertisingConfig;
+use sanvi_advertising::adapters::SystemIdGenerator;
 use sanvi_advertising::adapters::{
     CheckoutPaymentLookup, OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
     SqlxCampaignRepository, SqlxConnectionTokenRepository, SqlxCreativeRepository,
@@ -39,6 +40,7 @@ use sanvi_advertising::domain::{
     ClickIds, Money, OAuthStateManager, PaymentLookup, PaymentLookupPort, PlatformKey, TokenVault,
     VendorRole, VendorRolePort,
 };
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
 use sanvi_privacy::domain::{
     DirectiveResolver, DirectiveSnapshot, DirectiveSource, DirectiveState, JurisdictionRef,
@@ -46,13 +48,14 @@ use sanvi_privacy::domain::{
 };
 use uuid::Uuid;
 
-async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> Uuid {
-    let tenant_id = Uuid::now_v7();
+async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> TenantId {
+    let tenant_id =
+        TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
     sqlx::query(
         "INSERT INTO tenancy.tenants (id, slug, display_name, status, region, default_locale)
          VALUES ($1, $2, $3, 'active', 'jp', 'en')",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(slug)
     .bind(format!("{slug} corp"))
     .execute(pool)
@@ -156,7 +159,7 @@ impl PaymentLookupPort for FixedPaymentLookup {
     async fn lookup_payment_value(
         &self,
         _scope: &mut ScopedTx<'_>,
-        _tenant_id: Uuid,
+        _tenant_id: TenantId,
         _order_ref: &str,
     ) -> Result<Option<PaymentLookup>, sanvi_advertising::domain::AdvertisingError> {
         Ok(self.0.clone())
@@ -187,10 +190,11 @@ fn capture_with(
         Arc::new(FixedPaymentLookup(payment)),
         Arc::new(FixedVendorRole(vendor_role)),
         Arc::new(resolver),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     )
 }
 
-fn base_command(tenant_id: Uuid, event_id: &str) -> TrackConversionCommand {
+fn base_command(tenant_id: TenantId, event_id: &str) -> TrackConversionCommand {
     TrackConversionCommand {
         tenant_id,
         event_name: "purchase".to_string(),
@@ -209,24 +213,24 @@ fn base_command(tenant_id: Uuid, event_id: &str) -> TrackConversionCommand {
 
 async fn fetch_row(
     pool: &sanvi_persistence::PgPool,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     event_id: &str,
 ) -> serde_json::Value {
     use sqlx::Row;
-    let manager = TxManager::new(pool.clone());
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let row = sqlx::query(
         "SELECT id, event_id, value_minor, currency, value_source, click_ids, hashed_ids,
                 consent, upload_state
          FROM advertising.conversion_events WHERE tenant_id = $1 AND event_id = $2",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(event_id)
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
     serde_json::json!({
-        "id": row.get::<Uuid, _>("id").to_string(),
+        "id": row.get::<i64, _>("id").to_string(),
         "event_id": row.get::<String, _>("event_id"),
         "value_minor": row.get::<Option<i64>, _>("value_minor"),
         "currency": row.get::<Option<String>, _>("currency"),
@@ -238,13 +242,13 @@ async fn fetch_row(
     })
 }
 
-async fn row_count(pool: &sanvi_persistence::PgPool, tenant_id: Uuid, event_id: &str) -> i64 {
-    let manager = TxManager::new(pool.clone());
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+async fn row_count(pool: &sanvi_persistence::PgPool, tenant_id: TenantId, event_id: &str) -> i64 {
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM advertising.conversion_events WHERE tenant_id = $1 AND event_id = $2",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(event_id)
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
@@ -253,18 +257,18 @@ async fn row_count(pool: &sanvi_persistence::PgPool, tenant_id: Uuid, event_id: 
 
 async fn order_event_count(
     pool: &sanvi_persistence::PgPool,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     order_ref: &str,
     event_name: Option<&str>,
 ) -> i64 {
-    let manager = TxManager::new(pool.clone());
-    let mut scope = manager.begin_for(tenant_id).await.unwrap();
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM advertising.conversion_events
          WHERE tenant_id = $1 AND order_ref = $2
            AND ($3::text IS NULL OR name = $3)",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(order_ref)
     .bind(event_name)
     .fetch_one(&mut **scope.tx_mut().as_inner())
@@ -277,7 +281,7 @@ async fn eu_subject_with_no_consent_is_suppressed() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "eu-no-consent").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     let resolver = FakeDirectiveResolver::allow_all().with(
         ProcessingPurpose::AdsMeasurement,
@@ -298,7 +302,7 @@ async fn us_subject_with_no_signal_is_permitted() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "us-no-signal").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     // Allowed everywhere, sourced from the jurisdiction default — exactly
     // "no explicit signal either way".
@@ -316,7 +320,7 @@ async fn us_subject_opted_out_is_suppressed() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "us-opt-out").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     let resolver = FakeDirectiveResolver::allow_all().with(
         ProcessingPurpose::SaleOrShare,
@@ -338,7 +342,7 @@ async fn gpc_signal_is_suppressed() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "gpc-signal").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     let resolver = FakeDirectiveResolver::allow_all().with(
         ProcessingPurpose::TargetedAdvertising,
@@ -370,7 +374,7 @@ async fn vendor_role_changes_the_gate_outcome_for_the_same_event() {
 
     // Service provider: sale_or_share is never asked, so the denial the
     // resolver would give doesn't matter — the event goes through.
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let capture = capture_with(
         tx,
         denied_sale_or_share(),
@@ -385,7 +389,7 @@ async fn vendor_role_changes_the_gate_outcome_for_the_same_event() {
     assert_eq!(row["upload_state"]["status"], "pending");
 
     // Third party: the same denial now applies and suppresses the event.
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let capture = capture_with(tx, denied_sale_or_share(), None, VendorRole::ThirdParty);
     capture
         .execute(base_command(tenant_id, "evt-third-party"))
@@ -400,7 +404,7 @@ async fn every_stored_event_carries_a_complete_consent_snapshot() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "consent-snapshot").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     let capture = capture_with(
         tx,
@@ -486,9 +490,11 @@ async fn client_value_is_overridden_by_the_payment_record_and_marked() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "value-override").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
-    let payment_id = Uuid::now_v7();
+    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+        sanvi_testsupport::test_ids().next_id().unwrap(),
+    );
     let real_payment = PaymentLookup {
         conversion_event_id: sanvi_payments::application::conversion_event_id(
             tenant_id, payment_id,
@@ -524,9 +530,11 @@ async fn server_derived_event_id_deduplicates_different_client_event_ids_for_sam
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "server-event-id").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
-    let payment_id = Uuid::now_v7();
+    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+        sanvi_testsupport::test_ids().next_id().unwrap(),
+    );
     let real_payment = PaymentLookup {
         conversion_event_id: sanvi_payments::application::conversion_event_id(
             tenant_id, payment_id,
@@ -565,7 +573,7 @@ async fn order_dedupe_survives_the_payment_webhook_race() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "webhook-race-dedupe").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     let before_webhook = capture_with(
         tx.clone(),
@@ -577,7 +585,9 @@ async fn order_dedupe_survives_the_payment_webhook_race() {
     first.order_ref = Some("order-webhook-race".to_string());
     before_webhook.execute(first).await.unwrap();
 
-    let payment_id = Uuid::now_v7();
+    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+        sanvi_testsupport::test_ids().next_id().unwrap(),
+    );
     let after_webhook = capture_with(
         tx,
         FakeDirectiveResolver::allow_all(),
@@ -605,8 +615,10 @@ async fn server_derived_event_id_keeps_distinct_event_names() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "event-name-dedupe").await;
-    let tx = TxManager::new(pool.clone());
-    let payment_id = Uuid::now_v7();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+        sanvi_testsupport::test_ids().next_id().unwrap(),
+    );
     let payment = PaymentLookup {
         conversion_event_id: sanvi_payments::application::conversion_event_id(
             tenant_id, payment_id,
@@ -657,7 +669,7 @@ async fn same_event_id_posted_five_times_yields_one_row() {
     let tenant_id = seed_tenant(&pool, "dedupe").await;
 
     for _ in 0..5 {
-        let tx = TxManager::new(pool.clone());
+        let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
         let capture = capture_with(
             tx,
             FakeDirectiveResolver::allow_all(),
@@ -703,7 +715,7 @@ async fn click_ids_present_partial_and_absent_are_distinguishable() {
     ];
 
     for (event_id, click_ids) in cases {
-        let tx = TxManager::new(pool.clone());
+        let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
         let capture = capture_with(
             tx,
             FakeDirectiveResolver::allow_all(),
@@ -738,43 +750,49 @@ async fn checkout_payment_lookup_joins_the_real_payments_schema() {
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "checkout-join").await;
 
-    let seed_tx = TxManager::new(pool.clone());
-    let mut seed_scope = seed_tx.begin_for(tenant_id).await.unwrap();
+    let seed_tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut seed_scope = seed_tx.begin_for(tenant_id.as_i64()).await.unwrap();
 
-    let connection_id = Uuid::now_v7();
+    let connection_id = sanvi_payments::domain::connection::ConnectionId::from_snowflake(
+        sanvi_testsupport::test_ids().next_id().unwrap(),
+    );
     sqlx::query(
         "INSERT INTO payments.provider_connections
            (id, tenant_id, provider, external_account_id, status)
          VALUES ($1, $2, 'stripe_connect', 'acct_1', 'active')",
     )
-    .bind(connection_id)
-    .bind(tenant_id)
+    .bind(connection_id.as_i64())
+    .bind(tenant_id.as_i64())
     .execute(&mut **seed_scope.tx_mut().as_inner())
     .await
     .unwrap();
 
-    let checkout_id = Uuid::now_v7();
+    let checkout_id = sanvi_payments::domain::checkout::CheckoutId::from_snowflake(
+        sanvi_testsupport::test_ids().next_id().unwrap(),
+    );
     sqlx::query(
         "INSERT INTO payments.checkouts
            (id, tenant_id, connection_id, reference, amount_minor, currency, status, created_at)
          VALUES ($1, $2, $3, 'order-jpy-1', 4980, 'JPY', 'open', now())",
     )
-    .bind(checkout_id)
-    .bind(tenant_id)
-    .bind(connection_id)
+    .bind(checkout_id.as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(connection_id.as_i64())
     .execute(&mut **seed_scope.tx_mut().as_inner())
     .await
     .unwrap();
 
-    let payment_id = Uuid::now_v7();
+    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+        sanvi_testsupport::test_ids().next_id().unwrap(),
+    );
     sqlx::query(
         "INSERT INTO payments.payments
            (id, tenant_id, checkout_id, external_payment_id, status, amount_minor, currency)
          VALUES ($1, $2, $3, 'pi_jpy_1', 'processing', 4980, 'JPY')",
     )
-    .bind(payment_id)
-    .bind(tenant_id)
-    .bind(checkout_id)
+    .bind(payment_id.as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(checkout_id.as_i64())
     .execute(&mut **seed_scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -784,8 +802,8 @@ async fn checkout_payment_lookup_joins_the_real_payments_schema() {
         Arc::new(sanvi_payments::adapters::SqlxCheckoutRepository::new());
     let lookup = CheckoutPaymentLookup::new(checkouts);
 
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let payment = lookup
         .lookup_payment_value(&mut scope, tenant_id, "order-jpy-1")
         .await
@@ -820,7 +838,7 @@ async fn concurrent_captures_never_hold_a_connection_while_the_gate_needs_one() 
     .await
     .unwrap();
     let tenant_id = seed_tenant(&pool, "gate-pool").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     let capture = Arc::new(CaptureConversion::new(
         tx.clone(),
@@ -833,6 +851,7 @@ async fn concurrent_captures_never_hold_a_connection_while_the_gate_needs_one() 
             inner: FakeDirectiveResolver::allow_all(),
             tx,
         }),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     ));
 
     let mut handles = Vec::new();
@@ -857,7 +876,7 @@ fn create_test_advertising_state(
     ip_permits: usize,
     domain_permits: usize,
 ) -> AdvertisingState {
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let campaign_repo = Arc::new(SqlxCampaignRepository::new());
     let payment_lookup = Arc::new(FixedPaymentLookup(None));
     let vendor_role = Arc::new(FixedVendorRole(VendorRole::ThirdParty));
@@ -869,6 +888,7 @@ fn create_test_advertising_state(
         payment_lookup,
         vendor_role,
         directive_resolver,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     ));
 
     let settings_repo = Arc::new(SqlxTrackingSettingsRepository::new());
@@ -888,7 +908,7 @@ fn create_test_advertising_state(
 
     let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
     let registry = Arc::new(PlatformRegistry::new());
-    let events = Arc::new(OutboxEventPublisher::new());
+    let events = Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let campaigns = campaign_repo.clone();
     let token_vault = Arc::new(TokenVault::new(
         Arc::new(SqlxTenantEnvelopeCrypto::new(
@@ -907,12 +927,14 @@ fn create_test_advertising_state(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         resolve_campaign_drift: Arc::new(ResolveCampaignDrift::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         create_campaign: Arc::new(CreateCampaign::new(
             tx.clone(),
@@ -920,6 +942,7 @@ fn create_test_advertising_state(
             connections.clone(),
             registry.clone(),
             events.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         get_campaign: Arc::new(GetCampaign::new(tx.clone(), campaigns.clone())),
         list_campaigns: Arc::new(ListCampaigns::new(tx.clone(), campaigns.clone())),
@@ -935,6 +958,7 @@ fn create_test_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         publish_campaign: Arc::new(PublishCampaign::new(
             tx.clone(),
@@ -942,18 +966,21 @@ fn create_test_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         pause_campaign: Arc::new(PauseCampaign::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         resume_campaign: Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         list_campaign_changes: Arc::new(ListCampaignChanges::new(tx.clone(), campaigns.clone())),
         add_ad_group: Arc::new(AddAdGroup::new(
@@ -961,12 +988,14 @@ fn create_test_advertising_state(
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         update_ad_group: Arc::new(UpdateAdGroup::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         add_ad: Arc::new(AddAd::new(
             tx.clone(),
@@ -974,6 +1003,7 @@ fn create_test_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         update_ad: Arc::new(UpdateAd::new(
             tx.clone(),
@@ -981,10 +1011,12 @@ fn create_test_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         start_authorization: Arc::new(StartAuthorization::new(
             registry.clone(),
             oauth_state.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         handle_callback: Arc::new(HandleCallback::new(
             tx.clone(),
@@ -992,6 +1024,7 @@ fn create_test_advertising_state(
             registry.clone(),
             oauth_state.clone(),
             token_vault,
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         create_connection: Arc::new(CreateConnection::new(tx.clone(), connections.clone())),
         list_connections: Arc::new(ListConnections::new(
@@ -1005,6 +1038,7 @@ fn create_test_advertising_state(
             creatives.clone(),
             connections,
             registry.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         get_creative: Arc::new(GetCreative::new(tx.clone(), creatives.clone())),
         list_creatives: Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),
@@ -1191,7 +1225,7 @@ async fn dry_run_test_event_does_not_populate_server_click_ids() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "dry-run-click-ids").await;
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
     let capture = capture_with(
         tx,

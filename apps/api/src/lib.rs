@@ -2812,6 +2812,7 @@ pub fn build_payments_state(
 /// its own to consult instead.
 pub async fn build_advertising_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &AdvertisingConfig,
     directive_resolver: Arc<dyn DirectiveResolver>,
     subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository>,
@@ -2829,7 +2830,7 @@ pub async fn build_advertising_state(
             ),
         },
     ));
-    let tx = sanvi_persistence::TxManager::new(pool, ids.clone());
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
     let oauth_state =
         OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store);
@@ -2846,8 +2847,13 @@ pub async fn build_advertising_state(
         std::sync::Arc::new(SqlxCreativeRepository::new());
     let connections: std::sync::Arc<dyn sanvi_advertising::AdvertisingConnectionRepository> =
         std::sync::Arc::new(SqlxAdvertisingConnectionRepository::new());
-    let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        std::sync::Arc::new(AdvertisingEvents::new());
+    let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> = std::sync::Arc::new(
+        sanvi_advertising::adapters::OutboxEventPublisher::new(ids.clone()),
+    );
+    let advertising_ids: std::sync::Arc<dyn sanvi_advertising::domain::IdGenerator> =
+        std::sync::Arc::new(sanvi_advertising::adapters::SystemIdGenerator::new(
+            ids.clone(),
+        ));
 
     // 10.5: conversion capture & the directive gate. The sub-processor
     // role snapshot is loaded once here rather than per beacon hit — see
@@ -2886,6 +2892,7 @@ pub async fn build_advertising_state(
             payment_lookup,
             vendor_role,
             directive_resolver,
+            advertising_ids.clone(),
         ),
     );
     let settings_mgr = std::sync::Arc::new(
@@ -2915,12 +2922,14 @@ pub async fn build_advertising_state(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
+            advertising_ids.clone(),
         )),
         resolve_campaign_drift: std::sync::Arc::new(ResolveCampaignDrift::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         create_campaign: std::sync::Arc::new(CreateCampaign::new(
             tx.clone(),
@@ -2928,6 +2937,7 @@ pub async fn build_advertising_state(
             connections.clone(),
             registry.clone(),
             events.clone(),
+            advertising_ids.clone(),
         )),
         get_campaign: std::sync::Arc::new(GetCampaign::new(tx.clone(), campaigns.clone())),
         list_campaigns: std::sync::Arc::new(ListCampaigns::new(tx.clone(), campaigns.clone())),
@@ -2943,6 +2953,7 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         publish_campaign: std::sync::Arc::new(PublishCampaign::new(
             tx.clone(),
@@ -2950,18 +2961,21 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         pause_campaign: std::sync::Arc::new(PauseCampaign::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         resume_campaign: std::sync::Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         list_campaign_changes: std::sync::Arc::new(ListCampaignChanges::new(
             tx.clone(),
@@ -2972,12 +2986,14 @@ pub async fn build_advertising_state(
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         update_ad_group: std::sync::Arc::new(UpdateAdGroup::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         add_ad: std::sync::Arc::new(AddAd::new(
             tx.clone(),
@@ -2985,6 +3001,7 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         update_ad: std::sync::Arc::new(UpdateAd::new(
             tx.clone(),
@@ -2992,10 +3009,12 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events,
             registry.clone(),
+            advertising_ids.clone(),
         )),
         start_authorization: std::sync::Arc::new(StartAuthorization::new(
             registry.clone(),
             oauth_state.clone(),
+            advertising_ids.clone(),
         )),
         handle_callback: std::sync::Arc::new(HandleCallback::new(
             tx.clone(),
@@ -3003,6 +3022,7 @@ pub async fn build_advertising_state(
             registry.clone(),
             oauth_state.clone(),
             token_vault,
+            advertising_ids.clone(),
         )),
         create_connection: std::sync::Arc::new(CreateConnection::new(
             tx.clone(),
@@ -3022,6 +3042,7 @@ pub async fn build_advertising_state(
             creatives.clone(),
             connections,
             registry.clone(),
+            advertising_ids.clone(),
         )),
         get_creative: std::sync::Arc::new(GetCreative::new(tx.clone(), creatives.clone())),
         list_creatives: std::sync::Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),

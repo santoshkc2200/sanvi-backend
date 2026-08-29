@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::domain::model::CampaignId;
 use chrono::Utc;
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use uuid::Uuid;
 
@@ -15,6 +17,7 @@ pub struct ReconcileCampaign {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
     events: Arc<dyn EventPublisher>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 impl ReconcileCampaign {
@@ -22,11 +25,13 @@ impl ReconcileCampaign {
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
         events: Arc<dyn EventPublisher>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
             campaigns,
             events,
+            ids,
         }
     }
 
@@ -34,13 +39,13 @@ impl ReconcileCampaign {
     /// so a reconciliation pass cannot resurrect a paused remote campaign.
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         remote: Campaign,
     ) -> Result<ReconciliationResult, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let stored = self
@@ -84,7 +89,7 @@ impl ReconcileCampaign {
             .append_change(
                 &mut scope,
                 &CampaignChange {
-                    id: Uuid::now_v7(),
+                    id: self.ids.next_campaign_change_id()?,
                     tenant_id,
                     campaign_id,
                     revision: updated.revision,

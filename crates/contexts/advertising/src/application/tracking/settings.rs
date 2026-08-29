@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use uuid::Uuid;
 
@@ -18,11 +19,11 @@ impl ManageTrackingSettings {
 
     pub async fn get_settings(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<TrackingSettings, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         match self.repo.get(&mut scope, tenant_id).await? {
@@ -40,7 +41,7 @@ impl ManageTrackingSettings {
     ) -> Result<(), AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(settings.tenant_id)
+            .begin_for(settings.tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         self.repo.upsert(&mut scope, &settings).await?;

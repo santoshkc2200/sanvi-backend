@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sanvi_kernel::TenantId;
 use sanvi_payments::domain::CheckoutRepository;
-use uuid::Uuid;
 
 use crate::domain::{AdvertisingError, Money, PaymentLookup, PaymentLookupPort};
 
@@ -26,7 +26,7 @@ impl PaymentLookupPort for CheckoutPaymentLookup {
     async fn lookup_payment_value(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         order_ref: &str,
     ) -> Result<Option<PaymentLookup>, AdvertisingError> {
         let checkout = self
