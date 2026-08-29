@@ -11,7 +11,7 @@ use crate::domain::model::{
     AdGroupId, AdId, CampaignChangeId, CampaignId, ConnectionId, ConsentSnapshot, ConversionId,
     CreativeId,
 };
-use sanvi_persistence::ScopedTx;
+use sanvi_persistence::{PlatformScope, ScopedTx};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AdvertisingError {
@@ -299,6 +299,14 @@ pub trait ConversionEventRepository: Send + Sync {
         id: ConversionId,
         upload_states: BTreeMap<super::model::PlatformKey, super::model::UploadState>,
     ) -> Result<(), AdvertisingError>;
+
+    /// Cross-tenant batch fetch: events across all tenants that have at least
+    /// one platform pending upload, oldest `occurred_at` first, capped at `limit`.
+    async fn list_pending_upload(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

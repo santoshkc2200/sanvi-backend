@@ -18,7 +18,8 @@ use sanvi_privacy::domain::{
 
 use crate::domain::{
     AdvertisingError, ClickIds, ConsentSnapshot, ConversionEvent, ConversionEventRepository, Money,
-    PaymentLookupPort, PlatformKey, SubjectKeyRef, ValueSource, VendorRole, VendorRolePort,
+    PaymentLookupPort, PlatformKey, SubjectKeyRef, UploadState, ValueSource, VendorRole,
+    VendorRolePort,
     hashing::{hash_email, hash_phone},
 };
 
@@ -137,14 +138,16 @@ impl CaptureConversion {
         // lets a burst of concurrent beacons occupy every connection
         // waiting for a connection, and the pool deadlocks until acquire
         // timeouts unwind it.
-        let consent = self.resolve_gate(&command).await?;
+        let (consent, suppressed) = self.resolve_gate(&command).await?;
 
         let mut scope = self
             .tx
             .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let event = self.build_event(&mut scope, command, consent).await?;
+        let event = self
+            .build_event(&mut scope, command, consent, suppressed)
+            .await?;
         self.conversion_repo
             .insert_idempotent(&mut scope, &event)
             .await?;
@@ -163,13 +166,14 @@ impl CaptureConversion {
         &self,
         command: TrackConversionCommand,
     ) -> Result<ConversionEvent, AdvertisingError> {
-        let consent = self.resolve_gate(&command).await?;
+        let (consent, suppressed) = self.resolve_gate(&command).await?;
         let mut scope = self
             .tx
             .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        self.build_event(&mut scope, command, consent).await
+        self.build_event(&mut scope, command, consent, suppressed)
+            .await
     }
 
     async fn build_event(
@@ -177,6 +181,7 @@ impl CaptureConversion {
         scope: &mut ScopedTx<'_>,
         command: TrackConversionCommand,
         consent: ConsentSnapshot,
+        suppressed: bool,
     ) -> Result<ConversionEvent, AdvertisingError> {
         let mut hashed_identifiers = BTreeMap::new();
         if let Some(ref email) = command.email {
@@ -196,6 +201,16 @@ impl CaptureConversion {
             &event_id,
         );
 
+        let upload_states = if suppressed {
+            BTreeMap::new()
+        } else {
+            command
+                .platforms
+                .iter()
+                .map(|platform| (platform.clone(), UploadState::Pending { attempt_count: 0 }))
+                .collect()
+        };
+
         Ok(ConversionEvent {
             id: self.ids.next_conversion_id()?,
             tenant_id: command.tenant_id,
@@ -209,7 +224,7 @@ impl CaptureConversion {
             click_ids: command.click_ids,
             hashed_identifiers,
             consent,
-            upload_states: BTreeMap::new(),
+            upload_states,
             subject_key,
         })
     }
@@ -270,7 +285,7 @@ impl CaptureConversion {
     async fn resolve_gate(
         &self,
         command: &TrackConversionCommand,
-    ) -> Result<ConsentSnapshot, AdvertisingError> {
+    ) -> Result<(ConsentSnapshot, bool), AdvertisingError> {
         let mut required_purposes = vec![ProcessingPurpose::AdsMeasurement];
         let mut reaches_third_party = command.platforms_incomplete;
         for platform in &command.platforms {
@@ -327,6 +342,6 @@ impl CaptureConversion {
             signal_source,
         };
 
-        Ok(consent)
+        Ok((consent, denied_found))
     }
 }

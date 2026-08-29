@@ -28,3 +28,7 @@ pub use drift_resolution::{DriftResolution, ResolveCampaignDrift, ResolvedCampai
 pub use reconciliation::ReconcileCampaign;
 pub use reconciliation_sweep::{ReconcileDueCampaigns, ReconciliationSweepReport};
 pub use registry::PlatformRegistry;
+pub use tracking::{
+    GetConversionDiagnostics, ListConversions, RetryConversion, UploadPendingConversions,
+    UploadSweepReport,
+};

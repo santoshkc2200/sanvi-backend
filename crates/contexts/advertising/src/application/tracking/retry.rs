@@ -14,7 +14,10 @@ use crate::domain::{
 /// event stored nothing reconstructable — TASK-014 forbids persisting the
 /// raw email here — so there is no safe subject to re-query: `None` means
 /// the caller must refuse the retry rather than check the wrong subject.
-fn rebuild_subject(tenant_id: TenantId, subject_key: &SubjectKeyRef) -> Option<SubjectRef> {
+pub(crate) fn rebuild_subject(
+    tenant_id: TenantId,
+    subject_key: &SubjectKeyRef,
+) -> Option<SubjectRef> {
     match subject_key {
         SubjectKeyRef::TenantDevice { device_ref } => {
             Some(SubjectRef::tenant_device(tenant_id, device_ref))

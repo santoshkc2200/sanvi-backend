@@ -18,11 +18,13 @@ use chrono::Utc;
 use sanvi_advertising::AdvertisingConfig;
 use sanvi_advertising::adapters::SystemIdGenerator;
 use sanvi_advertising::adapters::{
-    CheckoutPaymentLookup, OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
-    SqlxCampaignRepository, SqlxConnectionTokenRepository, SqlxCreativeRepository,
-    SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository, http::AdvertisingState,
+    CheckoutPaymentLookup, FakeAdPlatform, FakeConversionSink, OutboxEventPublisher, QuotaLimiter,
+    SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
+    SqlxCreativeRepository, SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository,
+    http::AdvertisingState,
 };
 use sanvi_advertising::application::tracking::{
+    UploadPendingConversions,
     capture::{CaptureConversion, TrackConversionCommand},
     conversions::{GetConversionDiagnostics, ListConversions},
     retry::RetryConversion,
@@ -38,9 +40,10 @@ use sanvi_advertising::application::{
     ValidateCampaign,
 };
 use sanvi_advertising::domain::{
-    AdvertisingError, ClickIds, ConversionEventRepository, ConversionId, Money, OAuthStateManager,
-    PaymentLookup, PaymentLookupPort, PlatformKey, TokenVault, UploadState, VendorRole,
-    VendorRolePort,
+    AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, ClickIds,
+    ConnectionId, ConversionEventRepository, ConversionId, ConversionSinkPort, Money,
+    OAuthStateManager, PaymentLookup, PaymentLookupPort, PlatformKey, SecretRef, TokenVault,
+    UploadState, VendorRole, VendorRolePort,
 };
 use sanvi_kernel::TenantId;
 use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
@@ -327,7 +330,15 @@ async fn us_subject_with_no_signal_is_permitted() {
 
     let row = fetch_row(&pool, tenant_id, "evt-us-no-signal").await;
     assert_eq!(row["consent"]["answers"]["ads_measurement"], "allowed");
-    assert_eq!(row["upload_states"], serde_json::json!({}));
+    assert_eq!(
+        row["upload_states"],
+        serde_json::json!({
+            "google_ads": {
+                "status": "pending",
+                "attempt_count": 0
+            }
+        })
+    );
 }
 
 #[tokio::test]
@@ -404,7 +415,15 @@ async fn vendor_role_changes_the_gate_outcome_for_the_same_event() {
     let row = fetch_row(&pool, tenant_id, "evt-service-provider").await;
     assert_eq!(row["consent"]["answers"]["ads_measurement"], "allowed");
     assert_eq!(row["consent"]["answers"].get("sale_or_share"), None);
-    assert_eq!(row["upload_states"], serde_json::json!({}));
+    assert_eq!(
+        row["upload_states"],
+        serde_json::json!({
+            "google_ads": {
+                "status": "pending",
+                "attempt_count": 0
+            }
+        })
+    );
 
     // Third party: the same denial now applies and suppresses the event.
     let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
@@ -1910,4 +1929,325 @@ async fn retry_conversion_contact_subject_cannot_retry() {
         unchanged.upload_states.get(&google_ads),
         Some(UploadState::Parked { attempts: 1, .. })
     ));
+}
+
+async fn seed_test_connection(
+    tx: &TxManager,
+    connections: &SqlxAdvertisingConnectionRepository,
+    tenant_id: TenantId,
+    platform: &str,
+) -> ConnectionId {
+    let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
+        tenant_id,
+        PlatformKey::parse(platform).unwrap(),
+        "123-456-7890",
+        "USD",
+        "America/New_York",
+        SecretRef::new("vault-ref"),
+        None,
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    connections.upsert(&mut scope, &connection).await.unwrap();
+    scope.commit().await.unwrap();
+    connection_id
+}
+
+#[tokio::test]
+async fn upload_sweep_permitted_event_gets_pending_at_capture() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "upload-permitted-pending").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let mut command = command_with_device_subject(tenant_id, "evt-upload-permitted");
+    command.platforms = vec![
+        PlatformKey::parse("google_ads").unwrap(),
+        PlatformKey::parse("meta").unwrap(),
+    ];
+    capture.execute(command).await.unwrap();
+
+    let row = fetch_row(&pool, tenant_id, "evt-upload-permitted").await;
+    assert_eq!(
+        row["upload_states"],
+        serde_json::json!({
+            "google_ads": {
+                "status": "pending",
+                "attempt_count": 0
+            },
+            "meta": {
+                "status": "pending",
+                "attempt_count": 0
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn upload_sweep_suppressed_event_gets_empty_upload_states_and_is_untouched_by_worker() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "upload-suppressed-empty").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    let denied_resolver = FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::AdsMeasurement,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    );
+    let capture = capture_with(tx.clone(), denied_resolver, None, VendorRole::ThirdParty);
+    let command = command_with_device_subject(tenant_id, "evt-suppressed-capture");
+    capture.execute(command).await.unwrap();
+
+    let row = fetch_row(&pool, tenant_id, "evt-suppressed-capture").await;
+    assert_eq!(row["upload_states"], serde_json::json!({}));
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let sweep_resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        sweep_resolver,
+        sinks,
+    );
+
+    let report = worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 0);
+    assert_eq!(report.uploaded, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.parked, 0);
+    assert_eq!(report.suppressed_late, 0);
+    assert_eq!(google_sink.uploaded_events().len(), 0);
+
+    let row_after = fetch_row(&pool, tenant_id, "evt-suppressed-capture").await;
+    assert_eq!(row_after["upload_states"], serde_json::json!({}));
+}
+
+#[tokio::test]
+async fn upload_sweep_uploads_pending_event_and_flips_to_uploaded() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "upload-pending-uploaded").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-upload-ok");
+    capture.execute(command).await.unwrap();
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        resolver,
+        sinks,
+    );
+
+    let report = worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.uploaded, 1);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.parked, 0);
+    assert_eq!(report.suppressed_late, 0);
+
+    assert_eq!(google_sink.uploaded_events().len(), 1);
+    assert_eq!(google_sink.uploaded_events()[0].event_id, "evt-upload-ok");
+
+    let row = fetch_row(&pool, tenant_id, "evt-upload-ok").await;
+    assert_eq!(
+        row["upload_states"],
+        serde_json::json!({
+            "google_ads": {
+                "status": "uploaded",
+                "attempt_count": 0
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn upload_sweep_withdrawn_directive_produces_failed_suppressed_late_without_sink_call() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "upload-withdrawn-suppressed-late").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    // Permitted at capture time
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-withdrawn-later");
+    capture.execute(command).await.unwrap();
+
+    let row = fetch_row(&pool, tenant_id, "evt-withdrawn-later").await;
+    assert_eq!(
+        row["upload_states"],
+        serde_json::json!({
+            "google_ads": {
+                "status": "pending",
+                "attempt_count": 0
+            }
+        })
+    );
+
+    // Directive is now Denied (withdrawn since capture)
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let withdrawn_resolver = Arc::new(FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::AdsMeasurement,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    ));
+    let worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        withdrawn_resolver,
+        sinks,
+    );
+
+    let report = worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.uploaded, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.parked, 0);
+    assert_eq!(report.suppressed_late, 1);
+
+    // Sink was NEVER called
+    assert_eq!(google_sink.uploaded_events().len(), 0);
+
+    let row = fetch_row(&pool, tenant_id, "evt-withdrawn-later").await;
+    assert_eq!(row["upload_states"]["google_ads"]["status"], "failed");
+    assert!(
+        row["upload_states"]["google_ads"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("suppressed_late")
+    );
+}
+
+#[tokio::test]
+async fn upload_sweep_parks_event_after_5_consecutive_failures() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "upload-parked-after-5").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(
+        FakeConversionSink::new(FakeAdPlatform::fixtures()[0].clone()).with_upload_error(
+            AdvertisingError::PlatformUnavailable("503 Service Unavailable".to_string()),
+        ),
+    );
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-fail-to-park");
+    capture.execute(command).await.unwrap();
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        resolver,
+        sinks,
+    );
+
+    // Attempts 1 to 4: state is Failed
+    for attempt in 1..=4 {
+        let report = worker.execute(100).await.unwrap();
+        assert_eq!(report.checked, 1, "attempt {attempt} checked");
+        assert_eq!(report.uploaded, 0, "attempt {attempt} uploaded");
+        assert_eq!(report.failed, 1, "attempt {attempt} failed");
+        assert_eq!(report.parked, 0, "attempt {attempt} parked");
+
+        let row = fetch_row(&pool, tenant_id, "evt-fail-to-park").await;
+        assert_eq!(row["upload_states"]["google_ads"]["status"], "failed");
+        assert_eq!(row["upload_states"]["google_ads"]["attempt_count"], attempt);
+    }
+
+    // Attempt 5: reaches bounded ceiling -> Parked
+    let report = worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 1, "attempt 5 checked");
+    assert_eq!(report.uploaded, 0, "attempt 5 uploaded");
+    assert_eq!(report.failed, 0, "attempt 5 failed");
+    assert_eq!(report.parked, 1, "attempt 5 parked");
+
+    let row = fetch_row(&pool, tenant_id, "evt-fail-to-park").await;
+    assert_eq!(row["upload_states"]["google_ads"]["status"], "parked");
+    assert_eq!(row["upload_states"]["google_ads"]["attempts"], 5);
+
+    // Attempt 6: Parked event is not picked up anymore
+    let report = worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 0);
+    assert_eq!(report.uploaded, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.parked, 0);
 }
