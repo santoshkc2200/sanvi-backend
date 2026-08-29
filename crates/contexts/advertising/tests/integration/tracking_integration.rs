@@ -12,19 +12,20 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use actix_web::{App, http::StatusCode, test, web};
+use actix_web::{App, HttpMessage, http::StatusCode, test, web};
 use async_trait::async_trait;
 use chrono::Utc;
 use sanvi_advertising::AdvertisingConfig;
 use sanvi_advertising::adapters::SystemIdGenerator;
 use sanvi_advertising::adapters::{
-    AdvertisingMetrics, CheckoutPaymentLookup, FakeAdPlatform, FakeConversionSink,
-    OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
+    AdvertisingMetrics, CheckoutPaymentLookup, FakeAdPlatform, FakeAudienceSync,
+    FakeConversionSink, OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
     SqlxCampaignRepository, SqlxConnectionTokenRepository, SqlxCreativeRepository,
     SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository, http::AdvertisingState,
 };
 use sanvi_advertising::application::tracking::{
-    RetractWithdrawnConversions, UploadPendingConversions,
+    CreateAudience, ListAudiences, RefreshAudience, RetractWithdrawnConversions, SyncAudiences,
+    UploadPendingConversions,
     capture::{CaptureConversion, TrackConversionCommand},
     conversions::{GetConversionDiagnostics, ListConversions},
     retry::RetryConversion,
@@ -40,10 +41,10 @@ use sanvi_advertising::application::{
     ValidateCampaign,
 };
 use sanvi_advertising::domain::{
-    AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, ClickIds,
-    ConnectionId, ConversionEventRepository, ConversionId, ConversionSinkPort, Money,
-    OAuthStateManager, PaymentLookup, PaymentLookupPort, PlatformKey, SecretRef, TokenVault,
-    UploadState, VendorRole, VendorRolePort,
+    AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, AudienceId,
+    AudienceStatus, AudienceSyncPort, ClickIds, ConnectionId, ConversionEventRepository,
+    ConversionId, ConversionSinkPort, Money, OAuthStateManager, PaymentLookup, PaymentLookupPort,
+    PlatformKey, SecretRef, TokenVault, UploadState, VendorRole, VendorRolePort,
 };
 use sanvi_kernel::TenantId;
 use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
@@ -972,7 +973,7 @@ fn create_test_advertising_state(
     let retry_conversion = Arc::new(RetryConversion::new(
         tx.clone(),
         campaign_repo.clone(),
-        directive_resolver,
+        directive_resolver.clone(),
     ));
 
     let config = AdvertisingConfig {
@@ -1112,14 +1113,43 @@ fn create_test_advertising_state(
         create_creative: Arc::new(CreateCreative::new(
             tx.clone(),
             creatives.clone(),
-            connections,
+            connections.clone(),
             registry.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         get_creative: Arc::new(GetCreative::new(tx.clone(), creatives.clone())),
         list_creatives: Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),
         delete_creative: Arc::new(DeleteCreative::new(tx.clone(), creatives.clone())),
-        get_creative_previews: Arc::new(GetCreativePreviews::new(tx, creatives, registry)),
+        get_creative_previews: Arc::new(GetCreativePreviews::new(
+            tx.clone(),
+            creatives.clone(),
+            registry.clone(),
+        )),
+        create_audience: Arc::new(CreateAudience::new(
+            tx.clone(),
+            campaign_repo.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+        )),
+        list_audiences: Arc::new(ListAudiences::new(tx.clone(), campaign_repo.clone())),
+        refresh_audience: {
+            let mut audience_sinks: BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>> =
+                BTreeMap::new();
+            for descriptor in FakeAdPlatform::fixtures() {
+                audience_sinks.insert(
+                    descriptor.key.clone(),
+                    Arc::new(FakeAudienceSync::new(descriptor)),
+                );
+            }
+            Arc::new(RefreshAudience::new(
+                tx.clone(),
+                campaign_repo.clone(),
+                campaign_repo,
+                connections,
+                directive_resolver,
+                audience_sinks,
+                Arc::new(AdvertisingMetrics::default()),
+            ))
+        },
         oauth_state,
         tracking_ip_limiter: Arc::new(QuotaLimiter::new(100, ip_permits)),
         tracking_domain_limiter: Arc::new(QuotaLimiter::new(100, domain_permits)),
@@ -2865,4 +2895,504 @@ async fn retraction_sweep_observability_metrics_and_transient_failure() {
         row_retracted["upload_states"]["google_ads"]["status"],
         "retracted"
     );
+}
+
+async fn fetch_audience_row(
+    pool: &sanvi_persistence::PgPool,
+    tenant_id: TenantId,
+    audience_id: AudienceId,
+) -> serde_json::Value {
+    use sqlx::Row;
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let row = sqlx::query(
+        "SELECT id, tenant_id, platform, name, status, failure_reason, external_ref,
+                included_identifiers, last_synced_at
+         FROM advertising.audiences WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(audience_id.as_i64())
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    serde_json::json!({
+        "id": row.get::<i64, _>("id").to_string(),
+        "tenant_id": row.get::<i64, _>("tenant_id").to_string(),
+        "platform": row.get::<String, _>("platform"),
+        "name": row.get::<String, _>("name"),
+        "status": row.get::<String, _>("status"),
+        "failure_reason": row.get::<Option<String>, _>("failure_reason"),
+        "external_ref": row.get::<Option<String>, _>("external_ref"),
+        "included_identifiers": row.get::<serde_json::Value, _>("included_identifiers"),
+        "last_synced_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_synced_at"),
+    })
+}
+
+struct TestPermissionGate {
+    allowed: bool,
+}
+
+impl sanvi_http::PermissionGate for TestPermissionGate {
+    fn check<'a>(
+        &'a self,
+        _subject: &'a sanvi_http::Subject,
+        _permission: &'a str,
+        _resource: &'a sanvi_http::ResourceRef,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<sanvi_http::Decision, sanvi_http::ApiError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            Ok(if self.allowed {
+                sanvi_http::Decision::Allowed
+            } else {
+                sanvi_http::Decision::Denied
+            })
+        })
+    }
+}
+
+struct TestFeatureGate {
+    enabled: bool,
+}
+
+impl sanvi_http::FeatureGate for TestFeatureGate {
+    fn check<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        _feature: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<bool, sanvi_http::ApiError>> + Send + 'a>,
+    > {
+        Box::pin(async move { Ok(self.enabled) })
+    }
+}
+
+#[tokio::test]
+async fn audience_sync_eligible_subject_included_on_first_sync() {
+    use sanvi_advertising::domain::AudienceRepository;
+
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "aud-sync-first").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sync = Arc::new(FakeAudienceSync::new(FakeAdPlatform::fixtures()[0].clone()));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sync.clone(),
+    );
+
+    // Capture an event for a device subject with allowed directives
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-aud-eligible");
+    capture.execute(command).await.unwrap();
+
+    let audience_repo: Arc<dyn AudienceRepository> = Arc::new(SqlxCampaignRepository::new());
+    let conversion_repo: Arc<dyn ConversionEventRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let ids = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
+
+    let create_audience = CreateAudience::new(tx.clone(), audience_repo.clone(), ids);
+    let audience = create_audience
+        .execute(
+            tenant_id,
+            "High Value Customers".to_string(),
+            PlatformKey::parse("google_ads").unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(audience.status, AudienceStatus::Building);
+    assert_eq!(audience.included_identifiers.len(), 0);
+
+    let sweep = SyncAudiences::new(
+        tx.clone(),
+        audience_repo.clone(),
+        conversion_repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks,
+        Arc::new(AdvertisingMetrics::default()),
+    );
+
+    let report = sweep.execute(3600, 100).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.synced, 1);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.removed_identifiers, 0);
+
+    let calls = google_sync.sync_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].removed.len(), 0);
+    assert_eq!(calls[0].included.len(), 2); // email + phone
+
+    let row = fetch_audience_row(&pool, tenant_id, audience.id).await;
+    assert_eq!(row["status"], "active");
+    assert!(row["external_ref"].is_string());
+    assert!(row["last_synced_at"].is_string());
+    assert_eq!(row["included_identifiers"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn audience_sync_opted_out_subject_is_removed_on_next_sync_and_absent_from_included() {
+    use sanvi_advertising::domain::AudienceRepository;
+
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "aud-sync-optout").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sync = Arc::new(FakeAudienceSync::new(FakeAdPlatform::fixtures()[0].clone()));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sync.clone(),
+    );
+
+    // 1. Capture event with allowed directives
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-aud-optout");
+    capture.execute(command).await.unwrap();
+
+    let audience_repo: Arc<dyn AudienceRepository> = Arc::new(SqlxCampaignRepository::new());
+    let conversion_repo: Arc<dyn ConversionEventRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let ids = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
+
+    let create_audience = CreateAudience::new(tx.clone(), audience_repo.clone(), ids);
+    let audience = create_audience
+        .execute(
+            tenant_id,
+            "Target Audience".to_string(),
+            PlatformKey::parse("google_ads").unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // First sync: member is included
+    let sweep_initial = SyncAudiences::new(
+        tx.clone(),
+        audience_repo.clone(),
+        conversion_repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks.clone(),
+        Arc::new(AdvertisingMetrics::default()),
+    );
+    let report1 = sweep_initial.execute(3600, 100).await.unwrap();
+    assert_eq!(report1.synced, 1);
+    assert_eq!(google_sync.sync_calls().len(), 1);
+    assert_eq!(google_sync.sync_calls()[0].included.len(), 2);
+
+    // 2. Subject withdraws consent (opts out of TargetedAdvertising)
+    let opt_out_resolver = Arc::new(FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::TargetedAdvertising,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    ));
+
+    let sweep_refresh = SyncAudiences::new(
+        tx.clone(),
+        audience_repo.clone(),
+        conversion_repo.clone(),
+        connections.clone(),
+        opt_out_resolver,
+        sinks,
+        Arc::new(AdvertisingMetrics::default()),
+    );
+
+    // Run sync with stale_after_secs = 0 so it runs immediately
+    let report2 = sweep_refresh.execute(0, 100).await.unwrap();
+    assert_eq!(report2.checked, 1);
+    assert_eq!(report2.synced, 1);
+    assert_eq!(report2.removed_identifiers, 2);
+
+    let calls = google_sync.sync_calls();
+    assert_eq!(calls.len(), 2);
+    let second_call = &calls[1];
+    assert_eq!(second_call.included.len(), 0); // absent from newly built list
+    assert_eq!(second_call.removed.len(), 2); // present in removed list
+
+    let row = fetch_audience_row(&pool, tenant_id, audience.id).await;
+    assert_eq!(row["status"], "active");
+    assert_eq!(row["included_identifiers"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn audience_sync_no_active_connection_is_skipped_not_failed() {
+    use sanvi_advertising::domain::AudienceRepository;
+
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "aud-sync-no-conn").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    // Do NOT seed connection
+
+    let google_sync = Arc::new(FakeAudienceSync::new(FakeAdPlatform::fixtures()[0].clone()));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sync.clone(),
+    );
+
+    let audience_repo: Arc<dyn AudienceRepository> = Arc::new(SqlxCampaignRepository::new());
+    let conversion_repo: Arc<dyn ConversionEventRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let ids = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
+
+    let create_audience = CreateAudience::new(tx.clone(), audience_repo.clone(), ids);
+    let audience = create_audience
+        .execute(
+            tenant_id,
+            "Skipped Audience".to_string(),
+            PlatformKey::parse("google_ads").unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let sweep = SyncAudiences::new(
+        tx.clone(),
+        audience_repo.clone(),
+        conversion_repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks,
+        Arc::new(AdvertisingMetrics::default()),
+    );
+
+    let report = sweep.execute(0, 100).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.synced, 0);
+    assert_eq!(report.failed, 0);
+
+    // Sync port never called
+    assert_eq!(google_sync.sync_calls().len(), 0);
+
+    // DB state remains building and unsynced
+    let row = fetch_audience_row(&pool, tenant_id, audience.id).await;
+    assert_eq!(row["status"], "building");
+    assert!(row["last_synced_at"].is_null());
+}
+
+#[tokio::test]
+async fn audience_sync_unsupported_removal_marks_status_failed() {
+    use sanvi_advertising::domain::AudienceRepository;
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "aud-sync-unsupported").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sync = Arc::new(FakeAudienceSync::new(FakeAdPlatform::fixtures()[0].clone()));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sync.clone(),
+    );
+
+    // 1. Capture event with allowed directives
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-aud-unsup");
+    capture.execute(command).await.unwrap();
+
+    let audience_repo: Arc<dyn AudienceRepository> = Arc::new(SqlxCampaignRepository::new());
+    let conversion_repo: Arc<dyn ConversionEventRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let ids = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
+
+    let create_audience = CreateAudience::new(tx.clone(), audience_repo.clone(), ids);
+    let audience = create_audience
+        .execute(
+            tenant_id,
+            "Unsupported Removal Test".to_string(),
+            PlatformKey::parse("google_ads").unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // First sync
+    let sweep_initial = SyncAudiences::new(
+        tx.clone(),
+        audience_repo.clone(),
+        conversion_repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks.clone(),
+        Arc::new(AdvertisingMetrics::default()),
+    );
+    sweep_initial.execute(3600, 100).await.unwrap();
+
+    // 2. Opt out + configure sync port with unsupported removal
+    google_sync.set_unsupported_removal(true);
+
+    let opt_out_resolver = Arc::new(FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::SaleOrShare,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    ));
+
+    let sweep_refresh = SyncAudiences::new(
+        tx.clone(),
+        audience_repo.clone(),
+        conversion_repo.clone(),
+        connections.clone(),
+        opt_out_resolver,
+        sinks,
+        Arc::new(AdvertisingMetrics::default()),
+    );
+
+    let report = sweep_refresh.execute(0, 100).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.synced, 0);
+    assert_eq!(report.unpropagated_removals, 1);
+
+    let row = fetch_audience_row(&pool, tenant_id, audience.id).await;
+    assert_eq!(row["status"], "failed");
+    assert!(
+        row["failure_reason"]
+            .as_str()
+            .unwrap()
+            .contains("capability_unsupported")
+    );
+    assert!(row["last_synced_at"].is_string());
+}
+
+#[tokio::test]
+async fn audience_http_create_refresh_list_round_trip() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "aud-http-roundtrip").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    // Capture an event
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-aud-http");
+    capture.execute(command).await.unwrap();
+
+    let secret = "test-signing-secret-of-at-least-32-bytes";
+    let state = create_test_advertising_state(pool.clone(), secret, 50, 50);
+
+    let subject = sanvi_http::Subject {
+        user_id: sanvi_kernel::UserId::from_snowflake(
+            sanvi_testsupport::test_ids().next_id().expect("test id"),
+        ),
+        session_id: "sess_test".to_string(),
+        aal: "aal2".to_string(),
+        methods: vec!["password".to_string()],
+        tenant_id: Some(tenant_id),
+        role_ids: vec![],
+        authenticated_at: Some(Utc::now()),
+    };
+    let tenant_context = sanvi_http::TenantContext {
+        tenant_id,
+        slug: "aud-http-roundtrip".to_string(),
+        display_name: "Audience HTTP Test".to_string(),
+        status: sanvi_http::tenancy::TenantRuntimeStatus::Active,
+        region: "jp".to_string(),
+        default_locale: "en".to_string(),
+        resolution_source: sanvi_http::tenancy::ResolutionSource::Subdomain,
+    };
+    let permission_gate: Arc<dyn sanvi_http::PermissionGate> =
+        Arc::new(TestPermissionGate { allowed: true });
+    let feature_gate: Arc<dyn sanvi_http::FeatureGate> =
+        Arc::new(TestFeatureGate { enabled: true });
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state))
+            .app_data(web::Data::new(permission_gate))
+            .app_data(web::Data::new(feature_gate))
+            .wrap(actix_web::middleware::from_fn(
+                move |req: actix_web::dev::ServiceRequest,
+                      srv: actix_web::middleware::Next<actix_web::body::BoxBody>| {
+                    let subject = subject.clone();
+                    let tenant_context = tenant_context.clone();
+                    async move {
+                        req.extensions_mut().insert(subject);
+                        req.extensions_mut().insert(tenant_context);
+                        srv.call(req).await
+                    }
+                },
+            ))
+            .service(
+                web::scope("/api/v1/tenant")
+                    .configure(sanvi_advertising::routes::tracking_tenant_routes),
+            ),
+    )
+    .await;
+
+    // 1. Create audience
+    let create_req = test::TestRequest::post()
+        .uri("/api/v1/tenant/ads/audiences")
+        .set_json(serde_json::json!({
+            "name": "VIP Audience",
+            "platform": "google_ads"
+        }))
+        .to_request();
+    let create_res = test::call_service(&app, create_req).await;
+    assert_eq!(create_res.status(), StatusCode::CREATED);
+    let create_body: serde_json::Value = test::read_body_json(create_res).await;
+    let aud_id = create_body["id"].as_str().unwrap().to_string();
+    assert_eq!(create_body["name"], "VIP Audience");
+    assert_eq!(create_body["status"]["status"], "building");
+
+    // 2. Refresh audience
+    let refresh_req = test::TestRequest::post()
+        .uri(&format!("/api/v1/tenant/ads/audiences/{aud_id}/refresh"))
+        .to_request();
+    let refresh_res = test::call_service(&app, refresh_req).await;
+    assert_eq!(refresh_res.status(), StatusCode::OK);
+    let refresh_body: serde_json::Value = test::read_body_json(refresh_res).await;
+    assert_eq!(refresh_body["status"]["status"], "active");
+    assert!(refresh_body["external_ref"].is_string());
+    assert!(refresh_body["last_synced_at"].is_string());
+
+    // 3. List audiences
+    let list_req = test::TestRequest::get()
+        .uri("/api/v1/tenant/ads/audiences")
+        .to_request();
+    let list_res = test::call_service(&app, list_req).await;
+    assert_eq!(list_res.status(), StatusCode::OK);
+    let list_body: Vec<serde_json::Value> = test::read_body_json(list_res).await;
+    assert_eq!(list_body.len(), 1);
+    assert_eq!(list_body[0]["id"], aud_id);
+    assert_eq!(list_body[0]["status"]["status"], "active");
 }

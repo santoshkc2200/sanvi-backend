@@ -29,6 +29,7 @@ pub use reconciliation::ReconcileCampaign;
 pub use reconciliation_sweep::{ReconcileDueCampaigns, ReconciliationSweepReport};
 pub use registry::PlatformRegistry;
 pub use tracking::{
-    GetConversionDiagnostics, ListConversions, RetractWithdrawnConversions, RetractionSweepReport,
-    RetryConversion, UploadPendingConversions, UploadSweepReport,
+    AudienceSyncReport, CreateAudience, GetConversionDiagnostics, ListAudiences, ListConversions,
+    RefreshAudience, RetractWithdrawnConversions, RetractionSweepReport, RetryConversion,
+    SyncAudiences, UploadPendingConversions, UploadSweepReport,
 };

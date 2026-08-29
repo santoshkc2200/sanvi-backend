@@ -25,35 +25,84 @@ paths:
     get:
       operationId: list_audiences
       responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/Audience'
+                type: array
+          description: Every audience owned by the tenant
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
-        '501':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProblemDetail'
-          description: Audience sync is not implemented yet
       tags:
       - advertising
     post:
       operationId: create_audience
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAudienceRequest'
+        required: true
       responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Audience'
+          description: Draft audience created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid audience parameters
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission
-        '501':
+      tags:
+      - advertising
+  /api/v1/tenant/ads/audiences/{id}/refresh:
+    post:
+      operationId: refresh_audience
+      parameters:
+      - description: The audience ID to refresh
+        in: path
+        name: id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Audience'
+          description: Audience refreshed
+        '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Audience sync is not implemented yet
+          description: Missing advertising.campaign.write permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Audience not found
       tags:
       - advertising
   /api/v1/tenant/ads/campaigns:

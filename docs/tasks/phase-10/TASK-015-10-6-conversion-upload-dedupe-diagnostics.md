@@ -47,7 +47,7 @@ causes a tenant can fix from the ones they must respect.
       is a different diagnostic message from suppressed at capture.
 - [ ] **Per-platform upload state** — an event succeeds on Google and fails on Meta independently.
       State is per platform, never a single boolean, or a partial success reports as total failure.
-- [ ] **Audience sync** — customer-list build and refresh requiring `sale_or_share` **and**
+- [x] **Audience sync** — customer-list build and refresh requiring `sale_or_share` **and**
       `targeted_advertising` per subject. Opted-out subjects are excluded from a new list and **removed
       from existing ones on the next refresh**, not merely skipped. Refresh is scheduled, not manual.
 - [x] **Retraction propagation** — a withdrawal or opt-out after upload triggers a deletion/suppression
@@ -76,7 +76,7 @@ causes a tenant can fix from the ones they must respect.
 - [ ] Google succeeds and Meta fails on the same event: states are independent and both are reported.
 - [ ] A malformed-identifier rejection stops retrying; a 503 retries and eventually succeeds; a token
       expiry parks the event and surfaces as a connection problem, not a data problem.
-- [ ] An opted-out subject is absent from a newly built list **and removed from an existing one on the
+- [x] An opted-out subject is absent from a newly built list **and removed from an existing one on the
       next refresh**, verified against the platform's own list state.
 - [x] A post-upload withdrawal issues a deletion request where supported and records an explicit
       unpropagated outcome where not.

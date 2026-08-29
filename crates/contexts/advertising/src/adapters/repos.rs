@@ -5,12 +5,15 @@ use chrono::{DateTime, Utc};
 use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::ScopedTx;
 
-use crate::domain::model::{CampaignChangeId, CampaignId, ConnectionId, ConversionId, CreativeId};
+use crate::domain::model::{
+    AudienceId, CampaignChangeId, CampaignId, ConnectionId, ConversionId, CreativeId,
+};
 
 use crate::domain::{
-    AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, CampaignChange,
-    CampaignRepository, ChangeSource, ConnectionStatus, CreativeRepository, PlatformAccount,
-    PlatformKey, SecretRef, StoredCampaign, StoredCreative, SyncError,
+    AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, Audience,
+    AudienceRepository, AudienceStatus, CampaignChange, CampaignRepository, ChangeSource,
+    ConnectionStatus, CreativeRepository, HashedIdentifier, PlatformAccount, PlatformKey,
+    SecretRef, StoredCampaign, StoredCreative, SyncError,
 };
 
 #[derive(sqlx::FromRow)]
@@ -949,6 +952,200 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
         Ok(count)
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct AudienceRow {
+    id: i64,
+    tenant_id: i64,
+    platform: String,
+    name: String,
+    status: String,
+    failure_reason: Option<String>,
+    external_ref: Option<String>,
+    included_identifiers: serde_json::Value,
+    last_synced_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    #[allow(dead_code)]
+    updated_at: DateTime<Utc>,
+}
+
+fn row_to_audience(row: AudienceRow) -> Result<Audience, AdvertisingError> {
+    let platform = PlatformKey::parse(&row.platform)?;
+    let status = match row.status.as_str() {
+        "building" => AudienceStatus::Building,
+        "active" => AudienceStatus::Active,
+        "failed" => AudienceStatus::Failed {
+            reason: row.failure_reason.unwrap_or_default(),
+        },
+        unknown => {
+            return Err(AdvertisingError::Storage(format!(
+                "unknown audience status {unknown:?}"
+            )));
+        }
+    };
+    let included_identifiers: Vec<HashedIdentifier> =
+        serde_json::from_value(row.included_identifiers)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+    Ok(Audience {
+        id: AudienceId::try_from(row.id).map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        tenant_id: TenantId::try_from(row.tenant_id)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        platform,
+        name: row.name,
+        status,
+        external_ref: row.external_ref,
+        included_identifiers,
+        last_synced_at: row.last_synced_at,
+        created_at: row.created_at,
+    })
+}
+
+#[async_trait]
+impl AudienceRepository for SqlxCampaignRepository {
+    async fn insert(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        audience: &Audience,
+    ) -> Result<(), AdvertisingError> {
+        let (status_str, failure_reason) = match &audience.status {
+            AudienceStatus::Building => ("building", None),
+            AudienceStatus::Active => ("active", None),
+            AudienceStatus::Failed { reason } => ("failed", Some(reason.clone())),
+        };
+        let included_json = serde_json::to_value(&audience.included_identifiers)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        sqlx::query(
+            "INSERT INTO advertising.audiences
+               (id, tenant_id, platform, name, status, failure_reason, external_ref,
+                included_identifiers, last_synced_at, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())",
+        )
+        .bind(audience.id.as_i64())
+        .bind(audience.tenant_id.as_i64())
+        .bind(audience.platform.as_str())
+        .bind(&audience.name)
+        .bind(status_str)
+        .bind(failure_reason)
+        .bind(&audience.external_ref)
+        .bind(included_json)
+        .bind(audience.last_synced_at)
+        .bind(audience.created_at)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn find_by_id(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        tenant_id: TenantId,
+        id: AudienceId,
+    ) -> Result<Option<Audience>, AdvertisingError> {
+        let row = sqlx::query_as::<_, AudienceRow>(
+            "SELECT id, tenant_id, platform, name, status, failure_reason, external_ref,
+                    included_identifiers, last_synced_at, created_at, updated_at
+             FROM advertising.audiences
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(id.as_i64())
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        row.map(row_to_audience).transpose()
+    }
+
+    async fn list(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Audience>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, AudienceRow>(
+            "SELECT id, tenant_id, platform, name, status, failure_reason, external_ref,
+                    included_identifiers, last_synced_at, created_at, updated_at
+             FROM advertising.audiences
+             WHERE tenant_id = $1
+             ORDER BY created_at DESC, id DESC
+             LIMIT 200",
+        )
+        .bind(tenant_id.as_i64())
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        rows.into_iter().map(row_to_audience).collect()
+    }
+
+    async fn list_due_for_refresh(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        stale_after_secs: i64,
+        limit: i64,
+    ) -> Result<Vec<Audience>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, AudienceRow>(
+            "SELECT id, tenant_id, platform, name, status, failure_reason, external_ref,
+                    included_identifiers, last_synced_at, created_at, updated_at
+             FROM advertising.audiences
+             WHERE last_synced_at IS NULL
+                OR last_synced_at <= now() - ($1 || ' seconds')::interval
+             ORDER BY last_synced_at ASC NULLS FIRST, id ASC
+             LIMIT $2",
+        )
+        .bind(stale_after_secs)
+        .bind(limit)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        rows.into_iter().map(row_to_audience).collect()
+    }
+
+    async fn update_after_sync(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        audience: &Audience,
+    ) -> Result<(), AdvertisingError> {
+        let (status_str, failure_reason) = match &audience.status {
+            AudienceStatus::Building => ("building", None),
+            AudienceStatus::Active => ("active", None),
+            AudienceStatus::Failed { reason } => ("failed", Some(reason.clone())),
+        };
+        let included_json = serde_json::to_value(&audience.included_identifiers)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        sqlx::query(
+            "UPDATE advertising.audiences
+             SET platform = $1,
+                 name = $2,
+                 status = $3,
+                 failure_reason = $4,
+                 external_ref = $5,
+                 included_identifiers = $6,
+                 last_synced_at = $7,
+                 updated_at = now()
+             WHERE tenant_id = $8 AND id = $9",
+        )
+        .bind(audience.platform.as_str())
+        .bind(&audience.name)
+        .bind(status_str)
+        .bind(failure_reason)
+        .bind(&audience.external_ref)
+        .bind(included_json)
+        .bind(audience.last_synced_at)
+        .bind(audience.tenant_id.as_i64())
+        .bind(audience.id.as_i64())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        Ok(())
     }
 }
 

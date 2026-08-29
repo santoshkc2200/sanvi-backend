@@ -355,6 +355,8 @@ advertising_reconciliation_interval_secs = 86400
 advertising_conversion_upload_interval_secs = 60
 # 10.6: conversion retraction worker sweep.
 advertising_conversion_retraction_interval_secs = 60
+# 10.6: audience sync worker sweep.
+advertising_audience_sync_interval_secs = 3600
 
 [payments]
 # Phase 09: tenant payment providers (Stripe Connect, direct charges —

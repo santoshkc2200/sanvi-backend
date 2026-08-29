@@ -3,13 +3,14 @@ use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::hashing::HashedIdentifier;
 use super::{
     AdvertisingConnection, Campaign, CapabilityMatrix, ConnectionHandle, ConversionEvent,
     HashedIds, PlatformKey, UploadReceipt, ValidationViolation,
 };
 use crate::domain::model::{
-    AdGroupId, AdId, CampaignChangeId, CampaignId, ConnectionId, ConsentSnapshot, ConversionId,
-    CreativeId,
+    AdGroupId, AdId, Audience, AudienceId, AudienceSyncReceipt, CampaignChangeId, CampaignId,
+    ConnectionId, ConsentSnapshot, ConversionId, CreativeId,
 };
 use sanvi_persistence::{PlatformScope, ScopedTx};
 
@@ -41,6 +42,8 @@ pub enum AdvertisingError {
     CreativeNotFound,
     #[error("conversion not found")]
     ConversionNotFound,
+    #[error("audience not found")]
+    AudienceNotFound,
     #[error("advertising token encryption is not configured")]
     EncryptionUnconfigured,
     #[error("advertising token encryption failure: {0}")]
@@ -63,6 +66,7 @@ pub trait IdGenerator: Send + Sync {
     fn next_creative_id(&self) -> Result<CreativeId, AdvertisingError>;
     fn next_ad_group_id(&self) -> Result<AdGroupId, AdvertisingError>;
     fn next_ad_id(&self) -> Result<AdId, AdvertisingError>;
+    fn next_audience_id(&self) -> Result<AudienceId, AdvertisingError>;
 }
 
 #[async_trait]
@@ -418,4 +422,60 @@ pub trait CreativeRepository: Send + Sync {
         tenant_id: TenantId,
         creative_id: CreativeId,
     ) -> Result<bool, AdvertisingError>;
+}
+
+#[async_trait]
+pub trait AudienceSyncPort: Send + Sync {
+    fn descriptor(&self) -> PlatformDescriptor;
+    /// Full-state sync: `included` is the complete current membership after this
+    /// call, `removed` is exactly what must be actively deleted/suppressed on the
+    /// platform side (opted-out subjects previously included). A platform that
+    /// cannot remove an already-uploaded member must still accept the call and
+    /// report what it could not do via `AdvertisingError::Validation` with a
+    /// `capability_unsupported` violation code (see `is_retraction_unsupported`
+    /// in `src/application/tracking/retraction.rs` for the exact convention this
+    /// crate already uses to detect that case — reuse or mirror it, don't invent
+    /// a second convention).
+    async fn sync_audience(
+        &self,
+        connection: &ConnectionHandle,
+        external_ref: Option<&str>,
+        included: &[HashedIdentifier],
+        removed: &[HashedIdentifier],
+    ) -> Result<AudienceSyncReceipt, AdvertisingError>;
+}
+
+#[async_trait]
+pub trait AudienceRepository: Send + Sync {
+    async fn insert(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        audience: &Audience,
+    ) -> Result<(), AdvertisingError>;
+    async fn find_by_id(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+        id: AudienceId,
+    ) -> Result<Option<Audience>, AdvertisingError>;
+    async fn list(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Audience>, AdvertisingError>;
+    /// Cross-tenant batch fetch for the scheduled refresh sweep: audiences never
+    /// synced, or last synced more than `stale_after_secs` ago. Mirror
+    /// `ConversionEventRepository::list_uploaded`'s cross-tenant `PlatformScope`
+    /// pattern exactly.
+    async fn list_due_for_refresh(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stale_after_secs: i64,
+        limit: i64,
+    ) -> Result<Vec<Audience>, AdvertisingError>;
+    async fn update_after_sync(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        audience: &Audience,
+    ) -> Result<(), AdvertisingError>;
 }

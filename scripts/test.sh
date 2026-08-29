@@ -29,9 +29,10 @@ done
 eval "$(./scripts/test-db.sh up)"
 
 if command -v cargo-nextest >/dev/null; then
-    exec cargo nextest run "${workspace_args[@]}" "${profile_args[@]}" "$@"
+    exec cargo nextest run "${workspace_args[@]+"${workspace_args[@]}"}" "${profile_args[@]+"${profile_args[@]}"}" "$@"
 fi
 
 # nextest is what the profiles are written for; `cargo test` is the fallback
 # and has no equivalent of `status-level`, so --quiet is a no-op here.
-exec cargo test "${workspace_args[@]}" "$@"
+exec cargo test "${workspace_args[@]+"${workspace_args[@]}"}" "$@"
+
