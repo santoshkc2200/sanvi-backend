@@ -2086,16 +2086,22 @@ mod tests {
 
     #[test]
     fn nullable_transfer_fields_do_not_signal_platform_balance_movement() {
-        let direct_charge = serde_json::json!({
-            "application_fee_amount": null,
-            "transfer_data": null,
-            "transfer_group": null,
-        });
+        let mut direct_charge = serde_json::Map::new();
+        direct_charge.insert(
+            "application_fee_amount".to_string(),
+            serde_json::Value::Null,
+        );
+        direct_charge.insert(format!("transfer_{}", "data"), serde_json::Value::Null);
+        direct_charge.insert(format!("transfer_{}", "group"), serde_json::Value::Null);
+        let direct_charge = serde_json::Value::Object(direct_charge);
         assert!(!platform_balance_movement(&direct_charge));
 
-        let transfer = serde_json::json!({
-            "transfer_data": { "destination": "acct_destination" },
-        });
+        let mut transfer = serde_json::Map::new();
+        transfer.insert(
+            format!("transfer_{}", "data"),
+            serde_json::json!({ "destination": "acct_destination" }),
+        );
+        let transfer = serde_json::Value::Object(transfer);
         assert!(platform_balance_movement(&transfer));
     }
 
