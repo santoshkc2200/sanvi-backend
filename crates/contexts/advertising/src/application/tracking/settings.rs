@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::domain::{AdvertisingError, TrackingSettings, TrackingSettingsRepository};
 

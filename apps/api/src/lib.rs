@@ -42,7 +42,7 @@ use sanvi_access::{
 use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
-        FakeAdPlatform, OutboxEventPublisher as AdvertisingEvents,
+        FakeAdPlatform,
         SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
         SqlxCreativeRepository, SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
     },
@@ -132,6 +132,7 @@ use sanvi_identity::{
     },
     routes as identity_routes,
 };
+use sanvi_kernel::UserId;
 use sanvi_localization::{
     LocalizationConfig,
     adapters::{
@@ -275,7 +276,6 @@ use sanvi_theming::{
     },
     routes as theming_routes,
 };
-use sanvi_kernel::UserId;
 
 pub use config::AppConfig;
 pub use openapi::ApiDoc;
@@ -326,7 +326,8 @@ pub fn build_tenancy_state(
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let settings: Arc<dyn TenantSettingsRepository> = Arc::new(SqlxTenantSettingsRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events: Arc<dyn TenancyEventPublisherTrait> = Arc::new(TenancyEventPublisher::new(ids.clone()));
+    let events: Arc<dyn TenancyEventPublisherTrait> =
+        Arc::new(TenancyEventPublisher::new(ids.clone()));
     let ids: Arc<dyn TenancyIdGeneratorTrait> = Arc::new(TenancyIdGenerator::new(ids));
     let clock: Arc<dyn sanvi_tenancy::domain::Clock> = Arc::new(TenancyClock);
     let cache: Arc<dyn TenantResolutionCache> = match &redis {
@@ -1093,7 +1094,9 @@ impl EntitlementAdmin for AccessEntitlementAdmin {
             }
             Ok(GrantEntitlementOutput::ApprovalRequired { approval_id }) => Ok(
                 sanvi_platform_admin::domain::GrantOverrideOutcome::ApprovalRequired {
-                    approval_id: sanvi_platform_admin::domain::ApprovalId::from_snowflake(approval_id),
+                    approval_id: sanvi_platform_admin::domain::ApprovalId::from_snowflake(
+                        approval_id,
+                    ),
                 },
             ),
             Err(err) => Err(map_access_err(err)),
@@ -1888,10 +1891,8 @@ pub fn build_billing_state(
         std::time::Duration::from_secs(300),
     ));
 
-    let syncer: Arc<dyn EntitlementSyncer> = Arc::new(AccessEntitlementSyncer::new(
-        entitlements_repo,
-        raw_ids,
-    ));
+    let syncer: Arc<dyn EntitlementSyncer> =
+        Arc::new(AccessEntitlementSyncer::new(entitlements_repo, raw_ids));
 
     sanvi_billing::adapters::http::BillingState {
         list_public_plans: Arc::new(ListPublicPlans::new(
@@ -2625,8 +2626,9 @@ pub fn build_payments_state(
         std::sync::Arc::new(SqlxProviderConnectionRepository::new());
     let events: std::sync::Arc<dyn sanvi_payments::domain::EventPublisher> =
         std::sync::Arc::new(PaymentsEvents::new(ids.clone()));
-    let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> =
-        std::sync::Arc::new(sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()));
+    let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> = std::sync::Arc::new(
+        sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()),
+    );
     let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let create_connection = std::sync::Arc::new(StartProviderConnection::new(
         tx.clone(),

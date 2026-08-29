@@ -1103,19 +1103,6 @@ async fn an_orphaned_provider_account_is_adopted_on_retry() {
     assert_eq!(rows, 1);
 }
 
-/// The derivation is the use case's private function; the test pins its
-/// behaviour through the same construction (tenant ‖ key, v5).
-fn key_derived_id(tenant_id: Uuid, key: Uuid) -> Uuid {
-    let namespace = uuid::Uuid::from_bytes([
-        0x6b, 0x9b, 0x0d, 0x1e, 0x52, 0x6f, 0x4c, 0x2e, 0xa4, 0x1d, 0x7f, 0x3c, 0x90, 0x11, 0xab,
-        0x52,
-    ]);
-    let mut bytes = [0u8; 32];
-    bytes[..16].copy_from_slice(tenant_id.as_bytes());
-    bytes[16..].copy_from_slice(key.as_bytes());
-    uuid::Uuid::new_v5(&namespace, &bytes)
-}
-
 // ---------------------------------------------------------------------------
 // 09.2: the account-session use case.
 // ---------------------------------------------------------------------------

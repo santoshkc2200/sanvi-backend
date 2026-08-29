@@ -13,12 +13,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sanvi_kernel::Id;
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use super::{AdvertisingError, SecretRef};
-use crate::domain::model::{ConnectionId, ConnectionTag};
+use crate::domain::model::ConnectionId;
 
 #[derive(Debug, Clone)]
 pub struct TenantKeyRow {

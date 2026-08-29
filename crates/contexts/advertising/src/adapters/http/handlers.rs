@@ -6,7 +6,7 @@ use sanvi_http::{
     ApiError, CurrentSubject, CurrentTenant, FreshAal2Required, PROBLEM_TYPE_BASE, ProblemDetail,
     RequiredAnyFeature, RequiredPermission,
 };
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;

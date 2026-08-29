@@ -14,7 +14,7 @@ use aes_gcm::aead::{Aead, OsRng};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use async_trait::async_trait;
 use rand::RngCore;
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::domain::model::ConnectionId;

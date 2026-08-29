@@ -1,0 +1,9 @@
+# UUID values which are not first-party entity identities.
+kratos_identity_id: external Kratos identity identifier
+idempotency_key: retry deduplication key
+command_id: Stripe command correlation key
+nonce: OAuth state nonce
+mutation_id: provider mutation correlation key
+provider_event_id: external provider event identifier
+request_id: HTTP request correlation identifier
+trace_id: distributed tracing correlation identifier

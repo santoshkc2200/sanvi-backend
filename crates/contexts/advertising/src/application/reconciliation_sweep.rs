@@ -11,7 +11,6 @@ use std::sync::Arc;
 use sanvi_persistence::TxManager;
 use serde::Serialize;
 
-use crate::domain::model::CampaignId;
 use crate::{
     application::{PlatformRegistry, ReconcileCampaign},
     domain::{AdvertisingError, CampaignRepository, ConnectionHandle, ReconciliationResult},

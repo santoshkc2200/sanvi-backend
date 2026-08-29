@@ -62,6 +62,19 @@ constructed from tenant-scoped transactions (`TxManager::begin_for`), and
 Postgres RLS (`FORCE ROW LEVEL SECURITY` on every `tenant_id`-carrying table)
 filters rows by `SET LOCAL sanvi.tenant_id` — covered by the RLS matrix test.
 
+### IDs
+
+First-party entity IDs are signed 64-bit Snowflakes: stored as `BIGINT` and
+sent over HTTP, events, and CLI arguments as decimal strings (for example,
+`873698342314721281`). Do not convert them through JavaScript numbers. Each
+API, worker, and CLI process has a unique non-zero `ids.node_id`; node `0` is
+reserved for seeded data. Keep clocks synchronized with NTP: a clock rollback
+causes generation to fail rather than duplicate an ID. This is a reset-only
+migration; there is no UUID rollback path. UUIDs remain only for request/trace
+correlation, OAuth nonces, idempotency/command keys, Kratos identities, and
+provider event IDs. Snowflake generation uses `id-forge 1.0.0` (zero runtime
+dependencies, `Apache-2.0 OR MIT`).
+
 ### Identity & access (phase 02)
 
 Sign in happens in Ory Kratos (Google, Microsoft, or email OTP); the API

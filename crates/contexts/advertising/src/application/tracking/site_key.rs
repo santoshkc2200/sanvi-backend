@@ -7,9 +7,8 @@
 //! timing.
 
 use hmac::{Hmac, Mac};
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sha2::Sha256;
-use uuid::Uuid;
 
 use crate::domain::AdvertisingError;
 

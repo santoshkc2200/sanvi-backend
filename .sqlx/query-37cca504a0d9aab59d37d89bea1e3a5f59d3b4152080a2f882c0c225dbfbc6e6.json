@@ -5,10 +5,10 @@
     "columns": [],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Uuid",
+        "Int8",
+        "Int8",
         "Text",
-        "Uuid",
+        "Int8",
         "Timestamptz"
       ]
     },

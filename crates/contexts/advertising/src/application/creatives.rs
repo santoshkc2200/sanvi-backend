@@ -5,9 +5,8 @@ use std::sync::Arc;
 
 use crate::domain::model::{ConnectionId, CreativeId};
 use chrono::Utc;
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::{
     application::PlatformRegistry,

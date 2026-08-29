@@ -38,7 +38,7 @@ Then restart one worker (or wait a poll interval) so the host caches repopulate.
 A claim stays `pending_setup`/`verifying` longer than expected:
 
 1. `SELECT id, tenant_id, hostname, status, failure_code, failure_detail, next_check_at,
-   challenge_expires_at FROM domains.custom_domains WHERE id = '<uuid>';`
+   challenge_expires_at FROM domains.custom_domains WHERE id = '<snowflake-id>';`
 2. `failure_code = txt_missing` → the tenant hasn't published (or published wrong) the
    TXT record. Check the record independently: `dig +short TXT _sanvi-challenge.<host>`.
    Compare with the value in `challenge_token` (`sanvi-verify=<token>`).

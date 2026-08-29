@@ -8,7 +8,6 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::domain::model::ConnectionId;
 use crate::{

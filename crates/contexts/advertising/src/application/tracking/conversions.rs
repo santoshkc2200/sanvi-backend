@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::model::ConversionId;
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 
 use crate::domain::{

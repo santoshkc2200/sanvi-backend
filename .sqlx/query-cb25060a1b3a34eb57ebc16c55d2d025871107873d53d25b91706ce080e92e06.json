@@ -6,7 +6,7 @@
       {
         "ordinal": 0,
         "name": "tenant_id",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "theming.tenant_themes",
@@ -28,7 +28,7 @@
       {
         "ordinal": 2,
         "name": "theme_id",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "theming.tenant_themes",
@@ -116,7 +116,7 @@
       {
         "ordinal": 10,
         "name": "updated_by",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "theming.tenant_themes",
@@ -138,7 +138,7 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid",
+        "Int8",
         "Text"
       ]
     },

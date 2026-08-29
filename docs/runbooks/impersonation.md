@@ -16,8 +16,8 @@ curl -X POST https://admin.sanvi.app/api/v1/platform/impersonations \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "tenant_id": "<tenant-uuid>",
-    "target_user_id": "<member-uuid>",
+    "tenant_id": "<tenant-snowflake-id>",
+    "target_user_id": "<member-snowflake-id>",
     "reason": "support ticket #1234",
     "mode": "read_only",
     "duration_minutes": 15

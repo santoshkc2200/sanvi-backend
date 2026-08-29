@@ -120,6 +120,12 @@ ads-invariants:
 ads-invariants-self-test:
     ./scripts/check-ads-invariants.sh --self-test
 
+id-policy:
+    ./scripts/check-id-policy.sh
+
+id-policy-self-test:
+    ./scripts/check-id-policy.sh --self-test
+
 # One Postgres + Redis for the whole run; each test still gets its own
 # database, cloned from a pre-migrated template. Without `test-db` every test
 # process starts (and leaves behind) a container of its own.
@@ -195,7 +201,7 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants ads-invariants test openapi i18n
+ci: fmt clippy layering connect-invariants ads-invariants id-policy test openapi i18n
 
 # `ci` with the low-noise variants of the two chattiest gates.
-ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants test-quiet openapi i18n
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy test-quiet openapi i18n

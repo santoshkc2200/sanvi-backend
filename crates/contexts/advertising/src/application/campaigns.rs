@@ -8,9 +8,8 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use crate::domain::model::{CampaignChangeId, CampaignId, ConnectionId, ConversionId, CreativeId};
+use crate::domain::model::{CampaignId, ConnectionId, CreativeId};
 use chrono::Utc;
-use sanvi_kernel::Id;
 use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use uuid::Uuid;

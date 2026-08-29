@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use crate::domain::model::CampaignId;
 use chrono::Utc;
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::domain::{
     AdEvent, AdvertisingError, Campaign, CampaignChange, CampaignReconciliationState,

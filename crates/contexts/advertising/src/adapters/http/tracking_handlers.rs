@@ -13,9 +13,8 @@ use std::collections::BTreeMap;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use chrono::Utc;
 use sanvi_http::{ApiError, CurrentTenant, ProblemDetail, RequiredPermission};
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_privacy::domain::SubjectRef;
 

@@ -12,8 +12,8 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Uuid"
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
