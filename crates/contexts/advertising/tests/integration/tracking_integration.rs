@@ -18,10 +18,10 @@ use chrono::Utc;
 use sanvi_advertising::AdvertisingConfig;
 use sanvi_advertising::adapters::SystemIdGenerator;
 use sanvi_advertising::adapters::{
-    CheckoutPaymentLookup, FakeAdPlatform, FakeConversionSink, OutboxEventPublisher, QuotaLimiter,
-    SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
-    SqlxCreativeRepository, SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository,
-    http::AdvertisingState,
+    AdvertisingMetrics, CheckoutPaymentLookup, FakeAdPlatform, FakeConversionSink,
+    OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
+    SqlxCampaignRepository, SqlxConnectionTokenRepository, SqlxCreativeRepository,
+    SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository, http::AdvertisingState,
 };
 use sanvi_advertising::application::tracking::{
     UploadPendingConversions,
@@ -2031,6 +2031,7 @@ async fn upload_sweep_suppressed_event_gets_empty_upload_states_and_is_untouched
         connections.clone(),
         sweep_resolver,
         sinks,
+        Arc::new(AdvertisingMetrics::default()),
     );
 
     let report = worker.execute(100).await.unwrap();
@@ -2081,6 +2082,7 @@ async fn upload_sweep_uploads_pending_event_and_flips_to_uploaded() {
         connections.clone(),
         resolver,
         sinks,
+        Arc::new(AdvertisingMetrics::default()),
     );
 
     let report = worker.execute(100).await.unwrap();
@@ -2158,6 +2160,7 @@ async fn upload_sweep_withdrawn_directive_produces_failed_suppressed_late_withou
         connections.clone(),
         withdrawn_resolver,
         sinks,
+        Arc::new(AdvertisingMetrics::default()),
     );
 
     let report = worker.execute(100).await.unwrap();
@@ -2218,6 +2221,7 @@ async fn upload_sweep_parks_event_after_5_consecutive_failures() {
         connections.clone(),
         resolver,
         sinks,
+        Arc::new(AdvertisingMetrics::default()),
     );
 
     // Attempts 1 to 4: state is Failed
@@ -2250,4 +2254,195 @@ async fn upload_sweep_parks_event_after_5_consecutive_failures() {
     assert_eq!(report.uploaded, 0);
     assert_eq!(report.failed, 0);
     assert_eq!(report.parked, 0);
+}
+
+#[tokio::test]
+async fn upload_sweep_observability_metrics_recorded_accurately() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "upload-observability-metrics").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+    seed_test_connection(&tx, &connections, tenant_id, "meta").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let meta_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[1].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+    sinks.insert(PlatformKey::parse("meta").unwrap(), meta_sink.clone());
+
+    let registry = prometheus::Registry::new();
+    let metrics = Arc::new(AdvertisingMetrics::new(&registry));
+
+    // Capture an event destined for both google_ads and meta
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = TrackConversionCommand {
+        tenant_id,
+        event_name: "purchase".to_string(),
+        event_id: "evt-metrics-test".to_string(),
+        order_ref: None,
+        subject: SubjectRef::tenant_device(tenant_id, "dev-metrics"),
+        email: None,
+        phone: None,
+        value: Some(5000),
+        currency: Some("USD".to_string()),
+        click_ids: ClickIds::default(),
+        platforms: vec![
+            PlatformKey::parse("google_ads").unwrap(),
+            PlatformKey::parse("meta").unwrap(),
+        ],
+        platforms_incomplete: false,
+    };
+    capture.execute(command).await.unwrap();
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        resolver,
+        sinks.clone(),
+        metrics.clone(),
+    );
+
+    let report = worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.uploaded, 2);
+
+    // Verify upload metrics for both platforms
+    assert_eq!(
+        metrics
+            .conversion_upload_total()
+            .with_label_values(&["google_ads", "uploaded"])
+            .get(),
+        1
+    );
+    assert_eq!(
+        metrics
+            .conversion_upload_total()
+            .with_label_values(&["meta", "uploaded"])
+            .get(),
+        1
+    );
+    assert_eq!(
+        metrics.conversion_upload_lag_seconds().get_sample_count(),
+        2
+    );
+    assert_eq!(metrics.conversion_dlq_depth().get(), 0);
+
+    // Test suppressed_late metrics
+    let withdrawn_resolver = Arc::new(FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::AdsMeasurement,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    ));
+    let command_late = TrackConversionCommand {
+        tenant_id,
+        event_name: "purchase".to_string(),
+        event_id: "evt-metrics-late".to_string(),
+        order_ref: None,
+        subject: SubjectRef::tenant_device(tenant_id, "dev-late"),
+        email: None,
+        phone: None,
+        value: Some(1000),
+        currency: Some("USD".to_string()),
+        click_ids: ClickIds::default(),
+        platforms: vec![PlatformKey::parse("google_ads").unwrap()],
+        platforms_incomplete: false,
+    };
+    capture.execute(command_late).await.unwrap();
+
+    let worker_withdrawn = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        withdrawn_resolver,
+        sinks.clone(),
+        metrics.clone(),
+    );
+    let report_late = worker_withdrawn.execute(100).await.unwrap();
+    assert_eq!(report_late.suppressed_late, 1);
+    assert_eq!(
+        metrics
+            .conversion_upload_total()
+            .with_label_values(&["google_ads", "suppressed_late"])
+            .get(),
+        1
+    );
+    assert_eq!(
+        metrics
+            .conversion_suppressed_total()
+            .with_label_values(&["ads_measurement", "opt_out"])
+            .get(),
+        1
+    );
+
+    // Test failed and parked metrics
+    meta_sink.set_upload_error(Some(AdvertisingError::PlatformUnavailable(
+        "error".to_string(),
+    )));
+    let command_fail = TrackConversionCommand {
+        tenant_id,
+        event_name: "purchase".to_string(),
+        event_id: "evt-metrics-park".to_string(),
+        order_ref: None,
+        subject: SubjectRef::tenant_device(tenant_id, "dev-fail"),
+        email: None,
+        phone: None,
+        value: Some(1000),
+        currency: Some("USD".to_string()),
+        click_ids: ClickIds::default(),
+        platforms: vec![PlatformKey::parse("meta").unwrap()],
+        platforms_incomplete: false,
+    };
+    capture.execute(command_fail).await.unwrap();
+
+    let worker_fail = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks,
+        metrics.clone(),
+    );
+
+    // 4 failed attempts
+    for _ in 1..=4 {
+        worker_fail.execute(100).await.unwrap();
+    }
+    assert_eq!(
+        metrics
+            .conversion_upload_total()
+            .with_label_values(&["meta", "failed"])
+            .get(),
+        4
+    );
+    assert_eq!(metrics.conversion_dlq_depth().get(), 0);
+
+    // 5th attempt -> parked
+    let report_park = worker_fail.execute(100).await.unwrap();
+    assert_eq!(report_park.parked, 1);
+    assert_eq!(
+        metrics
+            .conversion_upload_total()
+            .with_label_values(&["meta", "parked"])
+            .get(),
+        1
+    );
+    assert_eq!(metrics.conversion_dlq_depth().get(), 1);
 }

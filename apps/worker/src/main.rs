@@ -38,8 +38,9 @@ use sanvi_access::{
 use sanvi_advertising::{
     ConversionSinkPort, PlatformKey,
     adapters::{
-        FakeAdPlatform, FakeConversionSink, OutboxEventPublisher as AdvertisingEventPublisher,
-        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
+        AdvertisingMetrics, FakeAdPlatform, FakeConversionSink,
+        OutboxEventPublisher as AdvertisingEventPublisher, SqlxAdvertisingConnectionRepository,
+        SqlxCampaignRepository,
     },
     application::{ReconcileCampaign, ReconcileDueCampaigns, UploadPendingConversions},
     domain::AdvertisingConnectionRepository,
@@ -1581,12 +1582,14 @@ async fn main() -> ExitCode {
     }
     let advertising_conversion_events: Arc<dyn ConversionEventRepository> =
         Arc::new(SqlxCampaignRepository::new());
+    let advertising_metrics = Arc::new(AdvertisingMetrics::new(registry));
     let advertising_conversion_upload_sweep = Arc::new(UploadPendingConversions::new(
         tx_manager.clone(),
         advertising_conversion_events,
         advertising_connections,
         privacy_directive_resolver,
         advertising_conversion_sinks,
+        advertising_metrics.clone(),
     ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![

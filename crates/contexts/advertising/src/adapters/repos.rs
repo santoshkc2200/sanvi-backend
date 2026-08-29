@@ -905,6 +905,27 @@ impl ConversionEventRepository for SqlxCampaignRepository {
 
         rows.into_iter().map(row_to_conversion_event).collect()
     }
+
+    // TODO: If conversion_events partition size grows large in production, consider adding a partial
+    // GIN or functional index on `(upload_states)` (e.g. `WHERE jsonb_path_exists(upload_states, '$.* ? (@.status == "parked")')`)
+    // to accelerate DLQ depth counting across all partitions.
+    async fn count_parked(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+    ) -> Result<i64, AdvertisingError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM advertising.conversion_events
+             WHERE EXISTS (
+                 SELECT 1 FROM jsonb_each(upload_states) AS kv
+                 WHERE kv.value->>'status' = 'parked'
+             )",
+        )
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        Ok(count)
+    }
 }
 
 #[derive(Default)]

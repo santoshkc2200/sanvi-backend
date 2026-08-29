@@ -307,6 +307,9 @@ pub trait ConversionEventRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         limit: i64,
     ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
+
+    /// Cross-tenant count of conversion events that currently have at least one platform parked.
+    async fn count_parked(&self, scope: &mut PlatformScope<'_>) -> Result<i64, AdvertisingError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
