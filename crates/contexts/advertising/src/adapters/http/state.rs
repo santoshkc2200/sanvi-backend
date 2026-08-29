@@ -63,4 +63,5 @@ pub struct AdvertisingState {
     pub list_conversions: Arc<crate::application::tracking::conversions::ListConversions>,
     pub get_conversion_diagnostics:
         Arc<crate::application::tracking::conversions::GetConversionDiagnostics>,
+    pub retry_conversion: Arc<crate::application::tracking::retry::RetryConversion>,
 }

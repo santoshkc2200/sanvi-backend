@@ -464,29 +464,24 @@ pub async fn get_conversion_diagnostics(
         ("id" = String, Path, description = "Conversion event Snowflake ID")
     ),
     responses(
-        (status = 501, description = "Conversion upload retry is not implemented yet", body = ProblemDetail),
-        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail)
+        (status = 200, description = "Conversion event re-queued for upload", body = ConversionEvent),
+        (status = 403, description = "Missing advertising.campaign.write permission", body = ProblemDetail),
+        (status = 404, description = "Conversion not found", body = ProblemDetail),
+        (status = 409, description = "Conversion retry refused", body = ProblemDetail)
     )
 )]
 pub async fn retry_conversion(
-    _tenant: CurrentTenant,
+    tenant: CurrentTenant,
     _permission: RequiredPermission,
-    _path: web::Path<crate::domain::model::ConversionId>,
-    _state: web::Data<AdvertisingState>,
+    path: web::Path<crate::domain::model::ConversionId>,
+    state: web::Data<AdvertisingState>,
 ) -> Result<HttpResponse, ApiError> {
-    let problem = ProblemDetail {
-        r#type: format!("{}/not-implemented", sanvi_http::PROBLEM_TYPE_BASE),
-        title: "not_implemented".to_string(),
-        status: 501,
-        detail:
-            "conversion upload retry is not implemented yet; upload retry ships in a later task"
-                .to_string(),
-        instance: None,
-        trace_id: None,
-        reason: None,
-        extensions: None,
-    };
-    Ok(HttpResponse::NotImplemented().json(problem))
+    let event = state
+        .retry_conversion
+        .execute(tenant.0.tenant_id, path.into_inner())
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(event))
 }
 
 #[utoipa::path(

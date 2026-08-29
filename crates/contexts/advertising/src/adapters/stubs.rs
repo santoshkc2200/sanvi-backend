@@ -743,6 +743,9 @@ mod tests {
                 signal_source: "default".to_string(),
             },
             upload_states: BTreeMap::new(),
+            subject_key: crate::domain::SubjectKeyRef::TenantDevice {
+                device_ref: "device-stub".to_string(),
+            },
         }
     }
 
@@ -799,40 +802,45 @@ mod tests {
         let google_ads = PlatformKey::parse("google_ads").unwrap();
         let meta = PlatformKey::parse("meta").unwrap();
 
-        event
-            .upload_states
-            .insert(google_ads.clone(), UploadState::Uploaded);
+        event.upload_states.insert(
+            google_ads.clone(),
+            UploadState::Uploaded { attempt_count: 0 },
+        );
         event.upload_states.insert(
             meta.clone(),
             UploadState::Failed {
                 reason: "invalid access token".to_string(),
+                attempt_count: 0,
             },
         );
 
         assert_eq!(
             event.upload_states.get(&google_ads),
-            Some(&UploadState::Uploaded)
+            Some(&UploadState::Uploaded { attempt_count: 0 })
         );
         assert_eq!(
             event.upload_states.get(&meta),
             Some(&UploadState::Failed {
                 reason: "invalid access token".to_string(),
+                attempt_count: 0,
             })
         );
 
         // Mutating google_ads does not clobber or affect meta
-        event
-            .upload_states
-            .insert(google_ads.clone(), UploadState::Pending);
+        event.upload_states.insert(
+            google_ads.clone(),
+            UploadState::Pending { attempt_count: 0 },
+        );
 
         assert_eq!(
             event.upload_states.get(&google_ads),
-            Some(&UploadState::Pending)
+            Some(&UploadState::Pending { attempt_count: 0 })
         );
         assert_eq!(
             event.upload_states.get(&meta),
             Some(&UploadState::Failed {
                 reason: "invalid access token".to_string(),
+                attempt_count: 0,
             })
         );
     }
@@ -848,12 +856,13 @@ mod tests {
         let meta = PlatformKey::parse("meta").unwrap();
 
         let mut event = sample_conversion_event("evt-retract-1");
+        event.upload_states.insert(
+            google_ads.clone(),
+            UploadState::Uploaded { attempt_count: 0 },
+        );
         event
             .upload_states
-            .insert(google_ads.clone(), UploadState::Uploaded);
-        event
-            .upload_states
-            .insert(meta.clone(), UploadState::Uploaded);
+            .insert(meta.clone(), UploadState::Uploaded { attempt_count: 0 });
 
         sink.retract(&connection, &event).await.unwrap();
 
@@ -865,7 +874,10 @@ mod tests {
         // but does not mutate meta's entry
         event.upload_states.remove(&google_ads);
         assert_eq!(event.upload_states.get(&google_ads), None);
-        assert_eq!(event.upload_states.get(&meta), Some(&UploadState::Uploaded));
+        assert_eq!(
+            event.upload_states.get(&meta),
+            Some(&UploadState::Uploaded { attempt_count: 0 })
+        );
     }
 
     #[tokio::test]

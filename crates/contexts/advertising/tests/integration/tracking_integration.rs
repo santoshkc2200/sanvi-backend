@@ -25,6 +25,7 @@ use sanvi_advertising::adapters::{
 use sanvi_advertising::application::tracking::{
     capture::{CaptureConversion, TrackConversionCommand},
     conversions::{GetConversionDiagnostics, ListConversions},
+    retry::RetryConversion,
     settings::ManageTrackingSettings,
     site_key::generate_site_key,
 };
@@ -37,8 +38,9 @@ use sanvi_advertising::application::{
     ValidateCampaign,
 };
 use sanvi_advertising::domain::{
-    ClickIds, Money, OAuthStateManager, PaymentLookup, PaymentLookupPort, PlatformKey, TokenVault,
-    VendorRole, VendorRolePort,
+    AdvertisingError, ClickIds, ConversionEventRepository, ConversionId, Money, OAuthStateManager,
+    PaymentLookup, PaymentLookupPort, PlatformKey, TokenVault, UploadState, VendorRole,
+    VendorRolePort,
 };
 use sanvi_kernel::TenantId;
 use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
@@ -207,6 +209,18 @@ fn base_command(tenant_id: TenantId, event_id: &str) -> TrackConversionCommand {
         subject: SubjectRef::contact("customer-1@example.com"),
         platforms: vec![PlatformKey::parse("google_ads").unwrap()],
         platforms_incomplete: false,
+    }
+}
+
+/// A `Contact` (email-identified) subject stores no reconstructable key
+/// material (TASK-014's no-raw-PII rule), so its retry withdrawal re-check
+/// always refuses — see `retry_conversion_contact_subject_cannot_retry`.
+/// Retry tests exercising the actual directive re-check need a
+/// device-identified subject instead.
+fn command_with_device_subject(tenant_id: TenantId, event_id: &str) -> TrackConversionCommand {
+    TrackConversionCommand {
+        subject: SubjectRef::tenant_device(tenant_id, "device-1"),
+        ..base_command(tenant_id, event_id)
     }
 }
 
@@ -925,7 +939,7 @@ fn create_test_advertising_state(
         campaign_repo.clone(),
         payment_lookup,
         vendor_role,
-        directive_resolver,
+        directive_resolver.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     ));
 
@@ -935,6 +949,11 @@ fn create_test_advertising_state(
     let get_conversion_diagnostics = Arc::new(GetConversionDiagnostics::new(
         tx.clone(),
         campaign_repo.clone(),
+    ));
+    let retry_conversion = Arc::new(RetryConversion::new(
+        tx.clone(),
+        campaign_repo.clone(),
+        directive_resolver,
     ));
 
     let config = AdvertisingConfig {
@@ -1089,6 +1108,7 @@ fn create_test_advertising_state(
         settings_mgr,
         list_conversions,
         get_conversion_diagnostics,
+        retry_conversion,
     }
 }
 
@@ -1579,4 +1599,315 @@ async fn http_abuse_control_rate_limit_breach_returns_202_and_stores_nothing() {
     let body_domain_ok = test::read_body(res_domain_ok).await;
     assert_eq!(body_domain_ok, "{}");
     assert_eq!(row_count(&pool, tenant_id, "evt-domain-ok").await, 1);
+}
+
+#[tokio::test]
+async fn retry_conversion_parked_to_pending_transition_succeeds() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retry-parked-ok").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let repo = Arc::new(SqlxCampaignRepository::new());
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-retry-parked");
+    capture.execute(command).await.unwrap();
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let events = repo.list(&mut scope, tenant_id).await.unwrap();
+    assert_eq!(events.len(), 1);
+    let conversion_id = events[0].id;
+
+    let google_ads = PlatformKey::parse("google_ads").unwrap();
+    let meta = PlatformKey::parse("meta").unwrap();
+    let mut upload_states = BTreeMap::new();
+    upload_states.insert(
+        google_ads.clone(),
+        UploadState::Parked {
+            reason: "exhausted retries".to_string(),
+            attempts: 3,
+        },
+    );
+    upload_states.insert(meta.clone(), UploadState::Uploaded { attempt_count: 1 });
+    repo.update_upload_states(&mut scope, tenant_id, conversion_id, upload_states)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let retry = RetryConversion::new(tx.clone(), repo.clone(), resolver);
+    let retried_event = retry.execute(tenant_id, conversion_id).await.unwrap();
+
+    assert_eq!(
+        retried_event.upload_states.get(&google_ads),
+        Some(&UploadState::Pending { attempt_count: 4 })
+    );
+    assert_eq!(
+        retried_event.upload_states.get(&meta),
+        Some(&UploadState::Uploaded { attempt_count: 1 })
+    );
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let reloaded = repo
+        .find_by_id(&mut scope, tenant_id, conversion_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reloaded.upload_states.get(&google_ads),
+        Some(&UploadState::Pending { attempt_count: 4 })
+    );
+    assert_eq!(
+        reloaded.upload_states.get(&meta),
+        Some(&UploadState::Uploaded { attempt_count: 1 })
+    );
+}
+
+#[tokio::test]
+async fn retry_conversion_non_parked_event_is_rejected() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retry-non-parked").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let repo = Arc::new(SqlxCampaignRepository::new());
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = base_command(tenant_id, "evt-retry-non-parked");
+    capture.execute(command).await.unwrap();
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let events = repo.list(&mut scope, tenant_id).await.unwrap();
+    let conversion_id = events[0].id;
+    scope.commit().await.unwrap();
+
+    let retry = RetryConversion::new(tx.clone(), repo.clone(), resolver);
+
+    // Case 1: Empty / initial upload states -> rejected
+    let err = retry.execute(tenant_id, conversion_id).await.unwrap_err();
+    assert!(matches!(err, AdvertisingError::InvalidInput(_)));
+
+    // Case 2: Only Uploaded state -> rejected
+    let google_ads = PlatformKey::parse("google_ads").unwrap();
+    let mut upload_states = BTreeMap::new();
+    upload_states.insert(
+        google_ads.clone(),
+        UploadState::Uploaded { attempt_count: 1 },
+    );
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    repo.update_upload_states(&mut scope, tenant_id, conversion_id, upload_states)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let err = retry.execute(tenant_id, conversion_id).await.unwrap_err();
+    assert!(matches!(err, AdvertisingError::InvalidInput(_)));
+
+    // Case 3: Only transient Failed (not Parked) state -> rejected
+    let mut upload_states = BTreeMap::new();
+    upload_states.insert(
+        google_ads.clone(),
+        UploadState::Failed {
+            reason: "transient network error".to_string(),
+            attempt_count: 1,
+        },
+    );
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    repo.update_upload_states(&mut scope, tenant_id, conversion_id, upload_states)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let err = retry.execute(tenant_id, conversion_id).await.unwrap_err();
+    assert!(matches!(err, AdvertisingError::InvalidInput(_)));
+
+    // Case 4: Non-existent event -> ConversionNotFound
+    let non_existent_id = ConversionId::try_from(9_999_999_999_i64).unwrap();
+    let err = retry.execute(tenant_id, non_existent_id).await.unwrap_err();
+    assert!(matches!(err, AdvertisingError::ConversionNotFound));
+}
+
+#[tokio::test]
+async fn retry_conversion_directive_withdrawn_is_rejected_even_if_parked() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retry-withdrawn").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let repo = Arc::new(SqlxCampaignRepository::new());
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-retry-withdrawn");
+    capture.execute(command).await.unwrap();
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let events = repo.list(&mut scope, tenant_id).await.unwrap();
+    let conversion_id = events[0].id;
+
+    let google_ads = PlatformKey::parse("google_ads").unwrap();
+    let mut upload_states = BTreeMap::new();
+    upload_states.insert(
+        google_ads.clone(),
+        UploadState::Parked {
+            reason: "exhausted retries".to_string(),
+            attempts: 3,
+        },
+    );
+    repo.update_upload_states(&mut scope, tenant_id, conversion_id, upload_states)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    // Directive now Denied (consent was withdrawn)
+    let denying_resolver = Arc::new(FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::AdsMeasurement,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    ));
+
+    let retry = RetryConversion::new(tx.clone(), repo.clone(), denying_resolver);
+    let err = retry.execute(tenant_id, conversion_id).await.unwrap_err();
+    assert!(matches!(err, AdvertisingError::InvalidInput(msg) if msg.contains("withdrawn")));
+
+    // State in DB remains Parked (not modified)
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let unchanged = repo
+        .find_by_id(&mut scope, tenant_id, conversion_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        unchanged.upload_states.get(&google_ads),
+        Some(UploadState::Parked { attempts: 3, .. })
+    ));
+}
+
+#[tokio::test]
+async fn retry_conversion_double_retry_is_idempotent() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retry-idempotent").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let repo = Arc::new(SqlxCampaignRepository::new());
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-retry-idempotent");
+    capture.execute(command).await.unwrap();
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let events = repo.list(&mut scope, tenant_id).await.unwrap();
+    let conversion_id = events[0].id;
+
+    let google_ads = PlatformKey::parse("google_ads").unwrap();
+    let mut upload_states = BTreeMap::new();
+    upload_states.insert(
+        google_ads.clone(),
+        UploadState::Parked {
+            reason: "exhausted retries".to_string(),
+            attempts: 2,
+        },
+    );
+    repo.update_upload_states(&mut scope, tenant_id, conversion_id, upload_states)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let retry = RetryConversion::new(tx.clone(), repo.clone(), resolver);
+
+    // First retry call: flips Parked -> Pending { attempt_count: 3 }
+    let first_result = retry.execute(tenant_id, conversion_id).await.unwrap();
+    assert_eq!(
+        first_result.upload_states.get(&google_ads),
+        Some(&UploadState::Pending { attempt_count: 3 })
+    );
+
+    // Second retry call immediately: no-op success returning the event unchanged
+    let second_result = retry.execute(tenant_id, conversion_id).await.unwrap();
+    assert_eq!(
+        second_result.upload_states.get(&google_ads),
+        Some(&UploadState::Pending { attempt_count: 3 })
+    );
+    assert_eq!(first_result.upload_states, second_result.upload_states);
+}
+
+/// An event captured under an email-identified subject stores no
+/// reconstructable key material (TASK-014 forbids persisting the raw
+/// email here). Retry must refuse rather than re-check withdrawal against
+/// a fabricated subject that was never the one the gate actually asked —
+/// regression test for that exact bug.
+#[tokio::test]
+async fn retry_conversion_contact_subject_cannot_retry() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retry-contact-subject").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let resolver = Arc::new(FakeDirectiveResolver::allow_all());
+    let repo = Arc::new(SqlxCampaignRepository::new());
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    // base_command's subject is `SubjectRef::contact(..)` — email-identified.
+    let command = base_command(tenant_id, "evt-retry-contact-subject");
+    capture.execute(command).await.unwrap();
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let events = repo.list(&mut scope, tenant_id).await.unwrap();
+    let conversion_id = events[0].id;
+
+    let google_ads = PlatformKey::parse("google_ads").unwrap();
+    let mut upload_states = BTreeMap::new();
+    upload_states.insert(
+        google_ads.clone(),
+        UploadState::Parked {
+            reason: "exhausted retries".to_string(),
+            attempts: 1,
+        },
+    );
+    repo.update_upload_states(&mut scope, tenant_id, conversion_id, upload_states)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let retry = RetryConversion::new(tx.clone(), repo.clone(), resolver);
+    let err = retry.execute(tenant_id, conversion_id).await.unwrap_err();
+    assert!(matches!(
+        err,
+        AdvertisingError::InvalidInput(msg) if msg.contains("email-identified")
+    ));
+
+    // State in DB remains Parked (not silently flipped to Pending).
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let unchanged = repo
+        .find_by_id(&mut scope, tenant_id, conversion_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        unchanged.upload_states.get(&google_ads),
+        Some(UploadState::Parked { attempts: 1, .. })
+    ));
 }

@@ -675,8 +675,11 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
     }
 }
 
+use std::collections::BTreeMap;
+
 use crate::domain::{
     ConversionEvent, ConversionEventRepository, TrackingSettings, TrackingSettingsRepository,
+    UploadState,
 };
 
 #[derive(sqlx::FromRow)]
@@ -695,6 +698,7 @@ struct ConversionEventRow {
     hashed_ids: serde_json::Value,
     consent: serde_json::Value,
     upload_states: serde_json::Value,
+    subject_key: serde_json::Value,
 }
 
 fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, AdvertisingError> {
@@ -731,6 +735,7 @@ fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, A
         hashed_identifiers: serde_json::from_value(row.hashed_ids).map_err(map_json_err)?,
         consent: serde_json::from_value(row.consent).map_err(map_json_err)?,
         upload_states: serde_json::from_value(row.upload_states).map_err(map_json_err)?,
+        subject_key: serde_json::from_value(row.subject_key).map_err(map_json_err)?,
     })
 }
 
@@ -779,12 +784,14 @@ impl ConversionEventRepository for SqlxCampaignRepository {
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
         let upload_states = serde_json::to_value(&event.upload_states)
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let subject_key = serde_json::to_value(&event.subject_key)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
         sqlx::query(
             "INSERT INTO advertising.conversion_events
                (id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
-                value_source, order_ref, click_ids, hashed_ids, consent, upload_states)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+                value_source, order_ref, click_ids, hashed_ids, consent, upload_states, subject_key)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(event.id.as_i64())
         .bind(event.tenant_id.as_i64())
@@ -800,6 +807,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         .bind(hashed_ids)
         .bind(consent)
         .bind(upload_states)
+        .bind(subject_key)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_err)?;
@@ -814,7 +822,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
     ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
         let rows = sqlx::query_as::<_, ConversionEventRow>(
             "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
-                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states, subject_key
              FROM advertising.conversion_events
              WHERE tenant_id = $1
              ORDER BY occurred_at DESC
@@ -836,7 +844,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
     ) -> Result<Option<ConversionEvent>, AdvertisingError> {
         let row = sqlx::query_as::<_, ConversionEventRow>(
             "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
-                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states, subject_key
              FROM advertising.conversion_events
              WHERE tenant_id = $1 AND id = $2",
         )
@@ -847,6 +855,31 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
         row.map(row_to_conversion_event).transpose()
+    }
+
+    async fn update_upload_states(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        id: ConversionId,
+        upload_states: BTreeMap<PlatformKey, UploadState>,
+    ) -> Result<(), AdvertisingError> {
+        let upload_states = serde_json::to_value(&upload_states)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        sqlx::query(
+            "UPDATE advertising.conversion_events
+             SET upload_states = $1
+             WHERE tenant_id = $2 AND id = $3",
+        )
+        .bind(upload_states)
+        .bind(tenant_id.as_i64())
+        .bind(id.as_i64())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        Ok(())
     }
 }
 
