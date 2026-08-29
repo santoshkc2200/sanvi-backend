@@ -10,6 +10,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use sanvi_kernel::RawIdGenerator;
 use sha2::{Digest, Sha256};
 
 use sanvi_persistence::build_pool;
@@ -30,6 +31,7 @@ pub async fn publish(
     visibility: &str,
     required_feature: Option<&str>,
     allow_contrast_warnings: bool,
+    ids: std::sync::Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
     let config = crate::config::load(environment)?;
     let theme_dir = PathBuf::from(dir);
@@ -76,8 +78,6 @@ pub async fn publish(
 
     // 4. Registry insert, in the audited platform scope, atomically with
     //    the published event.
-    let ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator> =
-        std::sync::Arc::new(sanvi_kernel::SnowflakeGenerator::new(0));
     let pool = build_pool(&config.database).await?;
     let themes: std::sync::Arc<dyn ThemeRepository> =
         std::sync::Arc::new(SqlxThemeRepository::new());
@@ -151,10 +151,13 @@ pub async fn versions(environment: &str, key: &str) -> anyhow::Result<()> {
 }
 
 /// Withdraw a version (the kill switch; pinned tenants keep rendering).
-pub async fn yank(environment: &str, key: &str, version: &str) -> anyhow::Result<()> {
+pub async fn yank(
+    environment: &str,
+    key: &str,
+    version: &str,
+    ids: std::sync::Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
     let config = crate::config::load(environment)?;
-    let ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator> =
-        std::sync::Arc::new(sanvi_kernel::SnowflakeGenerator::new(0));
     let pool = build_pool(&config.database).await?;
     let themes: std::sync::Arc<dyn ThemeRepository> =
         std::sync::Arc::new(SqlxThemeRepository::new());

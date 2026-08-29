@@ -23,6 +23,7 @@ use sanvi_identity::{
     application::{GrantMembership, GrantMembershipCommand},
     domain::{Email, EventPublisher, MembershipRepository, RoleCatalog, UserRepository},
 };
+use sanvi_kernel::RawIdGenerator;
 use sanvi_persistence::TxManager;
 use sanvi_tenancy::domain::TenantRepository as _;
 
@@ -35,18 +36,24 @@ pub enum SeedKind {
     Features,
 }
 
-pub async fn seed(environment: &str, kind: SeedKind) -> anyhow::Result<()> {
+pub async fn seed(
+    environment: &str,
+    kind: SeedKind,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
     let config = load_config(environment)?;
     let pool = sanvi_persistence::build_pool(&config.database).await?;
-    let tx_manager = TxManager::new(pool.clone());
+    let tx_manager = TxManager::new(pool.clone(), ids.clone());
 
     let roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
-    let ids: Arc<dyn IdGenerator> = Arc::new(sanvi_access::adapters::SystemRoleIdGenerator);
+    let role_ids: Arc<dyn IdGenerator> = Arc::new(
+        sanvi_access::adapters::SystemRoleIdGenerator::new(ids.clone()),
+    );
     let clock: Arc<dyn Clock> = Arc::new(sanvi_access::adapters::SystemClock);
 
     match kind {
         SeedKind::Roles => {
-            let use_case = SeedRoles::new(tx_manager, roles, ids, clock);
+            let use_case = SeedRoles::new(tx_manager, roles, role_ids, clock);
             let changed = use_case.execute().await?;
             println!("seeded roles ({changed} created or updated)");
         }
@@ -82,10 +89,14 @@ pub struct MembershipGrantArgs {
     pub platform: bool,
 }
 
-pub async fn membership_grant(environment: &str, args: MembershipGrantArgs) -> anyhow::Result<()> {
+pub async fn membership_grant(
+    environment: &str,
+    args: MembershipGrantArgs,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
     let config = load_config(environment)?;
     let pool = sanvi_persistence::build_pool(&config.database).await?;
-    let tx_manager = TxManager::new(pool.clone());
+    let tx_manager = TxManager::new(pool.clone(), ids.clone());
     let users: Arc<dyn UserRepository> = Arc::new(SqlxUserRepository::new());
 
     // The target user must already exist (registered via Kratos).
@@ -110,7 +121,7 @@ pub async fn membership_grant(environment: &str, args: MembershipGrantArgs) -> a
         store
             .write(&[Tuple::role_membership(
                 &format!("platform:{}", args.role),
-                user.id().as_i64(),
+                user.id(),
             )])
             .await?;
         println!(
@@ -137,15 +148,15 @@ pub async fn membership_grant(environment: &str, args: MembershipGrantArgs) -> a
         .await?
         .ok_or_else(|| anyhow::anyhow!("no tenant with slug {tenant_slug}"))?;
     scope.commit().await?;
-    let tenant_id = tenant.id().as_i64();
+    let tenant_id = tenant.id();
 
     let roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
     let role_catalog: Arc<dyn RoleCatalog> = Arc::new(SqlxRoleCatalog::new(
-        TxManager::new(pool.clone()),
+        TxManager::new(pool.clone(), ids.clone()),
         roles.clone(),
     ));
     let memberships: Arc<dyn MembershipRepository> = Arc::new(SqlxMembershipRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(ids));
     let clock: Arc<dyn sanvi_identity::domain::Clock> = Arc::new(SystemClock);
 
     let grant = GrantMembership::new(
@@ -166,7 +177,7 @@ pub async fn membership_grant(environment: &str, args: MembershipGrantArgs) -> a
     let role_id = assignable
         .iter()
         .find(|role| role.key() == args.role)
-        .map(|role| role.id().as_i64())
+        .map(|role| role.id())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "role {} is not assignable in tenant {tenant_slug}",

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::config::load as load_config;
 use sanvi_access::{
     adapters::{SqlxEntitlementRepository, SqlxFeatureRepository, SqlxRoleRepository},
     application::{
@@ -22,6 +23,7 @@ use sanvi_audit::{
     adapters::{SqlxAuditReader, SqlxAuditWriter},
     application::{ListAuditLog, VerifyAuditChain},
 };
+use sanvi_kernel::{RawIdGenerator, TenantId, UserId};
 use sanvi_persistence::TxManager;
 use sanvi_platform_admin::{
     adapters::{
@@ -39,21 +41,24 @@ use sanvi_tenancy::{
     adapters::repo::SqlxTenantRepository,
     domain::{TenantRepository, TenantSlug},
 };
-use uuid::Uuid;
-
-use crate::config::load as load_config;
 
 /// The CLI's recorded actor (audit entries); a local operator session.
-const CLI_ACTOR: Uuid = Uuid::nil();
+fn cli_actor() -> UserId {
+    UserId::try_from(1).expect("the reserved CLI actor ID is valid")
+}
 
 async fn connect(environment: &str) -> anyhow::Result<sanvi_persistence::PgPool> {
     let config = load_config(environment)?;
     sanvi_persistence::build_pool(&config.database).await
 }
 
-async fn tenant_id_by_slug(environment: &str, slug: &str) -> anyhow::Result<Uuid> {
+async fn tenant_id_by_slug(
+    environment: &str,
+    slug: &str,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<TenantId> {
     let pool = connect(environment).await?;
-    let tx_manager = TxManager::new(pool);
+    let tx_manager = TxManager::new(pool, ids);
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let mut scope = tx_manager
         .begin_unscoped("cli_tenant_lookup", "platform-admin")
@@ -63,16 +68,19 @@ async fn tenant_id_by_slug(environment: &str, slug: &str) -> anyhow::Result<Uuid
         .await?
         .ok_or_else(|| anyhow::anyhow!("no tenant with slug {slug}"))?;
     scope.commit().await?;
-    Ok(tenant.id().as_i64())
+    Ok(tenant.id())
 }
 
 // ---------------------------------------------------------------------------
 // Features
 // ---------------------------------------------------------------------------
 
-pub async fn feature_list(environment: &str) -> anyhow::Result<()> {
+pub async fn feature_list(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
-    let use_case = ListFeatures::new(TxManager::new(pool), Arc::new(SqlxFeatureRepository::new()));
+    let use_case = ListFeatures::new(
+        TxManager::new(pool, ids),
+        Arc::new(SqlxFeatureRepository::new()),
+    );
     let features = use_case.execute().await?;
     for feature in &features {
         let deprecated = feature
@@ -105,18 +113,24 @@ pub struct FeatureDefineArgs<'a> {
     pub visibility: &'a str,
 }
 
-pub async fn feature_define(environment: &str, args: FeatureDefineArgs<'_>) -> anyhow::Result<()> {
+pub async fn feature_define(
+    environment: &str,
+    args: FeatureDefineArgs<'_>,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
     let use_case = DefineFeature::new(
-        TxManager::new(pool),
+        TxManager::new(pool, ids.clone()),
         Arc::new(SqlxFeatureRepository::new()),
-        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new(
+            ids.clone(),
+        )),
         Arc::new(sanvi_access::adapters::SystemClock),
-        Arc::new(SqlxAuditWriter::new()),
+        Arc::new(SqlxAuditWriter::new(ids)),
     );
     let feature = use_case
         .execute(
-            CLI_ACTOR,
+            cli_actor(),
             None,
             DefineFeatureCommand {
                 key: FeatureKey::parse(args.key)?,
@@ -149,23 +163,26 @@ pub struct EntitlementGrantArgs {
 pub async fn entitlement_grant(
     environment: &str,
     args: EntitlementGrantArgs,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
-    let tenant_id = tenant_id_by_slug(environment, &args.tenant_slug).await?;
+    let tenant_id = tenant_id_by_slug(environment, &args.tenant_slug, ids.clone()).await?;
     let config = load_config(environment)?;
     let pool = connect(environment).await?;
-    let tx_manager = TxManager::new(pool);
+    let tx_manager = TxManager::new(pool, ids.clone());
     let record_approval = Arc::new(RecordApprovalRequest::new(
         Arc::new(SqlxPendingApprovalRepository::new()),
-        Arc::new(SystemIdGenerator),
+        Arc::new(SystemIdGenerator::new(ids.clone())),
         Arc::new(SystemClock),
     ));
     let use_case = GrantEntitlement::new(
         tx_manager,
         Arc::new(SqlxFeatureRepository::new()),
         Arc::new(SqlxEntitlementRepository::new()),
-        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new(
+            ids.clone(),
+        )),
         Arc::new(sanvi_access::adapters::SystemClock),
-        Arc::new(SqlxAuditWriter::new()),
+        Arc::new(SqlxAuditWriter::new(ids)),
         Arc::new(ApprovalGateAdapter::new(record_approval)),
         sanvi_access::application::entitlements::EntitlementPolicy {
             approval_threshold: config.access.entitlement_approval_threshold,
@@ -173,7 +190,7 @@ pub async fn entitlement_grant(
     );
     match use_case
         .execute(
-            CLI_ACTOR,
+            cli_actor(),
             None,
             GrantEntitlementCommand {
                 tenant_id,
@@ -200,20 +217,23 @@ pub async fn entitlement_revoke(
     environment: &str,
     tenant_slug: &str,
     feature: &str,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
-    let tenant_id = tenant_id_by_slug(environment, tenant_slug).await?;
+    let tenant_id = tenant_id_by_slug(environment, tenant_slug, ids.clone()).await?;
     let pool = connect(environment).await?;
     let use_case = RevokeEntitlement::new(
-        TxManager::new(pool),
+        TxManager::new(pool, ids.clone()),
         Arc::new(SqlxEntitlementRepository::new()),
         Arc::new(sanvi_access::adapters::NoopEntitlementCache),
-        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new(
+            ids.clone(),
+        )),
         Arc::new(sanvi_access::adapters::SystemClock),
-        Arc::new(SqlxAuditWriter::new()),
+        Arc::new(SqlxAuditWriter::new(ids)),
     );
     use_case
         .execute(
-            CLI_ACTOR,
+            cli_actor(),
             None,
             RevokeEntitlementCommand {
                 tenant_id,
@@ -225,11 +245,15 @@ pub async fn entitlement_revoke(
     Ok(())
 }
 
-pub async fn entitlement_list(environment: &str, tenant_slug: &str) -> anyhow::Result<()> {
-    let tenant_id = tenant_id_by_slug(environment, tenant_slug).await?;
+pub async fn entitlement_list(
+    environment: &str,
+    tenant_slug: &str,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
+    let tenant_id = tenant_id_by_slug(environment, tenant_slug, ids.clone()).await?;
     let pool = connect(environment).await?;
     let use_case = ListTenantOverrides::new(
-        TxManager::new(pool),
+        TxManager::new(pool, ids),
         Arc::new(SqlxEntitlementRepository::new()),
     );
     let rows = use_case.execute(tenant_id).await?;
@@ -261,9 +285,12 @@ pub async fn entitlement_list(environment: &str, tenant_slug: &str) -> anyhow::R
 // Roles
 // ---------------------------------------------------------------------------
 
-pub async fn role_list(environment: &str) -> anyhow::Result<()> {
+pub async fn role_list(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
-    let use_case = ListRoles::new(TxManager::new(pool), Arc::new(SqlxRoleRepository::new()));
+    let use_case = ListRoles::new(
+        TxManager::new(pool, ids),
+        Arc::new(SqlxRoleRepository::new()),
+    );
     let roles = use_case.execute_platform().await?;
     for role in &roles {
         println!(
@@ -285,14 +312,15 @@ pub async fn role_list(environment: &str) -> anyhow::Result<()> {
 pub async fn impersonation_list(
     environment: &str,
     tenant_slug: Option<&str>,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
     let tenant_id = match tenant_slug {
-        Some(slug) => Some(tenant_id_by_slug(environment, slug).await?),
+        Some(slug) => Some(tenant_id_by_slug(environment, slug, ids.clone()).await?),
         None => None,
     };
     let pool = connect(environment).await?;
     let use_case = ListImpersonations::new(
-        TxManager::new(pool),
+        TxManager::new(pool, ids),
         Arc::new(SqlxImpersonationGrantRepository::new()),
         Arc::new(SystemClock),
     );
@@ -315,22 +343,22 @@ pub async fn impersonation_list(
     Ok(())
 }
 
-pub async fn impersonation_revoke(environment: &str, grant_id: Uuid) -> anyhow::Result<()> {
+pub async fn impersonation_revoke(
+    environment: &str,
+    grant_id: sanvi_platform_admin::domain::ImpersonationGrantId,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
     let use_case = RevokeImpersonation::new(
-        TxManager::new(pool),
+        TxManager::new(pool, ids.clone()),
         Arc::new(SqlxImpersonationGrantRepository::new()),
-        Arc::new(sanvi_platform_admin::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_platform_admin::adapters::OutboxEventPublisher::new(
+            ids.clone(),
+        )),
         Arc::new(SystemClock),
-        Arc::new(SqlxAuditWriter::new()),
+        Arc::new(SqlxAuditWriter::new(ids)),
     );
-    use_case
-        .execute(
-            CLI_ACTOR,
-            None,
-            sanvi_platform_admin::domain::ImpersonationGrantId::from_uuid(grant_id),
-        )
-        .await?;
+    use_case.execute(cli_actor(), None, grant_id).await?;
     println!("grant {grant_id} revoked");
     Ok(())
 }
@@ -339,10 +367,13 @@ pub async fn impersonation_revoke(environment: &str, grant_id: Uuid) -> anyhow::
 // Audit
 // ---------------------------------------------------------------------------
 
-pub async fn audit_verify(environment: &str) -> anyhow::Result<()> {
+pub async fn audit_verify(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
-    let use_case =
-        VerifyAuditChain::new(TxManager::new(pool), Arc::new(SqlxAuditReader::new()), 1000);
+    let use_case = VerifyAuditChain::new(
+        TxManager::new(pool, ids),
+        Arc::new(SqlxAuditReader::new()),
+        1000,
+    );
     let report = use_case.execute().await?;
     if report.verified {
         println!("audit chain verified ({} entries)", report.entries_checked);
@@ -357,12 +388,13 @@ pub async fn audit_verify(environment: &str) -> anyhow::Result<()> {
 
 pub async fn audit_list(
     environment: &str,
-    tenant_id: Option<Uuid>,
+    tenant_id: Option<TenantId>,
     action: Option<String>,
     limit: u32,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
-    let use_case = ListAuditLog::new(TxManager::new(pool), Arc::new(SqlxAuditReader::new()));
+    let use_case = ListAuditLog::new(TxManager::new(pool, ids), Arc::new(SqlxAuditReader::new()));
     let page = use_case
         .execute(
             sanvi_audit::domain::AuditFilters {
@@ -404,10 +436,10 @@ pub async fn audit_list(
 // Four-eyes approvals
 // ---------------------------------------------------------------------------
 
-pub async fn approval_list(environment: &str) -> anyhow::Result<()> {
+pub async fn approval_list(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
     let use_case = ListPendingApprovals::new(
-        TxManager::new(pool),
+        TxManager::new(pool, ids),
         Arc::new(SqlxPendingApprovalRepository::new()),
     );
     let approvals = use_case.execute(100).await?;
@@ -425,30 +457,31 @@ pub async fn approval_list(environment: &str) -> anyhow::Result<()> {
 
 pub async fn approval_decide(
     environment: &str,
-    approval_id: Uuid,
+    approval_id: sanvi_platform_admin::domain::ApprovalId,
     approve: bool,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
     let pool = connect(environment).await?;
-    let tx_manager = TxManager::new(pool);
+    let tx_manager = TxManager::new(pool, ids.clone());
 
     // The approval executor re-runs the access grant with four-eyes
     // skipped (the approval is the second pair of eyes).
     let entitlement_admin: Arc<dyn EntitlementAdmin> =
-        Arc::new(control_entitlement_admin(tx_manager.clone()));
+        Arc::new(control_entitlement_admin(tx_manager.clone(), ids.clone()));
     let decide = Arc::new(DecideApproval::new(
         tx_manager,
         Arc::new(SqlxPendingApprovalRepository::new()),
         entitlement_admin,
         Arc::new(SystemClock),
-        Arc::new(SqlxAuditWriter::new()),
+        Arc::new(SqlxAuditWriter::new(ids)),
     ));
     let outcome = if approve {
         ApproveRequest::new(decide)
             .execute(
-                CLI_ACTOR,
+                cli_actor(),
                 None,
                 DecideApprovalCommand {
-                    approval_id: sanvi_platform_admin::domain::ApprovalId::from_uuid(approval_id),
+                    approval_id,
                     approve: true,
                 },
             )
@@ -456,10 +489,10 @@ pub async fn approval_decide(
     } else {
         RejectRequest::new(decide)
             .execute(
-                CLI_ACTOR,
+                cli_actor(),
                 None,
                 DecideApprovalCommand {
-                    approval_id: sanvi_platform_admin::domain::ApprovalId::from_uuid(approval_id),
+                    approval_id,
                     approve: false,
                 },
             )
@@ -479,12 +512,16 @@ fn noop_approval_gate() -> Arc<dyn ApprovalGate> {
 
 /// The `EntitlementAdmin` adapter for the CLI's approval executor (reuses
 /// the composition root's adapter from `sanvi-api`).
-fn control_entitlement_admin(tx_manager: TxManager) -> sanvi_api::AccessEntitlementAdmin {
+fn control_entitlement_admin(
+    tx_manager: TxManager,
+    ids: Arc<dyn RawIdGenerator>,
+) -> sanvi_api::AccessEntitlementAdmin {
     let features: Arc<dyn FeatureRepository> = Arc::new(SqlxFeatureRepository::new());
     let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
-    let events: Arc<dyn EventPublisher> =
-        Arc::new(sanvi_access::adapters::OutboxEventPublisher::new());
-    let audit = Arc::new(SqlxAuditWriter::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(
+        sanvi_access::adapters::OutboxEventPublisher::new(ids.clone()),
+    );
+    let audit = Arc::new(SqlxAuditWriter::new(ids));
     let cache: Arc<dyn EntitlementCache> = Arc::new(sanvi_access::adapters::NoopEntitlementCache);
 
     let grant = Arc::new(GrantEntitlement::new(

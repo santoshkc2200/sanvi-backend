@@ -53,18 +53,20 @@ fn test_app() -> actix_web::App<
     // Identity/access wiring: real adapter construction with the lazy pool
     // (nothing connects until a route actually exercises it).
     let pool = pool_stub();
+    let ids = test_ids();
     let role_catalog: std::sync::Arc<dyn sanvi_identity::domain::RoleCatalog> =
         std::sync::Arc::new(sanvi_access::adapters::SqlxRoleCatalog::new(
-            sanvi_persistence::TxManager::new(pool.clone()),
+            sanvi_persistence::TxManager::new(pool.clone(), ids.clone()),
             std::sync::Arc::new(sanvi_access::adapters::SqlxRoleRepository::new()),
         ));
     let tenant_catalog: std::sync::Arc<dyn sanvi_identity::domain::TenantCatalog> =
         std::sync::Arc::new(TenantCatalogAdapter::new(
-            sanvi_persistence::TxManager::new(pool.clone()),
+            sanvi_persistence::TxManager::new(pool.clone(), ids.clone()),
             std::sync::Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
         ));
     let identity = build_identity_state(
         pool.clone(),
+        ids.clone(),
         None,
         &config.identity,
         &config.ory.kratos_public_url,
@@ -73,9 +75,10 @@ fn test_app() -> actix_web::App<
         tenant_catalog,
         None,
     );
-    let audit = build_audit_state(pool.clone(), &config.audit);
+    let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);
     let access = build_access_state(
         pool.clone(),
+        ids.clone(),
         &config.access,
         &config.ory.keto_read_url,
         &config.ory.keto_write_url,
@@ -94,6 +97,7 @@ fn test_app() -> actix_web::App<
         ));
     let platform_admin = build_platform_admin_state(
         pool.clone(),
+        ids,
         &config.platform_admin,
         std::sync::Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
         identity.memberships.clone(),

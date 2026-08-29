@@ -20,6 +20,7 @@ use sanvi_billing::{
         SubscriptionRepository, TenantLifecycle, WebhookEventRepository,
     },
 };
+use sanvi_kernel::RawIdGenerator;
 use sanvi_persistence::TxManager;
 
 /// Load configuration and connect.
@@ -37,6 +38,7 @@ async fn connect(
 async fn build_stack(
     pool: sanvi_persistence::PgPool,
     config: &sanvi_billing::BillingConfig,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<(
     TxManager,
     Arc<WebhookDispatcher>,
@@ -46,7 +48,7 @@ async fn build_stack(
     Arc<DunningSweep>,
     Arc<dyn WebhookEventRepository>,
 )> {
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), ids.clone());
     let plans: Arc<dyn PlanRepository> = Arc::new(SqlxPlanRepository::new());
     let prices: Arc<dyn PlanPriceRepository> = Arc::new(SqlxPlanPriceRepository::new());
     let grants: Arc<dyn PlanEntitlementRepository> = Arc::new(SqlxPlanEntitlementRepository::new());
@@ -54,19 +56,22 @@ async fn build_stack(
         Arc::new(SqlxSubscriptionRepository::new());
     let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(ids.clone()));
     let notifications: Arc<dyn Notifications> = Arc::new(LoggingNotifications::new());
-    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator);
+    let billing_ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(ids.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let entitlements: Arc<dyn sanvi_access::domain::EntitlementRepository> =
         Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new());
-    let syncer: Arc<dyn EntitlementSyncer> = Arc::new(AccessEntitlementSyncer::new(entitlements));
+    let syncer: Arc<dyn EntitlementSyncer> =
+        Arc::new(AccessEntitlementSyncer::new(entitlements, ids.clone()));
     let tenants: Arc<dyn sanvi_tenancy::domain::TenantRepository> =
         Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new());
     let lifecycle: Arc<dyn TenantLifecycle> = Arc::new(TenancyTenantLifecycle::new(
         tx.clone(),
         tenants,
-        Arc::new(sanvi_tenancy::adapters::OutboxEventPublisher::new()),
+        Arc::new(sanvi_tenancy::adapters::OutboxEventPublisher::new(
+            ids.clone(),
+        )),
         Arc::new(sanvi_tenancy::adapters::SystemClock),
     ));
     let stripe: Arc<dyn StripeClient> = Arc::new(HttpStripeClient::new(
@@ -88,7 +93,7 @@ async fn build_stack(
         notifications.clone(),
         events.clone(),
         stripe.clone(),
-        ids,
+        billing_ids,
         clock.clone(),
     ));
     let list_plans = Arc::new(ListPlans::new(tx.clone(), plans, prices, grants));
@@ -125,9 +130,9 @@ async fn build_stack(
 }
 
 /// `billing plans` — the operator catalog.
-pub async fn plans(environment: &str) -> anyhow::Result<()> {
+pub async fn plans(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let (pool, config) = connect(environment).await?;
-    let (_, _, list_plans, _, _, _, _) = build_stack(pool, &config).await?;
+    let (_, _, list_plans, _, _, _, _) = build_stack(pool, &config, ids).await?;
     let plans = list_plans
         .execute()
         .await
@@ -148,9 +153,9 @@ pub async fn plans(environment: &str) -> anyhow::Result<()> {
 
 /// `billing tax-check` — fail loudly when automatic_tax is enabled without
 /// an active Stripe Tax registration.
-pub async fn tax_check(environment: &str) -> anyhow::Result<()> {
+pub async fn tax_check(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let (pool, config) = connect(environment).await?;
-    let (_, _, _, check, _, _, _) = build_stack(pool, &config).await?;
+    let (_, _, _, check, _, _, _) = build_stack(pool, &config, ids).await?;
     let registrations = check.execute().await.map_err(|err| anyhow::anyhow!(err))?;
     for registration in &registrations {
         println!("{}\t{}", registration.country, registration.id);
@@ -161,9 +166,9 @@ pub async fn tax_check(environment: &str) -> anyhow::Result<()> {
 
 /// `billing reconcile` — one manual reconciliation pass (the worker does
 /// this daily; the runbook uses this for incident repair).
-pub async fn reconcile(environment: &str) -> anyhow::Result<()> {
+pub async fn reconcile(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let (pool, config) = connect(environment).await?;
-    let (_, _, _, _, reconciliation, _, _) = build_stack(pool, &config).await?;
+    let (_, _, _, _, reconciliation, _, _) = build_stack(pool, &config, ids).await?;
     let report = reconciliation
         .execute(1000)
         .await
@@ -179,9 +184,9 @@ pub async fn reconcile(environment: &str) -> anyhow::Result<()> {
 }
 
 /// `billing webhooks` — the store-first queue's backlog.
-pub async fn webhooks(environment: &str) -> anyhow::Result<()> {
+pub async fn webhooks(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let (pool, config) = connect(environment).await?;
-    let (tx, _, _, _, _, _, webhooks) = build_stack(pool, &config).await?;
+    let (tx, _, _, _, _, _, webhooks) = build_stack(pool, &config, ids).await?;
     let mut scope = tx
         .begin_unscoped("billing_webhook_status", "platform-admin")
         .await?;

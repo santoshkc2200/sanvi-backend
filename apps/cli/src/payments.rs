@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::{RawIdGenerator, TenantId};
 use sanvi_payments::{
     adapters::{
         OutboxEventPublisher as PaymentsEvents, SqlxProviderConnectionRepository,
@@ -69,8 +70,8 @@ struct CliNotifier;
 impl PaymentsConnectionNotifier for CliNotifier {
     async fn connection_activated(
         &self,
-        tenant_id: uuid::Uuid,
-        connection_id: uuid::Uuid,
+        tenant_id: TenantId,
+        connection_id: sanvi_payments::domain::ConnectionId,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         tracing::info!(tenant_id = %tenant_id, connection_id = %connection_id, "connection activated");
         Ok(())
@@ -78,8 +79,8 @@ impl PaymentsConnectionNotifier for CliNotifier {
 
     async fn connection_restricted(
         &self,
-        tenant_id: uuid::Uuid,
-        connection_id: uuid::Uuid,
+        tenant_id: TenantId,
+        connection_id: sanvi_payments::domain::ConnectionId,
         detail: &str,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         tracing::warn!(tenant_id = %tenant_id, connection_id = %connection_id, detail = %detail, "connection restricted");
@@ -88,8 +89,8 @@ impl PaymentsConnectionNotifier for CliNotifier {
 
     async fn requirement_deadline_approaching(
         &self,
-        tenant_id: uuid::Uuid,
-        connection_id: uuid::Uuid,
+        tenant_id: TenantId,
+        connection_id: sanvi_payments::domain::ConnectionId,
         deadline: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         tracing::info!(tenant_id = %tenant_id, connection_id = %connection_id, deadline = %deadline, "requirement deadline approaching");
@@ -98,8 +99,8 @@ impl PaymentsConnectionNotifier for CliNotifier {
 
     async fn dispute_opened(
         &self,
-        tenant_id: uuid::Uuid,
-        dispute_id: uuid::Uuid,
+        tenant_id: TenantId,
+        dispute_id: sanvi_payments::domain::DisputeId,
         due_by: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         tracing::warn!(tenant_id = %tenant_id, dispute_id = %dispute_id, due_by = ?due_by, "dispute opened");
@@ -108,7 +109,7 @@ impl PaymentsConnectionNotifier for CliNotifier {
 
     async fn payout_failed(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         external_payout_id: &str,
         amount: &sanvi_payments::Money,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
@@ -124,7 +125,7 @@ impl PaymentsConnectionNotifier for CliNotifier {
 
     async fn tax_compliance_lapsed(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         detail: &str,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         tracing::warn!(tenant_id = %tenant_id, detail = %detail, "tax compliance lapsed");
@@ -134,9 +135,9 @@ impl PaymentsConnectionNotifier for CliNotifier {
 
 /// `payments webhooks` — the store-first queue's backlog plus its
 /// dead-letter head.
-pub async fn webhooks(environment: &str) -> anyhow::Result<()> {
+pub async fn webhooks(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let (pool, _) = connect(environment).await?;
-    let tx = TxManager::new(pool);
+    let tx = TxManager::new(pool, ids);
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
     let mut scope = tx
         .begin_unscoped("payments_webhook_status", "platform-admin")
@@ -174,9 +175,13 @@ pub async fn webhooks(environment: &str) -> anyhow::Result<()> {
 /// `payments replay <event-id>` — requeue one dead-lettered event after
 /// the root cause is fixed. A poison event never blocks the queue; this
 /// is how it gets back in once it is no longer poison.
-pub async fn replay(environment: &str, event_id: &str) -> anyhow::Result<()> {
+pub async fn replay(
+    environment: &str,
+    event_id: &str,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
     let (pool, _) = connect(environment).await?;
-    let tx = TxManager::new(pool);
+    let tx = TxManager::new(pool, ids);
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
     let mut scope = tx
         .begin_unscoped("replay_connect_webhook", "platform-admin")
@@ -197,12 +202,12 @@ pub async fn replay(environment: &str, event_id: &str) -> anyhow::Result<()> {
 /// `payments sync` — one manual reconciliation pass (the worker does this
 /// hourly; the runbook uses this for incident repair and the lost-webhook
 /// drill).
-pub async fn sync(environment: &str) -> anyhow::Result<()> {
+pub async fn sync(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
     let (pool, config) = connect(environment).await?;
-    let tx = TxManager::new(pool);
+    let tx = TxManager::new(pool, ids.clone());
     let lifecycle: Arc<dyn ConnectionLifecycleStore> =
         Arc::new(SqlxProviderConnectionRepository::new());
-    let events: Arc<dyn PaymentsEventPublisher> = Arc::new(PaymentsEvents::new());
+    let events: Arc<dyn PaymentsEventPublisher> = Arc::new(PaymentsEvents::new(ids));
     let notifier: Arc<dyn PaymentsConnectionNotifier> = Arc::new(CliNotifier);
     let registry = build_registry(&config, environment);
     // One full pass regardless of staleness: an operator-invoked sync is

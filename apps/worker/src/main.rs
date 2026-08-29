@@ -65,7 +65,7 @@ use sanvi_billing::{
     },
 };
 use sanvi_domains::{DomainsConfig, adapters::events::domains_event_handler};
-use sanvi_kernel::{IdsConfig, RawIdGenerator, SnowflakeGenerator};
+use sanvi_kernel::{IdsConfig, RawIdGenerator, SnowflakeGenerator, TenantId};
 use sanvi_localization::{
     LocalizationConfig,
     adapters::{
@@ -105,7 +105,8 @@ use sanvi_privacy::{
         SqlxLegalHoldRepository, SqlxParticipantRepository, SqlxRequestMetricsRepository,
         SqlxRetentionRuleRepository, SqlxSignalRepository, SqlxSubProcessorRepository,
         SqlxSubjectKeyRepository, SqlxSubjectRepository, SqlxVerificationRepository,
-        SystemClock as PrivacySystemClock, ZipPackager,
+        SystemClock as PrivacySystemClock, SystemIdGenerator as PrivacySystemIdGenerator,
+        ZipPackager,
     },
     application::{
         CleanupExpiredExports, GenerateAnnualMetrics, ProcessDsrBatch, PropagateOptOuts,
@@ -143,7 +144,7 @@ struct WorkerBillingNotifications {
 impl WorkerBillingNotifications {
     async fn render(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         subject_key: &str,
         body_key: &str,
         extra_args: &[(&str, LocalizationArg)],
@@ -163,7 +164,7 @@ impl WorkerBillingNotifications {
 impl Notifications for WorkerBillingNotifications {
     async fn payment_failed(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<(), sanvi_billing::domain::BillingError> {
         self.render(
             tenant_id,
@@ -177,7 +178,7 @@ impl Notifications for WorkerBillingNotifications {
 
     async fn grace_expired(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<(), sanvi_billing::domain::BillingError> {
         self.render(
             tenant_id,
@@ -191,7 +192,7 @@ impl Notifications for WorkerBillingNotifications {
 
     async fn trial_ending(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         trial_end: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), sanvi_billing::domain::BillingError> {
         self.render(
@@ -206,7 +207,7 @@ impl Notifications for WorkerBillingNotifications {
 
     async fn subscription_canceled(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<(), sanvi_billing::domain::BillingError> {
         self.render(
             tenant_id,
@@ -220,7 +221,7 @@ impl Notifications for WorkerBillingNotifications {
 
     async fn subscription_restored(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<(), sanvi_billing::domain::BillingError> {
         self.render(
             tenant_id,
@@ -243,7 +244,7 @@ struct WorkerPaymentsNotifications {
 impl WorkerPaymentsNotifications {
     async fn render(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         subject_key: &str,
         body_key: &str,
         extra_args: &[(&str, LocalizationArg)],
@@ -263,8 +264,8 @@ impl WorkerPaymentsNotifications {
 impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
     async fn connection_activated(
         &self,
-        tenant_id: uuid::Uuid,
-        connection_id: uuid::Uuid,
+        tenant_id: TenantId,
+        connection_id: sanvi_payments::domain::ConnectionId,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         self.render(
             tenant_id,
@@ -281,8 +282,8 @@ impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
 
     async fn connection_restricted(
         &self,
-        tenant_id: uuid::Uuid,
-        connection_id: uuid::Uuid,
+        tenant_id: TenantId,
+        connection_id: sanvi_payments::domain::ConnectionId,
         detail: &str,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         self.render(
@@ -303,8 +304,8 @@ impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
 
     async fn requirement_deadline_approaching(
         &self,
-        tenant_id: uuid::Uuid,
-        connection_id: uuid::Uuid,
+        tenant_id: TenantId,
+        connection_id: sanvi_payments::domain::ConnectionId,
         deadline: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         self.render(
@@ -325,8 +326,8 @@ impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
 
     async fn dispute_opened(
         &self,
-        tenant_id: uuid::Uuid,
-        dispute_id: uuid::Uuid,
+        tenant_id: TenantId,
+        dispute_id: sanvi_payments::domain::DisputeId,
         due_by: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         let dispute_arg = [("dispute", LocalizationArg::from(dispute_id.to_string()))];
@@ -357,7 +358,7 @@ impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
 
     async fn payout_failed(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         external_payout_id: &str,
         amount: &sanvi_payments::Money,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
@@ -393,7 +394,7 @@ impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
 
     async fn tax_compliance_lapsed(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         detail: &str,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         self.render(
@@ -784,7 +785,7 @@ async fn main() -> ExitCode {
     ));
     let invalidate = {
         let resolve = resolve.clone();
-        move |slug: String, tenant_id: uuid::Uuid| {
+        move |slug: String, tenant_id: TenantId| {
             let resolve = resolve.clone();
             tokio::spawn(async move {
                 resolve.invalidate(&slug, tenant_id).await;
@@ -805,6 +806,7 @@ async fn main() -> ExitCode {
     // copy after another process edits overrides or tenant locale settings.
     let localization_service = Arc::new(LocalizationService::new(
         pool.clone(),
+        ids.clone(),
         Arc::new(SqlxTranslationRepository::new()),
         Arc::new(LocalizationCache::new()),
         Arc::new(LocalizationMetrics::new(registry)),
@@ -812,6 +814,7 @@ async fn main() -> ExitCode {
     ));
     let notification_localizer = Arc::new(NotificationLocalizer::new(
         pool.clone(),
+        ids.clone(),
         localization_service.clone(),
         config.localization.clone(),
     ));
@@ -865,7 +868,7 @@ async fn main() -> ExitCode {
     let role_key_resolver = {
         let roles = access_roles.clone();
         let tx = access_tx.clone();
-        move |role_id: uuid::Uuid| {
+        move |role_id: sanvi_access::domain::RoleId| {
             let roles = roles.clone();
             let tx = tx.clone();
             Box::pin(async move {
@@ -877,7 +880,7 @@ async fn main() -> ExitCode {
                     }
                 };
                 let key = match roles
-                    .find_by_id(&mut scope, sanvi_access::domain::RoleId::from_uuid(role_id))
+                    .find_by_id(&mut scope, role_id)
                     .await
                 {
                     Ok(Some(role)) => Some(role.key().to_string()),
@@ -912,7 +915,7 @@ async fn main() -> ExitCode {
     // --- access events consumer: entitlement cache + role authoring sync ----
     let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
     let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());
-    let access_events: Arc<dyn EventPublisher> = Arc::new(AccessEventPublisher::new());
+    let access_events: Arc<dyn EventPublisher> = Arc::new(AccessEventPublisher::new(ids.clone()));
     let entitlement_cache: Arc<dyn EntitlementCache> = Arc::new(RedisEntitlementCache::new(
         redis.clone(),
         config.access.entitlement_cache_ttl_secs,
@@ -934,7 +937,7 @@ async fn main() -> ExitCode {
 
     // --- billing context: Stripe webhooks, dunning, reconciliation -----------
     let billing_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
-    let billing_tenancy_events = Arc::new(TenancyEventPublisher::new());
+    let billing_tenancy_events = Arc::new(TenancyEventPublisher::new(ids.clone()));
     let billing_plans: std::sync::Arc<dyn PlanRepository> =
         std::sync::Arc::new(SqlxPlanRepository::new());
     let billing_prices: std::sync::Arc<dyn PlanPriceRepository> =
@@ -1027,7 +1030,9 @@ async fn main() -> ExitCode {
     let payments_webhooks: std::sync::Arc<dyn PaymentsWebhookEventRepository> =
         std::sync::Arc::new(PaymentsWebhookEvents::new());
     let payments_events: std::sync::Arc<dyn PaymentsEventPublisher> =
-        std::sync::Arc::new(PaymentsEvents::new());
+        std::sync::Arc::new(PaymentsEvents::new(ids.clone()));
+    let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> =
+        std::sync::Arc::new(sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()));
     let payments_notifier: std::sync::Arc<dyn PaymentsConnectionNotifier> =
         std::sync::Arc::new(WorkerPaymentsNotifications {
             localizer: notification_localizer.clone(),
@@ -1087,6 +1092,7 @@ async fn main() -> ExitCode {
             payments_registry.clone(),
             payments_events.clone(),
             payments_notifier.clone(),
+            payment_ids,
         )
         .with_checkout_store(payments_checkouts.clone())
         .with_refund_store(payments_refunds.clone())
@@ -1296,12 +1302,14 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(SqlxRetentionRuleRepository::new());
     let privacy_metrics: std::sync::Arc<dyn RequestMetricsRepository> =
         std::sync::Arc::new(SqlxRequestMetricsRepository::new());
-    let privacy_events = std::sync::Arc::new(PrivacyEvents::new());
+    let privacy_events = std::sync::Arc::new(PrivacyEvents::new(ids.clone()));
     let privacy_notifications: std::sync::Arc<dyn PrivacyNotificationsTrait> =
         std::sync::Arc::new(WorkerPrivacyNotifications {
             localizer: notification_localizer.clone(),
         });
     let privacy_clock = std::sync::Arc::new(PrivacySystemClock);
+    let privacy_ids: std::sync::Arc<dyn sanvi_privacy::domain::IdGenerator> =
+        std::sync::Arc::new(PrivacySystemIdGenerator::new(ids.clone()));
     let privacy_hasher: std::sync::Arc<dyn Hasher> =
         std::sync::Arc::new(Sha256Hasher::new(if config.privacy.kek.is_empty() {
             "dev-pepper-insecure".to_string()
@@ -1384,7 +1392,7 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(sanvi_audit::adapters::AuditPrivacyProvider::new(
             privacy_tx.clone(),
             std::sync::Arc::new(SqlxAuditReader::new()),
-            std::sync::Arc::new(SqlxAuditWriter::new()),
+            std::sync::Arc::new(SqlxAuditWriter::new(ids.clone())),
         )),
         std::sync::Arc::new(
             sanvi_platform_admin::adapters::privacy_provider::PlatformAdminPrivacyProvider::new(
@@ -1446,6 +1454,7 @@ async fn main() -> ExitCode {
         privacy_notifications.clone(),
         privacy_events.clone(),
         privacy_hasher.clone(),
+        privacy_ids,
         privacy_clock.clone(),
         config.privacy.export_dir.clone(),
         config.privacy.export_ttl_days,
@@ -1465,7 +1474,7 @@ async fn main() -> ExitCode {
         privacy_signals.clone(),
         privacy_clock.clone(),
         std::sync::Arc::new(sanvi_audit::adapters::PrivacyAuditWriterAdapter::new(
-            std::sync::Arc::new(SqlxAuditWriter::new()),
+            std::sync::Arc::new(SqlxAuditWriter::new(ids.clone())),
         )),
         config.privacy.retention_dry_run,
         config.privacy.retention_sweep_batch_size,
@@ -1491,7 +1500,7 @@ async fn main() -> ExitCode {
     );
 
     // --- scheduler: purge + idempotency + quota rollover + expiry + audit ----
-    let events = Arc::new(TenancyEventPublisher::new());
+    let events = Arc::new(TenancyEventPublisher::new(ids.clone()));
     let clock = Arc::new(TenancySystemClock);
     let purge_sweep = Arc::new(PurgeSweep::new(
         tx_manager.clone(),
@@ -1509,7 +1518,7 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_access::adapters::SystemClock),
     ));
     let audit_reader = Arc::new(SqlxAuditReader::new());
-    let _audit_writer = SqlxAuditWriter::new();
+    let _audit_writer = SqlxAuditWriter::new(ids.clone());
     let verify_audit = Arc::new(VerifyAuditChain::new(
         tx_manager.clone(),
         audit_reader,

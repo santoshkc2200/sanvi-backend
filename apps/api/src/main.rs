@@ -197,7 +197,7 @@ async fn main() -> ExitCode {
     // access context's own use cases*. So: build the approval gate first,
     // then access (which takes the gate), then wrap access's use cases into
     // the `EntitlementAdmin` adapter and finish platform_admin.
-    let approval_gate = build_approval_gate(pool.clone());
+    let approval_gate = build_approval_gate(pool.clone(), ids.clone());
 
     let access = build_access_state(
         pool.clone(),
@@ -504,6 +504,7 @@ async fn main() -> ExitCode {
 /// access consumes it.
 fn build_approval_gate(
     pool: sanvi_persistence::PgPool,
+    ids: Arc<dyn sanvi_kernel::RawIdGenerator>,
 ) -> Arc<dyn sanvi_access::domain::ApprovalGate> {
     use sanvi_platform_admin::{
         adapters::{
@@ -514,9 +515,9 @@ fn build_approval_gate(
     let approvals = Arc::new(SqlxPendingApprovalRepository::new());
     let record = Arc::new(RecordApprovalRequest::new(
         approvals,
-        Arc::new(SystemIdGenerator),
+        Arc::new(SystemIdGenerator::new(ids.clone())),
         Arc::new(SystemClock),
     ));
-    let _tx = sanvi_persistence::TxManager::new(pool);
+    let _tx = sanvi_persistence::TxManager::new(pool, ids);
     Arc::new(ApprovalGateAdapter::new(record))
 }
