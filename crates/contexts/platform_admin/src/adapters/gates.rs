@@ -6,8 +6,8 @@
 use async_trait::async_trait;
 use sanvi_access::domain::AccessError;
 use sanvi_access::domain::ports::{ApprovalGate, ApprovalOutcome};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::PlatformScope;
-use uuid::Uuid;
 
 use crate::application::approvals::RecordApprovalRequest;
 
@@ -30,7 +30,7 @@ impl ApprovalGate for ApprovalGateAdapter {
     async fn request_if_required(
         &self,
         scope: &mut PlatformScope<'_>,
-        requested_by: Uuid,
+        requested_by: UserId,
         action_type: &str,
         payload: serde_json::Value,
     ) -> Result<ApprovalOutcome, AccessError> {
@@ -39,7 +39,9 @@ impl ApprovalGate for ApprovalGateAdapter {
             .execute(scope, requested_by, action_type, payload)
             .await
             .map_err(|err| AccessError::Storage(err.to_string()))?;
-        Ok(ApprovalOutcome::Required { approval_id })
+        Ok(ApprovalOutcome::Required {
+            approval_id: approval_id.as_snowflake(),
+        })
     }
 }
 
@@ -53,7 +55,7 @@ impl ApprovalGate for NoopApprovalGate {
     async fn request_if_required(
         &self,
         _scope: &mut PlatformScope<'_>,
-        _requested_by: Uuid,
+        _requested_by: UserId,
         _action_type: &str,
         _payload: serde_json::Value,
     ) -> Result<ApprovalOutcome, AccessError> {
@@ -68,7 +70,10 @@ pub struct NoopPrivacyLock;
 
 #[async_trait]
 impl crate::domain::ports::PrivacyLock for NoopPrivacyLock {
-    async fn is_locked(&self, _tenant_id: Uuid) -> Result<bool, crate::domain::PlatformAdminError> {
+    async fn is_locked(
+        &self,
+        _tenant_id: TenantId,
+    ) -> Result<bool, crate::domain::PlatformAdminError> {
         Ok(false)
     }
 }

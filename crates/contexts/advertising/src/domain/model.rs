@@ -1,10 +1,32 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{Id, TenantId};
 use serde::{Deserialize, Serialize};
 
 use super::AdvertisingError;
 use super::hashing::HashedIdentifier;
+
+pub enum ConnectionTag {}
+pub type ConnectionId = Id<ConnectionTag>;
+
+pub enum CampaignTag {}
+pub type CampaignId = Id<CampaignTag>;
+
+pub enum CampaignChangeTag {}
+pub type CampaignChangeId = Id<CampaignChangeTag>;
+
+pub enum ConversionTag {}
+pub type ConversionId = Id<ConversionTag>;
+
+pub enum CreativeTag {}
+pub type CreativeId = Id<CreativeTag>;
+
+pub enum AdGroupTag {}
+pub type AdGroupId = Id<AdGroupTag>;
+
+pub enum AdTag {}
+pub type AdId = Id<AdTag>;
 
 /// Adapter-owned identifier. Domain code never switches on a platform name.
 #[derive(
@@ -287,8 +309,10 @@ pub struct UploadReceipt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConversionEvent {
-    pub id: uuid::Uuid,
-    pub tenant_id: uuid::Uuid,
+    #[schema(value_type = String)]
+    pub id: ConversionId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     pub event_id: String,
     /// Immutable storage identity. For order-backed events this is derived
     /// from the order reference and event name, so a webhook state change

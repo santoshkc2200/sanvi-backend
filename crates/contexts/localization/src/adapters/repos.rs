@@ -6,9 +6,9 @@
 //! RLS; platform rows are public to read (they are public copy) and
 //! writable only from the audited platform scope.
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 use sqlx::FromRow;
-use uuid::Uuid;
 
 use crate::domain::catalog::Translation;
 use crate::domain::error::LocalizationError;
@@ -34,10 +34,10 @@ impl PoolUserLocaleProvider {
 
 #[async_trait::async_trait]
 impl UserLocaleProvider for PoolUserLocaleProvider {
-    async fn locale_for(&self, user_id: Uuid) -> Option<String> {
+    async fn locale_for(&self, user_id: UserId) -> Option<String> {
         let row: Option<Option<String>> =
             sqlx::query_scalar("SELECT locale FROM identity.users WHERE id = $1")
-                .bind(user_id)
+                .bind(user_id.as_i64())
                 .fetch_optional(&self.pool)
                 .await
                 .ok()
@@ -107,7 +107,7 @@ struct TenantLocaleRow {
 }
 
 impl TenantLocaleRow {
-    fn into_settings(self, tenant_id: Uuid) -> Result<TenantLocaleSettings, LocalizationError> {
+    fn into_settings(self, tenant_id: TenantId) -> Result<TenantLocaleSettings, LocalizationError> {
         let default_locale = Locale::parse(&self.default_locale)?;
         let enabled_locales = self
             .enabled_locales
@@ -129,14 +129,14 @@ impl TenantLocaleRepository for SqlxTenantLocaleRepository {
     async fn get(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<TenantLocaleSettings>, LocalizationError> {
         let row = sqlx::query_as!(
             TenantLocaleRow,
             "SELECT default_locale, enabled_locales, timezone, updated_at
              FROM localization.tenant_locales
              WHERE tenant_id = $1",
-            tenant_id
+            tenant_id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -163,7 +163,7 @@ impl TenantLocaleRepository for SqlxTenantLocaleRepository {
                      enabled_locales = EXCLUDED.enabled_locales,
                      timezone = EXCLUDED.timezone,
                      updated_at = now()",
-            settings.tenant_id,
+            settings.tenant_id.as_i64(),
             settings.default_locale.as_str(),
             &enabled,
             settings.timezone,
@@ -190,20 +190,25 @@ struct TranslationRow {
     key: String,
     locale: String,
     value: String,
-    updated_by: Option<Uuid>,
+    updated_by: Option<i64>,
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl TranslationRow {
-    fn into_translation(self) -> Translation {
-        Translation {
+    fn into_translation(self) -> Result<Translation, LocalizationError> {
+        let updated_by = self
+            .updated_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| LocalizationError::Storage(format!("invalid updated_by id: {err}")))?;
+        Ok(Translation {
             scope: self.scope,
             key: self.key,
             locale: self.locale,
             value: self.value,
-            updated_by: self.updated_by,
+            updated_by,
             updated_at: self.updated_at,
-        }
+        })
     }
 }
 
@@ -212,7 +217,7 @@ impl TranslationRepository for SqlxTranslationRepository {
     async fn list_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Translation>, LocalizationError> {
         let rows = sqlx::query_as!(
             TranslationRow,
@@ -224,10 +229,9 @@ impl TranslationRepository for SqlxTranslationRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| LocalizationError::Storage(err.to_string()))?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(TranslationRow::into_translation)
-            .collect())
+            .collect()
     }
 
     async fn list_platform(&self, pool: &PgPool) -> Result<Vec<Translation>, LocalizationError> {
@@ -240,10 +244,9 @@ impl TranslationRepository for SqlxTranslationRepository {
         .fetch_all(pool)
         .await
         .map_err(|err| LocalizationError::Storage(err.to_string()))?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(TranslationRow::into_translation)
-            .collect())
+            .collect()
     }
 
     async fn list_platform_scoped(
@@ -258,16 +261,15 @@ impl TranslationRepository for SqlxTranslationRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| LocalizationError::Storage(err.to_string()))?;
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(TranslationRow::into_translation)
-            .collect())
+            .collect()
     }
 
     async fn upsert_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         translation: &Translation,
     ) -> Result<(), LocalizationError> {
         sqlx::query!(
@@ -282,7 +284,7 @@ impl TranslationRepository for SqlxTranslationRepository {
             translation.key,
             translation.locale,
             translation.value,
-            translation.updated_by,
+            translation.updated_by.map(|id| id.as_i64()),
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -306,7 +308,7 @@ impl TranslationRepository for SqlxTranslationRepository {
             translation.key,
             translation.locale,
             translation.value,
-            translation.updated_by,
+            translation.updated_by.map(|id| id.as_i64()),
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -317,7 +319,7 @@ impl TranslationRepository for SqlxTranslationRepository {
     async fn delete_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         key: &str,
         locale: &str,
     ) -> Result<(), LocalizationError> {

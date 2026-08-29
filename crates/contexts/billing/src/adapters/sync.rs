@@ -10,9 +10,9 @@ use chrono::{DateTime, Utc};
 use sanvi_access::domain::{
     Entitlement, EntitlementCache, EntitlementRepository, EntitlementSource, FeatureKey,
 };
+use sanvi_kernel::{EventId, RawIdGenerator, TenantId};
 use sanvi_messaging::{ConsumerHandler, OutboxWriter};
 use sanvi_persistence::PlatformScope;
-use uuid::Uuid;
 
 use crate::domain::events::BillingEvent;
 use crate::domain::{BillingError, EntitlementGrant, EntitlementSyncer};
@@ -29,18 +29,29 @@ impl SyncerClock {
 
 pub struct AccessEntitlementSyncer {
     entitlements: std::sync::Arc<dyn EntitlementRepository>,
+    ids: std::sync::Arc<dyn RawIdGenerator>,
 }
 
 impl AccessEntitlementSyncer {
-    pub fn new(entitlements: std::sync::Arc<dyn EntitlementRepository>) -> Self {
-        Self { entitlements }
+    pub fn new(
+        entitlements: std::sync::Arc<dyn EntitlementRepository>,
+        ids: std::sync::Arc<dyn RawIdGenerator>,
+    ) -> Self {
+        Self { entitlements, ids }
+    }
+
+    fn next_event_id(&self) -> Result<EventId, BillingError> {
+        self.ids
+            .next_id()
+            .map(EventId::from_snowflake)
+            .map_err(|err| BillingError::Storage(err.to_string()))
     }
 
     /// Replace the tenant's subscription-source rows with `grants`.
     async fn write(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plan_key: &str,
         grants: &[EntitlementGrant],
         clock: SyncerClock,
@@ -97,7 +108,7 @@ impl EntitlementSyncer for AccessEntitlementSyncer {
     async fn sync_subscription(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plan_key: &str,
         grants: &[EntitlementGrant],
     ) -> Result<(), BillingError> {
@@ -106,7 +117,7 @@ impl EntitlementSyncer for AccessEntitlementSyncer {
         OutboxWriter
             .append(
                 scope.tx_mut(),
-                &BillingEvent::EntitlementsRecomputed { tenant_id }.envelope(),
+                &BillingEvent::EntitlementsRecomputed { tenant_id }.envelope(self.next_event_id()?),
             )
             .await
             .map_err(|err| BillingError::Storage(err.to_string()))?;
@@ -116,7 +127,7 @@ impl EntitlementSyncer for AccessEntitlementSyncer {
     async fn clear_subscription(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<(), BillingError> {
         let current = self
             .entitlements
@@ -140,7 +151,7 @@ impl EntitlementSyncer for AccessEntitlementSyncer {
         OutboxWriter
             .append(
                 scope.tx_mut(),
-                &BillingEvent::EntitlementsRecomputed { tenant_id }.envelope(),
+                &BillingEvent::EntitlementsRecomputed { tenant_id }.envelope(self.next_event_id()?),
             )
             .await
             .map_err(|err| BillingError::Storage(err.to_string()))?;
@@ -161,8 +172,8 @@ pub fn billing_event_handler(cache: std::sync::Arc<dyn EntitlementCache>) -> Con
                     .metadata
                     .get("tenant_id")
                     .and_then(|id| id.as_str())
-                    .and_then(|id| id.parse::<Uuid>().ok())
-                    .unwrap_or(envelope.aggregate_id);
+                    .and_then(|id| id.parse::<TenantId>().ok())
+                    .unwrap_or_else(|| TenantId::from_snowflake(envelope.aggregate_id));
                 cache.invalidate(tenant_id).await;
             }
             Ok(())

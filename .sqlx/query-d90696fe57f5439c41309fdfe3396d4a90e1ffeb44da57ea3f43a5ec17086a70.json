@@ -6,7 +6,7 @@
       {
         "ordinal": 0,
         "name": "tenant_id",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "identity.memberships",
@@ -17,7 +17,7 @@
       {
         "ordinal": 1,
         "name": "user_id",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "identity.memberships",
@@ -39,7 +39,7 @@
       {
         "ordinal": 3,
         "name": "invited_by",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "identity.memberships",

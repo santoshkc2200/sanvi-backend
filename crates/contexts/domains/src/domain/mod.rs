@@ -12,23 +12,23 @@ pub mod ports;
 pub mod records;
 pub mod registrar;
 
-pub use certificate::{Certificate, CertificateStatus};
+pub use certificate::{Certificate, CertificateId, CertificateStatus, CertificateTag};
 pub use custom_domain::{
-    CustomDomain, DomainErrorCode, DomainFailure, DomainKind, DomainRole, DomainStatus,
-    VerificationChallenge, verification_backoff,
+    CustomDomain, CustomDomainId, CustomDomainTag, DomainErrorCode, DomainFailure, DomainKind,
+    DomainRole, DomainStatus, VerificationChallenge, verification_backoff,
 };
 pub use error::{DomainsError, storage};
 pub use events::{DomainsEvent, DomainsEventName};
 pub use hostname::Hostname;
 pub use money::{Money, TldPrice};
-pub use order::{DomainOrder, OrderStatus, RegistrantContact};
+pub use order::{DomainOrder, DomainOrderId, DomainOrderTag, OrderStatus, RegistrantContact};
 pub use ports::{
     CertificateAuthorityPort, CertificateRepository, Clock, CustomDomainRepository, DnsCheckResult,
     DnsProviderPort, DnsRecordRepository, DnsVerifierPort, DomainFeatureGate,
     DomainOrderRepository, EventPublisher, GuideTranslator, LiveHostRef, Notifications,
     ProbeResult, PurchaseCharger, StorefrontProbePort, TenantState,
 };
-pub use records::{DnsRecord, DnsRecordType};
+pub use records::{DnsRecord, DnsRecordId, DnsRecordTag, DnsRecordType};
 pub use registrar::{
     DomainQuote, DomainRegistrarPort, RegistrarGuideId, RegistrationResult, RenewalResult,
 };

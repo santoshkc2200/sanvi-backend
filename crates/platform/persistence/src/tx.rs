@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
+use sanvi_kernel::RawIdGenerator;
 use sqlx::PgPool;
 use tracing::debug;
-use uuid::Uuid;
 
 /// Transaction handle. Every write path in the system runs inside one.
 ///
@@ -14,7 +16,7 @@ pub struct Tx<'a> {
 
 impl<'a> Tx<'a> {
     /// Scope this transaction to a tenant for RLS filtering.
-    pub async fn set_tenant_id(&mut self, tenant_id: Uuid) -> Result<()> {
+    pub async fn set_tenant_id(&mut self, tenant_id: i64) -> Result<()> {
         sqlx::query("SELECT set_config('sanvi.tenant_id', $1, true)")
             .bind(tenant_id.to_string())
             .execute(&mut *self.inner)
@@ -115,14 +117,15 @@ impl<'a> PlatformScope<'a> {
 }
 
 /// Opens read/write transactions on the shared pool.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TxManager {
     pool: PgPool,
+    ids: Arc<dyn RawIdGenerator>,
 }
 
 impl TxManager {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { pool, ids }
     }
 
     pub async fn begin(&self) -> Result<Tx<'_>> {
@@ -140,7 +143,7 @@ impl TxManager {
     /// Open a tenant-scoped transaction: `SET LOCAL sanvi.tenant_id` runs
     /// before anything else, so every tenant-scoped table in the transaction
     /// is filtered by Postgres itself.
-    pub async fn begin_for(&self, tenant_id: Uuid) -> Result<ScopedTx<'_>> {
+    pub async fn begin_for(&self, tenant_id: i64) -> Result<ScopedTx<'_>> {
         let mut tx = self.begin().await?;
         tx.set_tenant_id(tenant_id).await?;
         debug!(tenant_id = %tenant_id, "tenant-scoped transaction started");
@@ -160,12 +163,17 @@ impl TxManager {
     /// code paths that reached this audited entry point.
     pub async fn begin_unscoped(&self, reason: &str, actor: &str) -> Result<PlatformScope<'_>> {
         let mut tx = self.begin().await?;
-        sqlx::query!(
-            "INSERT INTO platform.audit_log (actor, action, reason, detail)
-             VALUES ($1, 'platform_scope_begin', $2, '{}'::jsonb)",
-            actor,
-            reason
+        let audit_id = self
+            .ids
+            .next_id()
+            .context("failed to generate platform audit id")?;
+        sqlx::query(
+            "INSERT INTO platform.audit_log (id, actor, action, reason, detail)
+             VALUES ($1, $2, 'platform_scope_begin', $3, '{}'::jsonb)",
         )
+        .bind(audit_id.as_i64())
+        .bind(actor)
+        .bind(reason)
         .execute(&mut **tx.as_inner())
         .await
         .context("failed to write platform scope audit record")?;
@@ -191,7 +199,17 @@ mod tests {
         // No live database needed: the manager is just a handle.
         let pool = PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
             .expect("lazy pool construction never connects");
-        let manager = TxManager::new(pool);
+        let manager = TxManager::new(pool, Arc::new(TestIds));
         assert_eq!(manager.pool().size(), 0);
+    }
+
+    #[derive(Debug)]
+    struct TestIds;
+
+    impl RawIdGenerator for TestIds {
+        fn next_id(&self) -> Result<sanvi_kernel::SnowflakeId, sanvi_kernel::IdGenerationError> {
+            sanvi_kernel::SnowflakeId::try_from(1)
+                .map_err(|_| sanvi_kernel::IdGenerationError::OutOfRange)
+        }
     }
 }

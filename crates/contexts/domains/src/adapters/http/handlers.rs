@@ -1,22 +1,20 @@
-//! The domains context's HTTP handlers.
-
 use std::net::IpAddr;
 
 use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::Utc;
 use serde::Deserialize;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_http::{
     ApiError, CurrentLocale, CurrentSubject, CurrentTenant, ProblemDetail, RequiredPermission,
 };
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::application::{
     ClaimCustomDomainCommand, InstructionsView, OrderView, PlaceDomainOrderCommand,
 };
-use crate::domain::DomainsError;
+use crate::domain::{CustomDomainId, DomainOrderId, DomainsError};
 
 /// The domains context's domain-error → HTTP mapping.
 pub fn api_error(err: DomainsError) -> ApiError {
@@ -97,16 +95,20 @@ pub fn api_error(err: DomainsError) -> ApiError {
             tracing::error!(error = %detail, "domains notification failure");
             ApiError::internal("notification failure")
         }
+        DomainsError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "domains id generation failure");
+            ApiError::internal("id generation failure")
+        }
     }
 }
 
 /// Tenant-scoped transaction helpers (the same shape theming uses).
 async fn begin_tenant_scope<'a>(
     tx_manager: &'a sanvi_persistence::TxManager,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
 ) -> Result<ScopedTx<'a>, DomainsError> {
     tx_manager
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|err| DomainsError::Storage(format!("failed to open tenant scope: {err}")))
 }
@@ -144,8 +146,7 @@ pub async fn claim_custom_domain(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let result = state
@@ -181,8 +182,7 @@ pub async fn list_custom_domains(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
@@ -201,7 +201,7 @@ pub async fn list_custom_domains(
     tag = "domains",
     operation_id = "get_domain_instructions",
     params(
-        ("id" = Uuid, Path, description = "The domain claim id"),
+        ("id" = String, Path, description = "The domain claim id"),
         ("locale" = Option<String>, Query, description = "Requested locale (defaults to the negotiated one)")
     ),
     responses(
@@ -213,15 +213,14 @@ pub async fn get_domain_instructions(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     locale: CurrentLocale,
-    path: web::Path<Uuid>,
+    path: web::Path<CustomDomainId>,
     query: web::Query<InstructionsQuery>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let domain_id = path.into_inner();
     let requested_locale = sanitize_locale(query.locale.as_deref().unwrap_or(&locale.0.locale))?;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
@@ -246,7 +245,7 @@ pub struct InstructionsQuery {
     path = "/api/v1/tenant/domains/{id}/verify",
     tag = "domains",
     operation_id = "request_domain_verification",
-    params(("id" = Uuid, Path, description = "The domain claim id")),
+    params(("id" = String, Path, description = "The domain claim id")),
     responses(
         (status = 200, description = "The domain, now queued for verification", body = crate::application::CustomDomainView),
         (status = 404, description = "Unknown domain", body = ProblemDetail),
@@ -256,13 +255,12 @@ pub struct InstructionsQuery {
 pub async fn request_domain_verification(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CustomDomainId>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let domain_id = path.into_inner();
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
@@ -280,7 +278,7 @@ pub async fn request_domain_verification(
     path = "/api/v1/tenant/domains/{id}/promote",
     tag = "domains",
     operation_id = "promote_primary_domain",
-    params(("id" = Uuid, Path, description = "The domain claim id")),
+    params(("id" = String, Path, description = "The domain claim id")),
     responses(
         (status = 200, description = "The domain is now primary", body = crate::application::CustomDomainView),
         (status = 404, description = "Unknown domain", body = ProblemDetail)
@@ -289,13 +287,12 @@ pub async fn request_domain_verification(
 pub async fn promote_primary_domain(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CustomDomainId>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let domain_id = path.into_inner();
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
@@ -313,7 +310,7 @@ pub async fn promote_primary_domain(
     path = "/api/v1/tenant/domains/{id}",
     tag = "domains",
     operation_id = "remove_custom_domain",
-    params(("id" = Uuid, Path, description = "The domain claim id")),
+    params(("id" = String, Path, description = "The domain claim id")),
     responses(
         (status = 200, description = "The removed domain", body = crate::application::CustomDomainView),
         (status = 404, description = "Unknown domain", body = ProblemDetail)
@@ -322,13 +319,12 @@ pub async fn promote_primary_domain(
 pub async fn remove_custom_domain(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<CustomDomainId>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let domain_id = path.into_inner();
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
@@ -428,8 +424,7 @@ pub async fn list_domain_orders(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
@@ -452,7 +447,7 @@ pub struct AutoRenewCommand {
     path = "/api/v1/tenant/domains/orders/{id}/auto-renew",
     tag = "domains",
     operation_id = "set_order_auto_renew",
-    params(("id" = Uuid, Path, description = "The order id")),
+    params(("id" = String, Path, description = "The order id")),
     request_body = AutoRenewCommand,
     responses(
         (status = 200, description = "The updated order", body = OrderView),
@@ -462,14 +457,13 @@ pub struct AutoRenewCommand {
 pub async fn set_order_auto_renew(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
-    path: web::Path<Uuid>,
+    path: web::Path<DomainOrderId>,
     body: web::Json<AutoRenewCommand>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
     let order_id = path.into_inner();
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
-    let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
+    let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let use_case = if body.enabled {
@@ -681,7 +675,7 @@ pub async fn list_platform_domains(
     path = "/api/v1/platform/domains/{id}/release",
     tag = "domains",
     operation_id = "release_platform_domain",
-    params(("id" = Uuid, Path, description = "The domain id")),
+    params(("id" = String, Path, description = "The domain id")),
     request_body = ReleaseDomainCommand,
     responses(
         (status = 200, description = "The released domain", body = crate::application::CustomDomainView),
@@ -690,7 +684,7 @@ pub async fn list_platform_domains(
 )]
 pub async fn release_platform_domain(
     state: web::Data<crate::adapters::http::DomainsState>,
-    path: web::Path<Uuid>,
+    path: web::Path<CustomDomainId>,
     body: web::Json<ReleaseDomainCommand>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {

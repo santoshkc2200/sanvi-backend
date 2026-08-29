@@ -1,7 +1,7 @@
 //! Memberships: the user ↔ tenant ↔ roles binding.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+use sanvi_kernel::{Id, RoleId, TenantId};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -47,9 +47,9 @@ impl std::fmt::Display for MembershipStatus {
 /// authorization surface and change independently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Membership {
-    tenant_id: uuid::Uuid,
+    tenant_id: TenantId,
     user_id: UserId,
-    role_ids: Vec<uuid::Uuid>,
+    role_ids: Vec<RoleId>,
     status: MembershipStatus,
     invited_by: Option<UserId>,
     created_at: DateTime<Utc>,
@@ -57,9 +57,9 @@ pub struct Membership {
 
 impl Membership {
     pub fn grant(
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
-        role_ids: Vec<uuid::Uuid>,
+        role_ids: Vec<RoleId>,
         invited_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<Self, IdentityError> {
@@ -84,9 +84,9 @@ impl Membership {
 
     /// Rehydrate a stored row (adapter use only).
     pub fn from_parts(
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
-        role_ids: Vec<uuid::Uuid>,
+        role_ids: Vec<RoleId>,
         status: MembershipStatus,
         invited_by: Option<UserId>,
         created_at: DateTime<Utc>,
@@ -105,8 +105,8 @@ impl Membership {
     /// tuple sync.
     pub fn replace_roles(
         &mut self,
-        role_ids: Vec<uuid::Uuid>,
-    ) -> Result<(Vec<uuid::Uuid>, Vec<uuid::Uuid>), IdentityError> {
+        role_ids: Vec<RoleId>,
+    ) -> Result<(Vec<RoleId>, Vec<RoleId>), IdentityError> {
         if role_ids.is_empty() {
             return Err(IdentityError::NoRoles);
         }
@@ -116,12 +116,12 @@ impl Membership {
                 return Err(IdentityError::UnknownRole(*id));
             }
         }
-        let added: Vec<uuid::Uuid> = role_ids
+        let added: Vec<RoleId> = role_ids
             .iter()
             .filter(|id| !self.role_ids.contains(id))
             .copied()
             .collect();
-        let removed: Vec<uuid::Uuid> = self
+        let removed: Vec<RoleId> = self
             .role_ids
             .iter()
             .filter(|id| !role_ids.contains(id))
@@ -151,13 +151,13 @@ impl Membership {
         Ok(())
     }
 
-    pub fn tenant_id(&self) -> uuid::Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         self.tenant_id
     }
     pub fn user_id(&self) -> UserId {
         self.user_id
     }
-    pub fn role_ids(&self) -> &[uuid::Uuid] {
+    pub fn role_ids(&self) -> &[RoleId] {
         &self.role_ids
     }
     pub fn status(&self) -> MembershipStatus {
@@ -175,17 +175,22 @@ impl Membership {
 mod tests {
     use super::*;
 
-    fn role_ids() -> Vec<uuid::Uuid> {
-        vec![uuid::Uuid::now_v7(), uuid::Uuid::now_v7()]
+    fn role_ids() -> Vec<RoleId> {
+        vec![
+            RoleId::try_from(101_i64).unwrap(),
+            RoleId::try_from(102_i64).unwrap(),
+        ]
     }
 
     #[test]
     fn grant_requires_roles_and_rejects_duplicates() {
         let now = Utc::now();
         let mut roles = role_ids();
-        assert!(Membership::grant(uuid::Uuid::now_v7(), UserId::new(), vec![], None, now).is_err());
+        let tenant_id = TenantId::try_from(103_i64).unwrap();
+        let user_id = UserId::try_from(104_i64).unwrap();
+        assert!(Membership::grant(tenant_id, user_id, vec![], None, now).is_err());
         roles.push(roles[0]);
-        assert!(Membership::grant(uuid::Uuid::now_v7(), UserId::new(), roles, None, now).is_err());
+        assert!(Membership::grant(tenant_id, user_id, roles, None, now).is_err());
     }
 
     #[test]
@@ -193,14 +198,14 @@ mod tests {
         let now = Utc::now();
         let roles = role_ids();
         let mut membership = Membership::grant(
-            uuid::Uuid::now_v7(),
-            UserId::new(),
+            TenantId::try_from(103_i64).unwrap(),
+            UserId::try_from(104_i64).unwrap(),
             roles.clone(),
             None,
             now,
         )
         .unwrap();
-        let new_role = uuid::Uuid::now_v7();
+        let new_role = RoleId::try_from(105_i64).unwrap();
         let (added, removed) = membership.replace_roles(vec![roles[0], new_role]).unwrap();
         assert_eq!(added, vec![new_role]);
         assert_eq!(removed, vec![roles[1]]);
@@ -210,8 +215,14 @@ mod tests {
     #[test]
     fn suspend_resume_roundtrip() {
         let now = Utc::now();
-        let mut membership =
-            Membership::grant(uuid::Uuid::now_v7(), UserId::new(), role_ids(), None, now).unwrap();
+        let mut membership = Membership::grant(
+            TenantId::try_from(103_i64).unwrap(),
+            UserId::try_from(104_i64).unwrap(),
+            role_ids(),
+            None,
+            now,
+        )
+        .unwrap();
         membership.suspend().unwrap();
         assert_eq!(membership.status(), MembershipStatus::Suspended);
         assert!(membership.suspend().is_err());

@@ -3,7 +3,7 @@
 //! Every event carries the tenant id in its envelope metadata so consumers
 //! (cache invalidation, audit fan-out) can route without parsing payloads.
 
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId};
 use serde::Serialize;
 
 use crate::domain::tenant::TenantId;
@@ -116,17 +116,18 @@ impl TenantEvent {
     }
 
     /// The outbox envelope for this event, tagged with the tenant id.
-    pub fn envelope(&self) -> EventEnvelope {
+    pub fn envelope(&self, id: EventId) -> EventEnvelope {
         let payload = serde_json::to_value(self).expect("tenant events serialize infallibly");
         EventEnvelope::new(
+            id,
             TenantEventName::AGGREGATE,
-            self.tenant_id().as_uuid(),
+            self.tenant_id().as_snowflake(),
             self.name().as_str(),
             payload,
         )
         .with_metadata(
             "tenant_id",
-            serde_json::json!(self.tenant_id().as_uuid().to_string()),
+            serde_json::json!(self.tenant_id().as_i64().to_string()),
         )
     }
 }
@@ -139,17 +140,17 @@ mod tests {
     fn every_event_carries_tenant_id_metadata() {
         let events: Vec<TenantEvent> = vec![
             TenantEvent::SlugReserved {
-                tenant_id: TenantId::new(),
+                tenant_id: TenantId::try_from(101_i64).unwrap(),
                 slug: TenantSlug::parse("acme").unwrap(),
             },
             TenantEvent::SettingsChanged {
-                tenant_id: TenantId::new(),
+                tenant_id: TenantId::try_from(102_i64).unwrap(),
                 key: "theme".to_string(),
                 value: serde_json::json!({ "primary": "#000" }),
             },
         ];
         for event in events {
-            let envelope = event.envelope();
+            let envelope = event.envelope(EventId::try_from(201_i64).unwrap());
             assert_eq!(envelope.aggregate, "tenancy.tenant");
             assert_eq!(
                 envelope.metadata["tenant_id"],

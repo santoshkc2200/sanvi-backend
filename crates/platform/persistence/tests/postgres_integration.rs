@@ -3,7 +3,8 @@
 
 use std::time::Duration;
 
-use sanvi_persistence::{DatabaseConfig, Migrator, build_pool, check_database};
+use sanvi_kernel::SnowflakeId;
+use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool, check_database};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
@@ -29,6 +30,31 @@ fn config_for(port: u16, user: &str, password: &str) -> DatabaseConfig {
     }
 }
 
+async fn assert_column_type(
+    pool: &sqlx::PgPool,
+    schema: &str,
+    table: &str,
+    column: &str,
+    expected: &str,
+) {
+    let actual: String = sqlx::query_scalar(
+        "SELECT data_type
+         FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = $2 AND column_name = $3",
+    )
+    .bind(schema)
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        actual, expected,
+        "{schema}.{table}.{column} must use {expected}"
+    );
+}
+
 #[tokio::test]
 async fn migrations_run_and_revert_cleanly() {
     // A database with the two roles in place but nothing applied: this test
@@ -49,12 +75,19 @@ async fn migrations_run_and_revert_cleanly() {
     .unwrap();
     assert!(exists.0, "platform.outbox must exist after migration");
 
+    assert_column_type(&pool, "tenancy", "tenants", "id", "bigint").await;
+    assert_column_type(&pool, "identity", "users", "id", "bigint").await;
+    assert_column_type(&pool, "identity", "users", "kratos_identity_id", "uuid").await;
+    assert_column_type(&pool, "platform", "outbox", "id", "bigint").await;
+    assert_column_type(&pool, "platform", "processed_events", "event_id", "bigint").await;
+    assert_column_type(&pool, "platform", "audit_log", "id", "bigint").await;
+
     sqlx::query(
         "INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload)
          VALUES ($1, 'test.aggregate', $2, 'test.event', '{}')",
     )
-    .bind(uuid::Uuid::now_v7())
-    .bind(uuid::Uuid::now_v7())
+    .bind(101_i64)
+    .bind(202_i64)
     .execute(&pool)
     .await
     .expect("app role must be able to write to the outbox");
@@ -78,6 +111,27 @@ async fn migrations_run_and_revert_cleanly() {
     assert!(!exists.0, "platform schema must be gone after undo");
 
     pool.close().await;
+}
+
+#[tokio::test]
+async fn platform_scope_writes_a_snowflake_audit_id() {
+    let db = sanvi_testsupport::test_db().await;
+    let manager = TxManager::new(db.app_pool(), sanvi_testsupport::test_ids());
+
+    manager
+        .begin_unscoped("test", "tester")
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
+
+    let admin = db.admin_pool().await;
+    let id: i64 = sqlx::query_scalar("SELECT id FROM platform.audit_log LIMIT 1")
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+    assert!(SnowflakeId::try_from(id).is_ok());
 }
 
 #[tokio::test]

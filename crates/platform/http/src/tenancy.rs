@@ -21,9 +21,9 @@ use actix_web::{
     dev::{ServiceRequest, ServiceResponse},
     http::StatusCode,
 };
+use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::config::TenantPolicyConfig;
 use crate::error::{ApiError, ProblemDetail};
@@ -34,7 +34,8 @@ use crate::rate_limit::RateLimiter;
 /// from request extensions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct TenantContext {
-    pub tenant_id: Uuid,
+    #[schema(value_type = crate::openapi::SnowflakeId)]
+    pub tenant_id: TenantId,
     pub slug: String,
     pub display_name: String,
     pub status: TenantRuntimeStatus,

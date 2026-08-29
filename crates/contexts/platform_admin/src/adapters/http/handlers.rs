@@ -5,9 +5,9 @@ use std::sync::Arc;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use chrono::{DateTime, Utc};
 use sanvi_http::{ApiError, CurrentSubject, FreshAal2Required, RequiredPermission};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::{
     ApproveRequest, CreateImpersonation, CreateImpersonationCommand, DecideApprovalCommand,
@@ -77,6 +77,12 @@ pub fn api_error(err: PlatformAdminError) -> ApiError {
             tracing::error!(error = %detail, "platform_admin storage failure");
             ApiError::internal("storage failure")
         }
+        PlatformAdminError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "platform_admin ID generation failure");
+            ApiError::ServiceUnavailable {
+                detail: "ID generation is temporarily unavailable".to_string(),
+            }
+        }
     }
 }
 
@@ -89,7 +95,7 @@ pub struct TenantSearchQuery {
     pub query: Option<String>,
     pub status: Option<String>,
     pub after_created_at: Option<DateTime<Utc>>,
-    pub after_id: Option<Uuid>,
+    pub after_id: Option<TenantId>,
     pub limit: Option<u32>,
 }
 
@@ -103,7 +109,8 @@ pub struct TenantAdminPageView {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TenantViewCursorView {
     pub created_at: DateTime<Utc>,
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
 }
 
 /// `GET /api/v1/platform/admin/tenants` — operator tenant search.
@@ -116,7 +123,7 @@ pub struct TenantViewCursorView {
         ("query" = Option<String>, Query, description = "Substring match on slug/display name"),
         ("status" = Option<String>, Query, description = "Tenant status filter"),
         ("after_created_at" = Option<DateTime<Utc>>, Query, description = "Cursor: created_at of the last row"),
-        ("after_id" = Option<Uuid>, Query, description = "Cursor: tenant id of the last row"),
+        ("after_id" = Option<String>, Query, description = "Cursor: tenant id of the last row"),
         ("limit" = Option<u32>, Query, description = "Page size (1..=100, default 25)")
     ),
     responses(
@@ -170,7 +177,7 @@ pub async fn search_tenant_admin_views(
     path = "/api/v1/platform/admin/tenants/{id}",
     tag = "platform_admin",
     operation_id = "get_tenant_admin_view",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     responses(
         (status = 200, description = "The tenant view", body = TenantAdminView),
         (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
@@ -179,7 +186,7 @@ pub async fn search_tenant_admin_views(
 )]
 pub async fn get_tenant_admin_view(
     state: web::Data<PlatformAdminState>,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     _subject: CurrentSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -200,8 +207,10 @@ pub async fn get_tenant_admin_view(
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateImpersonationRequest {
-    pub tenant_id: Uuid,
-    pub target_user_id: Uuid,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
+    #[schema(value_type = String)]
+    pub target_user_id: UserId,
     pub reason: String,
     #[serde(default)]
     pub mode: ImpersonationMode,
@@ -251,7 +260,7 @@ pub async fn create_impersonation(
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListImpersonationsQuery {
-    pub tenant_id: Option<Uuid>,
+    pub tenant_id: Option<TenantId>,
     pub limit: Option<u32>,
 }
 
@@ -262,7 +271,7 @@ pub struct ListImpersonationsQuery {
     tag = "platform_admin",
     operation_id = "list_impersonations",
     params(
-        ("tenant_id" = Option<Uuid>, Query, description = "Restrict to one tenant"),
+        ("tenant_id" = Option<String>, Query, description = "Restrict to one tenant"),
         ("limit" = Option<u32>, Query, description = "Maximum grants (default 100)")
     ),
     responses(
@@ -290,7 +299,7 @@ pub async fn list_impersonations(
     path = "/api/v1/platform/impersonations/{id}",
     tag = "platform_admin",
     operation_id = "revoke_impersonation",
-    params(("id" = Uuid, Path, description = "Grant id")),
+    params(("id" = String, Path, description = "Grant id")),
     responses(
         (status = 200, description = "Revoked grant", body = ImpersonationGrantView),
         (status = 403, description = "Permission denied or fresh MFA missing", body = sanvi_http::ProblemDetail),
@@ -300,7 +309,7 @@ pub async fn list_impersonations(
 pub async fn revoke_impersonation(
     state: web::Data<PlatformAdminState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<ImpersonationGrantId>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
     req: HttpRequest,
@@ -310,7 +319,7 @@ pub async fn revoke_impersonation(
         .execute(
             subject.0.user_id,
             sanvi_http::impersonation_actor(&req),
-            ImpersonationGrantId::from_uuid(path.into_inner()),
+            path.into_inner(),
         )
         .await
         .map_err(api_error)?;
@@ -339,7 +348,10 @@ fn default_enabled() -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum GrantEntitlementResultView {
     Granted,
-    ApprovalRequired { approval_id: Uuid },
+    ApprovalRequired {
+        #[schema(value_type = String)]
+        approval_id: ApprovalId,
+    },
 }
 
 /// `POST /api/v1/platform/tenants/{id}/entitlements` — grant an override.
@@ -350,7 +362,7 @@ pub enum GrantEntitlementResultView {
     path = "/api/v1/platform/tenants/{id}/entitlements",
     tag = "platform_admin",
     operation_id = "grant_entitlement_override",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     request_body = GrantEntitlementRequest,
     responses(
         (status = 201, description = "Granted (or approval required)", body = GrantEntitlementResultView),
@@ -361,7 +373,7 @@ pub enum GrantEntitlementResultView {
 pub async fn grant_entitlement_override(
     state: web::Data<PlatformAdminState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     body: web::Json<GrantEntitlementRequest>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
@@ -391,12 +403,14 @@ pub async fn grant_entitlement_override(
 /// One stored override row (operator console).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OverrideView {
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     pub feature: String,
     pub enabled: bool,
     pub limit: Option<i64>,
     pub expires_at: Option<DateTime<Utc>>,
-    pub granted_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub granted_by: Option<UserId>,
     pub granted_reason: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
@@ -408,7 +422,7 @@ pub struct OverrideView {
     path = "/api/v1/platform/tenants/{id}/entitlements",
     tag = "platform_admin",
     operation_id = "list_entitlement_overrides",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     responses(
         (status = 200, description = "Override rows", body = Vec<OverrideView>),
         (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
@@ -416,7 +430,7 @@ pub struct OverrideView {
 )]
 pub async fn list_entitlement_overrides(
     state: web::Data<PlatformAdminState>,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     _subject: CurrentSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -449,7 +463,7 @@ pub async fn list_entitlement_overrides(
     tag = "platform_admin",
     operation_id = "revoke_entitlement_override",
     params(
-        ("id" = Uuid, Path, description = "Tenant id"),
+        ("id" = String, Path, description = "Tenant id"),
         ("feature" = String, Path, description = "Feature key")
     ),
     responses(
@@ -460,7 +474,7 @@ pub async fn list_entitlement_overrides(
 pub async fn revoke_entitlement_override(
     state: web::Data<PlatformAdminState>,
     subject: CurrentSubject,
-    path: web::Path<(Uuid, String)>,
+    path: web::Path<(TenantId, String)>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
 ) -> Result<impl Responder, ApiError> {
@@ -504,7 +518,7 @@ pub async fn list_pending_approvals(
     path = "/api/v1/platform/approvals/{id}/approve",
     tag = "platform_admin",
     operation_id = "approve_request",
-    params(("id" = Uuid, Path, description = "Approval id")),
+    params(("id" = String, Path, description = "Approval id")),
     responses(
         (status = 200, description = "Approved and executed", body = crate::application::approvals::ApprovalView),
         (status = 403, description = "Permission denied, self-approval, or fresh MFA missing", body = sanvi_http::ProblemDetail),
@@ -515,7 +529,7 @@ pub async fn list_pending_approvals(
 pub async fn approve_request(
     state: web::Data<PlatformAdminState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<ApprovalId>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
     req: HttpRequest,
@@ -526,7 +540,7 @@ pub async fn approve_request(
             subject.0.user_id,
             sanvi_http::impersonation_actor(&req),
             DecideApprovalCommand {
-                approval_id: ApprovalId::from_uuid(path.into_inner()),
+                approval_id: path.into_inner(),
                 approve: true,
             },
         )
@@ -541,7 +555,7 @@ pub async fn approve_request(
     path = "/api/v1/platform/approvals/{id}/reject",
     tag = "platform_admin",
     operation_id = "reject_request",
-    params(("id" = Uuid, Path, description = "Approval id")),
+    params(("id" = String, Path, description = "Approval id")),
     responses(
         (status = 200, description = "Rejected", body = crate::application::approvals::ApprovalView),
         (status = 403, description = "Permission denied, self-approval, or fresh MFA missing", body = sanvi_http::ProblemDetail),
@@ -552,7 +566,7 @@ pub async fn approve_request(
 pub async fn reject_request(
     state: web::Data<PlatformAdminState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<ApprovalId>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
     req: HttpRequest,
@@ -563,7 +577,7 @@ pub async fn reject_request(
             subject.0.user_id,
             sanvi_http::impersonation_actor(&req),
             DecideApprovalCommand {
-                approval_id: ApprovalId::from_uuid(path.into_inner()),
+                approval_id: path.into_inner(),
                 approve: false,
             },
         )
@@ -582,7 +596,8 @@ pub async fn reject_request(
 /// One tenant's application-fee configuration (operator console).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ApplicationFeeView {
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     /// Off everywhere by default in 0.10.0.
     pub enabled: bool,
     pub basis_points: Option<u32>,
@@ -610,7 +625,7 @@ fn fee_view(config: &crate::domain::fees::ApplicationFeeConfig) -> ApplicationFe
     path = "/api/v1/platform/tenants/{id}/application-fee",
     tag = "platform_admin",
     operation_id = "get_application_fee",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     responses(
         (status = 200, description = "The configuration (disabled when never configured)", body = ApplicationFeeView),
         (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
@@ -618,7 +633,7 @@ fn fee_view(config: &crate::domain::fees::ApplicationFeeConfig) -> ApplicationFe
 )]
 pub async fn get_application_fee(
     state: web::Data<PlatformAdminState>,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     _subject: CurrentSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
@@ -668,7 +683,7 @@ pub struct SetApplicationFeeRequest {
     path = "/api/v1/platform/tenants/{id}/application-fee",
     tag = "platform_admin",
     operation_id = "set_application_fee",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     request_body = SetApplicationFeeRequest,
     responses(
         (status = 201, description = "Configuration stored", body = ApplicationFeeView),
@@ -679,7 +694,7 @@ pub struct SetApplicationFeeRequest {
 pub async fn set_application_fee(
     state: web::Data<PlatformAdminState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     body: web::Json<SetApplicationFeeRequest>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
@@ -709,7 +724,7 @@ pub async fn set_application_fee(
     path = "/api/v1/platform/tenants/{id}/application-fee",
     tag = "platform_admin",
     operation_id = "disable_application_fee",
-    params(("id" = Uuid, Path, description = "Tenant id")),
+    params(("id" = String, Path, description = "Tenant id")),
     responses(
         (status = 204, description = "Disabled"),
         (status = 403, description = "Permission denied or fresh MFA missing", body = sanvi_http::ProblemDetail)
@@ -718,7 +733,7 @@ pub async fn set_application_fee(
 pub async fn disable_application_fee(
     state: web::Data<PlatformAdminState>,
     subject: CurrentSubject,
-    path: web::Path<Uuid>,
+    path: web::Path<TenantId>,
     _guard: RequiredPermission,
     _fresh_mfa: FreshAal2Required,
 ) -> Result<impl Responder, ApiError> {

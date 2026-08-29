@@ -4,6 +4,8 @@
 
 use thiserror::Error;
 
+use sanvi_kernel::IdGenerationError;
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PrivacyError {
     #[error("invalid jurisdiction code: {0}")]
@@ -163,6 +165,15 @@ pub enum PrivacyError {
     #[error("upstream dependency failure: {0}")]
     Upstream(String),
 
+    #[error("ID generation failure: {0}")]
+    IdGeneration(String),
+
     #[error("storage failure: {0}")]
     Storage(String),
+}
+
+impl From<IdGenerationError> for PrivacyError {
+    fn from(error: IdGenerationError) -> Self {
+        Self::IdGeneration(error.to_string())
+    }
 }

@@ -233,6 +233,10 @@ paths:
         name: invitation_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '204':
@@ -255,6 +259,10 @@ paths:
         name: invitation_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -344,6 +352,10 @@ paths:
         name: user_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '204':
@@ -372,6 +384,10 @@ paths:
         name: user_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:

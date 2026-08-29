@@ -6,9 +6,9 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::PrivacyError;
 
@@ -60,18 +60,19 @@ pub struct SubjectIdentifier {
 
 /// The cross-context reference to a data subject. `key` is the canonical,
 /// stable key used for directive materialisation and crypto-shredding:
-/// `user:{uuid}`, `end_user:{tenant_id}:{external_id}`, `email:{addr}` or
+/// `user:{snowflake}`, `end_user:{tenant_id}:{external_id}`, `email:{addr}` or
 /// `device:{device_ref}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 pub struct SubjectRef {
     pub kind: SubjectKind,
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
     pub key: String,
     pub identifiers: Vec<SubjectIdentifier>,
 }
 
 impl SubjectRef {
-    pub fn user(user_id: Uuid) -> Self {
+    pub fn user(user_id: UserId) -> Self {
         Self {
             kind: SubjectKind::TenantUser,
             tenant_id: None,
@@ -83,7 +84,7 @@ impl SubjectRef {
         }
     }
 
-    pub fn end_user(tenant_id: Uuid, external_id: &str) -> Self {
+    pub fn end_user(tenant_id: TenantId, external_id: &str) -> Self {
         Self {
             kind: SubjectKind::EndUser,
             tenant_id: Some(tenant_id),
@@ -112,7 +113,7 @@ impl SubjectRef {
     /// keying them globally, as [`SubjectRef::device`] does, would let one
     /// tenant's opt-out silence every other tenant's identically-named
     /// device.
-    pub fn tenant_device(tenant_id: Uuid, device_ref: &str) -> Self {
+    pub fn tenant_device(tenant_id: TenantId, device_ref: &str) -> Self {
         Self {
             kind: SubjectKind::Device,
             tenant_id: Some(tenant_id),
@@ -989,14 +990,9 @@ mod tests {
 
     #[test]
     fn subject_ref_keys_are_stable() {
-        let user =
-            SubjectRef::user(Uuid::parse_str("018f9f4e-6c58-7a3e-9b5b-7f5d2c7f6e1d").unwrap());
-        assert_eq!(
-            user.canonical_key(),
-            "user:018f9f4e-6c58-7a3e-9b5b-7f5d2c7f6e1d"
-        );
-        let other =
-            SubjectRef::user(Uuid::parse_str("018f9f4e-6c58-7a3e-9b5b-7f5d2c7f6e1d").unwrap());
+        let user = SubjectRef::user(UserId::try_from(123_456_789_i64).unwrap());
+        assert_eq!(user.canonical_key(), "user:123456789");
+        let other = SubjectRef::user(UserId::try_from(123_456_789_i64).unwrap());
         assert_eq!(user, other);
     }
 

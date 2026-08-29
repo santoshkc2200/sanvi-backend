@@ -23,7 +23,7 @@ impl OAuthStateStore for SqlxOAuthStateStore {
     async fn issue(&self, claims: OAuthStateClaims) -> Result<(), OAuthStateError> {
         let mut scope = self
             .tx_manager
-            .begin_for(claims.tenant_id)
+            .begin_for(claims.tenant_id.as_i64())
             .await
             .map_err(|err| {
                 tracing::error!(error = %err, "advertising OAuth state insert scope failed");
@@ -34,7 +34,7 @@ impl OAuthStateStore for SqlxOAuthStateStore {
              VALUES ($1, $2, $3, $4)",
         )
         .bind(claims.nonce)
-        .bind(claims.tenant_id)
+        .bind(claims.tenant_id.as_i64())
         .bind(claims.platform.as_str())
         .bind(claims.expires_at)
         .execute(&mut **scope.tx_mut().as_inner())
@@ -55,7 +55,7 @@ impl OAuthStateStore for SqlxOAuthStateStore {
     async fn consume(&self, claims: &OAuthStateClaims) -> Result<bool, OAuthStateError> {
         let mut scope = self
             .tx_manager
-            .begin_for(claims.tenant_id)
+            .begin_for(claims.tenant_id.as_i64())
             .await
             .map_err(|err| {
                 tracing::error!(error = %err, "advertising OAuth state consume scope failed");
@@ -68,7 +68,7 @@ impl OAuthStateStore for SqlxOAuthStateStore {
                AND expires_at = $4 AND expires_at > now() AND redeemed_at IS NULL",
         )
         .bind(claims.nonce)
-        .bind(claims.tenant_id)
+        .bind(claims.tenant_id.as_i64())
         .bind(claims.platform.as_str())
         .bind(claims.expires_at)
         .execute(&mut **scope.tx_mut().as_inner())

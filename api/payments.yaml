@@ -89,7 +89,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -272,7 +275,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required on every mutating payments endpoint
         in: header
@@ -328,7 +334,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -359,6 +368,9 @@ paths:
       - payments
   /api/v1/tenant/payments/connections/{id}/session:
     post:
+      description: |-
+        Fetched per render: never persisted, never logged, single-render;
+        refused outright for a disconnected connection.
       operationId: create_payment_connection_session
       parameters:
       - description: The connection id
@@ -366,7 +378,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required on every mutating payments endpoint; sessions are minted fresh per call
         in: header
@@ -413,10 +428,8 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider unavailable (payments/provider-unavailable)
       summary: |-
-        `POST /api/v1/tenant/payments/connections/{id}/session` — mint a
-        short-lived Account Session for the embedded onboarding component.
-        Fetched per render: never persisted, never logged, single-render;
-        refused outright for a disconnected connection.
+        `POST /api/v1/tenant/payments/connections/{id}/session` — mint an
+        Account Session client secret for the embedded onboarding component.
       tags:
       - payments
   /api/v1/tenant/payments/disputes:
@@ -668,7 +681,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -711,7 +727,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required (UUID). The same key with the same amount/reason replays the same refund; a different payload conflicts
         in: header

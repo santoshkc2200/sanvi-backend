@@ -17,6 +17,7 @@ use std::sync::Arc;
 // below into `#[actix_web::test]` and demand an async fn.
 use actix_web::{App, HttpMessage, http::StatusCode, test as actix_test, web};
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use uuid::Uuid;
 
 use sanvi_http::{FeatureGate, PermissionGate, ResourceRef, Subject, tenancy::TenantContext};
@@ -27,6 +28,7 @@ use sanvi_payments::adapters::repos::{
 };
 use sanvi_payments::adapters::{
     FakeProvider, FakeScript, FixedWindowThrottle, OutboxEventPublisher, PaymentsMetrics,
+    SystemIdGenerator,
 };
 use sanvi_payments::application::{
     ApplicationFeePolicy, CreateAccountSession, CreateCheckout, ListProviders, NewCheckoutCommand,
@@ -36,7 +38,10 @@ use sanvi_payments::application::{
 use sanvi_payments::config::PaymentsConfig;
 use sanvi_payments::domain::ports::{CreateAccountRequest, PaymentProviderPort};
 use sanvi_payments::domain::provider::{ConnectionStatus, ProviderKind};
-use sanvi_payments::domain::{Money, ProviderConnection, ProviderConnectionRepository};
+use sanvi_payments::domain::{
+    CheckoutId, ConnectionId, DisputeId, Money, PaymentId, PayoutId, ProviderConnection,
+    ProviderConnectionRepository,
+};
 use sanvi_payments::routes::payments_tenant_scope_routes;
 use sanvi_persistence::{Migrator, TxManager};
 use sanvi_privacy::domain::{DataClass, EraseMode, PersonalDataProvider, SubjectRef};
@@ -50,7 +55,7 @@ struct AllowShopTest;
 impl sanvi_payments::domain::ports::TenantDomainAllowList for AllowShopTest {
     async fn allows(
         &self,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
         hostname: &str,
     ) -> Result<bool, sanvi_payments::PaymentsError> {
         Ok(hostname == "shop.test")
@@ -70,7 +75,7 @@ struct NoFeeStore;
 impl sanvi_payments::domain::ports::ApplicationFeeStore for NoFeeStore {
     async fn configuration_for(
         &self,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
     ) -> Result<Option<sanvi_payments::domain::fees::FeeConfiguration>, sanvi_payments::PaymentsError>
     {
         Ok(None)
@@ -81,7 +86,7 @@ impl sanvi_payments::domain::ports::ApplicationFeeStore for NoFeeStore {
 impl ApplicationFeePolicy for TestFeePolicy {
     async fn application_fee(
         &self,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
         amount: &sanvi_payments::Money,
     ) -> Option<sanvi_payments::Money> {
         if self.0 {
@@ -102,13 +107,14 @@ fn migrations_dir() -> std::path::PathBuf {
 /// The migration this slice ships (up/down round-trip target).
 const PAYMENTS_MIGRATION: i64 = 20_260_823_000_000;
 
-async fn seed_tenant(pool: &sqlx::PgPool, slug: &str) -> Uuid {
-    let tenant_id = Uuid::now_v7();
+async fn seed_tenant(pool: &sqlx::PgPool, slug: &str) -> TenantId {
+    let tenant_id =
+        TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
     sqlx::query(
         "INSERT INTO tenancy.tenants (id, slug, display_name, status, region, default_locale)
          VALUES ($1, $2, $3, 'active', 'jp', 'en')",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(slug)
     .bind(format!("{slug} corp"))
     .execute(pool)
@@ -129,18 +135,18 @@ async fn migration_round_trips_on_a_seeded_database() {
 
     let tenant_id = seed_tenant(&pool, "round-trip").await;
     let connection = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         ProviderKind::StripeConnect,
-        format!("acct_{}", Uuid::now_v7().simple()),
+        format!("acct_{}", sanvi_testsupport::test_ids().next_id().unwrap()),
         Utc::now(),
     )
     .unwrap();
 
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.insert(&mut scope, &connection).await.unwrap();
         scope.commit().await.unwrap();
     }
@@ -225,9 +231,9 @@ async fn tenant_a_cannot_read_tenant_bs_connections() {
     let tenant_b = seed_tenant(&pool, "beta").await;
 
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let connection = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_a,
         ProviderKind::StripeConnect,
         "acct_alpha".to_string(),
@@ -235,19 +241,19 @@ async fn tenant_a_cannot_read_tenant_bs_connections() {
     )
     .unwrap();
     {
-        let mut scope = tx.begin_for(tenant_a).await.unwrap();
+        let mut scope = tx.begin_for(tenant_a.as_i64()).await.unwrap();
         repo.insert(&mut scope, &connection).await.unwrap();
         scope.commit().await.unwrap();
     }
 
     // Through the repo: A sees its connection, B sees nothing.
     {
-        let mut scope = tx.begin_for(tenant_a).await.unwrap();
+        let mut scope = tx.begin_for(tenant_a.as_i64()).await.unwrap();
         assert_eq!(repo.list(&mut scope, tenant_a).await.unwrap().len(), 1);
         scope.commit().await.unwrap();
     }
     {
-        let mut scope = tx.begin_for(tenant_b).await.unwrap();
+        let mut scope = tx.begin_for(tenant_b.as_i64()).await.unwrap();
         assert!(repo.list(&mut scope, tenant_b).await.unwrap().is_empty());
         assert!(
             repo.find_active(&mut scope, tenant_b, "stripe_connect")
@@ -260,7 +266,7 @@ async fn tenant_a_cannot_read_tenant_bs_connections() {
 
     // Directly in SQL: the same scoped transaction A uses sees A's row…
     {
-        let mut scope = tx.begin_for(tenant_a).await.unwrap();
+        let mut scope = tx.begin_for(tenant_a.as_i64()).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payments.provider_connections")
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
@@ -271,7 +277,7 @@ async fn tenant_a_cannot_read_tenant_bs_connections() {
     // …and B's scoped transaction sees none of it, with no predicate in
     // the query — RLS is the enforcement, not the WHERE clause.
     {
-        let mut scope = tx.begin_for(tenant_b).await.unwrap();
+        let mut scope = tx.begin_for(tenant_b.as_i64()).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payments.provider_connections")
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
@@ -289,7 +295,7 @@ async fn one_active_connection_per_provider_but_history_is_kept() {
 
     // Two live rows for the same provider collide (partial unique index)…
     let first = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         ProviderKind::StripeConnect,
         "acct_one".to_string(),
@@ -297,7 +303,7 @@ async fn one_active_connection_per_provider_but_history_is_kept() {
     )
     .unwrap();
     let second = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         ProviderKind::StripeConnect,
         "acct_two".to_string(),
@@ -305,14 +311,14 @@ async fn one_active_connection_per_provider_but_history_is_kept() {
     )
     .unwrap();
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.insert(&mut scope, &first).await.unwrap();
         scope.commit().await.unwrap();
     }
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         let err = repo.insert(&mut scope, &second).await.unwrap_err();
         // 09.2: the partial unique index maps to the 409-shaped domain
         // error, not a raw storage failure.
@@ -329,24 +335,24 @@ async fn one_active_connection_per_provider_but_history_is_kept() {
     // transaction like every other write — a raw pool query silently
     // matches zero rows instead of erroring.
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         sqlx::query(
             "UPDATE payments.provider_connections
              SET disconnected_at = now(), status = 'disconnected' WHERE id = $1",
         )
-        .bind(first.id)
+        .bind(first.id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .unwrap();
         scope.commit().await.unwrap();
     }
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.insert(&mut scope, &second).await.unwrap();
         scope.commit().await.unwrap();
     }
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         let history = repo.list(&mut scope, tenant_id).await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].status, ConnectionStatus::Pending);
@@ -433,7 +439,7 @@ struct FakeFeatureGate {
 impl FeatureGate for FakeFeatureGate {
     fn check<'a>(
         &'a self,
-        _tenant_id: Uuid,
+        _tenant_id: TenantId,
         _feature: &'a str,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<bool, sanvi_http::ApiError>> + Send + 'a>,
@@ -455,7 +461,7 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
     // execute the connection use case, so there is nothing to dial.
     let lazy_pool = sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
         .expect("lazy pool construction is configuration only");
-    let tx = TxManager::new(lazy_pool);
+    let tx = TxManager::new(lazy_pool, sanvi_testsupport::test_ids());
     let connections: Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
         Arc::new(SqlxProviderConnectionRepository::new());
     let checkouts: Arc<dyn sanvi_payments::domain::CheckoutRepository> =
@@ -466,8 +472,9 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
         Arc::new(SqlxRefundRepository::new());
     let disputes: Arc<dyn sanvi_payments::domain::DisputeRepository> =
         Arc::new(SqlxDisputeRepository::new());
-    let audit: Arc<dyn sanvi_audit::domain::AuditWriter> =
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new());
+    let audit: Arc<dyn sanvi_audit::domain::AuditWriter> = Arc::new(
+        sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids()),
+    );
 
     PaymentsState {
         config: PaymentsConfig::default(),
@@ -480,34 +487,40 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             tx.clone(),
             providers.clone(),
             connections.clone(),
-            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
             audit.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         account_session: Arc::new(sanvi_payments::application::CreateAccountSession::new(
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             providers.clone(),
             connections,
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         disconnect_connection: Arc::new(sanvi_payments::application::DisconnectConnection::new(
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             Arc::new(SqlxProviderConnectionRepository::new()),
             payments.clone(),
             disputes.clone(),
             Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
-            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
             audit.clone(),
         )),
         webhook_receiver: Arc::new(sanvi_payments::application::WebhookReceiver::new(
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             Arc::new(sanvi_payments::adapters::SqlxWebhookEventRepository::new()),
             Arc::new(FakeProvider::new()),
@@ -518,14 +531,16 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             providers.clone(),
             Arc::new(SqlxProviderConnectionRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
             Arc::new(AllowShopTest),
-            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
             Arc::new(TestFeePolicy(false)),
             Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
         payments: payments.clone(),
@@ -535,6 +550,7 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             payments.clone(),
         )),
@@ -542,6 +558,7 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             payments.clone(),
             refunds.clone(),
@@ -553,19 +570,24 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             providers.clone(),
             payments.clone(),
             refunds.clone(),
             Arc::new(SqlxProviderConnectionRepository::new()),
             checkouts.clone(),
-            Arc::new(OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             disputes.clone(),
             payments.clone(),
@@ -576,18 +598,22 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             payments.clone(),
             refunds.clone(),
             disputes.clone(),
             checkouts.clone(),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
         list_payouts: Arc::new(sanvi_payments::application::ListPayouts::new(
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             Arc::new(SqlxProviderConnectionRepository::new()),
             providers.clone(),
@@ -601,6 +627,7 @@ fn payments_state(environment: RuntimeEnvironment) -> PaymentsState {
             TxManager::new(
                 sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                     .expect("lazy pool construction is configuration only"),
+                sanvi_testsupport::test_ids(),
             ),
             Arc::new(SqlxProviderConnectionRepository::new()),
             providers.clone(),
@@ -624,9 +651,10 @@ async fn spawn_app(
     Response = actix_web::dev::ServiceResponse,
     Error = actix_web::Error,
 > {
-    let tenant_id = Uuid::now_v7();
+    let tenant_id =
+        TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
     let subject = Subject {
-        user_id: Uuid::now_v7(),
+        user_id: UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         session_id: "sess_test".to_string(),
         aal: "aal2".to_string(),
         methods: vec!["password".to_string()],
@@ -788,15 +816,18 @@ fn start_connection_use_case(pool: &sanvi_persistence::PgPool) -> StartProviderC
     let mut providers = ProviderRegistry::new();
     providers.register(Arc::new(FakeProvider::new())).unwrap();
     StartProviderConnection::new(
-        TxManager::new(pool.clone()),
+        TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
         Arc::new(providers),
         Arc::new(SqlxProviderConnectionRepository::new()),
-        Arc::new(OutboxEventPublisher::new()),
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     )
 }
 
-fn start_command(tenant_id: Uuid, idempotency_key: Uuid) -> StartConnectionCommand {
+fn start_command(tenant_id: TenantId, idempotency_key: Uuid) -> StartConnectionCommand {
     StartConnectionCommand {
         tenant_id,
         provider: ProviderKind::Fake,
@@ -804,7 +835,7 @@ fn start_command(tenant_id: Uuid, idempotency_key: Uuid) -> StartConnectionComma
         default_currency: None,
         display_name: None,
         idempotency_key,
-        actor: Uuid::now_v7(),
+        actor: UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         ip: None,
     }
 }
@@ -829,7 +860,7 @@ async fn starting_a_fake_provider_connection_emits_the_started_event_end_to_end(
     // row — the phase-01 outbox contract, proven for the fake provider.
     let events: Vec<(String, serde_json::Value)> =
         sqlx::query_as("SELECT event_type, payload FROM platform.outbox WHERE aggregate_id = $1")
-            .bind(connection.id)
+            .bind(connection.id.as_i64())
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -839,9 +870,9 @@ async fn starting_a_fake_provider_connection_emits_the_started_event_end_to_end(
 
     // The connection row itself round-trips through the repo.
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         let stored = repo
             .find_active(&mut scope, tenant_id, "fake")
             .await
@@ -852,15 +883,20 @@ async fn starting_a_fake_provider_connection_emits_the_started_event_end_to_end(
         scope.commit().await.unwrap();
     }
 
-    // Idempotent replay: the same Idempotency-Key returns the SAME
-    // connection — no second row, no second event.
-    let replay = use_case
+    // With snowflake IDs the connection id is no longer derived from the
+    // idempotency key, so a sequential replay with the same key now
+    // sees the existing active connection and is a 409 (the concurrent
+    // same-key race is still folded via the insert-conflict adoption).
+    let err = use_case
         .execute(start_command(tenant_id, key))
         .await
-        .unwrap();
-    assert_eq!(replay.id, connection.id);
-    // …and a DIFFERENT key while an active connection exists is a
-    // 409-shaped conflict, not a duplicate.
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        sanvi_payments::PaymentsError::ConnectionExists(_)
+    ));
+    // …and a DIFFERENT key while an active connection exists is also
+    // a 409-shaped conflict.
     let err = use_case
         .execute(start_command(tenant_id, Uuid::now_v7()))
         .await
@@ -888,9 +924,9 @@ async fn the_provider_check_admits_the_fake_kind_and_reverts_cleanly() {
 
     // The CHECK admits 'fake' — the whole point of the 09.1 migration.
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let fake_connection = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         ProviderKind::Fake,
         "acct_fake_check".to_string(),
@@ -899,7 +935,7 @@ async fn the_provider_check_admits_the_fake_kind_and_reverts_cleanly() {
     .unwrap();
     let stored_id = fake_connection.id;
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.insert(&mut scope, &fake_connection).await.unwrap();
         scope.commit().await.unwrap();
     }
@@ -918,7 +954,7 @@ async fn the_provider_check_admits_the_fake_kind_and_reverts_cleanly() {
             .await
             .unwrap();
         sqlx::query("DELETE FROM payments.provider_connections WHERE id = $1")
-            .bind(stored_id)
+            .bind(stored_id.as_i64())
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -964,10 +1000,12 @@ fn session_fixture(pool: &sanvi_persistence::PgPool) -> (CreateAccountSession, F
     let mut providers = ProviderRegistry::new();
     providers.register(Arc::new(provider.clone())).unwrap();
     let use_case = CreateAccountSession::new(
-        TxManager::new(pool.clone()),
+        TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
         Arc::new(providers),
         Arc::new(SqlxProviderConnectionRepository::new()),
-        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
     );
     (use_case, provider)
 }
@@ -1000,12 +1038,12 @@ async fn concurrent_creates_with_the_same_key_yield_one_account_and_one_row() {
     );
 
     // RLS: the count runs in a tenant-scoped tx.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let rows: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM payments.provider_connections WHERE tenant_id = $1",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -1048,35 +1086,21 @@ async fn an_orphaned_provider_account_is_adopted_on_retry() {
         .execute(start_command(tenant_id, key))
         .await
         .unwrap();
-    assert_eq!(connection.id, key_derived_id(tenant_id, key));
     assert_eq!(connection.external_account_id, orphaned.external_account_id);
 
     // One row (RLS: the count runs in a tenant-scoped tx), and the fake
     // provider holds exactly one account for the adopted key.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let rows: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM payments.provider_connections WHERE tenant_id = $1",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
     scope.rollback().await.unwrap();
     assert_eq!(rows, 1);
-}
-
-/// The derivation is the use case's private function; the test pins its
-/// behaviour through the same construction (tenant ‖ key, v5).
-fn key_derived_id(tenant_id: Uuid, key: Uuid) -> Uuid {
-    let namespace = uuid::Uuid::from_bytes([
-        0x6b, 0x9b, 0x0d, 0x1e, 0x52, 0x6f, 0x4c, 0x2e, 0xa4, 0x1d, 0x7f, 0x3c, 0x90, 0x11, 0xab,
-        0x52,
-    ]);
-    let mut bytes = [0u8; 32];
-    bytes[..16].copy_from_slice(tenant_id.as_bytes());
-    bytes[16..].copy_from_slice(key.as_bytes());
-    uuid::Uuid::new_v5(&namespace, &bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -1085,7 +1109,7 @@ fn key_derived_id(tenant_id: Uuid, key: Uuid) -> Uuid {
 
 async fn pending_connection(
     pool: &sqlx::PgPool,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     provider: &FakeProvider,
 ) -> ProviderConnection {
     let account = provider
@@ -1099,7 +1123,7 @@ async fn pending_connection(
         .await
         .unwrap();
     let connection = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         ProviderKind::Fake,
         account.external_account_id.clone(),
@@ -1107,8 +1131,8 @@ async fn pending_connection(
     )
     .unwrap();
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     repo.insert(&mut scope, &connection).await.unwrap();
     scope.commit().await.unwrap();
     connection
@@ -1121,7 +1145,7 @@ async fn minting_a_session_moves_pending_to_onboarding_and_writes_the_audit_entr
     let tenant_id = seed_tenant(&pool, "session").await;
     let (use_case, provider) = session_fixture(&pool);
     let connection = pending_connection(&pool, tenant_id, &provider).await;
-    let actor = Uuid::now_v7();
+    let actor = UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
 
     let (session, transitioned) = use_case
         .execute(
@@ -1139,8 +1163,8 @@ async fn minting_a_session_moves_pending_to_onboarding_and_writes_the_audit_entr
 
     // The transition persisted.
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let stored = repo
         .find_by_id(&mut scope, tenant_id, connection.id)
         .await
@@ -1149,7 +1173,7 @@ async fn minting_a_session_moves_pending_to_onboarding_and_writes_the_audit_entr
 
     // The audit entry: actor, tenant, IP — and never the secret. The
     // shared RLS policy admits the row's own tenant.
-    let entry: (Option<Uuid>, Option<String>) = sqlx::query_as(
+    let entry: (Option<i64>, Option<String>) = sqlx::query_as(
         "SELECT actor_id, host(ip) FROM audit.entries
          WHERE action = 'payments.account_session_issued' AND resource_id = $1",
     )
@@ -1167,7 +1191,7 @@ async fn minting_a_session_moves_pending_to_onboarding_and_writes_the_audit_entr
     .unwrap();
     scope.rollback().await.unwrap();
     assert_eq!(stored.status, ConnectionStatus::Onboarding);
-    assert_eq!(entry.0, Some(actor));
+    assert_eq!(entry.0, Some(actor.as_i64()));
     assert_eq!(entry.1.as_deref(), Some("203.0.113.7"));
     assert!(
         !after.to_string().contains(&session.client_secret),
@@ -1184,15 +1208,20 @@ async fn a_session_is_refused_for_a_disconnected_connection() {
     let connection = pending_connection(&pool, tenant_id, &provider).await;
 
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut disconnected = connection.clone();
     disconnected.disconnect(Utc::now()).unwrap();
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     repo.update(&mut scope, &disconnected).await.unwrap();
     scope.commit().await.unwrap();
 
     let err = use_case
-        .execute(Uuid::now_v7(), None, tenant_id, &disconnected)
+        .execute(
+            UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
+            None,
+            tenant_id,
+            &disconnected,
+        )
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1214,7 +1243,12 @@ async fn an_expired_session_secret_is_rejected() {
         ..Default::default()
     });
     let err = use_case
-        .execute(Uuid::now_v7(), None, tenant_id, &connection)
+        .execute(
+            UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
+            None,
+            tenant_id,
+            &connection,
+        )
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1229,7 +1263,7 @@ async fn creating_a_connection_writes_the_audit_entry() {
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "audit").await;
     let use_case = start_connection_use_case(&pool);
-    let actor = Uuid::now_v7();
+    let actor = UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
 
     let mut command = start_command(tenant_id, Uuid::now_v7());
     command.actor = actor;
@@ -1238,9 +1272,9 @@ async fn creating_a_connection_writes_the_audit_entry() {
 
     // audit.entries carries a shared RLS policy (platform scope OR the
     // row's own tenant id), so the read runs in a tenant-scoped tx.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
-    let entry: (Option<Uuid>, Option<Uuid>, Option<String>) = sqlx::query_as(
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let entry: (Option<i64>, Option<i64>, Option<String>) = sqlx::query_as(
         "SELECT actor_id, tenant_id, host(ip) FROM audit.entries
          WHERE action = 'payments.connection_created' AND resource_id = $1",
     )
@@ -1249,8 +1283,8 @@ async fn creating_a_connection_writes_the_audit_entry() {
     .await
     .unwrap();
     scope.rollback().await.unwrap();
-    assert_eq!(entry.0, Some(actor));
-    assert_eq!(entry.1, Some(tenant_id));
+    assert_eq!(entry.0, Some(actor.as_i64()));
+    assert_eq!(entry.1, Some(tenant_id.as_i64()));
     assert_eq!(entry.2.as_deref(), Some("198.51.100.9"));
 }
 
@@ -1356,7 +1390,7 @@ struct WebhookFixture {
 #[derive(Default)]
 struct RecordingNotifier {
     payout_failures: std::sync::Mutex<Vec<String>>,
-    tax_lapses: std::sync::Mutex<Vec<(uuid::Uuid, String)>>,
+    tax_lapses: std::sync::Mutex<Vec<(TenantId, String)>>,
 }
 
 impl RecordingNotifier {
@@ -1377,16 +1411,16 @@ impl RecordingNotifier {
 impl ConnectionNotifier for RecordingNotifier {
     async fn connection_activated(
         &self,
-        _tenant_id: uuid::Uuid,
-        _connection_id: uuid::Uuid,
+        _tenant_id: TenantId,
+        _connection_id: ConnectionId,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         Ok(())
     }
 
     async fn connection_restricted(
         &self,
-        _tenant_id: uuid::Uuid,
-        _connection_id: uuid::Uuid,
+        _tenant_id: TenantId,
+        _connection_id: ConnectionId,
         _detail: &str,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         Ok(())
@@ -1394,8 +1428,8 @@ impl ConnectionNotifier for RecordingNotifier {
 
     async fn requirement_deadline_approaching(
         &self,
-        _tenant_id: uuid::Uuid,
-        _connection_id: uuid::Uuid,
+        _tenant_id: TenantId,
+        _connection_id: ConnectionId,
         _deadline: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         Ok(())
@@ -1403,8 +1437,8 @@ impl ConnectionNotifier for RecordingNotifier {
 
     async fn dispute_opened(
         &self,
-        _tenant_id: uuid::Uuid,
-        _dispute_id: uuid::Uuid,
+        _tenant_id: TenantId,
+        _dispute_id: DisputeId,
         _due_by: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         Ok(())
@@ -1412,7 +1446,7 @@ impl ConnectionNotifier for RecordingNotifier {
 
     async fn payout_failed(
         &self,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
         external_payout_id: &str,
         _amount: &sanvi_payments::Money,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
@@ -1425,7 +1459,7 @@ impl ConnectionNotifier for RecordingNotifier {
 
     async fn tax_compliance_lapsed(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         detail: &str,
     ) -> Result<(), sanvi_payments::domain::PaymentsError> {
         self.tax_lapses
@@ -1446,7 +1480,8 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         Arc::new(SqlxProviderConnectionRepository::new());
     let lifecycle: Arc<dyn ConnectionLifecycleStore> =
         Arc::new(SqlxProviderConnectionRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> =
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let notifier = Arc::new(RecordingNotifier::new());
     let notifier_trait: Arc<dyn ConnectionNotifier> = notifier.clone();
     let tax_settings: Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
@@ -1458,7 +1493,7 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         tax_settings,
         notifier_trait.clone(),
     ));
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let receiver = Arc::new(WebhookReceiver::new(
         tx.clone(),
         webhooks.clone(),
@@ -1476,6 +1511,7 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
             registry.clone(),
             events.clone(),
             notifier_trait.clone(),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )
         .with_checkout_store(checkouts.clone())
         .with_refund_store(Arc::new(SqlxRefundRepository::new()))
@@ -1507,7 +1543,7 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
 }
 
 fn tx_manager_for_pool(pool: &sanvi_persistence::PgPool) -> TxManager {
-    TxManager::new(pool.clone())
+    TxManager::new(pool.clone(), sanvi_testsupport::test_ids())
 }
 
 impl WebhookFixture {
@@ -1699,7 +1735,7 @@ async fn the_same_event_delivered_twice_produces_exactly_one_state_change() {
     );
 
     let repo = SqlxProviderConnectionRepository::new();
-    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let stored = repo
         .find_by_id(&mut scope, tenant_id, connection.id)
         .await
@@ -1740,7 +1776,7 @@ async fn a_stale_pending_event_leaves_an_active_connection_active() {
     assert_eq!(report.processed, 0);
 
     let repo = SqlxProviderConnectionRepository::new();
-    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let stored = repo
         .find_by_id(&mut scope, tenant_id, connection.id)
         .await
@@ -1760,7 +1796,7 @@ async fn a_poison_event_is_dead_lettered_does_not_block_the_queue_and_is_replaya
     // A connection whose provider adapter is NOT in this registry: every
     // processing attempt fails — the poison.
     let poison_connection = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         ProviderKind::StripeConnect,
         "acct_poison".to_string(),
@@ -1769,7 +1805,7 @@ async fn a_poison_event_is_dead_lettered_does_not_block_the_queue_and_is_replaya
     .unwrap();
     {
         let repo = SqlxProviderConnectionRepository::new();
-        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.insert(&mut scope, &poison_connection).await.unwrap();
         scope.commit().await.unwrap();
     }
@@ -1861,7 +1897,7 @@ async fn the_lost_webhook_drill_reconciliation_alone_reaches_active() {
     assert_eq!(report.updated, 1, "the reconciliation repairs the status");
 
     let repo = SqlxProviderConnectionRepository::new();
-    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let stored = repo
         .find_by_id(&mut scope, tenant_id, connection.id)
         .await
@@ -1892,8 +1928,8 @@ async fn the_connection_view_maps_requirements_blockers_and_readiness() {
     use sanvi_payments::domain::{CapabilitySet, CapabilityStatus, RequirementSummary};
     let config = PaymentsConfig::default();
     let mut connection = ProviderConnection::pending(
-        Uuid::now_v7(),
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
+        TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         ProviderKind::StripeConnect,
         "acct_view".to_string(),
         Utc::now(),
@@ -1989,14 +2025,14 @@ async fn get_connection_returns_the_enriched_truthful_view() {
     synced.refresh_snapshot(&snapshot, Utc::now());
     {
         let repo = SqlxProviderConnectionRepository::new();
-        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.update(&mut scope, &synced).await.unwrap();
         scope.commit().await.unwrap();
     }
 
     // The route with REAL middleware products and a REAL pool.
     let subject = Subject {
-        user_id: Uuid::now_v7(),
+        user_id: UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         session_id: "sess_test".to_string(),
         aal: "aal2".to_string(),
         methods: vec!["password".to_string()],
@@ -2036,59 +2072,61 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             ),
                         ))),
                         registry,
-                        tx: TxManager::new(pool.clone()),
+                        tx: TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                         connections: connections.clone(),
                         create_connection: Arc::new(StartProviderConnection::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(ProviderRegistry::new()),
                             connections.clone(),
-                            Arc::new(OutboxEventPublisher::new()),
-                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
-                        )),
+                            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+        )),
                         account_session: Arc::new(CreateAccountSession::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(ProviderRegistry::new()),
                             connections,
-                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                         )),
                         disconnect_connection: Arc::new(
                             sanvi_payments::application::DisconnectConnection::new(
-                                TxManager::new(pool.clone()),
+                                TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                                 Arc::new(SqlxProviderConnectionRepository::new()),
                                 Arc::new(SqlxPaymentRepository::new()),
                                 Arc::new(SqlxDisputeRepository::new()),
                                 Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
-                                Arc::new(OutboxEventPublisher::new()),
-                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                                Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                             ),
                         ),
                         webhook_receiver: Arc::new(WebhookReceiver::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(SqlxWebhookEventRepository::new()),
                             Arc::new(FakeProvider::new()),
                             vec!["127.0.0.1".to_string()],
                         )),
                         checkouts: Arc::new(SqlxCheckoutRepository::new()),
                         create_checkout: Arc::new(CreateCheckout::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(ProviderRegistry::new()),
                             Arc::new(SqlxProviderConnectionRepository::new()),
                             Arc::new(SqlxCheckoutRepository::new()),
                             Arc::new(AllowShopTest),
-                            Arc::new(OutboxEventPublisher::new()),
+                            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
                             Arc::new(TestFeePolicy(false)),
                             Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
+                            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
                         )),
                         checkout_throttle: Arc::new(FixedWindowThrottle::new(1000)),
                         payments: Arc::new(SqlxPaymentRepository::new()),
                         refunds: Arc::new(SqlxRefundRepository::new()),
                         disputes: Arc::new(SqlxDisputeRepository::new()),
                         list_payments: Arc::new(sanvi_payments::application::ListPayments::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(SqlxPaymentRepository::new()),
                         )),
                         get_payment: Arc::new(sanvi_payments::application::GetPaymentDetail::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(SqlxPaymentRepository::new()),
                             Arc::new(SqlxRefundRepository::new()),
                             Arc::new(SqlxDisputeRepository::new()),
@@ -2096,17 +2134,18 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                             Arc::new(SqlxProviderConnectionRepository::new()),
                         )),
                         issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(ProviderRegistry::new()),
                             Arc::new(SqlxPaymentRepository::new()),
                             Arc::new(SqlxRefundRepository::new()),
                             Arc::new(SqlxProviderConnectionRepository::new()),
                             Arc::new(SqlxCheckoutRepository::new()),
-                            Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new()),
-                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
-                        )),
+                            Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+                            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+        )),
                         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
-                            TxManager::new(pool.clone()),
+                            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                             Arc::new(SqlxDisputeRepository::new()),
                             Arc::new(SqlxPaymentRepository::new()),
                             Arc::new(SqlxCheckoutRepository::new()),
@@ -2114,18 +2153,18 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                         )),
                         export_payments: Arc::new(
                             sanvi_payments::application::ExportPayments::new(
-                                TxManager::new(pool.clone()),
+                                TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                                 Arc::new(SqlxPaymentRepository::new()),
                                 Arc::new(SqlxRefundRepository::new()),
                                 Arc::new(SqlxDisputeRepository::new()),
                                 Arc::new(SqlxCheckoutRepository::new()),
-                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+                                Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())),
                             ),
                         ),
                         payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
                         list_payouts: Arc::new(
                             sanvi_payments::application::ListPayouts::new(
-                                TxManager::new(pool.clone()),
+                                TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                                 Arc::new(SqlxProviderConnectionRepository::new()),
                                 Arc::new(ProviderRegistry::new()),
                             ),
@@ -2135,7 +2174,7 @@ async fn get_connection_returns_the_enriched_truthful_view() {
                         ),
                         manage_tax_settings: Arc::new(
                             sanvi_payments::application::ManageTaxSettings::new(
-                                TxManager::new(pool.clone()),
+                                TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
                                 Arc::new(SqlxProviderConnectionRepository::new()),
                                 Arc::new(ProviderRegistry::new()),
                                 Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
@@ -2229,57 +2268,65 @@ fn checkout_fixture(
             RuntimeEnvironment::NonProduction,
         )))),
         registry: providers.clone(),
-        tx: TxManager::new(pool.clone()),
+        tx: TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
         connections: connections.clone(),
         create_connection: Arc::new(StartProviderConnection::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             providers.clone(),
             connections.clone(),
-            Arc::new(OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         account_session: Arc::new(CreateAccountSession::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             providers.clone(),
             connections.clone(),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         disconnect_connection: Arc::new(sanvi_payments::application::DisconnectConnection::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             connections.clone(),
             Arc::new(SqlxPaymentRepository::new()),
             Arc::new(SqlxDisputeRepository::new()),
             Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
-            Arc::new(OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         webhook_receiver: Arc::new(WebhookReceiver::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             Arc::new(WebhookEventsRepo::new()),
             Arc::new(provider.clone()),
             vec!["127.0.0.1".to_string()],
         )),
         checkouts: checkouts.clone(),
         create_checkout: Arc::new(CreateCheckout::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             providers.clone(),
             connections.clone(),
             checkouts,
             Arc::new(AllowShopTest),
-            Arc::new(OutboxEventPublisher::new()),
+            Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
             Arc::new(TestFeePolicy(fee_enabled)),
             Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new()),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         checkout_throttle: Arc::new(FixedWindowThrottle::new(throttle_limit)),
         payments: Arc::new(SqlxPaymentRepository::new()),
         refunds: Arc::new(SqlxRefundRepository::new()),
         disputes: Arc::new(SqlxDisputeRepository::new()),
         list_payments: Arc::new(sanvi_payments::application::ListPayments::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             Arc::new(SqlxPaymentRepository::new()),
         )),
         get_payment: Arc::new(sanvi_payments::application::GetPaymentDetail::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             Arc::new(SqlxPaymentRepository::new()),
             Arc::new(SqlxRefundRepository::new()),
             Arc::new(SqlxDisputeRepository::new()),
@@ -2287,39 +2334,46 @@ fn checkout_fixture(
             Arc::new(SqlxProviderConnectionRepository::new()),
         )),
         issue_refund: Arc::new(sanvi_payments::application::IssueRefund::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             providers.clone(),
             Arc::new(SqlxPaymentRepository::new()),
             Arc::new(SqlxRefundRepository::new()),
             Arc::new(SqlxProviderConnectionRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
-            Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_payments::adapters::OutboxEventPublisher::new(
+                sanvi_testsupport::test_ids(),
+            )),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
+            Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )),
         list_disputes: Arc::new(sanvi_payments::application::ListDisputes::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             Arc::new(SqlxDisputeRepository::new()),
             Arc::new(SqlxPaymentRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
             Arc::new(SqlxProviderConnectionRepository::new()),
         )),
         export_payments: Arc::new(sanvi_payments::application::ExportPayments::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             Arc::new(SqlxPaymentRepository::new()),
             Arc::new(SqlxRefundRepository::new()),
             Arc::new(SqlxDisputeRepository::new()),
             Arc::new(SqlxCheckoutRepository::new()),
-            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new()),
+            Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+                sanvi_testsupport::test_ids(),
+            )),
         )),
         payouts: Arc::new(sanvi_payments::adapters::SqlxPayoutRepository::new()),
         list_payouts: Arc::new(sanvi_payments::application::ListPayouts::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             connections.clone(),
             providers.clone(),
         )),
         tax_settings: tax_settings_repo.clone(),
         manage_tax_settings: Arc::new(sanvi_payments::application::ManageTaxSettings::new(
-            TxManager::new(pool.clone()),
+            TxManager::new(pool.clone(), sanvi_testsupport::test_ids()),
             connections.clone(),
             providers.clone(),
             tax_settings_repo.clone(),
@@ -2331,14 +2385,14 @@ fn checkout_fixture(
 /// The tenant app with REAL middleware products on a real pool.
 async fn checkout_app(
     state: PaymentsState,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
 ) -> impl actix_web::dev::Service<
     actix_http::Request,
     Response = actix_web::dev::ServiceResponse,
     Error = actix_web::Error,
 > {
     let subject = Subject {
-        user_id: Uuid::now_v7(),
+        user_id: UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         session_id: "sess_test".to_string(),
         aal: "aal2".to_string(),
         methods: vec!["password".to_string()],
@@ -2385,13 +2439,13 @@ async fn checkout_app(
 /// gets it back, so tests can seed several payments against one setup.
 async fn activate_connection(
     pool: &sqlx::PgPool,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     provider: &FakeProvider,
 ) -> ProviderConnection {
     let repo = SqlxProviderConnectionRepository::new();
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     {
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
         if let Some(live) = repo
             .find_active(&mut scope, tenant_id, "fake")
             .await
@@ -2422,7 +2476,7 @@ async fn activate_connection(
     conn.apply_status(&ready, ConnectionStatus::Active, Utc::now())
         .unwrap();
 
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     repo.update(&mut scope, &conn).await.unwrap();
     scope.commit().await.unwrap();
     conn
@@ -2484,8 +2538,8 @@ async fn a_double_click_creates_one_checkout_and_a_replayed_key_returns_the_same
     assert_eq!(replayed["url"], created["url"], "same hosted session");
 
     // …and exactly one row and one event landed.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let rows: i64 =
         sqlx::query_scalar("SELECT count(*) FROM payments.checkouts WHERE idempotency_key = $1")
             .bind(key)
@@ -2513,7 +2567,7 @@ async fn a_double_click_creates_one_checkout_and_a_replayed_key_returns_the_same
 
     // The fake provider holds exactly one live session for it —
     // retrieval reused the same session instead of minting another.
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut scope = tx.begin_unscoped("t", "tests").await.unwrap();
     let account: String =
         sqlx::query_scalar("SELECT external_account_id FROM payments.provider_connections LIMIT 1")
@@ -2618,8 +2672,8 @@ async fn a_redirect_off_the_verified_domain_allow_list_is_rejected() {
     }
 
     // Nothing was persisted for any rejected attempt.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM payments.checkouts")
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
@@ -2663,8 +2717,8 @@ async fn tenant_b_cannot_create_on_or_read_tenant_as_checkouts() {
     .await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let b_rows: i64 = {
-        let tx = TxManager::new(pool.clone());
-        let mut scope = tx.begin_for(tenant_b).await.unwrap();
+        let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+        let mut scope = tx.begin_for(tenant_b.as_i64()).await.unwrap();
         let rows = sqlx::query_scalar("SELECT count(*) FROM payments.checkouts")
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
@@ -2798,8 +2852,8 @@ async fn missing_idempotency_key_is_a_bad_request_not_a_second_session() {
 fn session_completed_event(
     event_id: &str,
     account: &str,
-    checkout_id: Uuid,
-    tenant_id: Uuid,
+    checkout_id: CheckoutId,
+    tenant_id: TenantId,
     session_id: &str,
     payment_intent: Option<&str>,
     created: i64,
@@ -2831,8 +2885,8 @@ fn payment_intent_event(
     event_id: &str,
     event_type: &str,
     account: &str,
-    checkout_id: Uuid,
-    tenant_id: Uuid,
+    checkout_id: CheckoutId,
+    tenant_id: TenantId,
     pi_id: &str,
     failure_code: Option<&str>,
     created: i64,
@@ -2865,9 +2919,9 @@ fn payment_intent_event(
 async fn create_checkout_via_use_case(
     pool: &sqlx::PgPool,
     provider: &FakeProvider,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     reference: &str,
-) -> (Uuid, String) {
+) -> (CheckoutId, String) {
     let state = checkout_fixture(pool, provider.clone(), 1000, false);
     let outcome = state
         .create_checkout
@@ -2892,13 +2946,13 @@ async fn create_checkout_via_use_case(
 
 /// The live connection row's account id (platform-scope read: money-webhook
 /// routing runs cross-tenant by design).
-async fn live_account_id(fixture: &WebhookFixture, tenant_id: Uuid) -> String {
+async fn live_account_id(fixture: &WebhookFixture, tenant_id: TenantId) -> String {
     let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
     let acct: String = sqlx::query_scalar(
         "SELECT external_account_id FROM payments.provider_connections
          WHERE tenant_id = $1 AND disconnected_at IS NULL LIMIT 1",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -2935,7 +2989,7 @@ async fn the_webhook_is_the_fact_a_customer_who_never_returns_still_ends_paid() 
     conn.apply_status(&ready, ConnectionStatus::Active, Utc::now())
         .unwrap();
     {
-        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.update(&mut scope, &conn).await.unwrap();
         scope.commit().await.unwrap();
     }
@@ -2962,11 +3016,11 @@ async fn the_webhook_is_the_fact_a_customer_who_never_returns_still_ends_paid() 
     assert_eq!(report.processed, 1, "{report:?}");
 
     // The read model: one succeeded JPY payment at minor units…
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
-    let row: (String, i64, String, Option<Uuid>) = sqlx::query_as(
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let row: (String, i64, String, Option<i64>) = sqlx::query_as(
         "SELECT status, amount_minor, currency, checkout_id FROM payments.payments
-         WHERE external_payment_id = 'pi_paid_1'",
+          WHERE external_payment_id = 'pi_paid_1'",
     )
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
@@ -2988,7 +3042,7 @@ async fn the_webhook_is_the_fact_a_customer_who_never_returns_still_ends_paid() 
         "\u{a5}2,000 IS 2000 \u{2014} no hidden \u{f7}100"
     );
     assert_eq!(row.2, "JPY");
-    assert_eq!(row.3, Some(checkout_id));
+    assert_eq!(row.3, Some(checkout_id.as_i64()));
     assert_eq!(stored.status.as_str(), "complete");
     assert!(stored.completed_at.is_some());
 
@@ -3017,8 +3071,8 @@ async fn the_webhook_is_the_fact_a_customer_who_never_returns_still_ends_paid() 
             .unwrap()
     );
     fixture.dispatcher.dispatch(10).await.unwrap();
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let payments: i64 = sqlx::query_scalar("SELECT count(*) FROM payments.payments")
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
@@ -3060,7 +3114,7 @@ async fn a_forged_return_url_yields_no_order_and_failures_expire_correctly() {
         .unwrap();
     {
         let repo = SqlxProviderConnectionRepository::new();
-        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.update(&mut scope, &conn).await.unwrap();
         scope.commit().await.unwrap();
     }
@@ -3107,8 +3161,8 @@ async fn a_forged_return_url_yields_no_order_and_failures_expire_correctly() {
     let report = fixture.dispatcher.dispatch(10).await.unwrap();
     assert_eq!(report.processed, 1, "{report:?}");
 
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let (status, failure): (String, serde_json::Value) = sqlx::query_as(
         "SELECT status, failure FROM payments.payments WHERE external_payment_id = 'pi_declined_1'",
     )
@@ -3165,7 +3219,9 @@ async fn a_forged_return_url_yields_no_order_and_failures_expire_correctly() {
             .deliver(&session_completed_event(
                 "evt_stranger_1",
                 "acct_never_seen_money",
-                Uuid::now_v7(),
+                CheckoutId::from_snowflake(
+                    sanvi_testsupport::test_ids().next_id().expect("test id")
+                ),
                 tenant_id,
                 "cs_unknown",
                 None,
@@ -3220,7 +3276,7 @@ async fn the_confirmation_view_is_webhook_truthful_and_the_conversion_id_is_stab
     conn.apply_status(&ready, ConnectionStatus::Active, Utc::now())
         .unwrap();
     {
-        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.update(&mut scope, &conn).await.unwrap();
         scope.commit().await.unwrap();
     }
@@ -3242,7 +3298,7 @@ async fn the_confirmation_view_is_webhook_truthful_and_the_conversion_id_is_stab
     .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let view: serde_json::Value = actix_test::read_body_json(created).await;
-    let checkout_id: Uuid = Uuid::parse_str(view["id"].as_str().unwrap()).unwrap();
+    let checkout_id: CheckoutId = view["id"].as_str().unwrap().parse().unwrap();
     let session_id: String = view["url"]
         .as_str()
         .unwrap()
@@ -3299,17 +3355,17 @@ async fn the_confirmation_view_is_webhook_truthful_and_the_conversion_id_is_stab
 
     // The conversion id equals the server-side derivation from the payment
     // row, identical across refreshes.
-    let expected_payment_id: Uuid = {
-        let tx = TxManager::new(pool.clone());
-        let mut scope = tx.begin_for(tenant_id).await.unwrap();
-        let id: Uuid = sqlx::query_scalar(
+    let expected_payment_id: PaymentId = {
+        let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+        let id: i64 = sqlx::query_scalar(
             "SELECT id FROM payments.payments WHERE external_payment_id = 'pi_confirm_1'",
         )
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .unwrap();
         scope.rollback().await.unwrap();
-        id
+        PaymentId::try_from(id).unwrap()
     };
     assert_eq!(
         after["conversion_event_id"],
@@ -3343,7 +3399,7 @@ async fn the_confirmation_view_is_webhook_truthful_and_the_conversion_id_is_stab
 async fn seed_paid_payment(
     pool: &sqlx::PgPool,
     fixture: &WebhookFixture,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     reference: &str,
     pi_id: &str,
 ) -> String {
@@ -3354,7 +3410,7 @@ async fn seed_paid_payment(
     let event = session_completed_event(
         &format!("evt_{pi_id}"),
         &account,
-        Uuid::now_v7(),
+        CheckoutId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         &session_id,
         Some(pi_id),
@@ -3377,17 +3433,17 @@ fn refund_body(minor_units: i64, reason: &str) -> serde_json::Value {
 }
 
 /// The payment row id for an external payment-intent id.
-async fn payment_row_id(pool: &sqlx::PgPool, tenant_id: Uuid, pi_id: &str) -> Uuid {
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
-    let id: Uuid =
+async fn payment_row_id(pool: &sqlx::PgPool, tenant_id: TenantId, pi_id: &str) -> PaymentId {
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let id: i64 =
         sqlx::query_scalar("SELECT id FROM payments.payments WHERE external_payment_id = $1")
             .bind(pi_id)
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .unwrap();
     scope.rollback().await.unwrap();
-    id
+    PaymentId::try_from(id).unwrap()
 }
 
 #[tokio::test]
@@ -3473,8 +3529,8 @@ async fn a_failed_provider_call_marks_the_refund_failed_and_a_retried_key_redriv
     assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
 
     // The row is honestly failed — no phantom pending.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let status: String =
         sqlx::query_scalar("SELECT status FROM payments.refunds WHERE idempotency_key = $1")
             .bind(key)
@@ -3653,8 +3709,8 @@ async fn a_dashboard_refund_lands_in_the_read_model_without_manual_intervention(
     let report = fixture.dispatcher.dispatch(10).await.unwrap();
     assert_eq!(report.processed, 1, "{report:?}");
 
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let row: (i64, String, String) = sqlx::query_as(
         "SELECT r.amount_minor, r.currency, r.status
          FROM payments.refunds r
@@ -3676,7 +3732,7 @@ async fn a_dashboard_refund_lands_in_the_read_model_without_manual_intervention(
     );
     let again = fixture.dispatcher.dispatch(10).await.unwrap();
     assert_eq!(again.processed, 0, "nothing new to process");
-    let tx = TxManager::new(pool.clone());
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut scope = tx.begin_unscoped("t", "tests").await.unwrap();
     let rows: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM payments.refunds WHERE external_refund_id = 're_dash_1'",
@@ -3855,8 +3911,8 @@ async fn the_csv_export_is_streamed_tenant_scoped_and_audited() {
     }
 
     // Both exports audited: actor + filters, visible to each own tenant.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(seeded[0].0).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(seeded[0].0.as_i64()).await.unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
         "SELECT after FROM audit.entries WHERE action = 'payments.export' LIMIT 1",
     )
@@ -3934,11 +3990,11 @@ async fn the_payments_list_serves_every_filter_and_walks_pages_without_loss_or_d
     }
     seen.sort();
     seen.dedup();
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let expected: i64 =
         sqlx::query_scalar("SELECT count(*) FROM payments.payments WHERE tenant_id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .unwrap();
@@ -4107,8 +4163,8 @@ async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_al
     );
 
     // Both rows are webhook-truthful in the projection.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT external_payout_id, status FROM payments.payouts ORDER BY external_payout_id",
     )
@@ -4131,7 +4187,7 @@ async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_al
 async fn enable_tax(
     pool: &sqlx::PgPool,
     provider: &FakeProvider,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
 ) -> Result<sanvi_payments::application::TaxSettingsView, sanvi_payments::domain::PaymentsError> {
     let state = checkout_fixture(pool, provider.clone(), 1000, false);
     state.manage_tax_settings.enable(tenant_id).await
@@ -4255,7 +4311,7 @@ async fn lapsed_registrations_warn_on_the_scheduled_re_check() {
     let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
     let row: (bool, Option<serde_json::Value>) =
         sqlx::query_as("SELECT enabled, warning FROM payments.tax_settings WHERE tenant_id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .unwrap();
@@ -4347,8 +4403,8 @@ async fn the_platform_fee_is_disclosed_on_the_payment_when_charged() {
     fixture.dispatcher.dispatch(10).await.unwrap();
 
     // The fee is disclosed on the payment read model the tenant sees.
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let row: (i64, String, i64, String) = sqlx::query_as(
         "SELECT amount_minor, currency,
                 COALESCE(fee_amount_minor, -1), COALESCE(fee_currency, '')
@@ -4382,22 +4438,24 @@ async fn the_platform_fee_is_disclosed_on_the_payment_when_charged() {
 /// Seed one payment row against `connection_id` through its checkout.
 async fn seed_payment(
     pool: &sqlx::PgPool,
-    tenant_id: Uuid,
-    connection_id: Uuid,
+    tenant_id: TenantId,
+    connection_id: ConnectionId,
     external_payment_id: &str,
     status: &str,
-) -> (Uuid, Uuid) {
-    let checkout_id = Uuid::now_v7();
-    let payment_id = Uuid::now_v7();
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+) -> (CheckoutId, PaymentId) {
+    let checkout_id =
+        CheckoutId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
+    let payment_id =
+        PaymentId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id"));
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     sqlx::query(
         "INSERT INTO payments.checkouts (id, tenant_id, connection_id, reference, amount_minor, currency, status)
          VALUES ($1, $2, $3, 'order-seed', 2000, 'JPY', 'open')",
     )
-    .bind(checkout_id)
-    .bind(tenant_id)
-    .bind(connection_id)
+    .bind(checkout_id.as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(connection_id.as_i64())
     .execute(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -4405,9 +4463,9 @@ async fn seed_payment(
         "INSERT INTO payments.payments (id, tenant_id, checkout_id, external_payment_id, status, amount_minor, currency)
          VALUES ($1, $2, $3, $4, $5, 2000, 'JPY')",
     )
-    .bind(payment_id)
-    .bind(tenant_id)
-    .bind(checkout_id)
+    .bind(payment_id.as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(checkout_id.as_i64())
     .bind(external_payment_id)
     .bind(status)
     .execute(&mut **scope.tx_mut().as_inner())
@@ -4419,16 +4477,16 @@ async fn seed_payment(
 
 /// Seed the state produced after checkout creation but before any payment
 /// webhook has arrived.
-async fn seed_open_checkout(pool: &sqlx::PgPool, tenant_id: Uuid, connection_id: Uuid) {
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+async fn seed_open_checkout(pool: &sqlx::PgPool, tenant_id: TenantId, connection_id: ConnectionId) {
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     sqlx::query(
         "INSERT INTO payments.checkouts (id, tenant_id, connection_id, reference, amount_minor, currency, status)
          VALUES ($1, $2, $3, 'order-open', 2000, 'JPY', 'open')",
     )
-    .bind(Uuid::now_v7())
-    .bind(tenant_id)
-    .bind(connection_id)
+    .bind(CheckoutId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")).as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(connection_id.as_i64())
     .execute(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
@@ -4461,33 +4519,38 @@ async fn disconnect_refuses_each_blocker_and_names_it_in_the_response() {
             Seed::Dispute => {
                 let (_, payment_id) =
                     seed_payment(&pool, tenant_id, connection.id, "pi_disputed", "succeeded").await;
-                let tx = TxManager::new(pool.clone());
-                let mut scope = tx.begin_for(tenant_id).await.unwrap();
+                let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+                let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
                 sqlx::query(
                     "INSERT INTO payments.disputes
                        (id, tenant_id, payment_id, external_dispute_id, status,
                         amount_minor, currency, created_at, updated_at)
                      VALUES ($1, $2, $3, 'dp_test_1', 'needs_response', 2000, 'JPY', now(), now())",
                 )
-                .bind(Uuid::now_v7())
-                .bind(tenant_id)
-                .bind(payment_id)
+                .bind(
+                    DisputeId::from_snowflake(
+                        sanvi_testsupport::test_ids().next_id().expect("test id"),
+                    )
+                    .as_i64(),
+                )
+                .bind(tenant_id.as_i64())
+                .bind(payment_id.as_i64())
                 .execute(&mut **scope.tx_mut().as_inner())
                 .await
                 .unwrap();
                 scope.commit().await.unwrap();
             }
             Seed::Payout => {
-                let tx = TxManager::new(pool.clone());
-                let mut scope = tx.begin_for(tenant_id).await.unwrap();
+                let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+                let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
                 sqlx::query(
                     "INSERT INTO payments.payouts
                        (id, tenant_id, connection_id, external_payout_id, amount_minor, currency, status)
                      VALUES ($1, $2, $3, 'po_test_1', 1500, 'JPY', 'pending')",
                 )
-                .bind(Uuid::now_v7())
-                .bind(tenant_id)
-                .bind(connection.id)
+                .bind(PayoutId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")).as_i64())
+                .bind(tenant_id.as_i64())
+                .bind(connection.id.as_i64())
                 .execute(&mut **scope.tx_mut().as_inner())
                 .await
                 .unwrap();
@@ -4540,28 +4603,30 @@ async fn privacy_erasure_scrubs_customer_ref_but_retains_transaction_record() {
     let (checkout_id, _) =
         seed_payment(&pool, tenant_id, connection.id, "pi_privacy", "succeeded").await;
 
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     sqlx::query(
         "UPDATE payments.checkouts
          SET customer_ref = '{\"buyer\": {\"id\": \"payer-123\"}}'::jsonb
          WHERE id = $1",
     )
-    .bind(checkout_id)
+    .bind(checkout_id.as_i64())
     .execute(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();
     scope.commit().await.unwrap();
 
-    let privacy =
-        sanvi_payments::adapters::PaymentsPrivacyProvider::new(TxManager::new(pool.clone()));
+    let privacy = sanvi_payments::adapters::PaymentsPrivacyProvider::new(TxManager::new(
+        pool.clone(),
+        sanvi_testsupport::test_ids(),
+    ));
     let subject = SubjectRef::end_user(tenant_id, "payer-123");
     let bundle = privacy.collect(&subject).await.unwrap();
     assert_eq!(bundle.entries.len(), 1);
     assert_eq!(bundle.entries[0].data_class, DataClass::TransactionRecord);
     assert_eq!(
         bundle.entries[0].value["checkout_id"],
-        checkout_id.to_string()
+        serde_json::json!(checkout_id.as_i64())
     );
 
     let report = privacy.erase(&subject, EraseMode::Full).await.unwrap();
@@ -4573,11 +4638,11 @@ async fn privacy_erasure_scrubs_customer_ref_but_retains_transaction_record() {
             .any(|item| item.data_class == DataClass::TransactionRecord)
     );
 
-    let verify_tx = TxManager::new(pool.clone());
-    let mut scope = verify_tx.begin_for(tenant_id).await.unwrap();
+    let verify_tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = verify_tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let customer_ref: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT customer_ref FROM payments.checkouts WHERE id = $1")
-            .bind(checkout_id)
+            .bind(checkout_id.as_i64())
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .unwrap();
@@ -4678,8 +4743,8 @@ async fn disconnect_when_clean_stops_checkout_keeps_history_and_allows_reconnect
     // The disconnect was audited (audit entries are tenant-RLS'd: read
     // through a scoped transaction, exactly like the shared policy's own
     // tenant admission).
-    let tx = TxManager::new(pool.clone());
-    let mut scope = tx.begin_for(tenant_id).await.unwrap();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let audited: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit.entries WHERE action = 'payments.connection_disconnected'",
     )
@@ -4745,7 +4810,7 @@ async fn a_payment_completing_after_disconnect_is_still_recorded() {
         .await
         .unwrap();
     let mut connection = ProviderConnection::pending(
-        Uuid::now_v7(),
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         ProviderKind::Fake,
         account.external_account_id.clone(),
@@ -4754,7 +4819,7 @@ async fn a_payment_completing_after_disconnect_is_still_recorded() {
     .unwrap();
     connection.disconnect(Utc::now()).unwrap();
     {
-        let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+        let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
         repo.insert(&mut scope, &connection).await.unwrap();
         scope.commit().await.unwrap();
     }
@@ -4764,7 +4829,7 @@ async fn a_payment_completing_after_disconnect_is_still_recorded() {
         "evt_after_disconnect",
         "payment_intent.succeeded",
         &account.external_account_id,
-        Uuid::now_v7(),
+        CheckoutId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
         tenant_id,
         "pi_after_disconnect",
         None,
@@ -4786,7 +4851,7 @@ async fn a_payment_completing_after_disconnect_is_still_recorded() {
     // The money has a local record even though the connection is gone.
     // (Reads go through a tenant-scoped transaction: RLS hides rows from
     // a bare pooled connection.)
-    let mut scope = fixture.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = fixture.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let recorded: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM payments.payments WHERE external_payment_id = 'pi_after_disconnect'",
     )

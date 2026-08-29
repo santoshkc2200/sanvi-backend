@@ -1,13 +1,8 @@
-//! Feature catalog authoring (platform operators): define, update, list,
-//! deprecate. Every change publishes `FeatureDefined` so consumers can drop
-//! caches; the entitlement TTL bounds the staleness window for tenants
-//! without an invalidation key.
-
 use std::sync::Arc;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::UserId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::events::AccessEvent;
@@ -52,8 +47,8 @@ impl DefineFeature {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: DefineFeatureCommand,
     ) -> Result<Feature, AccessError> {
         let feature = Feature::new(
@@ -151,8 +146,8 @@ impl UpdateFeature {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         cmd: UpdateFeatureCommand,
     ) -> Result<Feature, AccessError> {
         let mut scope = self
@@ -252,8 +247,8 @@ impl DeprecateFeature {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
-        on_behalf_of: Option<Uuid>,
+        actor: UserId,
+        on_behalf_of: Option<UserId>,
         key: &FeatureKey,
     ) -> Result<Feature, AccessError> {
         let mut scope = self

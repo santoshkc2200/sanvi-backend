@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_privacy::domain::{EraseMode, PersonalDataProvider, SubjectRef};
 use sanvi_testsupport::TestDb;
 use sanvi_theming::{
@@ -33,13 +34,13 @@ async fn prepare() -> (sanvi_persistence::PgPool, TestDb) {
     (db.app_pool(), db)
 }
 
-async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> uuid::Uuid {
-    let id = uuid::Uuid::now_v7();
+async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> TenantId {
+    let id = TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     sqlx::query(
         "INSERT INTO tenancy.tenants (id, slug, display_name, status, region)
          VALUES ($1, $2, $3, 'active', 'us')",
     )
-    .bind(id)
+    .bind(id.as_i64())
     .bind(slug)
     .bind(slug)
     .execute(pool)
@@ -56,11 +57,7 @@ struct TestGate {
 
 #[async_trait::async_trait]
 impl ThemeFeatureGate for TestGate {
-    async fn is_enabled(
-        &self,
-        _tenant_id: uuid::Uuid,
-        feature: &str,
-    ) -> Result<bool, ThemingError> {
+    async fn is_enabled(&self, _tenant_id: TenantId, feature: &str) -> Result<bool, ThemingError> {
         Ok(self.enabled.contains(&feature))
     }
 }
@@ -68,7 +65,7 @@ impl ThemeFeatureGate for TestGate {
 /// Host resolver: `tenant.<slug>` maps to a known tenant; everything else
 /// is unresolved.
 struct TestResolver {
-    tenant_id: uuid::Uuid,
+    tenant_id: TenantId,
     slug: String,
 }
 
@@ -114,15 +111,16 @@ struct Harness {
 }
 
 fn build_harness(pool: sanvi_persistence::PgPool, gate: Arc<dyn ThemeFeatureGate>) -> Harness {
+    let ids = sanvi_testsupport::test_ids();
     let themes: Arc<dyn ThemeRepository> = Arc::new(SqlxThemeRepository::new());
     let tenants: Arc<dyn TenantThemeRepository> = Arc::new(SqlxTenantThemeRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(ids.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let cache = Arc::new(ResolvedThemeCache::new(None));
     let metrics = Arc::new(ThemingMetrics::new(&prometheus::Registry::new()));
-    let tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let resolver: Arc<dyn TenantContextResolver> = Arc::new(TestResolver {
-        tenant_id: uuid::Uuid::nil(),
+        tenant_id: TenantId::try_from(1_i64).unwrap(),
         slug: "acme".to_string(),
     });
     let service = Arc::new(ResolveThemeService::new(
@@ -133,6 +131,7 @@ fn build_harness(pool: sanvi_persistence::PgPool, gate: Arc<dyn ThemeFeatureGate
         metrics,
         clock.clone(),
         pool.clone(),
+        ids.clone(),
         "/assets/theming".to_string(),
         86_400,
     ));
@@ -169,6 +168,7 @@ fn build_harness(pool: sanvi_persistence::PgPool, gate: Arc<dyn ThemeFeatureGate
             clock.clone(),
             pool.clone(),
             Arc::new(TestArtifactStore),
+            ids,
         )),
         available: Arc::new(ListAvailableThemes::new(
             themes.clone(),
@@ -329,7 +329,7 @@ async fn publish_rollback_and_resolution_round_trip() {
     assert!(resolved.css_vars.contains("prefers-color-scheme"));
 
     // Install aurora as a premium theme (visible only with the feature).
-    let tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut scope = tx.begin_unscoped("test.install", "test").await.unwrap();
     harness
         .install
@@ -348,7 +348,7 @@ async fn publish_rollback_and_resolution_round_trip() {
         enabled: vec!["theming.premium_themes"],
     });
     let harness = build_harness(pool.clone(), gate);
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let mut overrides = BTreeMap::new();
     overrides.insert(
         "color.brand.primary".to_string(),
@@ -384,7 +384,7 @@ async fn publish_rollback_and_resolution_round_trip() {
     assert_eq!(resolved.theme_key, "base");
 
     // Publish.
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let view = harness
         .publish
         .execute(&mut scope, tenant_id, None, "en")
@@ -402,7 +402,7 @@ async fn publish_rollback_and_resolution_round_trip() {
     assert!(resolved.css_vars.contains("--radius-md:0.75rem"));
 
     // The first publish has no previous look: rollback is refused.
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let err = harness
         .rollback
         .execute(&mut scope, tenant_id, None, "en")
@@ -425,7 +425,7 @@ async fn publish_rollback_and_resolution_round_trip() {
 
     // A second publish (with a different override) makes revision 1
     // restorable.
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let mut overrides = BTreeMap::new();
     overrides.insert(
         "color.brand.primary".to_string(),
@@ -465,7 +465,7 @@ async fn publish_rollback_and_resolution_round_trip() {
     assert!(resolved.css_vars.contains("--color-brand-primary:#0a7ea4"));
 
     // Rollback restores revision 1 exactly (theme + overrides).
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let view = harness
         .rollback
         .execute(&mut scope, tenant_id, None, "en")
@@ -502,6 +502,7 @@ async fn public_resolution_resolves_hosts_and_defaults() {
         Arc::new(ThemingMetrics::new(&prometheus::Registry::new())),
         Arc::new(SystemClock),
         pool,
+        sanvi_testsupport::test_ids(),
         "/assets/theming".to_string(),
         86_400,
     ));
@@ -527,7 +528,7 @@ async fn tenant_rows_are_rls_isolated() {
     let tenant_b = seed_tenant(&pool, "tenant-b").await;
     let harness = build_harness(pool.clone(), Arc::new(TestGate::default()));
 
-    let mut scope = harness.tx.begin_for(tenant_a).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_a.as_i64()).await.unwrap();
     harness
         .update_draft
         .execute(
@@ -548,7 +549,7 @@ async fn tenant_rows_are_rls_isolated() {
     scope.commit().await.unwrap();
 
     // B's scope cannot see A's draft.
-    let mut scope = harness.tx.begin_for(tenant_b).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_b.as_i64()).await.unwrap();
     assert!(
         harness
             .tenants
@@ -579,7 +580,7 @@ async fn theme_versions_are_immutable_and_yank_keeps_pins_renderable() {
     // Yank semantics: the seeded base 1.0.0 is pinned by a tenant, then
     // withdrawn — resolution keeps rendering it.
     let tenant_id = seed_tenant(&pool, "pinned").await;
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     harness
         .update_draft
         .execute(
@@ -604,7 +605,7 @@ async fn theme_versions_are_immutable_and_yank_keeps_pins_renderable() {
         .unwrap();
     scope.commit().await.unwrap();
 
-    let tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut scope = tx.begin_unscoped("test.yank", "test").await.unwrap();
     sanvi_theming::application::YankThemeVersion::new(
         harness.themes.clone(),
@@ -625,7 +626,7 @@ async fn theme_versions_are_immutable_and_yank_keeps_pins_renderable() {
     let fresh = seed_tenant(&pool, "fresh").await;
     let gate = Arc::new(TestGate { enabled: vec![] });
     let harness = build_harness(pool.clone(), gate);
-    let mut scope = harness.tx.begin_for(fresh).await.unwrap();
+    let mut scope = harness.tx.begin_for(fresh.as_i64()).await.unwrap();
     let err = harness
         .update_draft
         .execute(
@@ -658,7 +659,7 @@ async fn contrast_gate_refuses_unreadable_palettes() {
     command.tokens["light"]["color"]["text"]["primary"] =
         serde_json::json!({ "$value": "#94a3b8", "$type": "color" });
 
-    let tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut scope = tx.begin_unscoped("test.install", "test").await.unwrap();
     let err = harness
         .install
@@ -684,7 +685,7 @@ async fn custom_css_requires_the_entitlement_and_is_scoped() {
         enabled: vec!["theming.custom_css"],
     });
     let harness = build_harness(pool.clone(), gate);
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let view = harness
         .update_draft
         .execute(
@@ -707,7 +708,7 @@ async fn custom_css_requires_the_entitlement_and_is_scoped() {
 
     // Publish and confirm the live theme delivers the CSS scoped under the
     // storefront wrapper class.
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     harness
         .publish
         .execute(&mut scope, tenant_id, None, "en")
@@ -721,7 +722,7 @@ async fn custom_css_requires_the_entitlement_and_is_scoped() {
 
     // Without the entitlement the same command is refused.
     let harness = build_harness(pool.clone(), Arc::new(TestGate::default()));
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let err = harness
         .update_draft
         .execute(
@@ -761,7 +762,8 @@ async fn brand_asset_upload_validates_and_stores() {
     let store: Arc<dyn BrandAssetStore> = Arc::new(LocalFileStore::new(root.clone()));
     let themes: Arc<dyn ThemeRepository> = Arc::new(SqlxThemeRepository::new());
     let tenants: Arc<dyn TenantThemeRepository> = Arc::new(SqlxTenantThemeRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> =
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let upload = sanvi_theming::application::UploadBrandAsset::new(
         tenants.clone(),
@@ -773,8 +775,8 @@ async fn brand_asset_upload_validates_and_stores() {
         2 * 1024 * 1024,
     );
     use base64::Engine as _;
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
-    let mut scope = tx_manager.begin_for(tenant_id).await.unwrap();
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx_manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let view = upload
         .execute(
             &mut scope,
@@ -802,7 +804,7 @@ async fn brand_asset_upload_validates_and_stores() {
     // Once published, removing the asset from the mutable draft must not
     // delete the content-addressed object still referenced by live/revision.
     let harness = build_harness(pool.clone(), Arc::new(TestGate::default()));
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     harness
         .publish
         .execute(&mut scope, tenant_id, None, "en")
@@ -810,7 +812,7 @@ async fn brand_asset_upload_validates_and_stores() {
         .unwrap();
     scope.commit().await.unwrap();
     let remove = sanvi_theming::application::RemoveBrandAsset::new(tenants, events, clock);
-    let mut scope = tx_manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = tx_manager.begin_for(tenant_id.as_i64()).await.unwrap();
     remove
         .execute(
             &mut scope,
@@ -825,7 +827,7 @@ async fn brand_asset_upload_validates_and_stores() {
     assert!(stored.exists());
 
     // SVG with a script marker is refused.
-    let mut scope = tx_manager.begin_for(tenant_id).await.unwrap();
+    let mut scope = tx_manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let err = upload
         .execute(
             &mut scope,
@@ -850,10 +852,10 @@ async fn brand_asset_upload_validates_and_stores() {
 async fn privacy_erasure_anonymises_theme_revision_actors() {
     let (pool, _node) = prepare().await;
     let tenant_id = seed_tenant(&pool, "privacy-theme").await;
-    let actor = uuid::Uuid::now_v7();
+    let actor = UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
     let harness = build_harness(pool.clone(), Arc::new(TestGate::default()));
 
-    let mut scope = harness.tx.begin_for(tenant_id).await.unwrap();
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     harness
         .update_draft
         .execute(
@@ -893,7 +895,7 @@ async fn privacy_erasure_anonymises_theme_revision_actors() {
     let revision_actors: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM theming.tenant_theme_revisions WHERE published_by = $1",
     )
-    .bind(actor)
+    .bind(actor.as_i64())
     .fetch_one(&mut **scope.tx_mut().as_inner())
     .await
     .unwrap();

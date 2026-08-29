@@ -46,10 +46,10 @@ pub struct SqlxEnvelopeCrypto {
     kek: [u8; 32],
     kek_id: String,
     /// In-memory cache of unwrapped DEKs (bounded; keyed by subject id).
-    dek_cache: Mutex<HashMap<uuid::Uuid, Arc<[u8; 32]>>>,
+    dek_cache: Mutex<HashMap<i64, Arc<[u8; 32]>>>,
     /// Subjects whose key was destroyed in this process: refuse to serve
     /// stale cached DEKs after a shred.
-    shredded: Mutex<HashMap<uuid::Uuid, ()>>,
+    shredded: Mutex<HashMap<i64, ()>>,
 }
 
 impl SqlxEnvelopeCrypto {
@@ -102,19 +102,19 @@ impl SqlxEnvelopeCrypto {
             if cache.len() > 10_000 {
                 cache.clear();
             }
-            cache.insert(subject_id.as_uuid(), Arc::new(dek));
+            cache.insert(subject_id.as_i64(), Arc::new(dek));
         }
         Ok(dek)
     }
 
     async fn fetch_dek(&self, subject_id: SubjectId) -> Result<[u8; 32], PrivacyError> {
         if let Ok(shredded) = self.shredded.lock()
-            && shredded.contains_key(&subject_id.as_uuid())
+            && shredded.contains_key(&subject_id.as_i64())
         {
             return Err(PrivacyError::KeyShredded);
         }
         if let Ok(cache) = self.dek_cache.lock()
-            && let Some(dek) = cache.get(&subject_id.as_uuid())
+            && let Some(dek) = cache.get(&subject_id.as_i64())
         {
             return Ok(**dek);
         }
@@ -126,7 +126,7 @@ impl SqlxEnvelopeCrypto {
 impl EnvelopeCrypto for SqlxEnvelopeCrypto {
     async fn create_subject_key(&self, subject_id: SubjectId) -> Result<Vec<u8>, PrivacyError> {
         if let Ok(shredded) = self.shredded.lock()
-            && shredded.contains_key(&subject_id.as_uuid())
+            && shredded.contains_key(&subject_id.as_i64())
         {
             return Err(PrivacyError::KeyShredded);
         }
@@ -149,7 +149,7 @@ impl EnvelopeCrypto for SqlxEnvelopeCrypto {
                 .try_into()
                 .map_err(|_| PrivacyError::EncryptionFailure("DEK must be 32 bytes".to_string()))?;
             if let Ok(mut cache) = self.dek_cache.lock() {
-                cache.insert(subject_id.as_uuid(), Arc::new(dek));
+                cache.insert(subject_id.as_i64(), Arc::new(dek));
             }
             return Ok(row.wrapped_dek);
         }
@@ -189,7 +189,7 @@ impl EnvelopeCrypto for SqlxEnvelopeCrypto {
             .try_into()
             .map_err(|_| PrivacyError::EncryptionFailure("DEK must be 32 bytes".to_string()))?;
         if let Ok(mut cache) = self.dek_cache.lock() {
-            cache.insert(subject_id.as_uuid(), Arc::new(canonical));
+            cache.insert(subject_id.as_i64(), Arc::new(canonical));
         }
         Ok(row.wrapped_dek)
     }
@@ -258,10 +258,10 @@ impl EnvelopeCrypto for SqlxEnvelopeCrypto {
 
     async fn destroy_subject_key(&self, subject_id: SubjectId) -> Result<(), PrivacyError> {
         if let Ok(mut cache) = self.dek_cache.lock() {
-            cache.remove(&subject_id.as_uuid());
+            cache.remove(&subject_id.as_i64());
         }
         if let Ok(mut shredded) = self.shredded.lock() {
-            shredded.insert(subject_id.as_uuid(), ());
+            shredded.insert(subject_id.as_i64(), ());
         }
         let mut scope = self
             .tx_manager
@@ -383,6 +383,7 @@ mod tests {
         let tx = TxManager::new(
             sanvi_persistence::PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
                 .expect("lazy pool"),
+            sanvi_testsupport::test_ids(),
         );
         SqlxEnvelopeCrypto::new(
             tx,
@@ -423,7 +424,7 @@ mod tests {
     async fn disabled_crypto_fails_closed() {
         let crypto = DisabledEnvelopeCrypto;
         let result = crypto
-            .encrypt_for_subject(SubjectId::from_uuid(uuid::Uuid::now_v7()), b"x")
+            .encrypt_for_subject(SubjectId::try_from(1_i64).unwrap(), b"x")
             .await;
         assert_eq!(result.unwrap_err(), PrivacyError::EncryptionUnconfigured);
         assert_eq!(

@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, challenge_token, challenge_type, challenge_created_at, challenge_expires_at, detected_registrar, verified_at, last_checked_at, next_check_at, verification_attempts, failure_code, failure_detail, created_at, updated_at FROM domains.custom_domains WHERE normalized_hostname LIKE $1 OR hostname ILIKE $2 ORDER BY updated_at DESC LIMIT $3",
+  "query": "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, challenge_token, challenge_type, challenge_created_at, challenge_expires_at, detected_registrar, verified_at, last_checked_at, next_check_at, verification_attempts, failure_code, failure_detail, created_at, updated_at FROM domains.custom_domains WHERE normalized_hostname LIKE $1 OR hostname ILIKE $2 ORDER BY created_at DESC LIMIT $3",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "domains.custom_domains",
@@ -17,7 +17,7 @@
       {
         "ordinal": 1,
         "name": "tenant_id",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "domains.custom_domains",
@@ -254,5 +254,5 @@
       false
     ]
   },
-  "hash": "36c5c08c00264c6a0c4587cf0eee3df70701c22e979f73857e2d760bc3a72f72"
+  "hash": "d55ef19af864c443b6eca5900949962929bf680c9f10fca0a83abf3349105995"
 }

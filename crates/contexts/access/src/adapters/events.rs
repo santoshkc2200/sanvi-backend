@@ -1,8 +1,7 @@
-//! The access context's event publisher: appends events to the
-//! transactional outbox in the caller's transaction (PlatformScope or
-//! tenant-scoped).
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use sanvi_kernel::{EventEnvelope, EventId, RawIdGenerator};
 use sanvi_messaging::OutboxWriter;
 use sanvi_persistence::{PlatformScope, ScopedTx};
 
@@ -10,12 +9,23 @@ use crate::domain::AccessError;
 use crate::domain::events::AccessEvent;
 use crate::domain::ports::EventPublisher;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct OutboxEventPublisher;
+#[derive(Clone)]
+pub struct OutboxEventPublisher {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl OutboxEventPublisher {
-    pub fn new() -> Self {
-        Self
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
+
+    fn envelope(&self, event: &AccessEvent) -> Result<EventEnvelope, AccessError> {
+        let id = self
+            .ids
+            .next_id()
+            .map(EventId::from_snowflake)
+            .map_err(|err| AccessError::IdGeneration(err.to_string()))?;
+        Ok(event.envelope(id))
     }
 }
 
@@ -28,7 +38,7 @@ impl EventPublisher for OutboxEventPublisher {
     ) -> Result<(), AccessError> {
         for event in events {
             OutboxWriter
-                .append(scope.tx_mut(), &event.envelope())
+                .append(scope.tx_mut(), &self.envelope(event)?)
                 .await
                 .map_err(|err| AccessError::Storage(err.to_string()))?;
         }
@@ -42,7 +52,7 @@ impl EventPublisher for OutboxEventPublisher {
     ) -> Result<(), AccessError> {
         for event in events {
             OutboxWriter
-                .append(scope.tx_mut(), &event.envelope())
+                .append(scope.tx_mut(), &self.envelope(event)?)
                 .await
                 .map_err(|err| AccessError::Storage(err.to_string()))?;
         }

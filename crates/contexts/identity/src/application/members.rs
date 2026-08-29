@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::TxManager;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -22,9 +23,11 @@ pub struct MemberView {
     pub user_id: String,
     #[schema(example = "alice@example.com")]
     pub email: String,
-    pub role_ids: Vec<uuid::Uuid>,
+    #[schema(value_type = Vec<String>)]
+    pub role_ids: Vec<RoleId>,
     pub status: MembershipStatus,
-    pub invited_by: Option<uuid::Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub invited_by: Option<UserId>,
     #[schema(value_type = String)]
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -33,12 +36,14 @@ pub struct MemberView {
 pub struct GrantMembershipCommand {
     #[schema(example = "alice@example.com")]
     pub email: String,
-    pub role_ids: Vec<uuid::Uuid>,
+    #[schema(value_type = Vec<String>)]
+    pub role_ids: Vec<RoleId>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct UpdateRolesCommand {
-    pub role_ids: Vec<uuid::Uuid>,
+    #[schema(value_type = Vec<String>)]
+    pub role_ids: Vec<RoleId>,
 }
 
 pub struct ListMembers {
@@ -54,10 +59,10 @@ impl ListMembers {
         }
     }
 
-    pub async fn execute(&self, tenant_id: uuid::Uuid) -> Result<Vec<MemberView>, IdentityError> {
+    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<MemberView>, IdentityError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         let rows = self
@@ -72,7 +77,7 @@ impl ListMembers {
                 email: email.to_string(),
                 role_ids: membership.role_ids().to_vec(),
                 status: membership.status(),
-                invited_by: membership.invited_by().map(|id| id.as_uuid()),
+                invited_by: membership.invited_by(),
                 created_at: membership.created_at(),
             })
             .collect())
@@ -111,7 +116,7 @@ impl GrantMembership {
     /// role changes go through [`UpdateMemberRoles`]).
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         cmd: GrantMembershipCommand,
         actor: UserId,
     ) -> Result<MemberView, IdentityError> {
@@ -139,7 +144,7 @@ impl GrantMembership {
 
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         if self
@@ -164,21 +169,21 @@ impl GrantMembership {
             email: email.to_string(),
             role_ids: membership.role_ids().to_vec(),
             status: membership.status(),
-            invited_by: membership.invited_by().map(|id| id.as_uuid()),
+            invited_by: membership.invited_by(),
             created_at: membership.created_at(),
         })
     }
 
     async fn validate_roles(
         &self,
-        tenant_id: uuid::Uuid,
-        role_ids: &[uuid::Uuid],
+        tenant_id: TenantId,
+        role_ids: &[RoleId],
     ) -> Result<(), IdentityError> {
         if role_ids.is_empty() {
             return Err(IdentityError::NoRoles);
         }
         let assignable = self.roles.assignable_roles(tenant_id).await?;
-        let assignable_ids: std::collections::BTreeSet<uuid::Uuid> =
+        let assignable_ids: std::collections::BTreeSet<RoleId> =
             assignable.into_iter().map(|(id, _)| id).collect();
         for id in role_ids {
             if !assignable_ids.contains(id) {
@@ -213,7 +218,7 @@ impl UpdateMemberRoles {
 
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
         cmd: UpdateRolesCommand,
     ) -> Result<(), IdentityError> {
@@ -221,7 +226,7 @@ impl UpdateMemberRoles {
             return Err(IdentityError::NoRoles);
         }
         let assignable = self.roles.assignable_roles(tenant_id).await?;
-        let assignable_ids: std::collections::BTreeSet<uuid::Uuid> =
+        let assignable_ids: std::collections::BTreeSet<RoleId> =
             assignable.into_iter().map(|(id, _)| id).collect();
         for id in &cmd.role_ids {
             if !assignable_ids.contains(id) {
@@ -231,7 +236,7 @@ impl UpdateMemberRoles {
 
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         let mut membership = self
@@ -280,7 +285,7 @@ impl RemoveMember {
 
     pub async fn execute(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
         actor: UserId,
     ) -> Result<(), IdentityError> {
@@ -290,7 +295,7 @@ impl RemoveMember {
 
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
         let membership = self
@@ -344,7 +349,7 @@ mod tests {
         assert_eq!(email.as_str(), "alice@example.com");
         let bad = GrantMembershipCommand {
             email: "not-an-email".to_string(),
-            role_ids: vec![uuid::Uuid::now_v7()],
+            role_ids: vec![RoleId::try_from(101_i64).unwrap()],
         };
         assert!(matches!(
             Email::parse(&bad.email),

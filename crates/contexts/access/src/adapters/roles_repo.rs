@@ -7,18 +7,18 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::PlatformScope;
 use sqlx::FromRow;
-use uuid::Uuid;
 
-use crate::domain::roles::{Role, RoleId, RoleScope};
+use crate::domain::roles::{Role, RoleScope};
 use crate::domain::{AccessError, RoleRepository};
 
 #[derive(Debug, Clone, FromRow)]
 struct RoleRow {
-    id: Uuid,
+    id: i64,
     scope: String,
-    tenant_id: Option<Uuid>,
+    tenant_id: Option<i64>,
     key: String,
     name: String,
     is_system: bool,
@@ -51,9 +51,9 @@ impl RoleRepository for SqlxRoleRepository {
                key = EXCLUDED.key,
                name = EXCLUDED.name,
                is_system = EXCLUDED.is_system",
-            role.id().as_uuid(),
+            role.id().as_i64(),
             role.scope().as_str(),
-            role.tenant_id(),
+            role.tenant_id().map(|id| id.as_i64()),
             role.key(),
             role.name(),
             role.is_system(),
@@ -65,7 +65,7 @@ impl RoleRepository for SqlxRoleRepository {
 
         sqlx::query!(
             "DELETE FROM access.role_permissions WHERE role_id = $1",
-            role.id().as_uuid(),
+            role.id().as_i64(),
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -74,7 +74,7 @@ impl RoleRepository for SqlxRoleRepository {
         for permission in role.permissions() {
             sqlx::query!(
                 "INSERT INTO access.role_permissions (role_id, permission) VALUES ($1, $2)",
-                role.id().as_uuid(),
+                role.id().as_i64(),
                 permission,
             )
             .execute(&mut **scope.tx_mut().as_inner())
@@ -88,7 +88,7 @@ impl RoleRepository for SqlxRoleRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         scope_kind: RoleScope,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
         key: &str,
     ) -> Result<Option<Role>, AccessError> {
         let row = sqlx::query_as!(
@@ -97,7 +97,7 @@ impl RoleRepository for SqlxRoleRepository {
              FROM access.roles
              WHERE scope = $1 AND tenant_id IS NOT DISTINCT FROM $2 AND key = $3",
             scope_kind.as_str(),
-            tenant_id,
+            tenant_id.map(|id| id.as_i64()),
             key,
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -118,7 +118,7 @@ impl RoleRepository for SqlxRoleRepository {
             RoleRow,
             "SELECT id, scope, tenant_id, key, name, is_system, created_at
              FROM access.roles WHERE id = $1",
-            id.as_uuid(),
+            id.as_i64(),
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -131,7 +131,7 @@ impl RoleRepository for SqlxRoleRepository {
 
     async fn delete(&self, scope: &mut PlatformScope<'_>, id: RoleId) -> Result<(), AccessError> {
         sqlx::query("DELETE FROM access.roles WHERE id = $1")
-            .bind(id.as_uuid())
+            .bind(id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(|err| AccessError::Storage(err.to_string()))?;
@@ -142,7 +142,7 @@ impl RoleRepository for SqlxRoleRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         permission: &str,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
     ) -> Result<Vec<Role>, AccessError> {
         let rows = sqlx::query_as!(
             RoleRow,
@@ -159,7 +159,7 @@ impl RoleRepository for SqlxRoleRepository {
                  OR (r.scope = 'tenant' AND r.tenant_id IS NOT NULL AND r.tenant_id = $2)
                )",
             permission,
-            tenant_id,
+            tenant_id.map(|id| id.as_i64()),
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -191,7 +191,7 @@ impl RoleRepository for SqlxRoleRepository {
     async fn assignable_to(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Role>, AccessError> {
         let rows = sqlx::query_as!(
             RoleRow,
@@ -200,7 +200,7 @@ impl RoleRepository for SqlxRoleRepository {
              WHERE (scope = 'tenant' AND tenant_id IS NULL AND is_system)
                 OR (scope = 'tenant' AND tenant_id = $1)
              ORDER BY key",
-            tenant_id,
+            tenant_id.as_i64(),
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -227,10 +227,16 @@ impl SqlxRoleRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
+        let tenant_id = row
+            .tenant_id
+            .map(TenantId::try_from)
+            .transpose()
+            .map_err(|err| AccessError::Storage(format!("invalid tenant id: {err}")))?;
         Ok(Role::from_parts(
-            RoleId::from_uuid(row.id),
+            RoleId::try_from(row.id)
+                .map_err(|err| AccessError::Storage(format!("invalid role id: {err}")))?,
             RoleScope::parse(&row.scope)?,
-            row.tenant_id,
+            tenant_id,
             row.key,
             row.name,
             permissions

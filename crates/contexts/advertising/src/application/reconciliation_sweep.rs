@@ -151,7 +151,10 @@ impl ReconcileDueCampaigns {
         Ok(report)
     }
 
-    async fn mark_reconciled(&self, campaign_id: uuid::Uuid) -> Result<(), AdvertisingError> {
+    async fn mark_reconciled(
+        &self,
+        campaign_id: crate::domain::model::CampaignId,
+    ) -> Result<(), AdvertisingError> {
         let mut scope = self
             .tx
             .begin_unscoped("advertising_reconciliation_sweep", ACTOR)

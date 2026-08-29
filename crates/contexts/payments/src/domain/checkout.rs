@@ -8,10 +8,15 @@
 //! webhooks — never the browser redirect — close it.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{Id, TenantId};
 use uuid::Uuid;
 
+use super::connection::ConnectionId;
 use super::error::PaymentsError;
 use super::money::Money;
+
+pub enum CheckoutTag {}
+pub type CheckoutId = Id<CheckoutTag>;
 
 /// The tenant's own order reference, carried through to the provider and
 /// echoed on every read model — the join key between the tenant's order
@@ -95,9 +100,9 @@ impl CheckoutStatus {
 /// A checkout for one merchant order on the tenant's connected account.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Checkout {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub connection_id: Uuid,
+    pub id: CheckoutId,
+    pub tenant_id: TenantId,
+    pub connection_id: ConnectionId,
     /// The tenant's own order reference (opaque to Sanvi).
     pub reference: MerchantOrderRef,
     /// What the order is for, as the tenant's bookkeeping states it
@@ -124,9 +129,9 @@ impl Checkout {
     /// provider would reject it after the round-trip we can catch here.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        id: Uuid,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        id: CheckoutId,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         reference: MerchantOrderRef,
         amount: Money,
         now: DateTime<Utc>,
@@ -262,9 +267,9 @@ mod tests {
     #[test]
     fn zero_amount_checkouts_are_refused_and_sessions_open_once() {
         let mut checkout = Checkout::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            CheckoutId::try_from(1_i64).unwrap(),
+            TenantId::try_from(2_i64).unwrap(),
+            ConnectionId::try_from(3_i64).unwrap(),
             MerchantOrderRef::parse("order-1").unwrap(),
             Money::new(2000, "JPY").unwrap(),
             Utc::now(),
@@ -274,9 +279,9 @@ mod tests {
 
         assert!(
             Checkout::new(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                CheckoutId::try_from(4_i64).unwrap(),
+                TenantId::try_from(5_i64).unwrap(),
+                ConnectionId::try_from(6_i64).unwrap(),
                 MerchantOrderRef::parse("order-2").unwrap(),
                 Money::new(0, "JPY").unwrap(),
                 Utc::now(),
@@ -342,9 +347,9 @@ mod tests {
 
     fn new_checkout() -> Checkout {
         Checkout::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            CheckoutId::try_from(10_i64).unwrap(),
+            TenantId::try_from(20_i64).unwrap(),
+            ConnectionId::try_from(30_i64).unwrap(),
             MerchantOrderRef::parse("order-x").unwrap(),
             Money::new(1500, "JPY").unwrap(),
             Utc::now(),

@@ -60,7 +60,12 @@ impl PersonalDataProvider for TenancyPrivacyProvider {
                 .map_err(|err| PrivacyError::Storage(err.to_string()))?;
             if let Some(tenant) = self
                 .tenants
-                .find_by_id(&mut scope, TenantId::from_uuid(tenant_id))
+                .find_by_id(
+                    &mut scope,
+                    TenantId::try_from(tenant_id).map_err(|err| {
+                        PrivacyError::Storage(format!("invalid tenant id: {err}"))
+                    })?,
+                )
                 .await
                 .map_err(|err| PrivacyError::Storage(err.to_string()))?
             {

@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -28,7 +29,7 @@ fn map_db(err: sqlx::Error) -> BillingError {
 
 #[derive(Debug, Clone, FromRow)]
 struct PlanRow {
-    id: Uuid,
+    id: i64,
     key: String,
     name: String,
     tier: String,
@@ -41,7 +42,7 @@ struct PlanRow {
 
 fn to_plan(row: PlanRow) -> Result<Plan, BillingError> {
     Ok(Plan::from_parts(
-        PlanId::from_uuid(row.id),
+        PlanId::try_from(row.id).map_err(|err| BillingError::Storage(err.to_string()))?,
         row.key,
         row.name,
         PlanTier::parse(&row.tier)?,
@@ -77,7 +78,7 @@ impl PlanRepository for SqlxPlanRepository {
                sort_order = EXCLUDED.sort_order,
                updated_at = EXCLUDED.updated_at",
         )
-        .bind(plan.id().as_uuid())
+        .bind(plan.id().as_i64())
         .bind(plan.key())
         .bind(plan.name())
         .bind(plan.tier().as_str())
@@ -102,7 +103,7 @@ impl PlanRepository for SqlxPlanRepository {
                     created_at, updated_at
              FROM billing.plans WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -154,8 +155,8 @@ impl PlanRepository for SqlxPlanRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct PriceRow {
-    id: Uuid,
-    plan_id: Uuid,
+    id: i64,
+    plan_id: i64,
     stripe_price_id: String,
     currency: String,
     interval: String,
@@ -167,8 +168,8 @@ struct PriceRow {
 
 fn to_price(row: PriceRow) -> Result<PlanPrice, BillingError> {
     Ok(PlanPrice::from_parts(
-        PriceId::from_uuid(row.id),
-        PlanId::from_uuid(row.plan_id),
+        PriceId::try_from(row.id).map_err(|err| BillingError::Storage(err.to_string()))?,
+        PlanId::try_from(row.plan_id).map_err(|err| BillingError::Storage(err.to_string()))?,
         row.stripe_price_id,
         row.currency,
         PriceInterval::parse(&row.interval)?,
@@ -206,8 +207,8 @@ impl PlanPriceRepository for SqlxPlanPriceRepository {
                trial_days = EXCLUDED.trial_days,
                active = EXCLUDED.active",
         )
-        .bind(price.id().as_uuid())
-        .bind(price.plan_id().as_uuid())
+        .bind(price.id().as_i64())
+        .bind(price.plan_id().as_i64())
         .bind(price.stripe_price_id())
         .bind(price.currency())
         .bind(price.interval().as_str())
@@ -231,7 +232,7 @@ impl PlanPriceRepository for SqlxPlanPriceRepository {
                     trial_days, active, created_at
              FROM billing.plan_prices WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -265,7 +266,7 @@ impl PlanPriceRepository for SqlxPlanPriceRepository {
                     trial_days, active, created_at
              FROM billing.plan_prices WHERE plan_id = $1 AND active ORDER BY unit_amount_minor",
         )
-        .bind(plan_id.as_uuid())
+        .bind(plan_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -302,7 +303,7 @@ impl crate::domain::PlanEntitlementRepository for SqlxPlanEntitlementRepository 
         grants: &[EntitlementGrant],
     ) -> Result<(), BillingError> {
         sqlx::query("DELETE FROM billing.plan_entitlements WHERE plan_id = $1")
-            .bind(plan_id.as_uuid())
+            .bind(plan_id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(map_db)?;
@@ -311,7 +312,7 @@ impl crate::domain::PlanEntitlementRepository for SqlxPlanEntitlementRepository 
                 "INSERT INTO billing.plan_entitlements (plan_id, feature_key, enabled, \"limit\")
                  VALUES ($1, $2, $3, $4)",
             )
-            .bind(plan_id.as_uuid())
+            .bind(plan_id.as_i64())
             .bind(&grant.feature_key)
             .bind(grant.enabled)
             .bind(grant.limit)
@@ -331,7 +332,7 @@ impl crate::domain::PlanEntitlementRepository for SqlxPlanEntitlementRepository 
             "SELECT feature_key, enabled, \"limit\"
              FROM billing.plan_entitlements WHERE plan_id = $1 ORDER BY feature_key",
         )
-        .bind(plan_id.as_uuid())
+        .bind(plan_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -352,8 +353,8 @@ impl crate::domain::PlanEntitlementRepository for SqlxPlanEntitlementRepository 
 
 #[derive(Debug, Clone, FromRow)]
 struct CheckoutStateRow {
-    tenant_id: Uuid,
-    price_id: Uuid,
+    tenant_id: i64,
+    price_id: i64,
     command_id: Uuid,
     stripe_customer_id: Option<String>,
     stripe_session_id: Option<String>,
@@ -364,10 +365,12 @@ struct CheckoutStateRow {
     expires_at: DateTime<Utc>,
 }
 
-fn to_checkout_state(row: CheckoutStateRow) -> CheckoutState {
-    CheckoutState {
-        tenant_id: row.tenant_id,
-        price_id: PriceId::from_uuid(row.price_id),
+fn to_checkout_state(row: CheckoutStateRow) -> Result<CheckoutState, BillingError> {
+    Ok(CheckoutState {
+        tenant_id: TenantId::try_from(row.tenant_id)
+            .map_err(|err| BillingError::Storage(err.to_string()))?,
+        price_id: PriceId::try_from(row.price_id)
+            .map_err(|err| BillingError::Storage(err.to_string()))?,
         command_id: row.command_id,
         stripe_customer_id: row.stripe_customer_id,
         stripe_session_id: row.stripe_session_id,
@@ -376,7 +379,7 @@ fn to_checkout_state(row: CheckoutStateRow) -> CheckoutState {
         cancel_url: row.cancel_url,
         integration_identifier_suffix: row.integration_identifier_suffix,
         expires_at: row.expires_at,
-    }
+    })
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -420,8 +423,8 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
                        stripe_session_id, session_url, success_url, cancel_url,
                        integration_identifier_suffix, expires_at",
         )
-        .bind(proposed.tenant_id)
-        .bind(proposed.price_id.as_uuid())
+        .bind(proposed.tenant_id.as_i64())
+        .bind(proposed.price_id.as_i64())
         .bind(proposed.command_id)
         .bind(&proposed.stripe_customer_id)
         .bind(&proposed.stripe_session_id)
@@ -444,18 +447,18 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
                         integration_identifier_suffix, expires_at
                  FROM billing.checkout_states WHERE tenant_id = $1",
             )
-            .bind(proposed.tenant_id)
+            .bind(proposed.tenant_id.as_i64())
             .fetch_one(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(map_db)?,
         };
-        Ok(to_checkout_state(row))
+        to_checkout_state(row)
     }
 
     async fn set_customer(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command_id: Uuid,
         stripe_customer_id: &str,
     ) -> Result<(), BillingError> {
@@ -464,7 +467,7 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
              SET stripe_customer_id = $3, updated_at = now()
              WHERE tenant_id = $1 AND command_id = $2",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(command_id)
         .bind(stripe_customer_id)
         .execute(&mut **scope.tx_mut().as_inner())
@@ -481,7 +484,7 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
     async fn complete(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command_id: Uuid,
         stripe_session_id: &str,
         session_url: &str,
@@ -491,7 +494,7 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
              SET stripe_session_id = $3, session_url = $4, updated_at = now()
              WHERE tenant_id = $1 AND command_id = $2",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(command_id)
         .bind(stripe_session_id)
         .bind(session_url)
@@ -509,12 +512,12 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
     async fn customer_for_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<String>, BillingError> {
         sqlx::query_scalar(
             "SELECT stripe_customer_id FROM billing.checkout_states WHERE tenant_id = $1",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)
@@ -524,7 +527,7 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
     async fn anonymise(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<usize, BillingError> {
         let result = sqlx::query(
             "UPDATE billing.checkout_states
@@ -534,7 +537,7 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
                AND (stripe_customer_id IS NOT NULL OR stripe_session_id IS NOT NULL
                     OR session_url IS NOT NULL)",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -548,10 +551,10 @@ impl CheckoutStateRepository for SqlxCheckoutStateRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct SubscriptionRow {
-    id: Uuid,
-    tenant_id: Uuid,
-    plan_id: Uuid,
-    price_id: Option<Uuid>,
+    id: i64,
+    tenant_id: i64,
+    plan_id: i64,
+    price_id: Option<i64>,
     source: String,
     stripe_customer_id: Option<String>,
     stripe_subscription_id: Option<String>,
@@ -575,10 +578,13 @@ fn to_subscription(row: SubscriptionRow) -> Result<Subscription, BillingError> {
         _ => None,
     };
     Ok(Subscription::from_parts(
-        SubscriptionId::from_uuid(row.id),
-        row.tenant_id,
-        PlanId::from_uuid(row.plan_id),
-        row.price_id.map(PriceId::from_uuid),
+        SubscriptionId::try_from(row.id).map_err(|err| BillingError::Storage(err.to_string()))?,
+        TenantId::try_from(row.tenant_id).map_err(|err| BillingError::Storage(err.to_string()))?,
+        PlanId::try_from(row.plan_id).map_err(|err| BillingError::Storage(err.to_string()))?,
+        row.price_id
+            .map(PriceId::try_from)
+            .transpose()
+            .map_err(|err| BillingError::Storage(err.to_string()))?,
         SubscriptionSource::parse(&row.source)?,
         row.stripe_customer_id,
         row.stripe_subscription_id,
@@ -610,14 +616,14 @@ impl SubscriptionRepository for SqlxSubscriptionRepository {
     async fn anonymise_stripe_ids(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<usize, BillingError> {
         let result = sqlx::query(
             "UPDATE billing.subscriptions
              SET stripe_customer_id = NULL, stripe_subscription_id = NULL, updated_at = now()
              WHERE tenant_id = $1",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -627,10 +633,10 @@ impl SubscriptionRepository for SqlxSubscriptionRepository {
     async fn delete_by_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<bool, BillingError> {
         let result = sqlx::query("DELETE FROM billing.subscriptions WHERE tenant_id = $1")
-            .bind(tenant_id)
+            .bind(tenant_id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(map_db)?;
@@ -672,10 +678,10 @@ impl SubscriptionRepository for SqlxSubscriptionRepository {
                stripe_invoice_event_at = EXCLUDED.stripe_invoice_event_at,
                updated_at = EXCLUDED.updated_at",
         )
-        .bind(subscription.id().as_uuid())
-        .bind(subscription.tenant_id())
-        .bind(subscription.plan_id().as_uuid())
-        .bind(subscription.price_id().map(|p| p.as_uuid()))
+        .bind(subscription.id().as_i64())
+        .bind(subscription.tenant_id().as_i64())
+        .bind(subscription.plan_id().as_i64())
+        .bind(subscription.price_id().map(|p| p.as_i64()))
         .bind(subscription.source().as_str())
         .bind(subscription.stripe_customer_id())
         .bind(subscription.stripe_subscription_id())
@@ -700,10 +706,10 @@ impl SubscriptionRepository for SqlxSubscriptionRepository {
     async fn find_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<Subscription>, BillingError> {
         let row: Option<SubscriptionRow> = sqlx::query_as("SELECT id, tenant_id, plan_id, price_id, source, stripe_customer_id, stripe_subscription_id, status, current_period_start, current_period_end, cancel_at_period_end, trial_end, trial_notified_at, collection_state, collection_started_at, stripe_subscription_event_at, stripe_invoice_event_at, created_at, updated_at FROM billing.subscriptions WHERE tenant_id = $1")
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -713,10 +719,10 @@ impl SubscriptionRepository for SqlxSubscriptionRepository {
     async fn find_by_tenant_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<Subscription>, BillingError> {
         let row: Option<SubscriptionRow> = sqlx::query_as("SELECT id, tenant_id, plan_id, price_id, source, stripe_customer_id, stripe_subscription_id, status, current_period_start, current_period_end, cancel_at_period_end, trial_end, trial_notified_at, collection_state, collection_started_at, stripe_subscription_event_at, stripe_invoice_event_at, created_at, updated_at FROM billing.subscriptions WHERE tenant_id = $1")
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -849,8 +855,8 @@ impl SubscriptionRepository for SqlxSubscriptionRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct InvoiceRow {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    tenant_id: i64,
     stripe_invoice_id: String,
     number: Option<String>,
     status: String,
@@ -870,8 +876,8 @@ fn to_invoice(row: InvoiceRow) -> Result<InvoiceRef, BillingError> {
         _ => None,
     };
     Ok(InvoiceRef::from_parts(
-        InvoiceId::from_uuid(row.id),
-        row.tenant_id,
+        InvoiceId::try_from(row.id).map_err(|err| BillingError::Storage(err.to_string()))?,
+        TenantId::try_from(row.tenant_id).map_err(|err| BillingError::Storage(err.to_string()))?,
         row.stripe_invoice_id,
         row.number,
         InvoiceStatus::parse(&row.status)?,
@@ -926,8 +932,8 @@ impl crate::domain::InvoiceRepository for SqlxInvoiceRepository {
              WHERE billing.invoices.stripe_event_created_at IS NULL
                 OR billing.invoices.stripe_event_created_at <= EXCLUDED.stripe_event_created_at",
         )
-        .bind(invoice.id().as_uuid())
-        .bind(invoice.tenant_id())
+        .bind(invoice.id().as_i64())
+        .bind(invoice.tenant_id().as_i64())
         .bind(invoice.stripe_invoice_id())
         .bind(invoice.number())
         .bind(invoice.status().as_str())
@@ -949,7 +955,7 @@ impl crate::domain::InvoiceRepository for SqlxInvoiceRepository {
     async fn list_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         limit: u32,
     ) -> Result<Vec<InvoiceRef>, BillingError> {
         let rows: Vec<InvoiceRow> = sqlx::query_as(
@@ -957,7 +963,7 @@ impl crate::domain::InvoiceRepository for SqlxInvoiceRepository {
                     hosted_url, pdf_url, period_start, period_end, created_at, paid_at
              FROM billing.invoices WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -968,7 +974,7 @@ impl crate::domain::InvoiceRepository for SqlxInvoiceRepository {
     async fn list_for_tenant_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         limit: u32,
     ) -> Result<Vec<InvoiceRef>, BillingError> {
         let rows: Vec<InvoiceRow> = sqlx::query_as(
@@ -976,7 +982,7 @@ impl crate::domain::InvoiceRepository for SqlxInvoiceRepository {
                     hosted_url, pdf_url, period_start, period_end, created_at, paid_at
              FROM billing.invoices WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await

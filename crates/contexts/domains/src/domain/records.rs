@@ -1,8 +1,8 @@
-//! DNS record value objects: what instructions render and what the
-//! provider port applies.
-
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+pub enum DnsRecordTag {}
+pub type DnsRecordId = sanvi_kernel::Id<DnsRecordTag>;
 
 /// The subset of record types the context works with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]

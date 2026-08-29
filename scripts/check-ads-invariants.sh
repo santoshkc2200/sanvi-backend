@@ -37,8 +37,14 @@ port_has_safe_upload_signature() {
 scan_frontend_bundle() {
   local bundle="${ADVERTISING_FRONTEND_BUNDLE:-}"
   if [[ -z "$bundle" || ! -d "$bundle" ]]; then
-    echo "advertising invariant failed: set ADVERTISING_FRONTEND_BUNDLE to built frontend assets" >&2
-    return 1
+    if [[ -d "$root/../sanvi-frontend" ]]; then
+      bundle="$root/../sanvi-frontend"
+    elif [[ -d "$root/../../sanvi-frontend" ]]; then
+      bundle="$root/../../sanvi-frontend"
+    else
+      echo "advertising invariant failed: set ADVERTISING_FRONTEND_BUNDLE to built frontend assets" >&2
+      return 1
+    fi
   fi
 
   if rg -n -i 'google_ads_developer_token|google_ads_client_secret|meta_client_secret' "$bundle" >/dev/null; then

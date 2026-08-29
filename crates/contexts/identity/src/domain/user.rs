@@ -6,15 +6,12 @@
 //! deactivation — never from a client directly.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+pub use sanvi_kernel::UserId;
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::domain::IdentityError;
 use crate::domain::values::{Email, Locale, ProviderId, ProviderSubject};
-
-pub enum UserTag {}
-pub type UserId = Id<UserTag>;
 
 /// Lifecycle of a projected user. Deactivated is terminal; the email is
 /// released for reuse.
@@ -263,7 +260,7 @@ mod tests {
 
     fn user(now: DateTime<Utc>) -> User {
         User::project_new(
-            UserId::new(),
+            UserId::try_from(101_i64).unwrap(),
             uuid::Uuid::now_v7(),
             Email::parse("alice@example.com").unwrap(),
             false,

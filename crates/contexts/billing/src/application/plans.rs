@@ -5,16 +5,17 @@
 use std::sync::Arc;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::UserId;
 use sanvi_persistence::TxManager;
 use serde::Serialize;
 use tracing::info;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::{
     BillingError, Clock, EntitlementGrant, IdGenerator, Plan, PlanEntitlementRepository, PlanId,
-    PlanPrice, PlanPriceRepository, PlanRepository, PlanTier, PlanVisibility, PriceInterval,
+    PlanPrice, PlanPriceRepository, PlanRepository, PlanTier, PlanVisibility, PriceId,
+    PriceInterval,
 };
 
 const ACTOR: &str = "platform-admin";
@@ -22,7 +23,7 @@ const ACTOR: &str = "platform-admin";
 async fn audit_plan(
     audit: &dyn AuditWriter,
     scope: &mut sanvi_persistence::PlatformScope<'_>,
-    actor: Uuid,
+    actor: UserId,
     action: &str,
     plan: &Plan,
     request_id: Option<String>,
@@ -40,7 +41,7 @@ async fn audit_plan(
                 resource_type: Some("plan".to_string()),
                 resource_id: Some(plan.key().to_string()),
                 before: None,
-                after: Some(serde_json::json!({ "plan_id": plan.id().as_uuid() })),
+                after: Some(serde_json::json!({ "plan_id": plan.id().as_i64() })),
                 request_id,
                 ip: None,
                 user_agent: None,
@@ -58,7 +59,8 @@ async fn audit_plan(
 /// One price on the public pricing page.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanPriceView {
-    pub price_id: Uuid,
+    #[schema(value_type = String)]
+    pub price_id: PriceId,
     pub currency: String,
     pub interval: PriceInterval,
     pub unit_amount_minor: i64,
@@ -68,7 +70,7 @@ pub struct PlanPriceView {
 impl From<&PlanPrice> for PlanPriceView {
     fn from(price: &PlanPrice) -> Self {
         Self {
-            price_id: price.id().as_uuid(),
+            price_id: price.id(),
             currency: price.currency().to_string(),
             interval: price.interval(),
             unit_amount_minor: price.unit_amount_minor(),
@@ -81,7 +83,8 @@ impl From<&PlanPrice> for PlanPriceView {
 /// Stripe price ids are omitted — they are integration details).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PublicPlanView {
-    pub plan_id: Uuid,
+    #[schema(value_type = String)]
+    pub plan_id: PlanId,
     pub key: String,
     pub name: String,
     pub tier: PlanTier,
@@ -93,7 +96,8 @@ pub struct PublicPlanView {
 /// The operator view adds the Stripe ids and visibility.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanAdminView {
-    pub plan_id: Uuid,
+    #[schema(value_type = String)]
+    pub plan_id: PlanId,
     pub key: String,
     pub name: String,
     pub tier: PlanTier,
@@ -106,7 +110,8 @@ pub struct PlanAdminView {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanAdminPriceView {
-    pub price_id: Uuid,
+    #[schema(value_type = String)]
+    pub price_id: PriceId,
     pub stripe_price_id: String,
     pub currency: String,
     pub interval: PriceInterval,
@@ -161,7 +166,7 @@ impl ListPublicPlans {
                 .collect();
             let entitlements = self.grants.list_for_plan(&mut scope, plan.id()).await?;
             views.push(PublicPlanView {
-                plan_id: plan.id().as_uuid(),
+                plan_id: plan.id(),
                 key: plan.key().to_string(),
                 name: plan.name().to_string(),
                 tier: plan.tier(),
@@ -213,7 +218,7 @@ impl ListPlans {
                 .await?;
             let entitlements = self.grants.list_for_plan(&mut scope, plan.id()).await?;
             views.push(PlanAdminView {
-                plan_id: plan.id().as_uuid(),
+                plan_id: plan.id(),
                 key: plan.key().to_string(),
                 name: plan.name().to_string(),
                 tier: plan.tier(),
@@ -223,7 +228,7 @@ impl ListPlans {
                 prices: prices
                     .iter()
                     .map(|price| PlanAdminPriceView {
-                        price_id: price.id().as_uuid(),
+                        price_id: price.id(),
                         stripe_price_id: price.stripe_price_id().to_string(),
                         currency: price.currency().to_string(),
                         interval: price.interval(),
@@ -282,7 +287,7 @@ impl CreatePlan {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         cmd: CreatePlanCommand,
     ) -> Result<PlanAdminView, BillingError> {
         let now = self.clock.now();
@@ -292,7 +297,7 @@ impl CreatePlan {
             .await
             .map_err(storage)?;
         let plan = Plan::new(
-            self.ids.next_plan_id(),
+            self.ids.next_plan_id()?,
             cmd.key.clone(),
             cmd.name,
             cmd.tier,
@@ -322,7 +327,7 @@ impl CreatePlan {
         scope.commit().await.map_err(storage)?;
         info!(plan = plan.key(), "plan created");
         Ok(PlanAdminView {
-            plan_id: plan.id().as_uuid(),
+            plan_id: plan.id(),
             key: plan.key().to_string(),
             name: plan.name().to_string(),
             tier: plan.tier(),
@@ -368,7 +373,7 @@ impl UpdatePlan {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         cmd: UpdatePlanCommand,
     ) -> Result<PlanAdminView, BillingError> {
         let mut scope = self
@@ -400,7 +405,7 @@ impl UpdatePlan {
         .await?;
         scope.commit().await.map_err(storage)?;
         Ok(PlanAdminView {
-            plan_id: plan.id().as_uuid(),
+            plan_id: plan.id(),
             key: plan.key().to_string(),
             name: plan.name().to_string(),
             tier: plan.tier(),
@@ -454,7 +459,7 @@ impl AddPlanPrice {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         cmd: AddPlanPriceCommand,
     ) -> Result<PlanAdminPriceView, BillingError> {
         let mut scope = self
@@ -468,7 +473,7 @@ impl AddPlanPrice {
             .await?
             .ok_or_else(|| BillingError::PlanNotFound(cmd.plan_id.to_string()))?;
         let price = PlanPrice::new(
-            self.ids.next_price_id(),
+            self.ids.next_price_id()?,
             plan.id(),
             cmd.stripe_price_id,
             cmd.currency,
@@ -489,7 +494,7 @@ impl AddPlanPrice {
         .await?;
         scope.commit().await.map_err(storage)?;
         Ok(PlanAdminPriceView {
-            price_id: price.id().as_uuid(),
+            price_id: price.id(),
             stripe_price_id: price.stripe_price_id().to_string(),
             currency: price.currency().to_string(),
             interval: price.interval(),
@@ -535,7 +540,7 @@ impl SetPlanEntitlements {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         cmd: SetPlanEntitlementsCommand,
     ) -> Result<Vec<EntitlementGrant>, BillingError> {
         let mut scope = self

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sanvi_http::{LocaleContext, LocaleResolutionInput, LocaleResolver};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::adapters::cache::LocalizationCache;
 use crate::adapters::catalog::LocalizationService;
@@ -88,14 +88,14 @@ impl LocaleResolverService {
 
     async fn tenant_settings(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Option<crate::domain::TenantLocaleSettings> {
         let ttl = Duration::from_secs(self.config.tenant_settings_cache_ttl_secs);
         if let Some(settings) = self.cache.get_tenant_settings(tenant_id, ttl) {
             return settings;
         }
         self.cache.record_miss();
-        let settings = match self.tx_manager.begin_for(tenant_id).await {
+        let settings = match self.tx_manager.begin_for(tenant_id.as_i64()).await {
             Ok(mut scope) => match self.tenant_locales.get(&mut scope, tenant_id).await {
                 Ok(settings) => {
                     let _ = scope.rollback().await;
@@ -116,7 +116,7 @@ impl LocaleResolverService {
         settings
     }
 
-    async fn user_locale(&self, user_id: Uuid) -> Option<String> {
+    async fn user_locale(&self, user_id: UserId) -> Option<String> {
         let ttl = Duration::from_secs(self.config.user_locale_cache_ttl_secs);
         if let Some(locale) = self.cache.get_user_locale(user_id, ttl) {
             return locale;

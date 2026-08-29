@@ -1,63 +1,218 @@
-use std::{fmt, hash::Hash, marker::PhantomData, str::FromStr};
+use std::{fmt, hash::Hash, marker::PhantomData, num::NonZeroI64, str::FromStr};
 
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use id_forge::snowflake::{ClockSkew, Snowflake};
+use serde::{
+    Deserialize, Serialize,
+    de::{self, Visitor},
+};
 
-/// Strongly-typed identifier.
-///
-/// Wraps a UUIDv7 so identifiers are globally unique *and* roughly sortable
-/// by creation time. The `Tag` parameter makes ids of different kinds
-/// (tenant vs. user vs. event) distinct types at compile time.
-///
-/// ```ignore
-/// pub enum TenantTag {}
-/// pub type TenantId = Id<TenantTag>;
-/// ```
-pub struct Id<Tag> {
-    raw: Uuid,
-    _tag: PhantomData<fn() -> Tag>,
+use crate::error::{IdGenerationError, KernelError};
+
+pub const SNOWFLAKE_EPOCH_MS: u64 = id_forge::snowflake::DEFAULT_EPOCH_MS;
+
+/// Process-level Snowflake node configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct IdsConfig {
+    pub node_id: Option<u16>,
 }
 
-impl<Tag> Id<Tag> {
-    /// Generate a new id (UUIDv7).
-    pub fn new() -> Self {
-        Self {
-            raw: Uuid::now_v7(),
-            _tag: PhantomData,
+impl IdsConfig {
+    /// Resolve an explicit node outside local development, or reserve the
+    /// binary's local-development node when no override is configured.
+    pub fn resolve(&self, environment: &str, local_default: u16) -> anyhow::Result<NodeId> {
+        let node_id = match self.node_id {
+            Some(node_id) => node_id,
+            None if environment == "local" => local_default,
+            None => anyhow::bail!(
+                "ids.node_id must be configured for {environment}; each replica needs a unique node id"
+            ),
+        };
+
+        NodeId::new(node_id).map_err(anyhow::Error::from)
+    }
+}
+
+/// Shared first-party identifier tags used across bounded contexts.
+pub enum TenantTag {}
+pub enum UserTag {}
+pub enum RoleTag {}
+
+/// Valid, positive, signed-64-bit Snowflake storage value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SnowflakeId(NonZeroI64);
+
+impl SnowflakeId {
+    pub const fn as_i64(self) -> i64 {
+        self.0.get()
+    }
+
+    pub fn node_id(self) -> u16 {
+        Snowflake::parts(self.as_i64() as u64).1
+    }
+}
+
+impl TryFrom<i64> for SnowflakeId {
+    type Error = KernelError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        NonZeroI64::new(value)
+            .filter(|value| value.get().is_positive())
+            .map(Self)
+            .ok_or_else(|| KernelError::InvalidId {
+                value: value.to_string(),
+            })
+    }
+}
+
+impl fmt::Display for SnowflakeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_i64().fmt(f)
+    }
+}
+
+impl FromStr for SnowflakeId {
+    type Err = KernelError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty()
+            || value.starts_with(['+', '-'])
+            || value.starts_with('0')
+            || value.bytes().any(|byte| !byte.is_ascii_digit())
+        {
+            return Err(KernelError::InvalidId {
+                value: value.to_string(),
+            });
+        }
+
+        value
+            .parse::<i64>()
+            .map_err(|_| KernelError::InvalidId {
+                value: value.to_string(),
+            })
+            .and_then(Self::try_from)
+    }
+}
+
+impl Serialize for SnowflakeId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for SnowflakeId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SnowflakeVisitor;
+
+        impl Visitor<'_> for SnowflakeVisitor {
+            type Value = SnowflakeId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a canonical positive decimal Snowflake ID string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(SnowflakeVisitor)
+    }
+}
+
+/// Configured Snowflake node. Zero is reserved for stable seed IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeId(u16);
+
+impl NodeId {
+    pub fn new(value: u16) -> Result<Self, IdGenerationError> {
+        if (1..=1023).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(IdGenerationError::InvalidNode(value))
         }
     }
 
-    /// Wrap an existing UUID without interpretation.
-    pub fn from_uuid(raw: Uuid) -> Self {
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// Generates raw first-party IDs. Composition roots own its implementation.
+pub trait RawIdGenerator: Send + Sync {
+    fn next_id(&self) -> Result<SnowflakeId, IdGenerationError>;
+}
+
+/// `id-forge` backed production generator using Sanvi's fixed epoch.
+#[derive(Debug)]
+pub struct SnowflakeGenerator {
+    inner: Snowflake,
+}
+
+impl SnowflakeGenerator {
+    pub fn new(node_id: NodeId) -> Self {
+        Self {
+            inner: Snowflake::new(node_id.get()),
+        }
+    }
+}
+
+impl RawIdGenerator for SnowflakeGenerator {
+    fn next_id(&self) -> Result<SnowflakeId, IdGenerationError> {
+        let value = self
+            .inner
+            .try_next_id()
+            .map_err(
+                |ClockSkew { last_ms, now_ms }| IdGenerationError::ClockSkew { last_ms, now_ms },
+            )?;
+        let value = i64::try_from(value).map_err(|_| IdGenerationError::OutOfRange)?;
+
+        SnowflakeId::try_from(value).map_err(|_| IdGenerationError::OutOfRange)
+    }
+}
+
+/// Strongly typed first-party identifier.
+///
+/// `Tag` makes IDs of different kinds distinct types at compile time while
+/// keeping their storage and wire representation uniform.
+pub struct Id<Tag> {
+    raw: SnowflakeId,
+    _tag: PhantomData<fn() -> Tag>,
+}
+
+pub type TenantId = Id<TenantTag>;
+pub type UserId = Id<UserTag>;
+pub type RoleId = Id<RoleTag>;
+
+impl<Tag> Id<Tag> {
+    pub const fn from_snowflake(raw: SnowflakeId) -> Self {
         Self {
             raw,
             _tag: PhantomData,
         }
     }
 
-    pub fn as_uuid(&self) -> Uuid {
+    pub const fn as_snowflake(self) -> SnowflakeId {
         self.raw
     }
 
-    pub fn is_nil(&self) -> bool {
-        self.raw.is_nil()
+    pub const fn as_i64(self) -> i64 {
+        self.raw.as_i64()
     }
 }
 
-impl<Tag> Default for Id<Tag> {
-    fn default() -> Self {
-        Self::new()
+impl<Tag> TryFrom<i64> for Id<Tag> {
+    type Error = KernelError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        SnowflakeId::try_from(value).map(Self::from_snowflake)
     }
 }
 
 impl<Tag> FromStr for Id<Tag> {
-    type Err = crate::error::KernelError;
+    type Err = KernelError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let raw = Uuid::parse_str(s).map_err(|_| crate::error::KernelError::InvalidId {
-            value: s.to_string(),
-        })?;
-        Ok(Self::from_uuid(raw))
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse::<SnowflakeId>().map(Self::from_snowflake)
     }
 }
 
@@ -109,20 +264,33 @@ impl<Tag> Hash for Id<Tag> {
 
 impl<Tag> Serialize for Id<Tag> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.raw.serialize(serializer)
+        serializer.serialize_str(&self.to_string())
     }
 }
 
 impl<'de, Tag> Deserialize<'de> for Id<Tag> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = Uuid::deserialize(deserializer)?;
-        Ok(Self::from_uuid(raw))
+        struct IdVisitor<Tag>(PhantomData<fn() -> Tag>);
+
+        impl<'de, Tag> Visitor<'de> for IdVisitor<Tag> {
+            type Value = Id<Tag>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a canonical positive decimal Snowflake ID string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(IdVisitor(PhantomData))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, sync::Arc};
 
     use super::*;
 
@@ -130,46 +298,57 @@ mod tests {
     type TestId = Id<Tag>;
 
     #[test]
-    fn new_ids_are_unique_and_parse_roundtrips() {
-        let mut seen = HashSet::new();
-        for _ in 0..10_000 {
-            assert!(seen.insert(TestId::new()));
-        }
-
-        let id = TestId::new();
-        let s = id.to_string();
-        assert_eq!(s.parse::<TestId>().unwrap(), id);
+    fn snowflake_value_rejects_non_positive_values() {
+        assert!(SnowflakeId::try_from(0_i64).is_err());
+        assert!(SnowflakeId::try_from(-1_i64).is_err());
     }
 
     #[test]
-    fn ids_are_uuid_v7() {
-        let id = TestId::new();
-        assert_eq!(id.as_uuid().get_version_num(), 7);
-        assert!(!id.is_nil());
+    fn tagged_id_serde_is_a_decimal_string_only() {
+        let id = TestId::try_from(873_698_342_314_721_281_i64).unwrap();
+
+        assert_eq!(
+            serde_json::to_string(&id).unwrap(),
+            "\"873698342314721281\""
+        );
+        assert_eq!(
+            serde_json::from_str::<TestId>("\"873698342314721281\"").unwrap(),
+            id
+        );
+        assert!(serde_json::from_str::<TestId>("873698342314721281").is_err());
+        assert!(serde_json::from_str::<TestId>("\"01\"").is_err());
     }
 
     #[test]
-    fn invalid_id_is_rejected() {
-        assert!(matches!(
-            "not-a-uuid".parse::<TestId>(),
-            Err(crate::error::KernelError::InvalidId { .. })
-        ));
+    fn generator_uses_requested_node_and_is_unique_under_concurrency() {
+        let generator = Arc::new(SnowflakeGenerator::new(NodeId::new(17).unwrap()));
+        let ids = (0..8)
+            .map(|_| {
+                let generator = Arc::clone(&generator);
+                std::thread::spawn(move || {
+                    (0..2_000)
+                        .map(|_| generator.next_id().unwrap())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .flat_map(|thread| thread.join().unwrap())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(ids.len(), 16_000);
+        assert!(ids.iter().all(|id| id.node_id() == 17));
     }
 
     #[test]
-    fn serde_roundtrip_is_transparent() {
-        let id = TestId::new();
-        let json = serde_json::to_string(&id).unwrap();
-        assert_eq!(json, format!("\"{id}\""));
-        let back: TestId = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, id);
-    }
-
-    #[test]
-    fn ids_generated_later_sort_after_earlier_ones() {
-        let a = TestId::new();
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let b = TestId::new();
-        assert!(a < b);
+    fn ids_config_requires_non_local_nodes_and_reserves_local_defaults() {
+        assert_eq!(IdsConfig::default().resolve("local", 3).unwrap().get(), 3);
+        assert!(IdsConfig::default().resolve("staging", 2).is_err());
+        assert!(IdsConfig { node_id: Some(0) }.resolve("local", 1).is_err());
+        assert!(
+            IdsConfig {
+                node_id: Some(1024)
+            }
+            .resolve("production", 1)
+            .is_err()
+        );
     }
 }

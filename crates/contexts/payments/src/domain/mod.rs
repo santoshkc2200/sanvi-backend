@@ -19,25 +19,28 @@ pub mod timeline;
 pub mod webhook;
 
 pub use capability::{CapabilitySet, CapabilityStatus, RequirementSummary};
-pub use checkout::{Checkout, CheckoutStatus, MerchantOrderRef};
-pub use connection::ProviderConnection;
+pub use checkout::{Checkout, CheckoutId, CheckoutStatus, CheckoutTag, MerchantOrderRef};
+pub use connection::{ConnectionId, ConnectionTag, ProviderConnection};
 pub use disconnect::DisconnectBlocker;
-pub use dispute::{DisputeRecord, DisputeStatus};
+pub use dispute::{DisputeId, DisputeRecord, DisputeStatus, DisputeTag};
 pub use error::PaymentsError;
 pub use events::{EventPublisher, PaymentsEvent, PaymentsEventName};
 pub use fees::{FeeConfiguration, disabled_configuration};
 pub use money::{Currency, Money};
-pub use payment::{PaymentFailure, PaymentRecord, PaymentStatus, RefundRecord, RefundStatus};
-pub use payout::PayoutRecord;
+pub use payment::{
+    PaymentFailure, PaymentId, PaymentRecord, PaymentStatus, PaymentTag, RefundId, RefundRecord,
+    RefundStatus, RefundTag,
+};
+pub use payout::{PayoutId, PayoutRecord, PayoutTag};
 pub use ports::{
     ApplicationFeeStore, AutomaticTaxLiability, CheckoutLifecycleStore, CheckoutRepository,
     CheckoutThrottle, ConnectionLifecycleStore, ConnectionNotifier, CreateAccountRequest,
-    CreateCheckoutCommand, DisputeFilter, DisputePage, DisputeRepository, PaymentFilter,
-    PaymentPage, PaymentProviderPort, PaymentRepository, PaymentSort, PayoutReadPort,
-    PayoutRepository, PayoutStatus, ProviderAccount, ProviderAccountSession, ProviderAccountStatus,
-    ProviderCheckoutSession, ProviderConnectionRepository, ProviderDescriptor, ProviderPayout,
-    ProviderRefund, ProviderRefundCommand, RefundRepository, TaxSettingsRepository,
-    TenantDomainAllowList, WebhookEventRepository, WebhookVerifierPort,
+    CreateCheckoutCommand, DisputeFilter, DisputePage, DisputeRepository, IdGenerator,
+    PaymentFilter, PaymentPage, PaymentProviderPort, PaymentRepository, PaymentSort,
+    PayoutReadPort, PayoutRepository, PayoutStatus, ProviderAccount, ProviderAccountSession,
+    ProviderAccountStatus, ProviderCheckoutSession, ProviderConnectionRepository,
+    ProviderDescriptor, ProviderPayout, ProviderRefund, ProviderRefundCommand, RefundRepository,
+    TaxSettingsRepository, TenantDomainAllowList, WebhookEventRepository, WebhookVerifierPort,
 };
 pub use provider::{ConnectionStatus, CountryCode, ProviderKind};
 pub use tax::{TaxComplianceSnapshot, TaxPreflightRejection, TaxSettingsRecord, TaxWarning};

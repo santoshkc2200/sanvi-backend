@@ -12,7 +12,7 @@ The worker verifies the chain on `scheduler.audit_verify_interval_secs`
 
 ```bash
 cargo run -p sanvi-cli -- audit verify     # fails non-zero on any mismatch
-cargo run -p sanvi-cli -- audit list --limit 50 [--tenant-id <uuid>] [--action access.entitlement_granted]
+cargo run -p sanvi-cli -- audit list --limit 50 [--tenant-id <snowflake-id>] [--action access.entitlement_granted]
 ```
 
 ## Incident: verification failed

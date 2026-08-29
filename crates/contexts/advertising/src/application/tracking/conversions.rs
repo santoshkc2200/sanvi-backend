@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::domain::{
     AdvertisingError, ConversionDiagnostics, ConversionEvent, ConversionEventRepository,
@@ -20,10 +20,13 @@ impl ListConversions {
         Self { tx, repo }
     }
 
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<Vec<ConversionEvent>, AdvertisingError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         self.repo.list(&mut scope, tenant_id).await
@@ -43,12 +46,12 @@ impl GetConversionDiagnostics {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: crate::domain::model::ConversionId,
     ) -> Result<ConversionDiagnostics, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let event = self

@@ -11,12 +11,11 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{Datelike, Utc};
-use uuid::Uuid;
 
 use crate::config::TldConfig;
 use crate::domain::{
-    DomainQuote, DomainRegistrarPort, DomainsError, Hostname, Money, RegistrationResult,
-    RenewalResult, TldPrice,
+    DomainOrderId, DomainQuote, DomainRegistrarPort, DomainsError, Hostname, Money,
+    RegistrationResult, RenewalResult, TldPrice,
 };
 
 /// Names the sandbox never sells (mirrors the reserved hostname list).
@@ -139,7 +138,7 @@ impl DomainRegistrarPort for SandboxRegistrar {
 
     async fn register(
         &self,
-        order_id: Uuid,
+        order_id: DomainOrderId,
         hostname: &Hostname,
         term_years: u8,
         _whois_privacy: bool,
@@ -224,7 +223,7 @@ mod tests {
     #[tokio::test]
     async fn registration_records_the_order_id() {
         let hostname = Hostname::parse("acme.com").unwrap();
-        let order_id = Uuid::now_v7();
+        let order_id = DomainOrderId::try_from(1i64).unwrap();
         let result = registrar()
             .register(order_id, &hostname, 1, true)
             .await

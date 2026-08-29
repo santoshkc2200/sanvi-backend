@@ -8,16 +8,16 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_persistence::{PlatformScope, TxManager};
 
 use crate::domain::{
     Clock, ConsentMethod, ConsentRecord, ConsentRepository, DataSubject, DirectiveInput,
     DirectiveRepository, DirectiveResolver, DirectiveSnapshot, DirectiveSource, DirectiveState,
-    EventPublisher, EvidenceKind, JurisdictionProfile, JurisdictionRepository, PrivacyError,
-    PrivacyEvent, ProcessingPurpose, PurposeDirective, SignalRepository, SignalSource, SubjectId,
-    SubjectRef, SubjectRepository, jurisdiction_default, resolve, resolve_snapshot,
+    EventPublisher, EvidenceKind, IdGenerator, JurisdictionProfile, JurisdictionRepository,
+    PrivacyError, PrivacyEvent, ProcessingPurpose, PurposeDirective, SignalRepository,
+    SignalSource, SubjectId, SubjectRef, SubjectRepository, jurisdiction_default, resolve,
+    resolve_snapshot,
 };
 
 /// Flip a set of purposes to `Denied` with the given source, ledgering the
@@ -29,6 +29,7 @@ pub async fn flip_directives(
     consents: &dyn ConsentRepository,
     directives: &dyn DirectiveRepository,
     signals: &dyn SignalRepository,
+    ids: &dyn IdGenerator,
     subject: &DataSubject,
     profile: &JurisdictionProfile,
     subject_ref: &SubjectRef,
@@ -44,7 +45,7 @@ pub async fn flip_directives(
             .append(
                 scope,
                 &ConsentRecord {
-                    id: Uuid::now_v7(),
+                    id: ids.next_consent_id()?,
                     tenant_id: subject.tenant_id,
                     subject_id: Some(subject.id),
                     subject_ref: subject_ref.clone(),
@@ -119,7 +120,7 @@ impl ResolveJurisdiction {
             .find_by_id(&mut scope, subject_id)
             .await?
             .ok_or(PrivacyError::SubjectNotFound(
-                subject_id.as_uuid().to_string(),
+                subject_id.as_i64().to_string(),
             ))?;
         let (jurisdiction, chain) = resolve(&evidence);
         self.jurisdictions
@@ -447,6 +448,7 @@ pub struct RecordConsentChange {
     consents: Arc<dyn ConsentRepository>,
     directives: Arc<dyn DirectiveRepository>,
     events: Arc<dyn EventPublisher>,
+    ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
 }
 
@@ -459,6 +461,7 @@ impl RecordConsentChange {
         consents: Arc<dyn ConsentRepository>,
         directives: Arc<dyn DirectiveRepository>,
         events: Arc<dyn EventPublisher>,
+        ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -468,6 +471,7 @@ impl RecordConsentChange {
             consents,
             directives,
             events,
+            ids,
             clock,
         }
     }
@@ -505,7 +509,7 @@ impl RecordConsentChange {
 
         let now = self.clock.now();
         let record = ConsentRecord {
-            id: Uuid::now_v7(),
+            id: self.ids.next_consent_id()?,
             tenant_id: subject.tenant_id,
             subject_id: Some(stored.id),
             subject_ref: subject.clone(),
@@ -605,6 +609,7 @@ pub struct RecordOptOut {
     signals: Arc<dyn SignalRepository>,
     directives: Arc<dyn DirectiveRepository>,
     events: Arc<dyn EventPublisher>,
+    ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
     notice_version: String,
 }
@@ -619,6 +624,7 @@ impl RecordOptOut {
         signals: Arc<dyn SignalRepository>,
         directives: Arc<dyn DirectiveRepository>,
         events: Arc<dyn EventPublisher>,
+        ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
         notice_version: String,
     ) -> Self {
@@ -630,6 +636,7 @@ impl RecordOptOut {
             signals,
             directives,
             events,
+            ids,
             clock,
             notice_version,
         }
@@ -673,7 +680,7 @@ impl RecordOptOut {
         // authenticated request.
         if let Some(device_ref) = &command.device_ref {
             let signal = crate::domain::PreferenceSignal {
-                id: Uuid::now_v7(),
+                id: self.ids.next_preference_signal_id()?,
                 tenant_id: subject.tenant_id,
                 signal: "gpc".to_string(),
                 device_ref: device_ref.clone(),
@@ -701,6 +708,7 @@ impl RecordOptOut {
                 self.consents.as_ref(),
                 self.directives.as_ref(),
                 self.signals.as_ref(),
+                self.ids.as_ref(),
                 stored,
                 &profile,
                 subject,

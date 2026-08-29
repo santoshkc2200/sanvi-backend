@@ -1,14 +1,9 @@
-//! The in-process decision cache: TTL + capacity bounded, no external
-//! dependency. Invalidation on events happens locally (in the process that
-//! consumed the event); cross-process freshness comes from the TTL bound
-//! (≤ 30 s), which is the acceptance criterion's window.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use uuid::Uuid;
+use sanvi_kernel::UserId;
 
 use crate::domain::ports::{Decision, DecisionCache};
 
@@ -73,7 +68,7 @@ impl DecisionCache for InMemoryDecisionCache {
         );
     }
 
-    async fn invalidate_user(&self, user_id: Uuid) {
+    async fn invalidate_user(&self, user_id: UserId) {
         let prefix = format!("{user_id}:");
         self.entries
             .lock()
@@ -99,7 +94,7 @@ impl DecisionCache for NoopDecisionCache {
 
     async fn put(&self, _key: &str, _decision: Decision, _ttl_secs: u64) {}
 
-    async fn invalidate_user(&self, _user_id: Uuid) {}
+    async fn invalidate_user(&self, _user_id: UserId) {}
 
     async fn invalidate_all(&self) {}
 }
@@ -122,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn invalidation_drops_all_entries_for_a_user() {
         let cache = InMemoryDecisionCache::new(10);
-        let user = Uuid::now_v7();
+        let user = UserId::try_from(101_i64).unwrap();
         cache
             .put(&format!("{user}:a:b"), Decision::Allowed, 60)
             .await;

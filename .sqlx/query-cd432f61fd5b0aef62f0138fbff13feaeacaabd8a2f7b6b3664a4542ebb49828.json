@@ -50,7 +50,7 @@
       {
         "ordinal": 4,
         "name": "updated_by",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "localization.translations",

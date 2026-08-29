@@ -1,9 +1,8 @@
 //! Domain events emitted by the platform_admin context. Every
 //! tenant-scoped event carries the tenant id in envelope metadata.
 
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId, TenantId, UserId};
 use serde::Serialize;
-use uuid::Uuid;
 
 use crate::domain::impersonation::{ImpersonationGrantId, ImpersonationMode};
 
@@ -30,21 +29,21 @@ impl PlatformAdminEventName {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PlatformAdminEvent {
     ImpersonationStarted {
-        grant_id: Uuid,
-        actor_id: Uuid,
-        tenant_id: Uuid,
-        target_user_id: Uuid,
+        grant_id: ImpersonationGrantId,
+        actor_id: UserId,
+        tenant_id: TenantId,
+        target_user_id: UserId,
         mode: ImpersonationMode,
         reason: String,
         expires_at: chrono::DateTime<chrono::Utc>,
     },
     ImpersonationEnded {
-        grant_id: Uuid,
-        actor_id: Uuid,
-        tenant_id: Uuid,
-        target_user_id: Uuid,
+        grant_id: ImpersonationGrantId,
+        actor_id: UserId,
+        tenant_id: TenantId,
+        target_user_id: UserId,
         /// The operator who revoked (revocations only; expiry is passive).
-        ended_by: Uuid,
+        ended_by: UserId,
     },
 }
 
@@ -56,21 +55,22 @@ impl PlatformAdminEvent {
         }
     }
 
-    pub fn tenant_id(&self) -> Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         match self {
             Self::ImpersonationStarted { tenant_id, .. }
             | Self::ImpersonationEnded { tenant_id, .. } => *tenant_id,
         }
     }
 
-    pub fn envelope(&self) -> EventEnvelope {
+    pub fn envelope(&self, id: EventId) -> EventEnvelope {
         let payload =
             serde_json::to_value(self).expect("platform admin events serialize infallibly");
         let aggregate_id = match self {
             Self::ImpersonationStarted { grant_id, .. }
-            | Self::ImpersonationEnded { grant_id, .. } => *grant_id,
+            | Self::ImpersonationEnded { grant_id, .. } => grant_id.as_snowflake(),
         };
         EventEnvelope::new(
+            id,
             PlatformAdminEventName::AGGREGATE,
             aggregate_id,
             self.name().as_str(),
@@ -89,20 +89,20 @@ mod tests {
 
     #[test]
     fn events_carry_tenant_metadata() {
-        let grant_id = Uuid::now_v7();
-        let tenant_id = Uuid::now_v7();
+        let grant_id = ImpersonationGrantId::try_from(101_i64).unwrap();
+        let tenant_id = TenantId::try_from(102_i64).unwrap();
         let event = PlatformAdminEvent::ImpersonationStarted {
             grant_id,
-            actor_id: Uuid::now_v7(),
+            actor_id: UserId::try_from(103_i64).unwrap(),
             tenant_id,
-            target_user_id: Uuid::now_v7(),
+            target_user_id: UserId::try_from(104_i64).unwrap(),
             mode: ImpersonationMode::ReadOnly,
             reason: "support ticket".to_string(),
             expires_at: chrono::Utc::now(),
         };
-        let envelope = event.envelope();
+        let envelope = event.envelope(EventId::try_from(105_i64).unwrap());
         assert_eq!(envelope.aggregate, "platform_admin.impersonation");
-        assert_eq!(envelope.aggregate_id, grant_id);
+        assert_eq!(envelope.aggregate_id, grant_id.as_snowflake());
         assert_eq!(envelope.metadata["tenant_id"], tenant_id.to_string());
         assert_eq!(envelope.event_type, "platform_admin.impersonation_started");
     }

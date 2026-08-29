@@ -6,7 +6,7 @@
 //! anonymisation, and the report says so.
 
 use async_trait::async_trait;
-use uuid::Uuid;
+use sanvi_kernel::UserId;
 
 use sanvi_persistence::TxManager;
 use sanvi_privacy::domain::{
@@ -38,12 +38,12 @@ impl PlatformAdminPrivacyProvider {
         }
     }
 
-    fn user_id(subject: &SubjectRef) -> Option<Uuid> {
+    fn user_id(subject: &SubjectRef) -> Option<UserId> {
         subject
             .identifiers
             .iter()
             .find(|id| id.id_type == "user_id")
-            .and_then(|id| Uuid::parse_str(&id.value).ok())
+            .and_then(|id| id.value.parse().ok())
     }
 }
 

@@ -2,7 +2,7 @@
 -- mapping) and the value-source label on captured conversion events, so a
 -- payment-record value and a client-reported hint are never confused.
 CREATE TABLE advertising.tracking_settings (
-  tenant_id  uuid        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id  bigint        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   mappings   jsonb       NOT NULL DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now()
 );

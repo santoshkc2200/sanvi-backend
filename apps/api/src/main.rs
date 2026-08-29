@@ -16,14 +16,15 @@ use figment::{
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsGuideTranslatorAdapter, DomainsTenantLookupAdapter,
-    FallbackGuideTranslator, TenantCatalogAdapter, build_access_state, build_advertising_state,
-    build_app, build_audit_state, build_billing_state, build_domains_lookup, build_domains_state,
-    build_identity_state, build_localization_state, build_payments_state,
-    build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
-    build_theming_state,
+    FallbackGuideTranslator, IdentityDependencies, PlatformAdminDependencies, TenantCatalogAdapter,
+    build_access_state, build_advertising_state, build_app, build_audit_state, build_billing_state,
+    build_domains_lookup, build_domains_state, build_identity_state, build_localization_state,
+    build_payments_state, build_platform_admin_state, build_privacy_state, build_system_state,
+    build_tenancy_state, build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
+use sanvi_kernel::{RawIdGenerator, SnowflakeGenerator};
 use sanvi_messaging::connect_redis;
 use sanvi_persistence::build_pool;
 use sanvi_privacy::adapters::PrivacyContextProvider;
@@ -49,6 +50,7 @@ fn load_config() -> anyhow::Result<AppConfig> {
         .context("failed to load configuration")?;
 
     config.validate()?;
+    config.ids.resolve(&config.telemetry.environment, 1)?;
     Ok(config)
 }
 
@@ -73,6 +75,15 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    let node_id = match config.ids.resolve(&config.telemetry.environment, 1) {
+        Ok(node_id) => node_id,
+        Err(err) => {
+            eprintln!("configuration error:\n{err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    let ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     let (metrics, mut telemetry_guard) = match sanvi_telemetry::init(config.telemetry.clone()) {
         Ok(guard) => guard,
@@ -119,6 +130,7 @@ async fn main() -> ExitCode {
     });
     let tenancy = build_tenancy_state(
         pool.clone(),
+        ids.clone(),
         redis.clone(),
         &config.tenancy,
         custom_domain_lookup,
@@ -129,6 +141,7 @@ async fn main() -> ExitCode {
     let localization = if config.features.localization {
         Some(build_localization_state(
             pool.clone(),
+            ids.clone(),
             &config.localization,
             metrics.prometheus_registry(),
         ))
@@ -138,6 +151,7 @@ async fn main() -> ExitCode {
     let notification_localizer = localization.as_ref().map(|wiring| {
         Arc::new(sanvi_localization::adapters::NotificationLocalizer::new(
             pool.clone(),
+            ids.clone(),
             wiring.service.clone(),
             config.localization.clone(),
         ))
@@ -145,7 +159,7 @@ async fn main() -> ExitCode {
 
     // The role catalog bridges identity → access in-process; it needs only
     // a TxManager and the role repository, so there is no wiring cycle.
-    let catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let catalog_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let role_repository: Arc<dyn sanvi_access::domain::RoleRepository> =
         Arc::new(sanvi_access::adapters::SqlxRoleRepository::new());
     let role_catalog: Arc<dyn RoleCatalog> =
@@ -154,7 +168,7 @@ async fn main() -> ExitCode {
     // Same bridging shape as `role_catalog` above, one context over: `GET
     // /api/v1/me` needs each membership's tenant slug/display name, and
     // identity has no `sanvi-tenancy` dependency of its own.
-    let tenant_catalog_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tenant_catalog_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let tenant_repository_for_catalog: Arc<dyn sanvi_tenancy::domain::TenantRepository> =
         Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new());
     let tenant_catalog: Arc<dyn TenantCatalog> = Arc::new(TenantCatalogAdapter::new(
@@ -164,28 +178,32 @@ async fn main() -> ExitCode {
 
     let identity = build_identity_state(
         pool.clone(),
+        ids.clone(),
         redis.clone(),
         &config.identity,
         &config.ory.kratos_public_url,
         &config.ory.kratos_admin_url,
-        role_catalog,
-        tenant_catalog,
-        notification_localizer.clone(),
+        IdentityDependencies {
+            role_catalog,
+            tenant_catalog,
+            notification_localizer: notification_localizer.clone(),
+        },
     );
 
     // The audit writer/reader are shared by the access and platform_admin
     // contexts (they record; the audit context owns the schema).
-    let audit = build_audit_state(pool.clone(), &config.audit);
+    let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);
 
     // Construction order matters: platform_admin owns the approval gate the
     // access context consumes, but its `EntitlementAdmin` port is *the
     // access context's own use cases*. So: build the approval gate first,
     // then access (which takes the gate), then wrap access's use cases into
     // the `EntitlementAdmin` adapter and finish platform_admin.
-    let approval_gate = build_approval_gate(pool.clone());
+    let approval_gate = build_approval_gate(pool.clone(), ids.clone());
 
     let access = build_access_state(
         pool.clone(),
+        ids.clone(),
         &config.access,
         &config.ory.keto_read_url,
         &config.ory.keto_write_url,
@@ -205,7 +223,7 @@ async fn main() -> ExitCode {
 
     // Phase 05: the privacy lock is built first because the impersonation
     // flow consumes it; with the privacy feature off it stays a no-op.
-    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone());
+    let privacy_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let privacy_requests: Arc<dyn sanvi_privacy::domain::DsrRepository> =
         Arc::new(SqlxDsrRepository::new());
     let privacy_lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock> =
@@ -220,13 +238,16 @@ async fn main() -> ExitCode {
 
     let platform_admin = build_platform_admin_state(
         pool.clone(),
+        ids.clone(),
         &config.platform_admin,
-        Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
-        identity.memberships.clone(),
-        Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
-        entitlement_admin,
-        audit.writer.clone(),
-        privacy_lock.clone(),
+        PlatformAdminDependencies {
+            tenants: Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+            memberships: identity.memberships.clone(),
+            entitlements: Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
+            entitlement_admin,
+            audit_writer: audit.writer.clone(),
+            privacy_lock: privacy_lock.clone(),
+        },
     );
 
     // Phase 04: the billing context consumes the access context's
@@ -235,6 +256,7 @@ async fn main() -> ExitCode {
     let billing = if config.features.billing {
         Some(build_billing_state(
             pool.clone(),
+            ids.clone(),
             &config.billing,
             access.entitlements_repo.clone(),
             access.features_repo.clone(),
@@ -345,6 +367,7 @@ async fn main() -> ExitCode {
         ];
         Some(build_privacy_state(
             pool.clone(),
+            ids.clone(),
             &config.privacy,
             privacy_providers,
             audit.writer.clone(),
@@ -361,6 +384,7 @@ async fn main() -> ExitCode {
     let theming = if config.features.theming {
         Some(build_theming_state(
             pool.clone(),
+            ids.clone(),
             &config.theming,
             metrics.prometheus_registry(),
             redis.clone(),
@@ -384,6 +408,7 @@ async fn main() -> ExitCode {
             };
         Some(build_domains_state(
             pool.clone(),
+            ids.clone(),
             &config.domains,
             metrics.prometheus_registry(),
             redis.clone(),
@@ -401,6 +426,7 @@ async fn main() -> ExitCode {
     // before the switch; that money must retain a local record.
     let payments = Some(build_payments_state(
         pool.clone(),
+        ids.clone(),
         &config.payments,
         metrics.prometheus_registry(),
         &config.telemetry.environment,
@@ -419,6 +445,7 @@ async fn main() -> ExitCode {
             Arc::new(sanvi_privacy::adapters::SqlxSubProcessorRepository::new());
         match build_advertising_state(
             pool.clone(),
+            ids.clone(),
             &config.advertising,
             directive_resolver,
             subprocessors,
@@ -482,6 +509,7 @@ async fn main() -> ExitCode {
 /// access consumes it.
 fn build_approval_gate(
     pool: sanvi_persistence::PgPool,
+    ids: Arc<dyn sanvi_kernel::RawIdGenerator>,
 ) -> Arc<dyn sanvi_access::domain::ApprovalGate> {
     use sanvi_platform_admin::{
         adapters::{
@@ -492,9 +520,9 @@ fn build_approval_gate(
     let approvals = Arc::new(SqlxPendingApprovalRepository::new());
     let record = Arc::new(RecordApprovalRequest::new(
         approvals,
-        Arc::new(SystemIdGenerator),
+        Arc::new(SystemIdGenerator::new(ids.clone())),
         Arc::new(SystemClock),
     ));
-    let _tx = sanvi_persistence::TxManager::new(pool);
+    let _tx = sanvi_persistence::TxManager::new(pool, ids);
     Arc::new(ApprovalGateAdapter::new(record))
 }

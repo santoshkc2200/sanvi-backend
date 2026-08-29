@@ -5,21 +5,23 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 use serde::Serialize;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::{
-    BillingError, CollectionState, InvoiceRef, InvoiceRepository, Period, PlanRepository,
-    Subscription, SubscriptionRepository, SubscriptionSource, SubscriptionStatus,
+    BillingError, CollectionState, InvoiceId, InvoiceRef, InvoiceRepository, Period,
+    PlanRepository, Subscription, SubscriptionId, SubscriptionRepository, SubscriptionSource,
+    SubscriptionStatus,
 };
 
 /// The tenant's subscription as served to the billing UI.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SubscriptionView {
-    pub subscription_id: Uuid,
+    #[schema(value_type = String)]
+    pub subscription_id: SubscriptionId,
     pub plan_key: String,
     pub plan_name: String,
     pub source: SubscriptionSource,
@@ -49,7 +51,10 @@ impl GetSubscription {
         }
     }
 
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<Option<SubscriptionView>, BillingError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Option<SubscriptionView>, BillingError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("get_subscription", "tenant")
@@ -75,7 +80,7 @@ impl GetSubscription {
 
 fn to_view(subscription: &Subscription, plan: &crate::domain::Plan) -> SubscriptionView {
     SubscriptionView {
-        subscription_id: subscription.id().as_uuid(),
+        subscription_id: subscription.id(),
         plan_key: plan.key().to_string(),
         plan_name: plan.name().to_string(),
         source: subscription.source(),
@@ -90,7 +95,8 @@ fn to_view(subscription: &Subscription, plan: &crate::domain::Plan) -> Subscript
 /// An invoice row as served to the billing UI.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct InvoiceView {
-    pub invoice_id: Uuid,
+    #[schema(value_type = String)]
+    pub invoice_id: InvoiceId,
     pub number: Option<String>,
     pub status: crate::domain::InvoiceStatus,
     pub total_minor: i64,
@@ -105,7 +111,7 @@ pub struct InvoiceView {
 impl From<&InvoiceRef> for InvoiceView {
     fn from(invoice: &InvoiceRef) -> Self {
         Self {
-            invoice_id: invoice.id().as_uuid(),
+            invoice_id: invoice.id(),
             number: invoice.number().map(str::to_string),
             status: invoice.status(),
             total_minor: invoice.total_minor(),
@@ -134,7 +140,7 @@ impl ListInvoices {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         limit: u32,
     ) -> Result<Vec<InvoiceView>, BillingError> {
         let mut scope = self

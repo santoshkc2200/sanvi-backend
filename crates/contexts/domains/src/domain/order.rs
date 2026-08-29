@@ -10,7 +10,12 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use sanvi_kernel::{TenantId, UserId};
+
 use crate::domain::{DomainsError, Hostname, Money};
+
+pub enum DomainOrderTag {}
+pub type DomainOrderId = sanvi_kernel::Id<DomainOrderTag>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -75,8 +80,10 @@ pub struct RegistrantContact {
 /// The domain order aggregate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DomainOrder {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
+    #[schema(value_type = String)]
+    pub id: DomainOrderId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
     pub hostname: Hostname,
     pub term_years: u8,
     pub price: Money,
@@ -84,7 +91,8 @@ pub struct DomainOrder {
     pub auto_renew: bool,
     pub whois_privacy: bool,
     pub registrant_contact: RegistrantContact,
-    pub ordered_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub ordered_by: Option<UserId>,
     pub idempotency_key: Option<Uuid>,
     pub external_order_ref: Option<String>,
     pub charge_id: Option<String>,
@@ -100,15 +108,15 @@ pub struct DomainOrder {
 impl DomainOrder {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        id: Uuid,
-        tenant_id: Uuid,
+        id: DomainOrderId,
+        tenant_id: TenantId,
         hostname: Hostname,
         term_years: u8,
         price: Money,
         auto_renew: bool,
         whois_privacy: bool,
         registrant_contact: RegistrantContact,
-        ordered_by: Option<Uuid>,
+        ordered_by: Option<UserId>,
         idempotency_key: Option<Uuid>,
         now: DateTime<Utc>,
     ) -> Self {
@@ -319,8 +327,8 @@ mod tests {
 
     fn order() -> DomainOrder {
         DomainOrder::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            DomainOrderId::try_from(1i64).unwrap(),
+            TenantId::try_from(1i64).unwrap(),
             Hostname::parse("example.com").unwrap(),
             1,
             Money::new(1299, "usd"),

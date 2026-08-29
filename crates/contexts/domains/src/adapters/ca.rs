@@ -1,30 +1,29 @@
-//! The sandbox certificate authority: the reference
-//! `CertificateAuthorityPort` adapter.
-//!
-//! Deterministic and key-less: it records issuance facts (serial, dates)
-//! exactly as the production adapter would after driving the edge's ACME
-//! pipeline. `renewal_error` lets tests (and staging configs) inject a
-//! failure mode to exercise the escalation path.
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use rand::RngCore;
-use uuid::Uuid;
 
-use crate::domain::{Certificate, CertificateAuthorityPort, CustomDomain, DomainsError};
+use sanvi_kernel::RawIdGenerator;
+
+use crate::domain::{
+    Certificate, CertificateAuthorityPort, CertificateId, CustomDomain, DomainsError,
+};
 
 pub struct SandboxCertificateAuthority {
     issuer: String,
     lifetime_days: u32,
     renewal_error: Option<String>,
+    ids: Arc<dyn RawIdGenerator>,
 }
 
 impl SandboxCertificateAuthority {
-    pub fn new(lifetime_days: u32) -> Self {
+    pub fn new(lifetime_days: u32, ids: Arc<dyn RawIdGenerator>) -> Self {
         Self {
             issuer: "Sandbox CA".to_string(),
             lifetime_days,
             renewal_error: None,
+            ids,
         }
     }
 
@@ -46,8 +45,13 @@ impl SandboxCertificateAuthority {
 impl CertificateAuthorityPort for SandboxCertificateAuthority {
     async fn issue(&self, domain: &CustomDomain) -> Result<Certificate, DomainsError> {
         let now = Utc::now();
+        let id = self
+            .ids
+            .next_id()
+            .map(CertificateId::from_snowflake)
+            .map_err(|err| DomainsError::Storage(err.to_string()))?;
         Ok(Certificate::issued(
-            Uuid::now_v7(),
+            id,
             domain.id,
             domain.tenant_id,
             domain.hostname.clone(),
@@ -83,12 +87,13 @@ impl CertificateAuthorityPort for SandboxCertificateAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{DomainKind, DomainRole, Hostname};
+    use crate::domain::{CustomDomainId, DomainKind, DomainRole, Hostname};
+    use sanvi_kernel::TenantId;
 
     fn domain() -> CustomDomain {
         CustomDomain::claim(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            CustomDomainId::try_from(1i64).unwrap(),
+            TenantId::try_from(1i64).unwrap(),
             Hostname::parse("example.com").unwrap(),
             DomainKind::Connected,
             DomainRole::Primary,
@@ -101,7 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn issues_with_the_configured_lifetime() {
-        let ca = SandboxCertificateAuthority::new(90);
+        let ca = SandboxCertificateAuthority::new(90, sanvi_testsupport::test_ids());
         let cert = ca.issue(&domain()).await.unwrap();
         let days = (cert.not_after - cert.not_before).num_days();
         assert!((89..=90).contains(&days));
@@ -109,7 +114,8 @@ mod tests {
 
     #[tokio::test]
     async fn injected_renewal_failure_escalates() {
-        let ca = SandboxCertificateAuthority::new(90).with_renewal_error("simulated outage");
+        let ca = SandboxCertificateAuthority::new(90, sanvi_testsupport::test_ids())
+            .with_renewal_error("simulated outage");
         let cert = ca.issue(&domain()).await.unwrap();
         assert!(matches!(
             ca.renew(&cert, &domain()).await,
@@ -119,7 +125,7 @@ mod tests {
 
     #[tokio::test]
     async fn renewal_moves_not_after() {
-        let ca = SandboxCertificateAuthority::new(90);
+        let ca = SandboxCertificateAuthority::new(90, sanvi_testsupport::test_ids());
         let cert = ca.issue(&domain()).await.unwrap();
         let renewed = ca.renew(&cert, &domain()).await.unwrap();
         assert!(renewed.not_after > cert.not_after);

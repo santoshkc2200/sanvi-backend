@@ -1,16 +1,11 @@
-//! `GET /api/v1/tenant/domains/search?q=` — registrar search.
-//!
-//! Entitlement-gated (`domains.purchase`), cached with a short TTL, and
-//! never fanning out uncontrolled registrar calls: one request, one
-//! response list over the served TLD catalog.
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use utoipa::ToSchema;
-use uuid::Uuid;
+
+use sanvi_kernel::TenantId;
 
 use crate::domain::{DomainFeatureGate, DomainRegistrarPort, DomainsError, Hostname};
 
@@ -83,7 +78,7 @@ impl SearchDomains {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         query: &str,
     ) -> Result<DomainSearchView, DomainsError> {
         if !self

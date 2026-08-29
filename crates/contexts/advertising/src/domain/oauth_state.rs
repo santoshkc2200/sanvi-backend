@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
+use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use uuid::Uuid;
@@ -23,7 +24,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthStateClaims {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub platform: PlatformKey,
     pub nonce: Uuid,
     pub expires_at: DateTime<Utc>,
@@ -118,7 +119,7 @@ impl OAuthStateManager {
     /// token, so it is safe to carry through browser redirects.
     pub async fn issue(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         platform: PlatformKey,
         now: DateTime<Utc>,
         ttl: Duration,
@@ -138,7 +139,7 @@ impl OAuthStateManager {
     pub async fn redeem(
         &self,
         state: &str,
-        expected_tenant_id: Uuid,
+        expected_tenant_id: TenantId,
         expected_platform: &PlatformKey,
         now: DateTime<Utc>,
     ) -> Result<OAuthStateClaims, OAuthStateError> {
@@ -207,11 +208,15 @@ mod tests {
         PlatformKey::parse("test_platform").unwrap()
     }
 
+    fn tenant_id(n: i64) -> TenantId {
+        TenantId::try_from(n).unwrap()
+    }
+
     #[tokio::test]
     async fn signed_state_rejects_forgery_expiry_replay_and_cross_tenant_redemption() {
         let manager = manager();
-        let tenant_a = Uuid::now_v7();
-        let tenant_b = Uuid::now_v7();
+        let tenant_a = tenant_id(1_000_001);
+        let tenant_b = tenant_id(1_000_002);
         let state = manager
             .issue(tenant_a, platform(), now(), Duration::minutes(10))
             .await

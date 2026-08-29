@@ -10,7 +10,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use actix_web::HttpMessage;
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use crate::error::ApiError;
 
@@ -45,7 +45,7 @@ impl RequiredAnyFeature {
 pub trait FeatureGate: Send + Sync {
     fn check<'a>(
         &'a self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, ApiError>> + Send + 'a>>;
 }

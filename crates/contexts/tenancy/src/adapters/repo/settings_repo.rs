@@ -40,7 +40,7 @@ impl TenantSettingsRepository for SqlxTenantSettingsRepository {
         let row = sqlx::query_as!(
             SettingRow,
             "SELECT key, value FROM tenancy.tenant_settings WHERE tenant_id = $1 AND key = $2",
-            tenant_id.as_uuid(),
+            tenant_id.as_i64(),
             key
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -61,7 +61,7 @@ impl TenantSettingsRepository for SqlxTenantSettingsRepository {
              VALUES ($1, $2, $3)
              ON CONFLICT (tenant_id, key) DO UPDATE
                SET value = EXCLUDED.value, updated_at = now()",
-            tenant_id.as_uuid(),
+            tenant_id.as_i64(),
             key,
             value
         )
@@ -79,7 +79,7 @@ impl TenantSettingsRepository for SqlxTenantSettingsRepository {
         let rows = sqlx::query_as!(
             SettingRow,
             "SELECT key, value FROM tenancy.tenant_settings WHERE tenant_id = $1 ORDER BY key",
-            tenant_id.as_uuid()
+            tenant_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await

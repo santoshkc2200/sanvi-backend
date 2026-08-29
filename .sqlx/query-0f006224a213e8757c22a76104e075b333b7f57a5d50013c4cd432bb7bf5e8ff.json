@@ -6,7 +6,7 @@
       {
         "ordinal": 0,
         "name": "role_id",
-        "type_info": "Uuid",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "identity.membership_roles",
@@ -17,8 +17,8 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Uuid"
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [

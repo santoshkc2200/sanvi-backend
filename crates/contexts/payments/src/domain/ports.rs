@@ -6,18 +6,33 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::TenantId;
 use uuid::Uuid;
 
 use sanvi_persistence::{PlatformScope, ScopedTx};
 
 use super::capability::{CapabilitySet, RequirementSummary};
-use super::checkout::Checkout;
-use super::connection::ProviderConnection;
+use super::checkout::{Checkout, CheckoutId};
+use super::connection::{ConnectionId, ProviderConnection};
+use super::dispute::{DisputeId, DisputeRecord, DisputeStatus};
 use super::error::PaymentsError;
 use super::fees::FeeConfiguration;
 use super::money::{Currency, Money};
-use super::payment::{PaymentRecord, PaymentStatus, RefundRecord, RefundStatus};
+use super::payment::{
+    PaymentId, PaymentRecord, PaymentStatus, RefundId, RefundRecord, RefundStatus,
+};
+use super::payout::{PayoutId, PayoutRecord};
 use super::provider::{ConnectionStatus, CountryCode, ProviderKind};
+
+/// Generator for payments entity identifiers.
+pub trait IdGenerator: Send + Sync {
+    fn next_connection_id(&self) -> Result<ConnectionId, PaymentsError>;
+    fn next_checkout_id(&self) -> Result<CheckoutId, PaymentsError>;
+    fn next_refund_id(&self) -> Result<RefundId, PaymentsError>;
+    fn next_payment_id(&self) -> Result<PaymentId, PaymentsError>;
+    fn next_dispute_id(&self) -> Result<DisputeId, PaymentsError>;
+    fn next_payout_id(&self) -> Result<PayoutId, PaymentsError>;
+}
 
 /// Persistence for the provider-connection aggregate. All access is
 /// tenant-scoped (`ScopedTx` sets `sanvi.tenant_id`, so RLS enforces
@@ -35,7 +50,7 @@ pub trait ProviderConnectionRepository: Send + Sync {
     async fn find_active(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         provider: &str,
     ) -> Result<Option<ProviderConnection>, PaymentsError>;
 
@@ -44,14 +59,14 @@ pub trait ProviderConnectionRepository: Send + Sync {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<ProviderConnection>, PaymentsError>;
 
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: ConnectionId,
     ) -> Result<Option<ProviderConnection>, PaymentsError>;
 
     /// Persist an aggregate's current state (status transitions stamp
@@ -91,7 +106,7 @@ pub struct ProviderDescriptor {
 /// provider's own embedded surfaces, never proxied through Sanvi.
 #[derive(Debug, Clone)]
 pub struct CreateAccountRequest {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub country: Option<CountryCode>,
     pub default_currency: Option<Currency>,
     /// Business display name prefilled from tenant data (the tenant's
@@ -347,7 +362,7 @@ pub trait PayoutReadPort: Send + Sync {
 pub trait ApplicationFeeStore: Send + Sync {
     async fn configuration_for(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<FeeConfiguration>, PaymentsError>;
 }
 
@@ -487,14 +502,14 @@ pub trait ConnectionLifecycleStore: Send + Sync {
 pub trait ConnectionNotifier: Send + Sync {
     async fn connection_activated(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<(), PaymentsError>;
 
     async fn connection_restricted(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         detail: &str,
     ) -> Result<(), PaymentsError>;
 
@@ -502,16 +517,16 @@ pub trait ConnectionNotifier: Send + Sync {
     /// response deadline is attached when the provider supplies one.
     async fn dispute_opened(
         &self,
-        tenant_id: Uuid,
-        dispute_id: Uuid,
+        tenant_id: TenantId,
+        dispute_id: DisputeId,
         due_by: Option<DateTime<Utc>>,
     ) -> Result<(), PaymentsError>;
     /// An outstanding requirement's deadline is approaching while the
     /// connection still cannot take payments.
     async fn requirement_deadline_approaching(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         deadline: DateTime<Utc>,
     ) -> Result<(), PaymentsError>;
 
@@ -521,7 +536,7 @@ pub trait ConnectionNotifier: Send + Sync {
     /// projection.
     async fn payout_failed(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_payout_id: &str,
         amount: &Money,
     ) -> Result<(), PaymentsError>;
@@ -531,7 +546,7 @@ pub trait ConnectionNotifier: Send + Sync {
     /// silently under-collecting on new sales.
     async fn tax_compliance_lapsed(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         detail: &str,
     ) -> Result<(), PaymentsError>;
 }
@@ -558,15 +573,15 @@ pub trait CheckoutRepository: Send + Sync {
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: CheckoutId,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
     /// The idempotency key's owner, if any (`checkouts_idempotency_idx`).
     async fn find_by_idempotency_key(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         key: Uuid,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
@@ -578,7 +593,7 @@ pub trait CheckoutRepository: Send + Sync {
     async fn find_by_reference(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         reference: &str,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
@@ -588,7 +603,7 @@ pub trait CheckoutRepository: Send + Sync {
     async fn find_completed_by_reference(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         reference: &str,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
@@ -603,8 +618,8 @@ pub trait CheckoutRepository: Send + Sync {
     async fn latest_payment_for_checkout(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        checkout_id: Uuid,
+        tenant_id: TenantId,
+        checkout_id: CheckoutId,
     ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
 }
 
@@ -627,8 +642,8 @@ pub trait CheckoutLifecycleStore: Send + Sync {
     async fn find_by_id(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
-        checkout_id: Uuid,
+        tenant_id: TenantId,
+        checkout_id: CheckoutId,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
     /// Persist an aggregate updated by a webhook handler.
@@ -651,7 +666,7 @@ pub trait CheckoutLifecycleStore: Send + Sync {
     async fn find_payment_by_external_id(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_payment_id: &str,
     ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
 }
@@ -663,7 +678,7 @@ pub trait CheckoutLifecycleStore: Send + Sync {
 /// context stays decoupled from how phase 08 stores its truth.
 #[async_trait]
 pub trait TenantDomainAllowList: Send + Sync {
-    async fn allows(&self, tenant_id: Uuid, hostname: &str) -> Result<bool, PaymentsError>;
+    async fn allows(&self, tenant_id: TenantId, hostname: &str) -> Result<bool, PaymentsError>;
 }
 
 /// The checkout throttle. Session-creation flooding is Sanvi's problem
@@ -737,8 +752,8 @@ pub trait PaymentRepository: Send + Sync {
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: PaymentId,
     ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
 
     /// Locate by the provider's external id (`pi_…` / `pay_…`), tenant-
@@ -747,7 +762,7 @@ pub trait PaymentRepository: Send + Sync {
     async fn find_by_external_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_payment_id: &str,
     ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
 
@@ -757,7 +772,7 @@ pub trait PaymentRepository: Send + Sync {
     async fn find_by_external_id_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_payment_id: &str,
     ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
 
@@ -768,8 +783,8 @@ pub trait PaymentRepository: Send + Sync {
     async fn count_in_flight_for_connection(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<i64, PaymentsError>;
 
     /// The list view — every documented filter combinable, cursor-
@@ -777,7 +792,7 @@ pub trait PaymentRepository: Send + Sync {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         filter: &PaymentFilter,
     ) -> Result<PaymentPage, PaymentsError>;
 
@@ -787,7 +802,7 @@ pub trait PaymentRepository: Send + Sync {
     async fn list_for_export(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         filter: &PaymentFilter,
     ) -> Result<Vec<super::payment::PaymentRecord>, PaymentsError>;
 }
@@ -816,8 +831,8 @@ pub trait DisputeRepository: Send + Sync {
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: DisputeId,
     ) -> Result<Option<super::dispute::DisputeRecord>, PaymentsError>;
 
     /// Locate by the provider's external dispute id (`dp_…`), platform
@@ -826,22 +841,22 @@ pub trait DisputeRepository: Send + Sync {
     async fn find_by_external_id_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_dispute_id: &str,
     ) -> Result<Option<super::dispute::DisputeRecord>, PaymentsError>;
 
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         filter: &DisputeFilter,
     ) -> Result<DisputePage, PaymentsError>;
 
     async fn list_for_payment(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        payment_id: Uuid,
+        tenant_id: TenantId,
+        payment_id: PaymentId,
     ) -> Result<Vec<super::dispute::DisputeRecord>, PaymentsError>;
 
     /// How many disputes on this connection are still **open** (need a
@@ -850,8 +865,8 @@ pub trait DisputeRepository: Send + Sync {
     async fn count_open_for_connection(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<i64, PaymentsError>;
 
     /// Authoritative platform-wide count of disputes that still need
@@ -874,29 +889,29 @@ pub trait RefundRepository: Send + Sync {
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: RefundId,
     ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
 
     async fn find_by_idempotency_key(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         key: Uuid,
     ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
 
     async fn find_by_external_id_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_refund_id: &str,
     ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
 
     async fn list_for_payment(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        payment_id: Uuid,
+        tenant_id: TenantId,
+        payment_id: PaymentId,
     ) -> Result<Vec<super::payment::RefundRecord>, PaymentsError>;
 
     /// The sum of `succeeded` refunds for a payment (minor units, same
@@ -905,8 +920,8 @@ pub trait RefundRepository: Send + Sync {
     async fn sum_succeeded_for_payment(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        payment_id: Uuid,
+        tenant_id: TenantId,
+        payment_id: PaymentId,
     ) -> Result<i64, PaymentsError>;
 
     async fn insert(
@@ -921,7 +936,7 @@ pub trait RefundRepository: Send + Sync {
     async fn find_by_external_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_refund_id: &str,
     ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
 
@@ -931,7 +946,7 @@ pub trait RefundRepository: Send + Sync {
     async fn try_finalize(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         refund: &super::payment::RefundRecord,
     ) -> Result<bool, PaymentsError>;
 
@@ -941,8 +956,8 @@ pub trait RefundRepository: Send + Sync {
     async fn mark_failed(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        refund_id: Uuid,
+        tenant_id: TenantId,
+        refund_id: RefundId,
     ) -> Result<(), PaymentsError>;
 
     /// Delete a superseded local row (the webhook path won the race and
@@ -950,8 +965,8 @@ pub trait RefundRepository: Send + Sync {
     async fn delete_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        refund_id: Uuid,
+        tenant_id: TenantId,
+        refund_id: RefundId,
     ) -> Result<(), PaymentsError>;
 
     /// Attach an API idempotency key to a webhook-created winner after its
@@ -959,8 +974,8 @@ pub trait RefundRepository: Send + Sync {
     async fn claim_idempotency_key(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        refund_id: Uuid,
+        tenant_id: TenantId,
+        refund_id: RefundId,
         idempotency_key: Uuid,
     ) -> Result<(), PaymentsError>;
 
@@ -995,7 +1010,7 @@ pub trait PayoutRepository: Send + Sync {
     async fn find_by_external_id_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_payout_id: &str,
     ) -> Result<Option<super::payout::PayoutRecord>, PaymentsError>;
 
@@ -1003,7 +1018,7 @@ pub trait PayoutRepository: Send + Sync {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         limit: u32,
     ) -> Result<Vec<super::payout::PayoutRecord>, PaymentsError>;
 
@@ -1013,8 +1028,8 @@ pub trait PayoutRepository: Send + Sync {
     async fn count_pending_for_connection(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<i64, PaymentsError>;
 }
 
@@ -1027,7 +1042,7 @@ pub trait TaxSettingsRepository: Send + Sync {
     async fn find_by_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<super::tax::TaxSettingsRecord>, PaymentsError>;
 
     async fn upsert(

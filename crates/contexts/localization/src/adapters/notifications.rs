@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{PgPool, TxManager};
-use uuid::Uuid;
 
 use crate::LocalizationConfig;
 use crate::adapters::{LocalizationService, SqlxTenantLocaleRepository};
@@ -30,17 +30,18 @@ pub struct NotificationLocalizer {
 impl NotificationLocalizer {
     pub fn new(
         pool: PgPool,
+        ids: Arc<dyn sanvi_kernel::RawIdGenerator>,
         service: Arc<LocalizationService>,
         config: LocalizationConfig,
     ) -> Self {
         Self {
-            tx_manager: TxManager::new(pool),
+            tx_manager: TxManager::new(pool, ids),
             service,
             config,
         }
     }
 
-    pub async fn tenant_locale(&self, tenant_id: Uuid) -> NotificationLocale {
+    pub async fn tenant_locale(&self, tenant_id: TenantId) -> NotificationLocale {
         let fallback_locale = Locale::parse(&self.config.default_locale).unwrap_or_default();
         let mut resolved = NotificationLocale {
             scope: tenant_id.to_string(),
@@ -48,7 +49,7 @@ impl NotificationLocalizer {
             timezone: default_timezone(fallback_locale.as_str()).to_string(),
         };
 
-        if let Ok(mut scope) = self.tx_manager.begin_for(tenant_id).await {
+        if let Ok(mut scope) = self.tx_manager.begin_for(tenant_id.as_i64()).await {
             let repo = SqlxTenantLocaleRepository::new();
             if let Ok(Some(settings)) = repo.get(&mut scope, tenant_id).await {
                 resolved.locale = settings.default_locale.as_str().to_string();

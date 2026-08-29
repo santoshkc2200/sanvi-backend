@@ -15,6 +15,7 @@ use crate::config::ThemingConfig;
 #[derive(Clone)]
 pub struct ThemingState {
     pub pool: PgPool,
+    pub tx_manager: sanvi_persistence::TxManager,
     pub config: ThemingConfig,
     /// The shared resolution service (public endpoint, live resolution).
     pub service: Arc<ResolveThemeService>,

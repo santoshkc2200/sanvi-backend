@@ -77,4 +77,13 @@ pub enum ThemingError {
 
     #[error("outbox failure: {0}")]
     Outbox(String),
+
+    #[error("ID generation failure: {0}")]
+    IdGeneration(String),
+}
+
+impl From<sanvi_kernel::IdGenerationError> for ThemingError {
+    fn from(error: sanvi_kernel::IdGenerationError) -> Self {
+        Self::IdGeneration(error.to_string())
+    }
 }

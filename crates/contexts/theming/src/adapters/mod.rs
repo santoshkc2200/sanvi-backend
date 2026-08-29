@@ -11,7 +11,7 @@ pub mod resolver;
 pub mod storage;
 
 pub use cache::ResolvedThemeCache;
-pub use events::{OutboxEventPublisher, SystemClock, theming_event_handler};
+pub use events::{OutboxEventPublisher, SystemClock, SystemIdGenerator, theming_event_handler};
 pub use metrics::ThemingMetrics;
 pub use repos::{SqlxTenantThemeRepository, SqlxThemeRepository};
 pub use resolver::HostTenantResolverAdapter;

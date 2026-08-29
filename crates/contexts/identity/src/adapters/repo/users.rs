@@ -12,7 +12,7 @@ use crate::domain::{IdentityError, UserRepository};
 
 #[derive(Debug, Clone, FromRow)]
 struct UserRow {
-    id: Uuid,
+    id: i64,
     kratos_identity_id: Uuid,
     primary_email: String,
     email_verified: bool,
@@ -29,7 +29,8 @@ impl UserRow {
             None => None,
         };
         Ok(User::from_parts(
-            UserId::from_uuid(self.id),
+            UserId::try_from(self.id)
+                .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
             self.kratos_identity_id,
             Email::parse(&self.primary_email)?,
             self.email_verified,
@@ -67,7 +68,7 @@ impl UserRepository for SqlxUserRepository {
                status = EXCLUDED.status,
                locale = EXCLUDED.locale,
                deactivated_at = EXCLUDED.deactivated_at",
-            user.id().as_uuid(),
+            user.id().as_i64(),
             user.kratos_identity_id(),
             user.primary_email().as_str(),
             user.email_verified(),
@@ -92,7 +93,7 @@ impl UserRepository for SqlxUserRepository {
             "SELECT id, kratos_identity_id, primary_email, email_verified, status, locale,
                     created_at, deactivated_at
              FROM identity.users WHERE id = $1",
-            id.as_uuid()
+            id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await

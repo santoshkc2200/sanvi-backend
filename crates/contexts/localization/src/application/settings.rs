@@ -4,10 +4,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{PgPool, ScopedTx};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::error::LocalizationError;
 use crate::domain::events::LocalizationEvent;
@@ -66,7 +66,7 @@ impl GetLocalizationSettings {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<LocalizationSettingsView, LocalizationError> {
         match self.repo.get(scope, tenant_id).await? {
             Some(settings) => Ok(settings.into()),
@@ -103,7 +103,7 @@ impl UpdateLocalizationSettings {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         command: &UpdateLocalizationSettingsCommand,
     ) -> Result<LocalizationSettingsView, LocalizationError> {
         // Every enabled locale must be platform-supported; the default must

@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use chrono::Utc;
 use sanvi_http::{ApiError, CurrentTenant, ProblemDetail, RequiredPermission};
+use sanvi_kernel::TenantId;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_privacy::domain::SubjectRef;
 
@@ -194,7 +194,7 @@ fn extract_server_click_ids(req: &HttpRequest, body_click_ids: &ClickIds) -> Cli
 }
 
 fn build_command(
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     body: &TrackConversionRequest,
     click_ids: ClickIds,
     (platforms, platforms_incomplete): (Vec<PlatformKey>, bool),
@@ -291,11 +291,13 @@ pub async fn public_track_conversion(
     else {
         return accepted();
     };
-    let Ok(tenant_id) = crate::application::tracking::site_key::verify_site_key(
-        &state.config.tracking_site_key_signing_secret,
-        site_key,
-        origin,
-    ) else {
+    let Ok(tenant_id): Result<TenantId, _> =
+        crate::application::tracking::site_key::verify_site_key(
+            &state.config.tracking_site_key_signing_secret,
+            site_key,
+            origin,
+        )
+    else {
         return accepted();
     };
 
@@ -431,7 +433,7 @@ pub async fn list_conversions(
     tag = "advertising",
     operation_id = "get_conversion_diagnostics",
     params(
-        ("id" = Uuid, Path, description = "Conversion event UUID")
+        ("id" = String, Path, description = "Conversion event Snowflake ID")
     ),
     responses(
         (status = 200, description = "Conversion event diagnostics story", body = ConversionDiagnostics),
@@ -442,7 +444,7 @@ pub async fn list_conversions(
 pub async fn get_conversion_diagnostics(
     tenant: CurrentTenant,
     _permission: RequiredPermission,
-    path: web::Path<Uuid>,
+    path: web::Path<crate::domain::model::ConversionId>,
     state: web::Data<AdvertisingState>,
 ) -> Result<HttpResponse, ApiError> {
     let diagnostics = state
@@ -459,7 +461,7 @@ pub async fn get_conversion_diagnostics(
     tag = "advertising",
     operation_id = "retry_conversion",
     params(
-        ("id" = Uuid, Path, description = "Conversion event UUID")
+        ("id" = String, Path, description = "Conversion event Snowflake ID")
     ),
     responses(
         (status = 501, description = "Conversion upload retry is not implemented yet", body = ProblemDetail),
@@ -469,7 +471,7 @@ pub async fn get_conversion_diagnostics(
 pub async fn retry_conversion(
     _tenant: CurrentTenant,
     _permission: RequiredPermission,
-    _path: web::Path<Uuid>,
+    _path: web::Path<crate::domain::model::ConversionId>,
     _state: web::Data<AdvertisingState>,
 ) -> Result<HttpResponse, ApiError> {
     let problem = ProblemDetail {

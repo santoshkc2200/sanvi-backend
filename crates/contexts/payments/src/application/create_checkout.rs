@@ -26,47 +26,26 @@ use std::sync::Arc;
 use chrono::Utc;
 use uuid::Uuid;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 
-use crate::domain::checkout::{Checkout, MerchantOrderRef};
+use crate::domain::checkout::{Checkout, CheckoutId, MerchantOrderRef};
 use crate::domain::connection::ProviderConnection;
 use crate::domain::error::PaymentsError;
 use crate::domain::events::{EventPublisher, PaymentsEvent};
 use crate::domain::money::Money;
+use crate::domain::payment::PaymentId;
 use crate::domain::ports::{
-    CheckoutRepository, CreateCheckoutCommand, PaymentProviderPort, ProviderCheckoutSession,
-    ProviderConnectionRepository, TenantDomainAllowList,
+    CheckoutRepository, CreateCheckoutCommand, IdGenerator, PaymentProviderPort,
+    ProviderCheckoutSession, ProviderConnectionRepository, TenantDomainAllowList,
 };
-
-/// Deterministic derivation of the checkout id from `(tenant,
-/// Idempotency-Key)`: a replayed or crash-retried buy button regenerates
-/// the same row id — and the same provider-side idempotency key, since
-/// adapters key session creation on it. A distinct namespace from the
-/// connection ids', so the two derivations can never collide.
-pub fn checkout_id_for(tenant_id: Uuid, idempotency_key: Uuid) -> Uuid {
-    const CHECKOUT_ID_NAMESPACE: Uuid = Uuid::from_bytes([
-        0x3f, 0x2a, 0xc4, 0x7e, 0x91, 0x58, 0x4b, 0xd6, 0xa7, 0x33, 0x0c, 0xe5, 0x84, 0x21, 0x9f,
-        0xab,
-    ]);
-    let mut bytes = [0u8; 32];
-    bytes[..16].copy_from_slice(tenant_id.as_bytes());
-    bytes[16..].copy_from_slice(idempotency_key.as_bytes());
-    Uuid::new_v5(&CHECKOUT_ID_NAMESPACE, &bytes)
-}
 
 /// The conversion event id phase 10 consumes: derived server-side from
 /// `(tenant, payment)` — once per order by construction, identical on
 /// every refresh of the confirmation page, so a refreshed page cannot
 /// double-count. Never stored: derivation *is* the dedupe.
-pub fn conversion_event_id(tenant_id: Uuid, payment_id: Uuid) -> Uuid {
-    const CONVERSION_ID_NAMESPACE: Uuid = Uuid::from_bytes([
-        0x8d, 0x51, 0xb2, 0x09, 0x44, 0xe7, 0x4f, 0x18, 0x93, 0xac, 0x5d, 0x76, 0x1b, 0x0e, 0xc3,
-        0x47,
-    ]);
-    let mut bytes = [0u8; 32];
-    bytes[..16].copy_from_slice(tenant_id.as_bytes());
-    bytes[16..].copy_from_slice(payment_id.as_bytes());
-    Uuid::new_v5(&CONVERSION_ID_NAMESPACE, &bytes)
+pub fn conversion_event_id(_tenant_id: TenantId, payment_id: PaymentId) -> PaymentId {
+    payment_id
 }
 
 /// The platform's fee policy for direct charges. Off in 0.10.0 — the
@@ -80,7 +59,7 @@ pub trait ApplicationFeePolicy: Send + Sync {
     /// The fee for one charge of this tenant, or `None`. Implementations
     /// compute minor units via [`crate::domain::fees`] — round half up on
     /// the fee, never on the total.
-    async fn application_fee(&self, tenant_id: Uuid, amount: &Money) -> Option<Money>;
+    async fn application_fee(&self, tenant_id: TenantId, amount: &Money) -> Option<Money>;
 }
 
 /// The shipped policy: fees are off.
@@ -89,7 +68,7 @@ pub struct NoApplicationFee;
 
 #[async_trait::async_trait]
 impl ApplicationFeePolicy for NoApplicationFee {
-    async fn application_fee(&self, _tenant_id: Uuid, _amount: &Money) -> Option<Money> {
+    async fn application_fee(&self, _tenant_id: TenantId, _amount: &Money) -> Option<Money> {
         None
     }
 }
@@ -97,7 +76,7 @@ impl ApplicationFeePolicy for NoApplicationFee {
 /// One checkout-creation request from the storefront.
 #[derive(Debug, Clone)]
 pub struct NewCheckoutCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     /// The merchant's order reference (opaque to Sanvi, echoed by the
     /// provider as its client reference).
     pub reference: String,
@@ -141,6 +120,7 @@ pub struct CreateCheckout {
     events: Arc<dyn EventPublisher>,
     fee_policy: Arc<dyn ApplicationFeePolicy>,
     tax_settings: Arc<dyn crate::domain::ports::TaxSettingsRepository>,
+    ids: Arc<dyn IdGenerator>,
 }
 
 impl CreateCheckout {
@@ -154,6 +134,7 @@ impl CreateCheckout {
         events: Arc<dyn EventPublisher>,
         fee_policy: Arc<dyn ApplicationFeePolicy>,
         tax_settings: Arc<dyn crate::domain::ports::TaxSettingsRepository>,
+        ids: Arc<dyn IdGenerator>,
     ) -> Self {
         Self {
             tx_manager,
@@ -164,6 +145,7 @@ impl CreateCheckout {
             events,
             fee_policy,
             tax_settings,
+            ids,
         }
     }
 
@@ -214,7 +196,6 @@ impl CreateCheckout {
             .await?;
 
         // ---- idempotent owner lookup ----------------------------------
-        let checkout_id = checkout_id_for(command.tenant_id, command.idempotency_key);
         if let Some(existing) = self
             .find_by_key(command.tenant_id, command.idempotency_key)
             .await?
@@ -225,6 +206,7 @@ impl CreateCheckout {
         }
 
         // ---- persist BEFORE the provider call -------------------------
+        let checkout_id = self.ids.next_checkout_id()?;
         let now = Utc::now();
         let mut checkout = Checkout::new(
             checkout_id,
@@ -386,7 +368,7 @@ impl CreateCheckout {
     /// stale liability is not sent; the next preflight refreshes it.
     async fn load_tax_liability(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         live_account_id: &str,
     ) -> Result<Option<crate::domain::ports::AutomaticTaxLiability>, PaymentsError> {
         let mut scope = self
@@ -414,7 +396,7 @@ impl CreateCheckout {
         let tenant_id = checkout.tenant_id;
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         if let Err(err) = self.checkouts.insert(&mut scope, checkout).await {
@@ -445,7 +427,7 @@ impl CreateCheckout {
         let tenant_id = checkout.tenant_id;
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         self.checkouts.update(&mut scope, checkout).await?;
@@ -458,12 +440,12 @@ impl CreateCheckout {
 
     async fn find_by_key(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         idempotency_key: Uuid,
     ) -> Result<Option<Checkout>, PaymentsError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let found = self
@@ -479,12 +461,12 @@ impl CreateCheckout {
     /// the TASK-004 computed field, is exactly this gate).
     async fn active_connection(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<ProviderConnection, PaymentsError> {
         let refused = |key: &str| PaymentsError::ConnectionNotActive(key.to_string());
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let connections = self.connections.list(&mut scope, tenant_id).await;
@@ -510,7 +492,7 @@ impl CreateCheckout {
         Ok(latest)
     }
 
-    async fn guard_domain(&self, tenant_id: Uuid, host: &str) -> Result<(), PaymentsError> {
+    async fn guard_domain(&self, tenant_id: TenantId, host: &str) -> Result<(), PaymentsError> {
         if !self.domains.allows(tenant_id, host).await? {
             return Err(PaymentsError::DomainNotAllowed(host.to_string()));
         }
@@ -662,43 +644,15 @@ mod tests {
         assert!(validated_locale(Some(&"x".repeat(36))).is_err());
     }
 
-    #[test]
-    fn ids_derive_deterministically_per_tenant_and_stay_in_distinct_namespaces() {
-        let tenant = Uuid::now_v7();
-        let key = Uuid::now_v7();
-        assert_eq!(checkout_id_for(tenant, key), checkout_id_for(tenant, key));
-        assert_ne!(
-            checkout_id_for(tenant, key),
-            checkout_id_for(Uuid::now_v7(), key)
-        );
-        assert_ne!(
-            checkout_id_for(tenant, key),
-            checkout_id_for(tenant, Uuid::now_v7())
-        );
-
-        // Same shape for the conversion id — stable across refreshes…
-        let payment = Uuid::now_v7();
-        assert_eq!(
-            conversion_event_id(tenant, payment),
-            conversion_event_id(tenant, payment)
-        );
-        // …tenant-scoped, and disjoint from the checkout derivation.
-        assert_ne!(
-            conversion_event_id(Uuid::now_v7(), payment),
-            conversion_event_id(tenant, payment)
-        );
-        assert_ne!(
-            conversion_event_id(tenant, payment),
-            checkout_id_for(tenant, key)
-        );
-    }
-
     #[tokio::test]
     async fn the_shipped_fee_policy_is_off() {
         // While fees are off no amount shape can conjure a fee.
         assert_eq!(
             NoApplicationFee
-                .application_fee(Uuid::now_v7(), &Money::new(2000, "JPY").unwrap())
+                .application_fee(
+                    TenantId::try_from(100).unwrap(),
+                    &Money::new(2000, "JPY").unwrap()
+                )
                 .await,
             None
         );

@@ -1,20 +1,31 @@
-//! Outbox-backed event publishing, the system clock, and the worker's
-//! consumer handler (cross-instance cache invalidation).
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{EventId, RawIdGenerator, TenantId};
 use sanvi_messaging::OutboxWriter;
 
 use crate::adapters::cache::ResolvedThemeCache;
 use crate::domain::ThemingError;
 use crate::domain::events::ThemingEvent;
-use crate::domain::ports::{Clock, EventPublisher};
+use crate::domain::ports::{Clock, EventPublisher, IdGenerator};
+use crate::domain::theme::{ThemeId, ThemeVersionId};
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct OutboxEventPublisher;
+#[derive(Clone)]
+pub struct OutboxEventPublisher {
+    ids: Arc<dyn RawIdGenerator>,
+}
 
 impl OutboxEventPublisher {
-    pub fn new() -> Self {
-        Self
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
+
+    fn envelope(
+        &self,
+        event: &ThemingEvent,
+    ) -> Result<sanvi_kernel::events::EventEnvelope, ThemingError> {
+        let id = self.ids.next_id().map(EventId::from_snowflake)?;
+        Ok(event.envelope(id))
     }
 }
 
@@ -25,7 +36,7 @@ impl EventPublisher for OutboxEventPublisher {
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         event: &ThemingEvent,
     ) -> Result<(), ThemingError> {
-        let envelope = event.envelope();
+        let envelope = self.envelope(event)?;
         OutboxWriter
             .append(scope.tx_mut(), &envelope)
             .await
@@ -37,11 +48,38 @@ impl EventPublisher for OutboxEventPublisher {
         scope: &mut sanvi_persistence::ScopedTx<'_>,
         event: &ThemingEvent,
     ) -> Result<(), ThemingError> {
-        let envelope = event.envelope();
+        let envelope = self.envelope(event)?;
         OutboxWriter
             .append(scope.tx_mut(), &envelope)
             .await
             .map_err(|err| ThemingError::Outbox(err.to_string()))
+    }
+}
+
+#[derive(Clone)]
+pub struct SystemIdGenerator {
+    ids: Arc<dyn RawIdGenerator>,
+}
+
+impl SystemIdGenerator {
+    pub fn new(ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self { ids }
+    }
+}
+
+impl IdGenerator for SystemIdGenerator {
+    fn next_theme_id(&self) -> Result<ThemeId, ThemingError> {
+        self.ids
+            .next_id()
+            .map(ThemeId::from_snowflake)
+            .map_err(|err| ThemingError::IdGeneration(err.to_string()))
+    }
+
+    fn next_theme_version_id(&self) -> Result<ThemeVersionId, ThemingError> {
+        self.ids
+            .next_id()
+            .map(ThemeVersionId::from_snowflake)
+            .map_err(|err| ThemingError::IdGeneration(err.to_string()))
     }
 }
 
@@ -74,7 +112,7 @@ pub fn theming_event_handler(
                         .metadata
                         .get("tenant_id")
                         .and_then(|value| value.as_str())
-                        .and_then(|value| uuid::Uuid::parse_str(value).ok());
+                        .and_then(|value| value.parse::<TenantId>().ok());
                     if let Some(tenant_id) = tenant_id {
                         cache.invalidate_tenant(tenant_id).await;
                     }

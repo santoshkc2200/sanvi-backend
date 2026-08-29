@@ -18,7 +18,7 @@
 //! warn instead of silently under-collecting.
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 /// The provider's compliance snapshot for one connected account — what
 /// [`crate::domain::PaymentProviderPort::fetch_tax_compliance`] returns
@@ -89,7 +89,7 @@ pub struct TaxWarning {
 /// tenant's single live connection's account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaxSettingsRecord {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     /// Whether checkout sessions carry
     /// `automatic_tax[enabled]=true` + the account liability. Flips on
     /// only through a passed preflight; flips off any time (with the
@@ -109,7 +109,7 @@ pub struct TaxSettingsRecord {
 
 impl TaxSettingsRecord {
     /// A fresh, disabled record for a tenant.
-    pub fn disabled(tenant_id: Uuid) -> Self {
+    pub fn disabled(tenant_id: TenantId) -> Self {
         Self {
             tenant_id,
             enabled: false,
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn observing_a_lapse_warns_without_flipping_the_toggle() {
-        let mut record = TaxSettingsRecord::disabled(Uuid::now_v7());
+        let mut record = TaxSettingsRecord::disabled(TenantId::try_from(100).unwrap());
         record.enable("acct_test_1", &compliant());
         assert!(record.enabled);
 
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn a_repeated_pass_does_not_reset_the_warning_clock() {
-        let mut record = TaxSettingsRecord::disabled(Uuid::now_v7());
+        let mut record = TaxSettingsRecord::disabled(TenantId::try_from(100).unwrap());
         record.enable("acct_test_1", &compliant());
         let first_seen = Utc::now();
         record.observe(
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn recovery_clears_the_warning_and_disable_is_immediate() {
-        let mut record = TaxSettingsRecord::disabled(Uuid::now_v7());
+        let mut record = TaxSettingsRecord::disabled(TenantId::try_from(100).unwrap());
         record.enable("acct_test_1", &compliant());
         record.observe(
             "acct_test_1",

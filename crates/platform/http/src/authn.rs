@@ -15,9 +15,9 @@ use actix_web::{
     dev::{ServiceRequest, ServiceResponse},
     http::header,
 };
+use sanvi_kernel::{RoleId, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::error::ApiError;
 use crate::middleware::RequestId;
@@ -26,13 +26,16 @@ use crate::middleware::RequestId;
 /// assurance level.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Subject {
-    pub user_id: Uuid,
+    #[schema(value_type = crate::openapi::SnowflakeId)]
+    pub user_id: UserId,
     pub session_id: String,
     pub aal: String,
     pub methods: Vec<String>,
     /// Roles held in the *current* tenant (empty on platform routes).
-    pub tenant_id: Option<Uuid>,
-    pub role_ids: Vec<Uuid>,
+    #[schema(value_type = Option<crate::openapi::SnowflakeId>)]
+    pub tenant_id: Option<TenantId>,
+    #[schema(value_type = Vec<crate::openapi::SnowflakeId>)]
+    pub role_ids: Vec<RoleId>,
     /// When the session was (re)authenticated — the freshness clock for
     /// the fresh-MFA requirement.
     pub authenticated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -50,7 +53,7 @@ pub trait SessionVerifier: Send + Sync {
     fn verify<'a>(
         &'a self,
         session_token: Option<(&'a str, SessionChannel)>,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Subject>, ApiError>> + Send + 'a>>;
 }
 

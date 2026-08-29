@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
+use sanvi_kernel::RawIdGenerator;
 use sanvi_persistence::TxManager;
 use sanvi_tenancy::{
     adapters::{
@@ -36,15 +37,15 @@ struct Services {
     list_tenants: ListTenants,
 }
 
-async fn services(environment: &str) -> anyhow::Result<Services> {
+async fn services(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<Services> {
     let config = load_config(environment)?;
     let pool = sanvi_persistence::build_pool(&config.database).await?;
-    let tx_manager = TxManager::new(pool);
+    let tx_manager = TxManager::new(pool, ids.clone());
 
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
-    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator);
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(ids.clone()));
+    let tenant_ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(ids));
     let clock: Arc<dyn sanvi_tenancy::domain::Clock> = Arc::new(SystemClock);
 
     Ok(Services {
@@ -53,7 +54,7 @@ async fn services(environment: &str) -> anyhow::Result<Services> {
             tenants.clone(),
             slugs,
             events.clone(),
-            ids,
+            tenant_ids,
             clock.clone(),
         ),
         activate: ActivateTenant::new(
@@ -108,8 +109,9 @@ pub async fn create(
     environment: &str,
     args: &TenantCreateArgs,
     activate: bool,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
-    let services = services(environment).await?;
+    let services = services(environment, ids).await?;
     let view = services
         .provision
         .execute(ProvisionTenantCommand {
@@ -142,8 +144,9 @@ pub async fn list(
     after: Option<String>,
     limit: u32,
     status: Option<String>,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
-    let services = services(environment).await?;
+    let services = services(environment, ids).await?;
     let status = match status {
         Some(raw) => Some(TenantStatus::parse(&raw).map_err(|err| anyhow::anyhow!("{err}"))?),
         None => None,
@@ -162,8 +165,8 @@ pub async fn list(
 }
 
 /// `tenant get <id>`: print one tenant.
-pub async fn get(environment: &str, id: &str) -> anyhow::Result<()> {
-    let services = services(environment).await?;
+pub async fn get(environment: &str, id: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Result<()> {
+    let services = services(environment, ids).await?;
     let id: TenantId = id.parse().context("invalid tenant id")?;
     let view = services
         .get_tenant
@@ -180,8 +183,9 @@ pub async fn lifecycle(
     id: &str,
     action: LifecycleCommand,
     reason: Option<String>,
+    ids: Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
-    let services = services(environment).await?;
+    let services = services(environment, ids).await?;
     let id: TenantId = id.parse().context("invalid tenant id")?;
     let view = match action {
         LifecycleCommand::Activate => services

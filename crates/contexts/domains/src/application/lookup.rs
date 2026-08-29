@@ -1,11 +1,6 @@
-//! Host → tenant resolution for the phase-01 hook (and the TLS authorize
-//! gate's fast path). Redis-backed with a local in-process layer; entries
-//! hold only hostnames that hold a live claim (verified/live states), so
-//! an unverified claim never resolves anything.
-
 use std::sync::Arc;
 
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use crate::adapters::cache::LiveDomainCache;
 use crate::domain::{CustomDomainRepository, DomainsError, Hostname};
@@ -30,7 +25,7 @@ impl LiveDomainLookupService {
     }
 
     /// The tenant a hostname resolves to, if it holds a live claim.
-    pub async fn resolve(&self, host: &str) -> Option<Uuid> {
+    pub async fn resolve(&self, host: &str) -> Option<TenantId> {
         let host = host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host);
         let hostname = Hostname::parse(host.trim_end_matches('.')).ok()?;
         let normalized = hostname.as_str();

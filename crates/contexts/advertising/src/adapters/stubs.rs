@@ -578,9 +578,10 @@ impl ConversionSinkPort for FakeConversionSink {
 mod tests {
     use super::*;
     use crate::domain::{
-        Ad, AdGroup, BidSettings, Budget, Creative, CreativeText, DriftState, Schedule, Targeting,
-        UploadState, ValidationViolation, validate_campaign,
+        Ad, AdGroup, BidSettings, Budget, ConversionId, Creative, CreativeText, DriftState,
+        Schedule, Targeting, UploadState, ValidationViolation, validate_campaign,
     };
+    use sanvi_kernel::TenantId;
 
     fn campaign(objective: &str, kind: BudgetType, locale: &str, headline: &str) -> Campaign {
         Campaign {
@@ -723,8 +724,8 @@ mod tests {
 
     fn sample_conversion_event(event_id: &str) -> ConversionEvent {
         ConversionEvent {
-            id: uuid::Uuid::now_v7(),
-            tenant_id: uuid::Uuid::now_v7(),
+            id: ConversionId::try_from(1_000_900_i64).unwrap(),
+            tenant_id: TenantId::try_from(1_000_901_i64).unwrap(),
             event_id: event_id.to_string(),
             dedupe_key: format!("test:{}", event_id),
             name: "purchase".to_string(),

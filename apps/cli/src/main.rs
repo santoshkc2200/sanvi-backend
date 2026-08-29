@@ -20,9 +20,11 @@ mod payments;
 mod tenant;
 mod theme;
 
-use std::process::ExitCode;
+use std::{process::ExitCode, sync::Arc};
 
 use clap::{Args, Parser, Subcommand};
+use sanvi_kernel::{RawIdGenerator, SnowflakeGenerator, TenantId};
+use sanvi_platform_admin::domain::{ApprovalId, ImpersonationGrantId};
 
 #[derive(Parser)]
 #[command(name = "sanvi", version, about = "Sanvi operator CLI")]
@@ -209,7 +211,7 @@ enum ImpersonationAction {
     /// Revoke a grant (immediate).
     Revoke {
         #[arg(long)]
-        id: uuid::Uuid,
+        id: ImpersonationGrantId,
     },
 }
 
@@ -220,7 +222,7 @@ enum AuditAction {
     /// List recent entries (optionally filtered).
     List {
         #[arg(long)]
-        tenant_id: Option<uuid::Uuid>,
+        tenant_id: Option<TenantId>,
         #[arg(long)]
         action: Option<String>,
         #[arg(long, default_value_t = 50)]
@@ -235,12 +237,12 @@ enum ApprovalAction {
     /// Approve a request (executes the recorded action).
     Approve {
         #[arg(long)]
-        id: uuid::Uuid,
+        id: ApprovalId,
     },
     /// Reject a request.
     Reject {
         #[arg(long)]
-        id: uuid::Uuid,
+        id: ApprovalId,
     },
 }
 
@@ -399,6 +401,21 @@ enum MigrateAction {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let config = match config::load(&cli.env) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("configuration error:\n{err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    let node_id = match config.ids.resolve(&cli.env, 3) {
+        Ok(node_id) => node_id,
+        Err(err) => {
+            eprintln!("configuration error:\n{err:#}");
+            return ExitCode::from(2);
+        }
+    };
+    let ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     match cli.command {
         Command::Migrate {
@@ -424,6 +441,7 @@ async fn main() -> ExitCode {
                             default_locale: args.default_locale,
                         },
                         activate,
+                        ids.clone(),
                     )
                     .await
                 }
@@ -431,20 +449,47 @@ async fn main() -> ExitCode {
                     after,
                     limit,
                     status,
-                } => tenant::list(&cli.env, after, limit, status).await,
-                TenantAction::Get { id } => tenant::get(&cli.env, &id).await,
+                } => tenant::list(&cli.env, after, limit, status, ids.clone()).await,
+                TenantAction::Get { id } => tenant::get(&cli.env, &id, ids.clone()).await,
                 TenantAction::Activate { id } => {
-                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Activate, None).await
+                    tenant::lifecycle(
+                        &cli.env,
+                        &id,
+                        tenant::LifecycleCommand::Activate,
+                        None,
+                        ids.clone(),
+                    )
+                    .await
                 }
                 TenantAction::Suspend { id, reason } => {
-                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Suspend, reason)
-                        .await
+                    tenant::lifecycle(
+                        &cli.env,
+                        &id,
+                        tenant::LifecycleCommand::Suspend,
+                        reason,
+                        ids.clone(),
+                    )
+                    .await
                 }
                 TenantAction::Resume { id } => {
-                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Resume, None).await
+                    tenant::lifecycle(
+                        &cli.env,
+                        &id,
+                        tenant::LifecycleCommand::Resume,
+                        None,
+                        ids.clone(),
+                    )
+                    .await
                 }
                 TenantAction::Archive { id } => {
-                    tenant::lifecycle(&cli.env, &id, tenant::LifecycleCommand::Archive, None).await
+                    tenant::lifecycle(
+                        &cli.env,
+                        &id,
+                        tenant::LifecycleCommand::Archive,
+                        None,
+                        ids.clone(),
+                    )
+                    .await
                 }
             };
             match result {
@@ -461,7 +506,7 @@ async fn main() -> ExitCode {
                 SeedKind::Access => access::SeedKind::Access,
                 SeedKind::Features => access::SeedKind::Features,
             };
-            match access::seed(&cli.env, kind).await {
+            match access::seed(&cli.env, kind, ids.clone()).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("seed failed: {err:#}");
@@ -471,7 +516,7 @@ async fn main() -> ExitCode {
         }
         Command::Feature { action } => {
             let result = match action {
-                FeatureAction::List => control::feature_list(&cli.env).await,
+                FeatureAction::List => control::feature_list(&cli.env, ids.clone()).await,
                 FeatureAction::Define {
                     key,
                     name,
@@ -490,6 +535,7 @@ async fn main() -> ExitCode {
                             default_limit,
                             visibility: &visibility,
                         },
+                        ids.clone(),
                     )
                     .await
                 }
@@ -532,14 +578,15 @@ async fn main() -> ExitCode {
                             expires_at,
                             reason,
                         },
+                        ids.clone(),
                     )
                     .await
                 }
                 EntitlementAction::Revoke { tenant, feature } => {
-                    control::entitlement_revoke(&cli.env, &tenant, &feature).await
+                    control::entitlement_revoke(&cli.env, &tenant, &feature, ids.clone()).await
                 }
                 EntitlementAction::List { tenant } => {
-                    control::entitlement_list(&cli.env, &tenant).await
+                    control::entitlement_list(&cli.env, &tenant, ids.clone()).await
                 }
             };
             match result {
@@ -550,7 +597,7 @@ async fn main() -> ExitCode {
                 }
             }
         }
-        Command::RoleList => match control::role_list(&cli.env).await {
+        Command::RoleList => match control::role_list(&cli.env, ids.clone()).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("role list failed: {err:#}");
@@ -560,10 +607,10 @@ async fn main() -> ExitCode {
         Command::Impersonation { action } => {
             let result = match action {
                 ImpersonationAction::List { tenant } => {
-                    control::impersonation_list(&cli.env, tenant.as_deref()).await
+                    control::impersonation_list(&cli.env, tenant.as_deref(), ids.clone()).await
                 }
                 ImpersonationAction::Revoke { id } => {
-                    control::impersonation_revoke(&cli.env, id).await
+                    control::impersonation_revoke(&cli.env, id, ids.clone()).await
                 }
             };
             match result {
@@ -576,12 +623,12 @@ async fn main() -> ExitCode {
         }
         Command::Audit { action } => {
             let result = match action {
-                AuditAction::Verify => control::audit_verify(&cli.env).await,
+                AuditAction::Verify => control::audit_verify(&cli.env, ids.clone()).await,
                 AuditAction::List {
                     tenant_id,
                     action,
                     limit,
-                } => control::audit_list(&cli.env, tenant_id, action, limit).await,
+                } => control::audit_list(&cli.env, tenant_id, action, limit, ids.clone()).await,
             };
             match result {
                 Ok(()) => ExitCode::SUCCESS,
@@ -593,12 +640,12 @@ async fn main() -> ExitCode {
         }
         Command::Approval { action } => {
             let result = match action {
-                ApprovalAction::List => control::approval_list(&cli.env).await,
+                ApprovalAction::List => control::approval_list(&cli.env, ids.clone()).await,
                 ApprovalAction::Approve { id } => {
-                    control::approval_decide(&cli.env, id, true).await
+                    control::approval_decide(&cli.env, id, true, ids.clone()).await
                 }
                 ApprovalAction::Reject { id } => {
-                    control::approval_decide(&cli.env, id, false).await
+                    control::approval_decide(&cli.env, id, false, ids.clone()).await
                 }
             };
             match result {
@@ -611,10 +658,10 @@ async fn main() -> ExitCode {
         }
         Command::Billing { action } => {
             let result = match action {
-                BillingAction::Plans => billing::plans(&cli.env).await,
-                BillingAction::TaxCheck => billing::tax_check(&cli.env).await,
-                BillingAction::Reconcile => billing::reconcile(&cli.env).await,
-                BillingAction::Webhooks => billing::webhooks(&cli.env).await,
+                BillingAction::Plans => billing::plans(&cli.env, ids.clone()).await,
+                BillingAction::TaxCheck => billing::tax_check(&cli.env, ids.clone()).await,
+                BillingAction::Reconcile => billing::reconcile(&cli.env, ids.clone()).await,
+                BillingAction::Webhooks => billing::webhooks(&cli.env, ids.clone()).await,
             };
             match result {
                 Ok(()) => ExitCode::SUCCESS,
@@ -626,9 +673,11 @@ async fn main() -> ExitCode {
         }
         Command::Payments { action } => {
             let result = match action {
-                PaymentsAction::Webhooks => payments::webhooks(&cli.env).await,
-                PaymentsAction::Replay { event_id } => payments::replay(&cli.env, &event_id).await,
-                PaymentsAction::Sync => payments::sync(&cli.env).await,
+                PaymentsAction::Webhooks => payments::webhooks(&cli.env, ids.clone()).await,
+                PaymentsAction::Replay { event_id } => {
+                    payments::replay(&cli.env, &event_id, ids.clone()).await
+                }
+                PaymentsAction::Sync => payments::sync(&cli.env, ids.clone()).await,
             };
             match result {
                 Ok(()) => ExitCode::SUCCESS,
@@ -653,6 +702,7 @@ async fn main() -> ExitCode {
                     tenant_slug: tenant,
                     platform,
                 },
+                ids.clone(),
             )
             .await
             {
@@ -707,12 +757,15 @@ async fn main() -> ExitCode {
                         &visibility,
                         required_feature.as_deref(),
                         allow_contrast_warnings,
+                        ids.clone(),
                     )
                     .await
                 }
                 ThemeAction::List => theme::list(&cli.env).await,
                 ThemeAction::Versions { key } => theme::versions(&cli.env, &key).await,
-                ThemeAction::Yank { key, version } => theme::yank(&cli.env, &key, &version).await,
+                ThemeAction::Yank { key, version } => {
+                    theme::yank(&cli.env, &key, &version, ids.clone()).await
+                }
             };
             match result {
                 Ok(()) => ExitCode::SUCCESS,

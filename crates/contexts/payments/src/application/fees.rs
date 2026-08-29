@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use crate::domain::error::PaymentsError;
 use crate::domain::fees::FeeConfiguration;
@@ -42,7 +42,7 @@ impl ConfiguredApplicationFeePolicy {
 
 #[async_trait::async_trait]
 impl super::ApplicationFeePolicy for ConfiguredApplicationFeePolicy {
-    async fn application_fee(&self, tenant_id: Uuid, amount: &Money) -> Option<Money> {
+    async fn application_fee(&self, tenant_id: TenantId, amount: &Money) -> Option<Money> {
         match self.store.configuration_for(tenant_id).await {
             // Absent row == disabled == the release default; that path is
             // indistinguishable from an explicitly disabled configuration
@@ -92,7 +92,7 @@ impl From<&FeeConfiguration> for TenantFeeDisclosure {
 /// Look up a tenant's disclosure (`None` = fees off for them).
 pub async fn disclose_fee_for(
     store: &dyn ApplicationFeeStore,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
 ) -> Result<Option<TenantFeeDisclosure>, PaymentsError> {
     Ok(store
         .configuration_for(tenant_id)

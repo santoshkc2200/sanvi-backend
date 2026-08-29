@@ -3,6 +3,8 @@
 # Default (no profile): the `core` services — Postgres + Redis.
 # `./scripts/dev.sh up --full` adds Ory Kratos/Keto, Mailpit, MinIO,
 # OpenObserve.
+# `docker compose up` also starts the API and worker with distinct local
+# Snowflake nodes from docker-compose.override.yml.
 #
 # Ory containers run from day one but nothing consumes them until phase 02.
 #

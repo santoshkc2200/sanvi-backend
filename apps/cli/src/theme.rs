@@ -10,6 +10,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use sanvi_kernel::RawIdGenerator;
 use sha2::{Digest, Sha256};
 
 use sanvi_persistence::build_pool;
@@ -30,6 +31,7 @@ pub async fn publish(
     visibility: &str,
     required_feature: Option<&str>,
     allow_contrast_warnings: bool,
+    ids: std::sync::Arc<dyn RawIdGenerator>,
 ) -> anyhow::Result<()> {
     let config = crate::config::load(environment)?;
     let theme_dir = PathBuf::from(dir);
@@ -80,11 +82,11 @@ pub async fn publish(
     let themes: std::sync::Arc<dyn ThemeRepository> =
         std::sync::Arc::new(SqlxThemeRepository::new());
     let events: std::sync::Arc<dyn EventPublisher> =
-        std::sync::Arc::new(OutboxEventPublisher::new());
+        std::sync::Arc::new(OutboxEventPublisher::new(ids.clone()));
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
-    let install = InstallThemeVersion::new(themes, events, clock, pool.clone(), store);
+    let install = InstallThemeVersion::new(themes, events, clock, pool.clone(), store, ids.clone());
 
-    let tx_manager = sanvi_persistence::TxManager::new(pool);
+    let tx_manager = sanvi_persistence::TxManager::new(pool, ids);
     let mut scope = tx_manager
         .begin_unscoped("theming.theme.publish", "cli")
         .await
@@ -149,18 +151,23 @@ pub async fn versions(environment: &str, key: &str) -> anyhow::Result<()> {
 }
 
 /// Withdraw a version (the kill switch; pinned tenants keep rendering).
-pub async fn yank(environment: &str, key: &str, version: &str) -> anyhow::Result<()> {
+pub async fn yank(
+    environment: &str,
+    key: &str,
+    version: &str,
+    ids: std::sync::Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
     let config = crate::config::load(environment)?;
     let pool = build_pool(&config.database).await?;
     let themes: std::sync::Arc<dyn ThemeRepository> =
         std::sync::Arc::new(SqlxThemeRepository::new());
     let events: std::sync::Arc<dyn EventPublisher> =
-        std::sync::Arc::new(OutboxEventPublisher::new());
+        std::sync::Arc::new(OutboxEventPublisher::new(ids.clone()));
     let clock: std::sync::Arc<dyn Clock> = std::sync::Arc::new(SystemClock);
     let use_case =
         sanvi_theming::application::YankThemeVersion::new(themes, events, clock, pool.clone());
 
-    let tx_manager = sanvi_persistence::TxManager::new(pool);
+    let tx_manager = sanvi_persistence::TxManager::new(pool, ids);
     let mut scope = tx_manager
         .begin_unscoped("theming.theme.yank", "cli")
         .await

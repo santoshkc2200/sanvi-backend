@@ -14,11 +14,13 @@ pub mod types;
 pub use data_map::{DATA_CLASSES, DataClassDef};
 pub use directive::{DirectiveInput, jurisdiction_default, resolve_purpose, resolve_snapshot};
 pub use dsr::{
-    AffectedSet, Appeal, AppealOutcome, AuthorizedAgent, BreachIncident, ConsentRecord,
-    ControllerRole, DataSubject, DataSubjectRequest, DsrId, ExportArtifact, LegalHold,
-    NotificationObligation, ObligationAudience, PreferenceSignal, ProcessingActivity,
-    RetentionRule, RiskAssessment, RiskAssessmentStatus, RiskAssessmentTrigger, SubProcessor,
-    SubProcessorRole, SubjectId, TransferMechanism, VerificationChallenge,
+    AffectedSet, Appeal, AppealId, AppealOutcome, AuthorizedAgent, AuthorizedAgentId,
+    BreachIncident, BreachIncidentId, ConsentId, ConsentRecord, ControllerRole, DataSubject,
+    DataSubjectRequest, DsrId, ExportArtifact, ExportArtifactId, LegalHold, LegalHoldId,
+    NotificationObligation, ObligationAudience, PreferenceSignal, PreferenceSignalId,
+    ProcessingActivity, ProcessingActivityId, RetentionRule, RiskAssessment, RiskAssessmentId,
+    RiskAssessmentStatus, RiskAssessmentTrigger, SubProcessor, SubProcessorRole, SubjectId,
+    TransferMechanism, VerificationChallenge, VerificationChallengeId,
 };
 pub use error::PrivacyError;
 pub use events::PrivacyEvent;

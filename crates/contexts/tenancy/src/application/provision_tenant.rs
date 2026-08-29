@@ -70,6 +70,7 @@ impl ProvisionTenant {
         let display_name = TenantName::parse(&cmd.display_name)?;
         let region = DataRegion::parse(&cmd.region)?;
         let default_locale = Locale::parse(&cmd.default_locale)?;
+        let id = self.ids.next_tenant_id()?;
         let now = self.clock.now();
 
         let mut scope = self
@@ -81,14 +82,8 @@ impl ProvisionTenant {
         // Reserve first: concurrent provisions of the same slug collide here.
         self.slugs.reserve(&mut scope, &slug).await?;
 
-        let (tenant, events) = Tenant::provision(
-            self.ids.next_tenant_id(),
-            slug,
-            display_name,
-            region,
-            default_locale,
-            now,
-        );
+        let (tenant, events) =
+            Tenant::provision(id, slug, display_name, region, default_locale, now);
         self.tenants.save(&mut scope, &tenant).await?;
         self.events.publish(&mut scope, &events).await?;
 
@@ -213,8 +208,8 @@ mod tests {
 
     struct FakeIds;
     impl IdGenerator for FakeIds {
-        fn next_tenant_id(&self) -> crate::domain::TenantId {
-            crate::domain::TenantId::new()
+        fn next_tenant_id(&self) -> Result<crate::domain::TenantId, TenancyError> {
+            Ok(crate::domain::TenantId::try_from(101_i64).unwrap())
         }
     }
 
@@ -230,6 +225,7 @@ mod tests {
             TxManager::new(
                 PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
                     .expect("lazy pool construction never connects"),
+                sanvi_testsupport::test_ids(),
             ),
             Arc::new(NoopTenants),
             Arc::new(NoopSlugs),

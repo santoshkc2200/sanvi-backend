@@ -5,27 +5,29 @@
 use std::sync::Arc;
 
 use chrono::DateTime;
+use sanvi_kernel::UserId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use sanvi_persistence::TxManager;
 
 use crate::domain::{
-    Appeal, AppealOutcome, AppealRepository, AuditWriter, Clock, DsrId, DsrRepository, DsrStatus,
-    EventPublisher, IdGenerator, JurisdictionRepository, PrivacyError, PrivacyEvent,
+    Appeal, AppealId, AppealOutcome, AppealRepository, AuditWriter, Clock, DsrId, DsrRepository,
+    DsrStatus, EventPublisher, IdGenerator, JurisdictionRepository, PrivacyError, PrivacyEvent,
     add_business_days, add_days,
 };
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct AppealRequestCommand {
-    pub request_id: Uuid,
+    #[schema(value_type = String)]
+    pub request_id: DsrId,
     pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AppealRequestOutput {
-    pub appeal_id: Uuid,
+    #[schema(value_type = String)]
+    pub appeal_id: AppealId,
     pub due_at: DateTime<chrono::Utc>,
     /// The state authority's complaint route, included up front.
     pub authority: crate::domain::AuthorityContact,
@@ -68,7 +70,7 @@ impl AppealRequest {
 
     pub async fn execute(
         &self,
-        requester_user: Option<Uuid>,
+        requester_user: Option<UserId>,
         command: AppealRequestCommand,
     ) -> Result<AppealRequestOutput, PrivacyError> {
         let mut scope = self
@@ -76,7 +78,7 @@ impl AppealRequest {
             .begin_unscoped("privacy_dsr_appeal", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let request_id = DsrId::from_uuid(command.request_id);
+        let request_id = command.request_id;
         let request = self
             .requests
             .find_by_id(&mut scope, request_id)
@@ -135,7 +137,7 @@ impl AppealRequest {
         }
 
         let appeal = Appeal {
-            id: self.ids.next(),
+            id: self.ids.next_appeal_id()?,
             request_id,
             reason: command.reason.clone(),
             received_at: now,
@@ -155,7 +157,7 @@ impl AppealRequest {
             .publish(
                 &mut scope,
                 &[PrivacyEvent::DsrReceived {
-                    request_id: request_id.as_uuid(),
+                    request_id,
                     subject: request.subject_ref.clone(),
                     dsr_kind: "appeal".to_string(),
                     jurisdiction: request.jurisdiction.as_str().to_string(),
@@ -165,10 +167,10 @@ impl AppealRequest {
         self.audit
             .record(
                 &mut scope,
-                requester_user.unwrap_or(Uuid::nil()),
+                requester_user,
                 "privacy.appeal.submit".to_string(),
                 appeal.id.to_string(),
-                serde_json::json!({ "request_id": request_id.as_uuid() }),
+                serde_json::json!({ "request_id": request_id.as_i64() }),
             )
             .await?;
 
@@ -187,14 +189,16 @@ impl AppealRequest {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct DecideAppealCommand {
-    pub appeal_id: Uuid,
+    #[schema(value_type = String)]
+    pub appeal_id: AppealId,
     pub outcome: AppealOutcome,
     pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct DecideAppealOutput {
-    pub appeal_id: Uuid,
+    #[schema(value_type = String)]
+    pub appeal_id: AppealId,
     pub outcome: AppealOutcome,
     pub decided_at: DateTime<chrono::Utc>,
     pub authority: Option<crate::domain::AuthorityContact>,
@@ -230,7 +234,7 @@ impl DecideAppeal {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         command: DecideAppealCommand,
     ) -> Result<DecideAppealOutput, PrivacyError> {
         let mut scope = self
@@ -250,7 +254,7 @@ impl DecideAppeal {
             .find_by_id(&mut scope, request_id)
             .await?
             .ok_or(PrivacyError::RequestNotFound(
-                request_id.as_uuid().to_string(),
+                request_id.as_i64().to_string(),
             ))?;
 
         // Second-operator review: both the rejecter and this decision are
@@ -290,7 +294,7 @@ impl DecideAppeal {
             .publish(
                 &mut scope,
                 &[PrivacyEvent::AppealDecided {
-                    request_id: request_id.as_uuid(),
+                    request_id,
                     appeal_id: appeal.id,
                     outcome: match command.outcome {
                         AppealOutcome::Upheld => "upheld".to_string(),
@@ -303,7 +307,7 @@ impl DecideAppeal {
         self.audit
             .record(
                 &mut scope,
-                actor,
+                Some(actor),
                 "privacy.appeal.decide".to_string(),
                 appeal.id.to_string(),
                 serde_json::json!({ "outcome": appeal.outcome }),

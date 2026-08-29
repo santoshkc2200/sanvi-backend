@@ -5,9 +5,9 @@
     "columns": [],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Uuid",
-        "Uuid"
+        "Int8",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": []

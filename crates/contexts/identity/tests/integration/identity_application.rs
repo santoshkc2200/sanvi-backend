@@ -22,6 +22,7 @@ use sanvi_identity::domain::{
     User, UserId, UserRepository, UserStatus,
 };
 
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::{PlatformScope, ScopedTx, TxManager};
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ impl World {
     fn next_id(&self) -> UserId {
         let mut memory = self.memory.lock().unwrap();
         memory.next_id += 1;
-        UserId::from_uuid(uuid::Uuid::from_u64_pair(0, memory.next_id))
+        UserId::try_from(memory.next_id as i64).expect("valid test id")
     }
 }
 
@@ -73,12 +74,12 @@ impl Clock for World {
 }
 
 impl IdGenerator for World {
-    fn next_user_id(&self) -> UserId {
-        self.next_id()
+    fn next_user_id(&self) -> Result<UserId, IdentityError> {
+        Ok(self.next_id())
     }
 
-    fn next_invitation_id(&self) -> InvitationId {
-        InvitationId::from_uuid(self.next_id().as_uuid())
+    fn next_invitation_id(&self) -> Result<InvitationId, IdentityError> {
+        Ok(InvitationId::try_from(self.next_id().as_i64()).expect("valid test id"))
     }
 }
 
@@ -172,7 +173,7 @@ impl MembershipRepository for World {
     async fn find(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
     ) -> Result<Option<Membership>, IdentityError> {
         Ok(self
@@ -188,7 +189,7 @@ impl MembershipRepository for World {
     async fn list(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Membership>, IdentityError> {
         Ok(self
             .memory
@@ -204,7 +205,7 @@ impl MembershipRepository for World {
     async fn list_with_emails(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<(Membership, Email)>, IdentityError> {
         let memberships = MembershipRepository::list(self, scope, tenant_id).await?;
         let memory = self.memory.lock().unwrap();
@@ -225,7 +226,7 @@ impl MembershipRepository for World {
     async fn remove(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
     ) -> Result<(), IdentityError> {
         let mut memory = self.memory.lock().unwrap();
@@ -245,7 +246,7 @@ impl MembershipRepository for World {
     async fn count_members_platform(
         &self,
         _scope: &mut PlatformScope<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<u32, IdentityError> {
         Ok(self
             .memory
@@ -260,8 +261,8 @@ impl MembershipRepository for World {
     async fn count_role_holders(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
-        role_id: uuid::Uuid,
+        tenant_id: TenantId,
+        role_id: RoleId,
     ) -> Result<u32, IdentityError> {
         Ok(self
             .memory
@@ -381,7 +382,7 @@ impl InvitationRepository for World {
     async fn find_by_token_hash(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         token_hash: &str,
     ) -> Result<Option<Invitation>, IdentityError> {
         Ok(self
@@ -397,7 +398,7 @@ impl InvitationRepository for World {
     async fn find_by_id(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         id: InvitationId,
     ) -> Result<Option<Invitation>, IdentityError> {
         Ok(self
@@ -413,7 +414,7 @@ impl InvitationRepository for World {
     async fn list(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Invitation>, IdentityError> {
         Ok(self
             .memory
@@ -429,7 +430,7 @@ impl InvitationRepository for World {
     async fn remove(
         &self,
         _scope: &mut ScopedTx<'_>,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         id: InvitationId,
     ) -> Result<(), IdentityError> {
         let mut memory = self.memory.lock().unwrap();
@@ -538,7 +539,7 @@ impl EventPublisher for World {
 impl Notifications for World {
     async fn send_invitation(
         &self,
-        _tenant_id: uuid::Uuid,
+        _tenant_id: TenantId,
         email: &Email,
         _tenant_name: &str,
         invite_url: &str,
@@ -568,16 +569,16 @@ impl Notifications for World {
 
 #[derive(Clone, Copy)]
 struct FakeRoleCatalog {
-    tenant_owner: uuid::Uuid,
-    tenant_member: uuid::Uuid,
+    tenant_owner: RoleId,
+    tenant_member: RoleId,
 }
 
 #[async_trait::async_trait]
 impl RoleCatalog for FakeRoleCatalog {
     async fn assignable_roles(
         &self,
-        _tenant_id: uuid::Uuid,
-    ) -> Result<Vec<(uuid::Uuid, String)>, IdentityError> {
+        _tenant_id: TenantId,
+    ) -> Result<Vec<(RoleId, String)>, IdentityError> {
         Ok(vec![
             (self.tenant_owner, "tenant_owner".to_string()),
             (self.tenant_member, "tenant_member".to_string()),
@@ -586,8 +587,8 @@ impl RoleCatalog for FakeRoleCatalog {
 
     async fn role_key(
         &self,
-        _tenant_id: uuid::Uuid,
-        role_id: uuid::Uuid,
+        _tenant_id: TenantId,
+        role_id: RoleId,
     ) -> Result<Option<String>, IdentityError> {
         Ok(match role_id {
             id if id == self.tenant_owner => Some("tenant_owner".to_string()),
@@ -598,8 +599,8 @@ impl RoleCatalog for FakeRoleCatalog {
 
     async fn permissions_for_roles(
         &self,
-        _tenant_id: uuid::Uuid,
-        role_ids: &[uuid::Uuid],
+        _tenant_id: TenantId,
+        role_ids: &[RoleId],
     ) -> Result<Vec<String>, IdentityError> {
         Ok(role_ids
             .iter()
@@ -673,7 +674,7 @@ impl SessionCache for World {
 struct Fixture {
     world: World,
     roles: FakeRoleCatalog,
-    tenant_id: uuid::Uuid,
+    tenant_id: TenantId,
     tx: TxManager,
     // The pool below borrows this database. Dropping the handle drops the
     // database with it, so the fixture has to outlive every query it serves.
@@ -685,11 +686,11 @@ impl Fixture {
         Self {
             world: World::new(),
             roles: FakeRoleCatalog {
-                tenant_owner: uuid::Uuid::now_v7(),
-                tenant_member: uuid::Uuid::now_v7(),
+                tenant_owner: RoleId::try_from(101_i64).unwrap(),
+                tenant_member: RoleId::try_from(102_i64).unwrap(),
             },
-            tenant_id: uuid::Uuid::now_v7(),
-            tx: TxManager::new(db.app_pool()),
+            tenant_id: TenantId::try_from(1_i64).unwrap(),
+            tx: TxManager::new(db.app_pool(), sanvi_testsupport::test_ids()),
             _db: db,
         }
     }
@@ -1095,7 +1096,7 @@ async fn invitation_lifecycle_grant_accept_and_guard() {
                 email: "alice@example.com".to_string(),
                 role_ids: vec![fixture.roles.tenant_owner],
             },
-            UserId::new(),
+            UserId::try_from(999_999_i64).unwrap(),
         )
         .await
         .unwrap();
@@ -1221,7 +1222,7 @@ async fn role_updates_emit_delta_events() {
                 email: "alice@example.com".to_string(),
                 role_ids: vec![fixture.roles.tenant_member],
             },
-            UserId::new(),
+            UserId::try_from(999_999_i64).unwrap(),
         )
         .await
         .unwrap();

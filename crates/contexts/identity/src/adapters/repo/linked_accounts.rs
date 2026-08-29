@@ -37,7 +37,8 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
 
         row.map(|row| {
             Ok(LinkedAccount::new(
-                UserId::from_uuid(row.user_id),
+                UserId::try_from(row.user_id)
+                    .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
                 ProviderId::parse(&row.provider)?,
                 ProviderSubject::new(row.subject),
                 LinkedVia::parse(&row.linked_via)?,
@@ -55,7 +56,7 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
         sqlx::query!(
             "INSERT INTO identity.linked_accounts (user_id, provider, subject, linked_via, linked_at)
              VALUES ($1, $2, $3, $4, $5)",
-            account.user_id().as_uuid(),
+            account.user_id().as_i64(),
             account.provider().as_str(),
             account.subject().as_str(),
             account.linked_via().as_str(),
@@ -73,7 +74,7 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
         user_id: UserId,
     ) -> Result<usize, IdentityError> {
         let result = sqlx::query("DELETE FROM identity.linked_accounts WHERE user_id = $1")
-            .bind(user_id.as_uuid())
+            .bind(user_id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(|err| IdentityError::Storage(err.to_string()))?;
@@ -88,7 +89,7 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
         let rows = sqlx::query!(
             "SELECT user_id, provider, subject, linked_via, linked_at
              FROM identity.linked_accounts WHERE user_id = $1 ORDER BY linked_at",
-            user_id.as_uuid(),
+            user_id.as_i64(),
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -97,7 +98,8 @@ impl LinkedAccountRepository for SqlxLinkedAccountRepository {
         rows.into_iter()
             .map(|row| {
                 Ok(LinkedAccount::new(
-                    UserId::from_uuid(row.user_id),
+                    UserId::try_from(row.user_id)
+                        .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
                     ProviderId::parse(&row.provider)?,
                     ProviderSubject::new(row.subject),
                     LinkedVia::parse(&row.linked_via)?,

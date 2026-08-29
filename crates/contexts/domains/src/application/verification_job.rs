@@ -259,7 +259,7 @@ impl RunVerificationSweep {
 
     async fn provider_records(
         &self,
-        domain_id: uuid::Uuid,
+        domain_id: crate::domain::CustomDomainId,
     ) -> Result<Vec<crate::domain::DnsRecord>, DomainsError> {
         let mut scope = self
             .tx

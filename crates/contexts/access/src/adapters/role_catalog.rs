@@ -3,6 +3,7 @@
 
 use async_trait::async_trait;
 use sanvi_identity::domain::{IdentityError, RoleCatalog};
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::TxManager;
 
 use crate::domain::RoleRepository;
@@ -22,8 +23,8 @@ impl SqlxRoleCatalog {
 impl RoleCatalog for SqlxRoleCatalog {
     async fn assignable_roles(
         &self,
-        tenant_id: uuid::Uuid,
-    ) -> Result<Vec<(uuid::Uuid, String)>, IdentityError> {
+        tenant_id: TenantId,
+    ) -> Result<Vec<(RoleId, String)>, IdentityError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("role_catalog", "identity")
@@ -40,14 +41,14 @@ impl RoleCatalog for SqlxRoleCatalog {
             .map_err(|err| IdentityError::Storage(err.to_string()))?;
         Ok(roles
             .into_iter()
-            .map(|role| (role.id().as_uuid(), role.key().to_string()))
+            .map(|role| (role.id(), role.key().to_string()))
             .collect())
     }
 
     async fn role_key(
         &self,
-        tenant_id: uuid::Uuid,
-        role_id: uuid::Uuid,
+        tenant_id: TenantId,
+        role_id: RoleId,
     ) -> Result<Option<String>, IdentityError> {
         let roles = self.assignable_roles(tenant_id).await?;
         Ok(roles
@@ -58,8 +59,8 @@ impl RoleCatalog for SqlxRoleCatalog {
 
     async fn permissions_for_roles(
         &self,
-        tenant_id: uuid::Uuid,
-        role_ids: &[uuid::Uuid],
+        tenant_id: TenantId,
+        role_ids: &[RoleId],
     ) -> Result<Vec<String>, IdentityError> {
         // Resolve through `assignable_to`, the same tenant-scoped role set
         // `GrantMembership`/`UpdateMemberRoles` validate `role_ids` against
@@ -88,7 +89,7 @@ impl RoleCatalog for SqlxRoleCatalog {
         // happen) a role belonging to a different tenant, contributes no
         // permissions rather than failing the whole `/me` response.
         for role in assignable {
-            if wanted.contains(&role.id().as_uuid()) {
+            if wanted.contains(&role.id()) {
                 permissions.extend(role.permissions().iter().cloned());
             }
         }

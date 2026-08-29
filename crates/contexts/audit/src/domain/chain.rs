@@ -46,11 +46,19 @@ pub fn verify_segment(
 mod tests {
     use chrono::Utc;
 
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    use sanvi_kernel::SnowflakeId;
+
     use super::*;
     use crate::domain::{ActorType, AuditEntry, AuditEntryData};
 
+    static NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
     fn entry(prev: [u8; 32]) -> AuditEntry {
+        let id = SnowflakeId::try_from(NEXT_ID.fetch_add(1, Ordering::Relaxed)).unwrap();
         AuditEntry::new(
+            id,
             AuditEntryData {
                 occurred_at: Utc::now(),
                 actor_type: ActorType::System,
@@ -143,8 +151,8 @@ mod tests {
     }
 
     #[test]
-    fn ids_are_uuid_v7() {
+    fn ids_are_positive_snowflakes() {
         let first = entry(GENESIS_HASH);
-        assert_eq!(first.id.get_version_num(), 7);
+        assert!(first.id.as_i64() > 0);
     }
 }

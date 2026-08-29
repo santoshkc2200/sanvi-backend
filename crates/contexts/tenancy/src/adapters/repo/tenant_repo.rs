@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sanvi_persistence::PlatformScope;
 use sqlx::FromRow;
-use uuid::Uuid;
 
 use crate::domain::tenant::{Tenant, TenantId, TenantStatus, TenantTimestamps};
 use crate::domain::values::{DataRegion, Locale, SuspensionReason, TenantName, TenantSlug};
@@ -13,7 +12,7 @@ use crate::domain::{TenancyError, TenantRepository, TenantSearch, TenantSearchCu
 /// Row shape of `tenancy.tenants` (sqlx maps citext to String).
 #[derive(Debug, Clone, FromRow)]
 struct TenantRow {
-    id: Uuid,
+    id: i64,
     slug: String,
     display_name: String,
     status: String,
@@ -33,7 +32,8 @@ impl TenantRow {
             None => None,
         };
         Tenant::from_parts(
-            TenantId::from_uuid(self.id),
+            TenantId::try_from(self.id)
+                .map_err(|err| TenancyError::Storage(format!("invalid tenant id: {err}")))?,
             TenantSlug::parse(&self.slug)?,
             TenantName::parse(&self.display_name)?,
             TenantStatus::parse(&self.status)?,
@@ -83,7 +83,7 @@ impl TenantRepository for SqlxTenantRepository {
                updated_at = EXCLUDED.updated_at,
                archived_at = EXCLUDED.archived_at,
                purge_requested_at = EXCLUDED.purge_requested_at",
-            tenant.id().as_uuid(),
+            tenant.id().as_i64(),
             tenant.slug().as_str(),
             tenant.display_name().as_str(),
             tenant.status().as_str(),
@@ -121,7 +121,7 @@ impl TenantRepository for SqlxTenantRepository {
             "SELECT id, slug, display_name, status, region, default_locale, suspended_reason,
                     created_at, updated_at, archived_at, purge_requested_at
              FROM tenancy.tenants WHERE id = $1",
-            id.as_uuid()
+            id.as_i64()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -161,11 +161,11 @@ impl TenantRepository for SqlxTenantRepository {
             "SELECT id, slug, display_name, status, region, default_locale, suspended_reason,
                     created_at, updated_at, archived_at, purge_requested_at
              FROM tenancy.tenants
-             WHERE ($1::uuid IS NULL OR id > $1)
+             WHERE ($1::bigint IS NULL OR id > $1)
                AND ($2::text IS NULL OR status = $2)
              ORDER BY id
              LIMIT $3",
-            after.map(|id| id.as_uuid()),
+            after.map(|id| id.as_i64()),
             status.map(|status| status.as_str()),
             i64::from(limit) + 1
         )
@@ -178,7 +178,11 @@ impl TenantRepository for SqlxTenantRepository {
         if has_more {
             rows.truncate(limit as usize);
         }
-        let next_cursor = rows.last().map(|row| TenantId::from_uuid(row.id));
+        let next_cursor = rows
+            .last()
+            .map(|row| TenantId::try_from(row.id))
+            .transpose()
+            .map_err(|err| TenancyError::Storage(format!("invalid tenant id: {err}")))?;
         let tenants = rows
             .into_iter()
             .map(TenantRow::into_tenant)
@@ -208,7 +212,7 @@ impl TenantRepository for SqlxTenantRepository {
             search.query.as_deref(),
             search.status.map(|status| status.as_str()),
             search.after.map(|cursor| cursor.created_at),
-            search.after.map(|cursor| cursor.id.as_uuid()),
+            search.after.map(|cursor| cursor.id.as_i64()),
             i64::from(search.limit) + 1
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
@@ -220,10 +224,16 @@ impl TenantRepository for SqlxTenantRepository {
         if has_more {
             rows.truncate(search.limit as usize);
         }
-        let next_cursor = rows.last().map(|row| TenantSearchCursor {
-            created_at: row.created_at,
-            id: TenantId::from_uuid(row.id),
-        });
+        let next_cursor = rows
+            .last()
+            .map(|row| {
+                TenantId::try_from(row.id).map(|id| TenantSearchCursor {
+                    created_at: row.created_at,
+                    id,
+                })
+            })
+            .transpose()
+            .map_err(|err| TenancyError::Storage(format!("invalid tenant id: {err}")))?;
         let tenants = rows
             .into_iter()
             .map(TenantRow::into_tenant)

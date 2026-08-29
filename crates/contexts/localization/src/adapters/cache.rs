@@ -6,6 +6,7 @@
 //! invalidation on the instance that made the change; the worker consumes
 //! the same events and invalidates its own copy.
 
+use sanvi_kernel::{TenantId, UserId};
 use std::{
     collections::HashMap,
     sync::{
@@ -14,8 +15,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-use uuid::Uuid;
 
 use crate::adapters::catalog::MergedCatalog;
 use crate::domain::{LocaleSet, TenantLocaleSettings};
@@ -104,7 +103,7 @@ impl LocalizationCache {
 
     pub fn get_tenant_settings(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         ttl: Duration,
     ) -> Option<Option<TenantLocaleSettings>> {
         match self.get(&tenant_settings_key(tenant_id), ttl) {
@@ -113,7 +112,7 @@ impl LocalizationCache {
         }
     }
 
-    pub fn set_tenant_settings(&self, tenant_id: Uuid, settings: Option<TenantLocaleSettings>) {
+    pub fn set_tenant_settings(&self, tenant_id: TenantId, settings: Option<TenantLocaleSettings>) {
         self.set(
             tenant_settings_key(tenant_id),
             CacheValue::TenantSettings(settings),
@@ -131,14 +130,14 @@ impl LocalizationCache {
         self.set("platform_set", CacheValue::PlatformSet(set));
     }
 
-    pub fn get_user_locale(&self, user_id: Uuid, ttl: Duration) -> Option<Option<String>> {
+    pub fn get_user_locale(&self, user_id: UserId, ttl: Duration) -> Option<Option<String>> {
         match self.get(&user_locale_key(user_id), ttl) {
             Some(CacheValue::UserLocale(locale)) => Some(locale),
             _ => None,
         }
     }
 
-    pub fn set_user_locale(&self, user_id: Uuid, locale: Option<String>) {
+    pub fn set_user_locale(&self, user_id: UserId, locale: Option<String>) {
         self.set(user_locale_key(user_id), CacheValue::UserLocale(locale));
     }
 
@@ -168,7 +167,7 @@ impl LocalizationCache {
 
     /// Invalidate one tenant's locale settings (and its merged catalogs,
     /// which embed its overrides and default locale).
-    pub fn invalidate_tenant(&self, tenant_id: Uuid) {
+    pub fn invalidate_tenant(&self, tenant_id: TenantId) {
         let mut guard = self.inner.write().expect("cache lock is not poisoned");
         guard
             .entries
@@ -178,7 +177,7 @@ impl LocalizationCache {
     }
 
     /// Invalidate a user's cached locale preference.
-    pub fn invalidate_user(&self, user_id: Uuid) {
+    pub fn invalidate_user(&self, user_id: UserId) {
         let mut guard = self.inner.write().expect("cache lock is not poisoned");
         guard.entries.remove(&user_locale_key(user_id));
     }
@@ -204,11 +203,11 @@ fn merged_key(scope: &str, locale: &str) -> String {
     format!("merged:{scope}:{locale}")
 }
 
-fn tenant_settings_key(tenant_id: Uuid) -> String {
+fn tenant_settings_key(tenant_id: TenantId) -> String {
     format!("tenant_settings:{tenant_id}")
 }
 
-fn user_locale_key(user_id: Uuid) -> String {
+fn user_locale_key(user_id: UserId) -> String {
     format!("user_locale:{user_id}")
 }
 

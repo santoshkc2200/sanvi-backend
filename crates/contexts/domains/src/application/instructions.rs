@@ -1,28 +1,21 @@
-//! `GET /api/v1/tenant/domains/{id}/instructions` — the exact records the
-//! tenant must create, plus a registrar-specific walkthrough.
-//!
-//! Records are data; the walkthrough is localized copy rendered through the
-//! `GuideTranslator` port (phase 06). Registrar detection runs in the
-//! verification worker from the zone's NS records; until the first check
-//! the generic guide is shown.
-
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::application::views::{GuideView, InstructionRecord};
 use crate::domain::{
-    CustomDomainRepository, DnsRecord, DnsRecordType, DomainKind, DomainsError, GuideTranslator,
-    Hostname, RegistrarGuideId,
+    CustomDomainId, CustomDomainRepository, DnsRecord, DnsRecordType, DomainKind, DomainsError,
+    GuideTranslator, Hostname, RegistrarGuideId,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct InstructionsView {
-    pub domain_id: Uuid,
+    #[schema(value_type = String)]
+    pub domain_id: CustomDomainId,
     pub hostname: String,
     pub kind: String,
     pub role: String,
@@ -94,8 +87,8 @@ impl GetDomainInstructions {
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        domain_id: Uuid,
+        tenant_id: TenantId,
+        domain_id: CustomDomainId,
         locale: &str,
     ) -> Result<InstructionsView, DomainsError> {
         let domain = self

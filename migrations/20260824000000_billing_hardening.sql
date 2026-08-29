@@ -5,8 +5,8 @@
 -- retried requests reuse the same Stripe idempotency keys. The customer id is
 -- retained across expired Checkout Sessions and future re-subscriptions.
 CREATE TABLE billing.checkout_states (
-  tenant_id                    uuid        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
-  price_id                     uuid        NOT NULL REFERENCES billing.plan_prices(id),
+  tenant_id                    bigint        PRIMARY KEY REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  price_id                     bigint        NOT NULL REFERENCES billing.plan_prices(id),
   command_id                   uuid        NOT NULL,
   stripe_customer_id           text        UNIQUE,
   stripe_session_id            text        UNIQUE,

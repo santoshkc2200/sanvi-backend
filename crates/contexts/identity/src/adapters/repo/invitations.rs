@@ -1,9 +1,9 @@
 //! Tenant-scoped invitation storage (`identity.invitations`).
 
 use async_trait::async_trait;
+use sanvi_kernel::{RoleId, TenantId};
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use sqlx::FromRow;
-use uuid::Uuid;
 
 use crate::domain::invitation::{Invitation, InvitationId};
 use crate::domain::user::UserId;
@@ -21,12 +21,12 @@ impl SqlxInvitationRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct InvitationRow {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    tenant_id: i64,
     email: String,
-    role_ids: Vec<Uuid>,
+    role_ids: Vec<i64>,
     token_hash: String,
-    invited_by: Option<Uuid>,
+    invited_by: Option<i64>,
     created_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
     accepted_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -34,12 +34,21 @@ struct InvitationRow {
 
 fn invitation_from_row(row: InvitationRow) -> Result<Invitation, IdentityError> {
     Ok(Invitation::from_parts(
-        InvitationId::from_uuid(row.id),
-        row.tenant_id,
+        InvitationId::try_from(row.id)
+            .map_err(|err| IdentityError::Storage(format!("invalid invitation id: {err}")))?,
+        TenantId::try_from(row.tenant_id)
+            .map_err(|err| IdentityError::Storage(format!("invalid tenant id: {err}")))?,
         Email::parse(&row.email)?,
-        row.role_ids,
+        row.role_ids
+            .into_iter()
+            .map(RoleId::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| IdentityError::Storage(format!("invalid role id: {err}")))?,
         row.token_hash,
-        row.invited_by.map(UserId::from_uuid),
+        row.invited_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
         row.created_at,
         row.expires_at,
         row.accepted_at,
@@ -64,12 +73,16 @@ impl InvitationRepository for SqlxInvitationRepository {
                token_hash = EXCLUDED.token_hash,
                expires_at = EXCLUDED.expires_at,
                accepted_at = EXCLUDED.accepted_at",
-            invitation.id().as_uuid(),
-            invitation.tenant_id(),
+            invitation.id().as_i64(),
+            invitation.tenant_id().as_i64(),
             invitation.email().as_str(),
-            invitation.role_ids(),
+            &invitation
+                .role_ids()
+                .iter()
+                .map(|id| id.as_i64())
+                .collect::<Vec<_>>(),
             invitation.token_hash(),
-            invitation.invited_by().map(|id| id.as_uuid()),
+            invitation.invited_by().map(|id| id.as_i64()),
             invitation.created_at(),
             invitation.expires_at(),
             invitation.accepted_at(),
@@ -83,7 +96,7 @@ impl InvitationRepository for SqlxInvitationRepository {
     async fn find_by_token_hash(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         token_hash: &str,
     ) -> Result<Option<Invitation>, IdentityError> {
         let row = sqlx::query_as!(
@@ -92,7 +105,7 @@ impl InvitationRepository for SqlxInvitationRepository {
                     expires_at, accepted_at
              FROM identity.invitations
              WHERE tenant_id = $1 AND token_hash = $2",
-            tenant_id,
+            tenant_id.as_i64(),
             token_hash,
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -104,7 +117,7 @@ impl InvitationRepository for SqlxInvitationRepository {
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         id: InvitationId,
     ) -> Result<Option<Invitation>, IdentityError> {
         let row = sqlx::query_as!(
@@ -113,8 +126,8 @@ impl InvitationRepository for SqlxInvitationRepository {
                     expires_at, accepted_at
              FROM identity.invitations
              WHERE tenant_id = $1 AND id = $2",
-            tenant_id,
-            id.as_uuid(),
+            tenant_id.as_i64(),
+            id.as_i64(),
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -125,7 +138,7 @@ impl InvitationRepository for SqlxInvitationRepository {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Invitation>, IdentityError> {
         let rows = sqlx::query_as!(
             InvitationRow,
@@ -133,7 +146,7 @@ impl InvitationRepository for SqlxInvitationRepository {
                     expires_at, accepted_at
              FROM identity.invitations
              WHERE tenant_id = $1 ORDER BY created_at",
-            tenant_id,
+            tenant_id.as_i64(),
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -157,13 +170,13 @@ impl InvitationRepository for SqlxInvitationRepository {
     async fn remove(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         id: InvitationId,
     ) -> Result<(), IdentityError> {
         sqlx::query!(
             "DELETE FROM identity.invitations WHERE tenant_id = $1 AND id = $2",
-            tenant_id,
-            id.as_uuid(),
+            tenant_id.as_i64(),
+            id.as_i64(),
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await

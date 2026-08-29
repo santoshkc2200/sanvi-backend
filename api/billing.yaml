@@ -69,7 +69,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -108,7 +111,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -158,7 +164,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -199,7 +208,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '204':
@@ -229,7 +241,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:

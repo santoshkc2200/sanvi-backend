@@ -4,13 +4,14 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::error::ThemingError;
 use crate::domain::manifest::Manifest;
+use crate::domain::theme::ThemeId;
 use crate::domain::tokens::TokenValue;
 
 /// Draft or live — the two rows a tenant may hold.
@@ -120,9 +121,9 @@ impl BrandAssets {
 /// A tenant theme row (draft or live).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TenantTheme {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub state: ThemeState,
-    pub theme_id: Uuid,
+    pub theme_id: ThemeId,
     pub theme_key: String,
     pub semver: Version,
     pub token_overrides: BTreeMap<String, TokenValue>,
@@ -130,7 +131,7 @@ pub struct TenantTheme {
     pub assets: BrandAssets,
     pub custom_css: Option<String>,
     pub revision: i32,
-    pub updated_by: Option<Uuid>,
+    pub updated_by: Option<UserId>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -138,8 +139,8 @@ impl TenantTheme {
     /// The tenant's default draft: the base theme, pinned to its latest
     /// published version, no overrides.
     pub fn default_draft(
-        tenant_id: Uuid,
-        theme_id: Uuid,
+        tenant_id: TenantId,
+        theme_id: ThemeId,
         theme_key: String,
         version: Version,
         now: DateTime<Utc>,
@@ -164,7 +165,7 @@ impl TenantTheme {
 /// The publish snapshot (immutable revision) rollback restores.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TenantThemeSnapshot {
-    pub theme_id: Uuid,
+    pub theme_id: ThemeId,
     pub theme_key: String,
     pub semver: Version,
     pub token_overrides: BTreeMap<String, TokenValue>,

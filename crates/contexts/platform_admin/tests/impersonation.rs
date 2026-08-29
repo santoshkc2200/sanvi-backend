@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use sanvi_audit::{adapters::SqlxAuditWriter, domain::AuditWriter};
 use sanvi_identity::domain::MembershipRepository;
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use sanvi_platform_admin::{
     adapters::{
@@ -15,8 +16,8 @@ use sanvi_platform_admin::{
         CreateImpersonation, CreateImpersonationCommand, ListImpersonations, RevokeImpersonation,
     },
     domain::{
-        EventPublisher, IdGenerator, ImpersonationGrantId, ImpersonationGrantRepository,
-        ImpersonationMode, PlatformAdminError, PrivacyLock,
+        EventPublisher, IdGenerator, ImpersonationGrantRepository, ImpersonationMode,
+        PlatformAdminError, PrivacyLock,
     },
 };
 use sanvi_testsupport::TestDb;
@@ -34,9 +35,9 @@ async fn prepare() -> (sanvi_persistence::PgPool, sanvi_persistence::PgPool, Tes
 /// first — exactly like the app's audited PlatformScope.
 async fn insert_tenant_and_member(
     migrator: &sanvi_persistence::PgPool,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     slug: &str,
-    user_id: Uuid,
+    user_id: UserId,
     email: &str,
 ) {
     let mut tx = migrator.begin().await.expect("owner tx");
@@ -49,7 +50,7 @@ async fn insert_tenant_and_member(
            (id, slug, display_name, status, region, default_locale, created_at, updated_at)
          VALUES ($1, $2, $3, 'active', 'us', 'en', now(), now())",
     )
-    .bind(tenant_id)
+    .bind(tenant_id.as_i64())
     .bind(slug)
     .bind(format!("Tenant {slug}"))
     .execute(&mut *tx)
@@ -60,7 +61,7 @@ async fn insert_tenant_and_member(
         "INSERT INTO identity.users (id, kratos_identity_id, primary_email, email_verified, status)
          VALUES ($1, $2, $3, true, 'active')",
     )
-    .bind(user_id)
+    .bind(user_id.as_i64())
     .bind(Uuid::now_v7())
     .bind(email)
     .execute(&mut *tx)
@@ -71,8 +72,8 @@ async fn insert_tenant_and_member(
         "INSERT INTO identity.memberships (tenant_id, user_id, status, created_at)
          VALUES ($1, $2, 'active', now())",
     )
-    .bind(tenant_id)
-    .bind(user_id)
+    .bind(tenant_id.as_i64())
+    .bind(user_id.as_i64())
     .execute(&mut *tx)
     .await
     .expect("membership row");
@@ -86,15 +87,16 @@ struct Wired {
 }
 
 fn wire(pool: sanvi_persistence::PgPool, privacy: Arc<dyn PrivacyLock>) -> Wired {
-    let tx_manager = TxManager::new(pool);
+    let raw_ids = sanvi_testsupport::test_ids();
+    let tx_manager = TxManager::new(pool, raw_ids.clone());
     let grants: Arc<dyn ImpersonationGrantRepository> =
         Arc::new(SqlxImpersonationGrantRepository::new());
     let memberships: Arc<dyn MembershipRepository> =
         Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
-    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator);
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids.clone()));
+    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(raw_ids));
     let clock = Arc::new(SystemClock);
-    let audit: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new());
+    let audit: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new(sanvi_testsupport::test_ids()));
 
     Wired {
         create: Arc::new(CreateImpersonation::new(
@@ -122,8 +124,8 @@ fn wire(pool: sanvi_persistence::PgPool, privacy: Arc<dyn PrivacyLock>) -> Wired
 #[tokio::test]
 async fn grants_are_created_listed_and_revoked_immediately() {
     let (app, migrator, _node) = prepare().await;
-    let tenant = Uuid::now_v7();
-    let target = Uuid::now_v7();
+    let tenant = TenantId::try_from(101_i64).unwrap();
+    let target = UserId::try_from(102_i64).unwrap();
     insert_tenant_and_member(
         &migrator,
         tenant,
@@ -132,7 +134,7 @@ async fn grants_are_created_listed_and_revoked_immediately() {
         "target@example.com",
     )
     .await;
-    let actor = Uuid::now_v7();
+    let actor = UserId::try_from(103_i64).unwrap();
 
     let wired = wire(app, Arc::new(NoopPrivacyLock));
     let grant = wired
@@ -162,11 +164,7 @@ async fn grants_are_created_listed_and_revoked_immediately() {
     // Revocation is immediate: the same list query no longer sees it.
     wired
         .revoke
-        .execute(
-            Uuid::now_v7(),
-            None,
-            ImpersonationGrantId::from_uuid(grant.id),
-        )
+        .execute(UserId::try_from(104_i64).unwrap(), None, grant.id)
         .await
         .expect("revoke");
     let active = wired.list.execute(Some(tenant), 100).await.unwrap();
@@ -175,11 +173,7 @@ async fn grants_are_created_listed_and_revoked_immediately() {
     // Idempotent: revoking again succeeds.
     wired
         .revoke
-        .execute(
-            Uuid::now_v7(),
-            None,
-            ImpersonationGrantId::from_uuid(grant.id),
-        )
+        .execute(UserId::try_from(104_i64).unwrap(), None, grant.id)
         .await
         .expect("idempotent revoke");
 }
@@ -187,8 +181,8 @@ async fn grants_are_created_listed_and_revoked_immediately() {
 #[tokio::test]
 async fn creation_guardrails_hold() {
     let (app, migrator, _node) = prepare().await;
-    let tenant = Uuid::now_v7();
-    let target = Uuid::now_v7();
+    let tenant = TenantId::try_from(201_i64).unwrap();
+    let target = UserId::try_from(202_i64).unwrap();
     insert_tenant_and_member(&migrator, tenant, "guards", target, "guarded@example.com").await;
 
     let wired = wire(app, Arc::new(NoopPrivacyLock));
@@ -204,7 +198,7 @@ async fn creation_guardrails_hold() {
     let err = wired
         .create
         .execute(
-            Uuid::now_v7(),
+            UserId::try_from(203_i64).unwrap(),
             None,
             CreateImpersonationCommand {
                 reason: "   ".to_string(),
@@ -219,7 +213,7 @@ async fn creation_guardrails_hold() {
     let err = wired
         .create
         .execute(
-            Uuid::now_v7(),
+            UserId::try_from(203_i64).unwrap(),
             None,
             CreateImpersonationCommand {
                 duration_minutes: 31,
@@ -237,10 +231,10 @@ async fn creation_guardrails_hold() {
     let err = wired
         .create
         .execute(
-            Uuid::now_v7(),
+            UserId::try_from(203_i64).unwrap(),
             None,
             CreateImpersonationCommand {
-                target_user_id: Uuid::now_v7(),
+                target_user_id: UserId::try_from(204_i64).unwrap(),
                 ..base.clone()
             },
         )
@@ -252,10 +246,10 @@ async fn creation_guardrails_hold() {
     let err = wired
         .create
         .execute(
-            Uuid::now_v7(),
+            UserId::try_from(203_i64).unwrap(),
             None,
             CreateImpersonationCommand {
-                tenant_id: Uuid::now_v7(),
+                tenant_id: TenantId::try_from(205_i64).unwrap(),
                 ..base
             },
         )
@@ -270,7 +264,7 @@ struct LockedPrivacy;
 
 #[async_trait::async_trait]
 impl PrivacyLock for LockedPrivacy {
-    async fn is_locked(&self, _tenant_id: Uuid) -> Result<bool, PlatformAdminError> {
+    async fn is_locked(&self, _tenant_id: TenantId) -> Result<bool, PlatformAdminError> {
         Ok(true)
     }
 }
@@ -278,15 +272,15 @@ impl PrivacyLock for LockedPrivacy {
 #[tokio::test]
 async fn impersonation_into_a_privacy_locked_tenant_is_refused() {
     let (app, migrator, _node) = prepare().await;
-    let tenant = Uuid::now_v7();
-    let target = Uuid::now_v7();
+    let tenant = TenantId::try_from(301_i64).unwrap();
+    let target = UserId::try_from(302_i64).unwrap();
     insert_tenant_and_member(&migrator, tenant, "locked", target, "locked@example.com").await;
 
     let wired = wire(app.clone(), Arc::new(LockedPrivacy));
     let err = wired
         .create
         .execute(
-            Uuid::now_v7(),
+            UserId::try_from(303_i64).unwrap(),
             None,
             CreateImpersonationCommand {
                 tenant_id: tenant,
@@ -301,7 +295,7 @@ async fn impersonation_into_a_privacy_locked_tenant_is_refused() {
     assert!(matches!(err, PlatformAdminError::PrivacyLocked { .. }));
 
     // And nothing was written.
-    let tx_manager = TxManager::new(app);
+    let tx_manager = TxManager::new(app, sanvi_testsupport::test_ids());
     let grants = SqlxImpersonationGrantRepository::new();
     let mut scope = tx_manager
         .begin_unscoped("test_list", "test")

@@ -5,9 +5,9 @@
 //! and billing can undercut a feature default without touching operators.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::AccessError;
 use crate::domain::features::{Feature, FeatureKey, FeatureKind};
@@ -59,13 +59,15 @@ impl EntitlementSource {
 /// A stored entitlement row for one tenant + feature + source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Entitlement {
-    tenant_id: Uuid,
+    #[schema(value_type = String)]
+    tenant_id: TenantId,
     feature: FeatureKey,
     enabled: bool,
     limit: Option<i64>,
     source: EntitlementSource,
     expires_at: Option<DateTime<Utc>>,
-    granted_by: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    granted_by: Option<UserId>,
     granted_reason: Option<String>,
     updated_at: DateTime<Utc>,
 }
@@ -73,13 +75,13 @@ pub struct Entitlement {
 impl Entitlement {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: FeatureKey,
         enabled: bool,
         limit: Option<i64>,
         source: EntitlementSource,
         expires_at: Option<DateTime<Utc>>,
-        granted_by: Option<Uuid>,
+        granted_by: Option<UserId>,
         granted_reason: Option<String>,
         now: DateTime<Utc>,
     ) -> Result<Self, AccessError> {
@@ -111,13 +113,13 @@ impl Entitlement {
     /// Re-hydration constructor (no validation).
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: FeatureKey,
         enabled: bool,
         limit: Option<i64>,
         source: EntitlementSource,
         expires_at: Option<DateTime<Utc>>,
-        granted_by: Option<Uuid>,
+        granted_by: Option<UserId>,
         granted_reason: Option<String>,
         updated_at: DateTime<Utc>,
     ) -> Self {
@@ -134,7 +136,7 @@ impl Entitlement {
         }
     }
 
-    pub fn tenant_id(&self) -> Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         self.tenant_id
     }
     pub fn feature(&self) -> &FeatureKey {
@@ -152,7 +154,7 @@ impl Entitlement {
     pub fn expires_at(&self) -> Option<DateTime<Utc>> {
         self.expires_at
     }
-    pub fn granted_by(&self) -> Option<Uuid> {
+    pub fn granted_by(&self) -> Option<UserId> {
         self.granted_by
     }
     pub fn granted_reason(&self) -> Option<&str> {
@@ -265,7 +267,7 @@ mod tests {
         expires_at: Option<DateTime<Utc>>,
     ) -> Entitlement {
         Entitlement::from_parts(
-            Uuid::now_v7(),
+            TenantId::try_from(101_i64).unwrap(),
             FeatureKey::parse(feature).unwrap(),
             enabled,
             limit,

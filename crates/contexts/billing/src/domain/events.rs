@@ -4,9 +4,8 @@
 //! invalidation, notifications) can route without parsing payloads.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, EventId, TenantId};
 use serde::Serialize;
-use uuid::Uuid;
 
 /// Machine-readable event names, stable across versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,49 +52,49 @@ impl BillingEventName {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BillingEvent {
     SubscriptionStarted {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plan_key: String,
         stripe_subscription_id: String,
     },
     SubscriptionRenewed {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         period_end: DateTime<Utc>,
     },
     SubscriptionPlanChanged {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         from_plan_key: String,
         to_plan_key: String,
     },
     SubscriptionPastDue {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         stripe_subscription_id: String,
     },
     SubscriptionCanceled {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     },
     /// Dunning grace expired: entitlements downgraded, tenant suspended.
     SubscriptionSuspended {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         stripe_subscription_id: String,
     },
     TrialEnding {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         trial_end: DateTime<Utc>,
     },
     InvoicePaid {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         number: Option<String>,
         total_minor: i64,
     },
     InvoicePaymentFailed {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         number: Option<String>,
         total_minor: i64,
     },
     /// Subscription-source entitlement rows were rewritten for a tenant;
     /// consumers invalidate their entitlement caches.
     EntitlementsRecomputed {
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     },
 }
 
@@ -115,7 +114,7 @@ impl BillingEvent {
         }
     }
 
-    pub fn tenant_id(&self) -> Uuid {
+    pub fn tenant_id(&self) -> TenantId {
         match self {
             Self::SubscriptionStarted { tenant_id, .. }
             | Self::SubscriptionRenewed { tenant_id, .. }
@@ -131,11 +130,12 @@ impl BillingEvent {
     }
 
     /// The outbox envelope for this event, tagged with the tenant id.
-    pub fn envelope(&self) -> EventEnvelope {
+    pub fn envelope(&self, id: EventId) -> EventEnvelope {
         let payload = serde_json::to_value(self).expect("billing events serialize infallibly");
         EventEnvelope::new(
+            id,
             self.name().aggregate(),
-            self.tenant_id(),
+            self.tenant_id().as_snowflake(),
             self.name().as_str(),
             payload,
         )
@@ -164,21 +164,22 @@ mod tests {
     fn every_event_carries_tenant_id_metadata() {
         let events = vec![
             BillingEvent::SubscriptionStarted {
-                tenant_id: Uuid::now_v7(),
+                tenant_id: TenantId::try_from(1_000_001_i64).unwrap(),
                 plan_key: "starter".to_string(),
                 stripe_subscription_id: "sub_x".to_string(),
             },
             BillingEvent::EntitlementsRecomputed {
-                tenant_id: Uuid::now_v7(),
+                tenant_id: TenantId::try_from(1_000_002_i64).unwrap(),
             },
         ];
-        for event in events {
-            let envelope = event.envelope();
+        for (index, event) in events.into_iter().enumerate() {
+            let id = EventId::try_from(1_i64 + index as i64).unwrap();
+            let envelope = event.envelope(id);
             assert_eq!(
                 envelope.metadata["tenant_id"],
                 event.tenant_id().to_string()
             );
-            assert_eq!(envelope.aggregate_id, event.tenant_id());
+            assert_eq!(envelope.aggregate_id, event.tenant_id().as_snowflake());
         }
     }
 }

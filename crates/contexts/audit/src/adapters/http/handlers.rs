@@ -36,8 +36,8 @@ pub fn api_error(err: AuditError) -> ApiError {
 /// Audit query parameters (all optional filters + cursor pagination).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuditQuery {
-    pub tenant_id: Option<uuid::Uuid>,
-    pub actor_id: Option<uuid::Uuid>,
+    pub tenant_id: Option<sanvi_kernel::TenantId>,
+    pub actor_id: Option<sanvi_kernel::UserId>,
     pub action: Option<String>,
     pub since: Option<chrono::DateTime<chrono::Utc>>,
     pub until: Option<chrono::DateTime<chrono::Utc>>,
@@ -72,8 +72,8 @@ impl From<AuditPage> for AuditPageView {
     path = "/api/v1/platform/audit",
     tag = "audit",
     params(
-        ("tenant_id" = Option<uuid::Uuid>, Query, description = "Restrict to one tenant"),
-        ("actor_id" = Option<uuid::Uuid>, Query, description = "Restrict to one actor"),
+        ("tenant_id" = Option<String>, Query, description = "Restrict to one tenant (decimal Snowflake)"),
+        ("actor_id" = Option<String>, Query, description = "Restrict to one actor (decimal Snowflake)"),
         ("action" = Option<String>, Query, description = "Exact action name, e.g. tenancy.suspend"),
         ("since" = Option<chrono::DateTime<chrono::Utc>>, Query, description = "Inclusive lower bound"),
         ("until" = Option<chrono::DateTime<chrono::Utc>>, Query, description = "Exclusive upper bound"),

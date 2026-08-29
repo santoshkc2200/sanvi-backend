@@ -14,8 +14,10 @@ use aes_gcm::aead::{Aead, OsRng};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use async_trait::async_trait;
 use rand::RngCore;
+use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
-use uuid::Uuid;
+
+use crate::domain::model::ConnectionId;
 
 use crate::domain::{
     AdvertisingError, ConnectionTokenRepository, TenantEnvelopeCrypto, TenantKeyRepository,
@@ -46,7 +48,7 @@ impl TenantKeyRepository for SqlxTenantKeyRepository {
     async fn get_or_create(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         candidate_wrapped_dek: Vec<u8>,
         kek_id: &str,
     ) -> Result<TenantKeyRow, AdvertisingError> {
@@ -59,7 +61,7 @@ impl TenantKeyRepository for SqlxTenantKeyRepository {
              ON CONFLICT (tenant_id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id
              RETURNING wrapped_dek, kek_id",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(&candidate_wrapped_dek)
         .bind(kek_id)
         .fetch_one(&mut **scope.tx_mut().as_inner())
@@ -86,8 +88,8 @@ impl ConnectionTokenRepository for SqlxConnectionTokenRepository {
     async fn upsert(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
         ciphertext: Vec<u8>,
     ) -> Result<(), AdvertisingError> {
         sqlx::query(
@@ -96,8 +98,8 @@ impl ConnectionTokenRepository for SqlxConnectionTokenRepository {
              ON CONFLICT (connection_id) DO UPDATE SET
                ciphertext = EXCLUDED.ciphertext, tenant_id = EXCLUDED.tenant_id, updated_at = now()",
         )
-        .bind(connection_id)
-        .bind(tenant_id)
+        .bind(connection_id.as_i64())
+        .bind(tenant_id.as_i64())
         .bind(ciphertext)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -108,15 +110,15 @@ impl ConnectionTokenRepository for SqlxConnectionTokenRepository {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<Option<Vec<u8>>, AdvertisingError> {
         let row: Option<(Vec<u8>,)> = sqlx::query_as(
             "SELECT ciphertext FROM advertising.connection_tokens
              WHERE tenant_id = $1 AND connection_id = $2",
         )
-        .bind(tenant_id)
-        .bind(connection_id)
+        .bind(tenant_id.as_i64())
+        .bind(connection_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -130,7 +132,7 @@ pub struct SqlxTenantEnvelopeCrypto {
     keys: SqlxTenantKeyRepository,
     kek: [u8; 32],
     kek_id: String,
-    dek_cache: Mutex<HashMap<Uuid, [u8; 32]>>,
+    dek_cache: Mutex<HashMap<TenantId, [u8; 32]>>,
 }
 
 impl SqlxTenantEnvelopeCrypto {
@@ -176,7 +178,7 @@ impl SqlxTenantEnvelopeCrypto {
     async fn fetch_dek(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<[u8; 32], AdvertisingError> {
         if let Ok(cache) = self.dek_cache.lock()
             && let Some(dek) = cache.get(&tenant_id)
@@ -212,7 +214,7 @@ impl TenantEnvelopeCrypto for SqlxTenantEnvelopeCrypto {
     async fn encrypt_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         plaintext: &[u8],
     ) -> Result<Vec<u8>, AdvertisingError> {
         let dek = self.fetch_dek(scope, tenant_id).await?;
@@ -231,7 +233,7 @@ impl TenantEnvelopeCrypto for SqlxTenantEnvelopeCrypto {
     async fn decrypt_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, AdvertisingError> {
         if ciphertext.len() < 13 {

@@ -2,7 +2,7 @@
 //! relation tuples, so a membership change reaches Keto within one outbox
 //! poll without any process restart.
 
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, RoleId, TenantId, UserId};
 use sanvi_messaging::ConsumerHandler;
 
 use crate::domain::AccessError;
@@ -18,7 +18,7 @@ pub fn access_sync_handler(
     store: std::sync::Arc<dyn PermissionStore>,
     cache: Option<std::sync::Arc<dyn DecisionCache>>,
     role_key_resolver: impl Fn(
-        uuid::Uuid,
+        RoleId,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Option<String>> + Send>,
     > + Send
@@ -53,14 +53,12 @@ async fn apply_event(
     store: &std::sync::Arc<dyn PermissionStore>,
     envelope: EventEnvelope,
     role_key_resolver: &std::sync::Arc<
-        impl Fn(
-            uuid::Uuid,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        impl Fn(RoleId) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         + Send
         + Sync
         + 'static,
     >,
-) -> Result<(Option<uuid::Uuid>, bool), AccessError> {
+) -> Result<(Option<UserId>, bool), AccessError> {
     match envelope.event_type.as_str() {
         "identity.membership_granted" | "identity.membership_roles_changed" => {
             let (tenant_id, user_id, role_ids) = parse_membership_payload(&envelope)?;
@@ -87,8 +85,8 @@ async fn apply_event(
                 .payload
                 .get("user_id")
                 .and_then(|value| value.as_str())
-                .and_then(|value| value.parse::<uuid::Uuid>().ok())
-                .unwrap_or(envelope.aggregate_id);
+                .and_then(|value| value.parse::<UserId>().ok())
+                .unwrap_or_else(|| UserId::from_snowflake(envelope.aggregate_id));
             // Cache invalidation only; tuple removal is the rebuild's job.
             Ok((Some(user_id), false))
         }
@@ -104,31 +102,26 @@ async fn apply_event(
 
 fn parse_membership_payload(
     envelope: &EventEnvelope,
-) -> Result<(uuid::Uuid, uuid::Uuid, Vec<uuid::Uuid>), AccessError> {
+) -> Result<(TenantId, UserId, Vec<RoleId>), AccessError> {
     let tenant_id = envelope
         .metadata
         .get("tenant_id")
         .and_then(|value| value.as_str())
-        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .and_then(|value| value.parse::<TenantId>().ok())
         .or_else(|| {
             envelope
                 .payload
                 .get("tenant_id")
                 .and_then(|value| value.as_str())
-                .and_then(|value| value.parse::<uuid::Uuid>().ok())
+                .and_then(|value| value.parse::<TenantId>().ok())
         })
         .ok_or_else(|| AccessError::BackendRejected("membership event has no tenant_id".into()))?;
     let user_id = envelope
         .payload
         .get("user_id")
         .and_then(|value| value.as_str())
-        .and_then(|value| value.parse::<uuid::Uuid>().ok())
-        .unwrap_or(envelope.aggregate_id);
-    if user_id.is_nil() {
-        return Err(AccessError::BackendRejected(
-            "membership event has no user_id".into(),
-        ));
-    }
+        .and_then(|value| value.parse::<UserId>().ok())
+        .unwrap_or_else(|| UserId::from_snowflake(envelope.aggregate_id));
     let role_ids = envelope
         .payload
         .get("role_ids")
@@ -137,7 +130,7 @@ fn parse_membership_payload(
             roles
                 .iter()
                 .filter_map(|role| role.as_str())
-                .filter_map(|role| role.parse::<uuid::Uuid>().ok())
+                .filter_map(|role| role.parse::<RoleId>().ok())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -145,13 +138,11 @@ fn parse_membership_payload(
 }
 
 async fn membership_tuples(
-    tenant_id: uuid::Uuid,
-    user_id: uuid::Uuid,
-    role_ids: &[uuid::Uuid],
+    tenant_id: TenantId,
+    user_id: UserId,
+    role_ids: &[RoleId],
     role_key_resolver: &std::sync::Arc<
-        impl Fn(
-            uuid::Uuid,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        impl Fn(RoleId) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
         + Send
         + Sync
         + 'static,
@@ -213,7 +204,7 @@ async fn apply_access_event(
         .metadata
         .get("tenant_id")
         .and_then(|value| value.as_str())
-        .and_then(|value| value.parse::<uuid::Uuid>().ok());
+        .and_then(|value| value.parse::<TenantId>().ok());
 
     match envelope.event_type.as_str() {
         "access.entitlement_granted"
@@ -308,7 +299,7 @@ fn role_object(envelope: &EventEnvelope) -> String {
         .payload
         .get("tenant_id")
         .and_then(|value| value.as_str())
-        .and_then(|value| value.parse::<uuid::Uuid>().ok());
+        .and_then(|value| value.parse::<TenantId>().ok());
     match tenant_id {
         Some(tenant_id) => format!("{tenant_id}:{key}"),
         None => format!("platform:{key}"),

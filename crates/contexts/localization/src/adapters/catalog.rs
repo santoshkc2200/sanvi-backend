@@ -11,8 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
 
-use uuid::Uuid;
-
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{PgPool, TxManager};
 
 use crate::adapters::cache::LocalizationCache;
@@ -85,12 +84,13 @@ pub struct LocalizationService {
 impl LocalizationService {
     pub fn new(
         pool: PgPool,
+        ids: Arc<dyn sanvi_kernel::RawIdGenerator>,
         translations: Arc<dyn TranslationRepository>,
         cache: Arc<LocalizationCache>,
         metrics: Arc<LocalizationMetrics>,
         config: LocalizationConfig,
     ) -> Self {
-        let tx_manager = TxManager::new(pool.clone());
+        let tx_manager = TxManager::new(pool.clone(), ids);
         Self {
             pool,
             tx_manager,
@@ -131,7 +131,7 @@ impl LocalizationService {
         }
     }
 
-    pub fn invalidate_tenant(&self, tenant_id: Uuid) {
+    pub fn invalidate_tenant(&self, tenant_id: TenantId) {
         self.cache.invalidate_tenant(tenant_id);
     }
 
@@ -164,10 +164,13 @@ impl LocalizationService {
 
         // 3. Tenant overrides (scope is a tenant id).
         if scope != "platform"
-            && let Ok(tenant_id) = scope.parse::<Uuid>()
+            && let Ok(tenant_id) = scope.parse::<i64>()
         {
             let mut scoped = self.tx_manager.begin_for(tenant_id).await.map_err(|err| {
                 LocalizationError::Storage(format!("failed to open tenant scope: {err}"))
+            })?;
+            let tenant_id = TenantId::try_from(tenant_id).map_err(|err| {
+                LocalizationError::Storage(format!("invalid tenant id in scope: {err}"))
             })?;
             let tenant_overrides = self
                 .translations
@@ -416,7 +419,7 @@ mod tests {
         async fn list_tenant(
             &self,
             _scope: &mut ScopedTx<'_>,
-            _tenant_id: Uuid,
+            _tenant_id: TenantId,
         ) -> Result<Vec<Translation>, LocalizationError> {
             Ok(Vec::new())
         }
@@ -442,7 +445,7 @@ mod tests {
         async fn upsert_tenant(
             &self,
             _scope: &mut ScopedTx<'_>,
-            _tenant_id: Uuid,
+            _tenant_id: TenantId,
             _translation: &Translation,
         ) -> Result<(), LocalizationError> {
             Ok(())
@@ -459,7 +462,7 @@ mod tests {
         async fn delete_tenant(
             &self,
             _scope: &mut ScopedTx<'_>,
-            _tenant_id: Uuid,
+            _tenant_id: TenantId,
             _key: &str,
             _locale: &str,
         ) -> Result<(), LocalizationError> {
@@ -492,6 +495,7 @@ mod tests {
             .expect("lazy pool construction never connects");
         LocalizationService::new(
             pool,
+            sanvi_testsupport::test_ids(),
             repo,
             Arc::new(LocalizationCache::new()),
             Arc::new(LocalizationMetrics::new(&prometheus::Registry::new())),

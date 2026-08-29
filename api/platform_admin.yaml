@@ -35,7 +35,10 @@ paths:
         name: after_id
         required: false
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Page size (1..=100, default 25)
         in: query
@@ -76,7 +79,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -130,7 +136,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -171,7 +180,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -210,7 +222,10 @@ paths:
         name: tenant_id
         required: false
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Maximum grants (default 100)
         in: query
@@ -280,7 +295,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -313,7 +331,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '204':
@@ -337,7 +358,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -366,7 +390,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -409,7 +436,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -439,7 +469,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -481,7 +514,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Feature key
         in: path

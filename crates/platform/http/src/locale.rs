@@ -21,9 +21,9 @@ use actix_web::{
     dev::{ServiceRequest, ServiceResponse},
     http::header,
 };
+use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::authn::Subject;
 use crate::tenancy::TenantContext;
@@ -73,7 +73,8 @@ pub struct LocaleContext {
     pub timezone: String,
     /// The tenant this locale was negotiated for, when the request was
     /// tenant-scoped.
-    pub tenant_id: Option<Uuid>,
+    #[schema(value_type = Option<String>)]
+    pub tenant_id: Option<TenantId>,
 }
 
 impl LocaleContext {

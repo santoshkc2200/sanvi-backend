@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::Utc;
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{ScopedTx, TxManager};
-use uuid::Uuid;
 
 use sanvi_privacy::domain::{DirectiveResolver, DirectiveState, ProcessingPurpose, SubjectRef};
 
@@ -27,15 +27,13 @@ use crate::domain::{
 /// rules decided it.
 const CONSENT_GATE_VERSION: &str = "v1";
 
-const CONVERSION_DEDUPE_NAMESPACE: Uuid = Uuid::from_bytes([
-    0x49, 0x06, 0xc6, 0xa4, 0x6a, 0x82, 0x45, 0x05, 0xa3, 0xab, 0x3c, 0x9f, 0x6a, 0x61, 0x1e, 0x02,
-]);
-
-/// Identity used for database idempotency. An order reference is immutable
-/// across checkout lifecycle transitions, unlike the presence of a completed
-/// payment record; event name keeps independent lifecycle events distinct.
+/// Stable dedup key: (tenant_id, order_ref, event_name) when an order
+/// reference exists, otherwise (tenant_id, event_id, event_name). An order
+/// reference is immutable across checkout lifecycle transitions, unlike the
+/// presence of a completed payment record; event name keeps independent
+/// lifecycle events distinct.
 fn conversion_dedupe_key(
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     order_ref: Option<&str>,
     event_name: &str,
     event_id: &str,
@@ -44,11 +42,7 @@ fn conversion_dedupe_key(
         Some(order_ref) => ("order", order_ref),
         None => ("client_event", event_id),
     };
-    Uuid::new_v5(
-        &CONVERSION_DEDUPE_NAMESPACE,
-        format!("{tenant_id}:{kind}:{identity}:event:{event_name}").as_bytes(),
-    )
-    .to_string()
+    format!("{tenant_id}:{kind}:{identity}:event:{event_name}")
 }
 
 pub struct CaptureConversion {
@@ -57,10 +51,11 @@ pub struct CaptureConversion {
     payment_lookup: Arc<dyn PaymentLookupPort>,
     vendor_role: Arc<dyn VendorRolePort>,
     directive_resolver: Arc<dyn DirectiveResolver>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 pub struct TrackConversionCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub event_name: String,
     pub event_id: String,
     pub order_ref: Option<String>,
@@ -89,6 +84,7 @@ impl CaptureConversion {
         payment_lookup: Arc<dyn PaymentLookupPort>,
         vendor_role: Arc<dyn VendorRolePort>,
         directive_resolver: Arc<dyn DirectiveResolver>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
@@ -96,6 +92,7 @@ impl CaptureConversion {
             payment_lookup,
             vendor_role,
             directive_resolver,
+            ids,
         }
     }
 
@@ -111,7 +108,7 @@ impl CaptureConversion {
 
         let mut scope = self
             .tx
-            .begin_for(command.tenant_id)
+            .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let event = self.build_event(&mut scope, command, consent).await?;
@@ -136,7 +133,7 @@ impl CaptureConversion {
         let consent = self.resolve_gate(&command).await?;
         let mut scope = self
             .tx
-            .begin_for(command.tenant_id)
+            .begin_for(command.tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         self.build_event(&mut scope, command, consent).await
@@ -157,7 +154,7 @@ impl CaptureConversion {
         }
 
         let (value, value_source, payment_event_id) = self.resolve_value(scope, &command).await?;
-        let event_id = payment_event_id.unwrap_or(command.event_id);
+        let event_id = payment_event_id.clone().unwrap_or(command.event_id.clone());
         let dedupe_key = conversion_dedupe_key(
             command.tenant_id,
             command.order_ref.as_deref(),
@@ -166,7 +163,7 @@ impl CaptureConversion {
         );
 
         Ok(ConversionEvent {
-            id: Uuid::now_v7(),
+            id: self.ids.next_conversion_id()?,
             tenant_id: command.tenant_id,
             event_id,
             dedupe_key,

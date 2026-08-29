@@ -12,6 +12,8 @@ services:
       SANVI_ENV: production
       SANVI__SERVER__HOST: 0.0.0.0
       SANVI__SERVER__PORT: 8080
+      # This replica's Snowflake node; set a unique override per replica.
+      SANVI__IDS__NODE_ID: 201
       # All remaining secrets come from the host's secret manager:
       # SANVI__DATABASE__HOST / PORT / NAME / USER / PASSWORD
       # SANVI__REDIS__URL
@@ -35,6 +37,8 @@ services:
     command: /usr/local/bin/sanvi-worker
     environment:
       SANVI_ENV: production
+      # This replica's Snowflake node; set a unique override per replica.
+      SANVI__IDS__NODE_ID: 202
       # SANVI__DATABASE__* / SANVI__REDIS__URL / SANVI__TELEMETRY__OTLP__AUTH_TOKEN
       # from the host's secret manager
     restart: unless-stopped

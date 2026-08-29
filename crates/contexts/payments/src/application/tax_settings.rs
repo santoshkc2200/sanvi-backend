@@ -21,14 +21,15 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use serde::Serialize;
-use uuid::Uuid;
+
+use sanvi_kernel::TenantId;
+use sanvi_persistence::TxManager;
 
 use crate::domain::error::PaymentsError;
 use crate::domain::ports::{
     ConnectionNotifier, ProviderConnectionRepository, TaxSettingsRepository,
 };
 use crate::domain::tax::TaxSettingsRecord;
-use sanvi_persistence::TxManager;
 
 /// The tenant-facing view: our toggle, the last observed snapshot, any
 /// lapse warning — and the standing legal statement.
@@ -101,11 +102,11 @@ impl ManageTaxSettings {
 
     async fn load_connection(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<crate::domain::connection::ProviderConnection, PaymentsError> {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         let connections = self.connections.list(&mut scope, tenant_id).await;
@@ -135,7 +136,7 @@ impl ManageTaxSettings {
     }
 
     /// `GET /tenant/payments/tax-settings`.
-    pub async fn view(&self, tenant_id: Uuid) -> Result<TaxSettingsView, PaymentsError> {
+    pub async fn view(&self, tenant_id: TenantId) -> Result<TaxSettingsView, PaymentsError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("load_tax_settings", ACTOR)
@@ -155,7 +156,7 @@ impl ManageTaxSettings {
     /// preflight against the connected account *now*, refuse with the
     /// specific missing step on failure, store the snapshot + liability on
     /// success.
-    pub async fn enable(&self, tenant_id: Uuid) -> Result<TaxSettingsView, PaymentsError> {
+    pub async fn enable(&self, tenant_id: TenantId) -> Result<TaxSettingsView, PaymentsError> {
         let connection = self.load_connection(tenant_id).await?;
         let adapter = self.registry.get(connection.provider).ok_or_else(|| {
             PaymentsError::InvalidConnection(format!(
@@ -208,7 +209,7 @@ impl ManageTaxSettings {
     /// permitted. Disabling mid-period changes what customers are charged,
     /// so the response is a tenant-facing change requiring notice — the
     /// handler surfaces the disclosure copy, never a silent flag flip.
-    pub async fn disable(&self, tenant_id: Uuid) -> Result<TaxSettingsView, PaymentsError> {
+    pub async fn disable(&self, tenant_id: TenantId) -> Result<TaxSettingsView, PaymentsError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("load_tax_settings_for_disable", ACTOR)
@@ -344,7 +345,7 @@ impl CheckTenantTaxCompliance {
 
     /// One tenant's re-check, callable from webhook handlers when a
     /// tax-related account event arrives.
-    pub async fn recheck_tenant(&self, tenant_id: Uuid) -> Result<(), PaymentsError> {
+    pub async fn recheck_tenant(&self, tenant_id: TenantId) -> Result<(), PaymentsError> {
         let Some(adapter) = self.provider_for(tenant_id).await else {
             return Ok(());
         };
@@ -384,7 +385,7 @@ impl CheckTenantTaxCompliance {
 
     async fn provider_for(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Option<Arc<dyn crate::domain::PaymentProviderPort>> {
         self.registry
             .get(self.load_connection_provider(tenant_id).await?)
@@ -392,9 +393,9 @@ impl CheckTenantTaxCompliance {
 
     async fn load_connection_provider(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Option<crate::domain::ProviderKind> {
-        let mut scope = self.tx_manager.begin_for(tenant_id).await.ok()?;
+        let mut scope = self.tx_manager.begin_for(tenant_id.as_i64()).await.ok()?;
         let list = self.connections.list(&mut scope, tenant_id).await.ok()?;
         let _ = scope.rollback().await;
         list.into_iter()
@@ -402,8 +403,8 @@ impl CheckTenantTaxCompliance {
             .map(|c| c.provider)
     }
 
-    async fn load_connection_account(&self, tenant_id: Uuid) -> Option<String> {
-        let mut scope = self.tx_manager.begin_for(tenant_id).await.ok()?;
+    async fn load_connection_account(&self, tenant_id: TenantId) -> Option<String> {
+        let mut scope = self.tx_manager.begin_for(tenant_id.as_i64()).await.ok()?;
         let list = self.connections.list(&mut scope, tenant_id).await.ok()?;
         let _ = scope.rollback().await;
         list.into_iter()

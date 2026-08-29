@@ -11,9 +11,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use chrono::Utc;
-use uuid::Uuid;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 
 use crate::domain::connection::ProviderConnection;
@@ -50,9 +50,9 @@ impl CreateAccountSession {
     /// transition. The session secret itself is never persisted.
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         ip: Option<IpAddr>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         connection: &ProviderConnection,
     ) -> Result<(ProviderAccountSession, Option<ProviderConnection>), PaymentsError> {
         if connection.tenant_id != tenant_id {
@@ -108,7 +108,7 @@ impl CreateAccountSession {
                     {
                         let mut scope = self
                             .tx_manager
-                            .begin_for(tenant_id)
+                            .begin_for(tenant_id.as_i64())
                             .await
                             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
                         self.connections.update(&mut scope, &updated).await?;
@@ -133,9 +133,9 @@ impl CreateAccountSession {
 
     async fn audit_issuance(
         &self,
-        actor: Uuid,
+        actor: UserId,
         ip: Option<IpAddr>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         connection: &ProviderConnection,
     ) {
         let Ok(mut scope) = self

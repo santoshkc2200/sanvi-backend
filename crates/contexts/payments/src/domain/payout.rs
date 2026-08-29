@@ -7,19 +7,23 @@
 //! transient API call, and so the payments list can show payout status.
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use sanvi_kernel::{Id, TenantId};
 
+use super::connection::ConnectionId;
 use super::money::Money;
 use super::ports::PayoutStatus;
+
+pub enum PayoutTag {}
+pub type PayoutId = Id<PayoutTag>;
 
 /// One payout from the tenant's connected account to their bank.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PayoutRecord {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub id: PayoutId,
+    pub tenant_id: TenantId,
     /// The connection that owned the account when the event arrived
     /// (`SET NULL` on delete — history survives a disconnect).
-    pub connection_id: Option<Uuid>,
+    pub connection_id: Option<ConnectionId>,
     pub external_payout_id: String,
     pub amount: Money,
     pub status: PayoutStatus,
@@ -30,9 +34,9 @@ pub struct PayoutRecord {
 
 impl PayoutRecord {
     pub fn new(
-        id: Uuid,
-        tenant_id: Uuid,
-        connection_id: Option<Uuid>,
+        id: PayoutId,
+        tenant_id: TenantId,
+        connection_id: Option<ConnectionId>,
         external_payout_id: String,
         amount: Money,
         status: PayoutStatus,
@@ -64,8 +68,8 @@ mod tests {
     fn payout_records_require_a_provider_payout_id() {
         assert!(
             PayoutRecord::new(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                PayoutId::try_from(1_i64).unwrap(),
+                TenantId::try_from(2_i64).unwrap(),
                 None,
                 "po_test_1".to_string(),
                 Money::new(1500, "JPY").unwrap(),
@@ -75,8 +79,8 @@ mod tests {
         );
         assert!(
             PayoutRecord::new(
-                Uuid::now_v7(),
-                Uuid::now_v7(),
+                PayoutId::try_from(1_i64).unwrap(),
+                TenantId::try_from(2_i64).unwrap(),
                 None,
                 "pi_not_a_payout".to_string(),
                 Money::new(1500, "JPY").unwrap(),

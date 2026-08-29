@@ -1,18 +1,12 @@
 //! The tenant aggregate: identity, lifecycle state machine and invariants.
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::Id;
+pub use sanvi_kernel::{TenantId, TenantTag};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::domain::values::{DataRegion, Locale, SuspensionReason, TenantName, TenantSlug};
 use crate::domain::{TenancyError, events::TenantEvent};
-
-/// Tag for tenant identifiers.
-pub enum TenantTag {}
-
-/// UUIDv7 tenant identifier.
-pub type TenantId = Id<TenantTag>;
 
 /// Tenant lifecycle:
 /// `provisioning → active → suspended → archived → purged` with
@@ -314,7 +308,7 @@ mod tests {
 
     fn fixture() -> (Tenant, Vec<TenantEvent>) {
         Tenant::provision(
-            TenantId::new(),
+            TenantId::try_from(101_i64).unwrap(),
             TenantSlug::parse("acme").unwrap(),
             TenantName::parse("Acme Corp").unwrap(),
             DataRegion::Us,

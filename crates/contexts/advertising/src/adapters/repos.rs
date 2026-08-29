@@ -2,8 +2,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::ScopedTx;
-use uuid::Uuid;
+
+use crate::domain::model::{CampaignChangeId, CampaignId, ConnectionId, ConversionId, CreativeId};
 
 use crate::domain::{
     AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, CampaignChange,
@@ -13,8 +15,8 @@ use crate::domain::{
 
 #[derive(sqlx::FromRow)]
 struct ConnectionRow {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    tenant_id: i64,
     platform: String,
     external_account_id: String,
     account_name: Option<String>,
@@ -23,7 +25,7 @@ struct ConnectionRow {
     status: String,
     scopes: Vec<String>,
     token_ref: String,
-    connected_by: Option<Uuid>,
+    connected_by: Option<i64>,
     connected_at: DateTime<Utc>,
     token_expires_at: Option<DateTime<Utc>>,
     last_synced_at: Option<DateTime<Utc>>,
@@ -57,9 +59,18 @@ impl TryFrom<ConnectionRow> for AdvertisingConnection {
             .map_err(|error| {
                 AdvertisingError::Storage(format!("invalid advertising pending accounts: {error}"))
             })?;
+        let id =
+            ConnectionId::try_from(row.id).map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let tenant_id = TenantId::try_from(row.tenant_id)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let connected_by = row
+            .connected_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
         AdvertisingConnection::from_persisted(
-            row.id,
-            row.tenant_id,
+            id,
+            tenant_id,
             platform,
             row.external_account_id,
             row.account_name,
@@ -68,7 +79,7 @@ impl TryFrom<ConnectionRow> for AdvertisingConnection {
             status,
             row.scopes,
             SecretRef::new(row.token_ref),
-            row.connected_by,
+            connected_by,
             row.connected_at,
             row.token_expires_at,
             row.last_synced_at,
@@ -108,9 +119,9 @@ fn pending_accounts_json(
 
 #[derive(sqlx::FromRow)]
 struct CampaignRow {
-    id: Uuid,
-    tenant_id: Uuid,
-    connection_id: Uuid,
+    id: i64,
+    tenant_id: i64,
+    connection_id: i64,
     platform: String,
     external_id: Option<String>,
     revision: i64,
@@ -123,9 +134,12 @@ impl TryFrom<CampaignRow> for StoredCampaign {
 
     fn try_from(row: CampaignRow) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: row.id,
-            tenant_id: row.tenant_id,
-            connection_id: row.connection_id,
+            id: CampaignId::try_from(row.id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+            tenant_id: TenantId::try_from(row.tenant_id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+            connection_id: ConnectionId::try_from(row.connection_id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
             platform: PlatformKey::parse(&row.platform).map_err(|_| {
                 AdvertisingError::Storage(format!(
                     "unknown advertising platform {:?}",
@@ -146,12 +160,12 @@ impl TryFrom<CampaignRow> for StoredCampaign {
 
 #[derive(sqlx::FromRow)]
 struct CampaignChangeRow {
-    id: Uuid,
-    tenant_id: Uuid,
-    campaign_id: Uuid,
+    id: i64,
+    tenant_id: i64,
+    campaign_id: i64,
     revision: i64,
-    mutation_id: Option<Uuid>,
-    actor_id: Option<Uuid>,
+    mutation_id: Option<uuid::Uuid>,
+    actor_id: Option<i64>,
     source: String,
     changed_fields: serde_json::Value,
     before_state: serde_json::Value,
@@ -173,12 +187,19 @@ impl TryFrom<CampaignChangeRow> for CampaignChange {
             }
         };
         Ok(Self {
-            id: row.id,
-            tenant_id: row.tenant_id,
-            campaign_id: row.campaign_id,
+            id: CampaignChangeId::try_from(row.id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+            tenant_id: TenantId::try_from(row.tenant_id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+            campaign_id: CampaignId::try_from(row.campaign_id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
             revision: row.revision,
             mutation_id: row.mutation_id,
-            actor_id: row.actor_id,
+            actor_id: row
+                .actor_id
+                .map(UserId::try_from)
+                .transpose()
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
             source,
             changed_fields: serde_json::from_value(row.changed_fields).map_err(|error| {
                 AdvertisingError::Storage(format!("invalid campaign change fields: {error}"))
@@ -218,9 +239,9 @@ impl CampaignRepository for SqlxCampaignRepository {
               schedule, drift, revision, intent, remote_snapshot)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
         )
-        .bind(campaign.id)
-        .bind(campaign.tenant_id)
-        .bind(campaign.connection_id)
+        .bind(campaign.id.as_i64())
+        .bind(campaign.tenant_id.as_i64())
+        .bind(campaign.connection_id.as_i64())
         .bind(campaign.platform.as_str())
         .bind(&campaign.external_id)
         .bind(&campaign.intent.name)
@@ -256,13 +277,13 @@ impl CampaignRepository for SqlxCampaignRepository {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
     ) -> Result<Option<StoredCampaign>, AdvertisingError> {
         sqlx::query_as::<_, CampaignRow>(
             "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
              FROM advertising.campaigns WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
-        ).bind(tenant_id).bind(campaign_id)
+        ).bind(tenant_id.as_i64()).bind(campaign_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?
         .map(TryInto::try_into).transpose()
     }
@@ -303,8 +324,8 @@ impl CampaignRepository for SqlxCampaignRepository {
             serde_json::to_value(&campaign.remote_snapshot)
                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
         )
-        .bind(campaign.tenant_id)
-        .bind(campaign.id)
+        .bind(campaign.tenant_id.as_i64())
+        .bind(campaign.id.as_i64())
         .bind(expected_revision)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -315,13 +336,13 @@ impl CampaignRepository for SqlxCampaignRepository {
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
         let rows = sqlx::query_as::<_, CampaignRow>(
             "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
              FROM advertising.campaigns WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -350,10 +371,10 @@ impl CampaignRepository for SqlxCampaignRepository {
     async fn mark_reconciled(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
-        campaign_id: Uuid,
+        campaign_id: CampaignId,
     ) -> Result<(), AdvertisingError> {
         sqlx::query("UPDATE advertising.campaigns SET updated_at=now() WHERE id=$1")
-            .bind(campaign_id)
+            .bind(campaign_id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(storage)?;
@@ -371,12 +392,12 @@ impl CampaignRepository for SqlxCampaignRepository {
               before_state, after_state, created_at)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
         )
-        .bind(change.id)
-        .bind(change.tenant_id)
-        .bind(change.campaign_id)
+        .bind(change.id.as_i64())
+        .bind(change.tenant_id.as_i64())
+        .bind(change.campaign_id.as_i64())
         .bind(change.revision)
         .bind(change.mutation_id)
-        .bind(change.actor_id)
+        .bind(change.actor_id.map(|v| v.as_i64()))
         .bind(change.source.as_str())
         .bind(
             serde_json::to_value(&change.changed_fields)
@@ -400,9 +421,9 @@ impl CampaignRepository for SqlxCampaignRepository {
     async fn find_change_by_mutation(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
-        mutation_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        mutation_id: uuid::Uuid,
     ) -> Result<Option<CampaignChange>, AdvertisingError> {
         sqlx::query_as::<_, CampaignChangeRow>(
             "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, source,
@@ -410,8 +431,8 @@ impl CampaignRepository for SqlxCampaignRepository {
              FROM advertising.campaign_changes
              WHERE tenant_id=$1 AND campaign_id=$2 AND mutation_id=$3",
         )
-        .bind(tenant_id)
-        .bind(campaign_id)
+        .bind(tenant_id.as_i64())
+        .bind(campaign_id.as_i64())
         .bind(mutation_id)
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -423,8 +444,8 @@ impl CampaignRepository for SqlxCampaignRepository {
     async fn list_changes(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        campaign_id: Uuid,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
         limit: i64,
     ) -> Result<Vec<CampaignChange>, AdvertisingError> {
         sqlx::query_as::<_, CampaignChangeRow>(
@@ -435,8 +456,8 @@ impl CampaignRepository for SqlxCampaignRepository {
              ORDER BY created_at DESC, id DESC
              LIMIT $3",
         )
-        .bind(tenant_id)
-        .bind(campaign_id)
+        .bind(tenant_id.as_i64())
+        .bind(campaign_id.as_i64())
         .bind(limit)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -476,8 +497,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
                last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
                pending_accounts",
         )
-        .bind(connection.id())
-        .bind(connection.tenant_id())
+        .bind(connection.id().as_i64())
+        .bind(connection.tenant_id().as_i64())
         .bind(connection.platform().as_str())
         .bind(connection.external_account_id())
         .bind(connection.account_name())
@@ -486,7 +507,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         .bind(connection.status().as_str())
         .bind(connection.granted_scopes())
         .bind(connection.token_ref().persisted_locator())
-        .bind(connection.connected_by())
+        .bind(connection.connected_by().map(|v| v.as_i64()))
         .bind(connection.connected_at())
         .bind(connection.token_expires_at())
         .bind(connection.last_synced_at())
@@ -527,8 +548,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
                last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
                pending_accounts",
         )
-        .bind(connection.tenant_id())
-        .bind(connection.id())
+        .bind(connection.tenant_id().as_i64())
+        .bind(connection.id().as_i64())
         .bind(connection.external_account_id())
         .bind(connection.account_name())
         .bind(connection.currency())
@@ -578,9 +599,9 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
              ON CONFLICT (connection_id) DO UPDATE SET
                ciphertext = EXCLUDED.ciphertext, tenant_id = EXCLUDED.tenant_id, updated_at = now()",
         )
-        .bind(connection.tenant_id())
-        .bind(pending_id)
-        .bind(stored.id())
+        .bind(connection.tenant_id().as_i64())
+        .bind(pending_id.as_i64())
+        .bind(stored.id().as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -594,15 +615,15 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
             "UPDATE advertising.connections SET token_ref = $3, updated_at = now()
              WHERE tenant_id = $1 AND id = $2",
         )
-        .bind(connection.tenant_id())
-        .bind(stored.id())
+        .bind(connection.tenant_id().as_i64())
+        .bind(stored.id().as_i64())
         .bind(stored.id().to_string())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
         sqlx::query("DELETE FROM advertising.connections WHERE tenant_id = $1 AND id = $2")
-            .bind(connection.tenant_id())
-            .bind(pending_id)
+            .bind(connection.tenant_id().as_i64())
+            .bind(pending_id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(storage)?;
@@ -614,7 +635,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<AdvertisingConnection>, AdvertisingError> {
         let rows = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
@@ -624,7 +645,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
              FROM advertising.connections
              WHERE tenant_id = $1 ORDER BY connected_at DESC, id DESC",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -634,8 +655,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<Option<AdvertisingConnection>, AdvertisingError> {
         let row = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
@@ -645,8 +666,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
              FROM advertising.connections
              WHERE tenant_id = $1 AND id = $2",
         )
-        .bind(tenant_id)
-        .bind(connection_id)
+        .bind(tenant_id.as_i64())
+        .bind(connection_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -660,8 +681,8 @@ use crate::domain::{
 
 #[derive(sqlx::FromRow)]
 struct ConversionEventRow {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    tenant_id: i64,
     event_id: String,
     dedupe_key: String,
     name: String,
@@ -679,8 +700,9 @@ struct ConversionEventRow {
 fn row_to_conversion_event(row: ConversionEventRow) -> Result<ConversionEvent, AdvertisingError> {
     let map_json_err = |err: serde_json::Error| AdvertisingError::Storage(err.to_string());
     Ok(ConversionEvent {
-        id: row.id,
-        tenant_id: row.tenant_id,
+        id: ConversionId::try_from(row.id).map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+        tenant_id: TenantId::try_from(row.tenant_id)
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
         event_id: row.event_id,
         dedupe_key: row.dedupe_key,
         name: row.name,
@@ -731,7 +753,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
                (tenant_id, event_id, dedupe_key, occurred_at)
              VALUES ($1, $2, $3, $4) ON CONFLICT (tenant_id, dedupe_key) DO NOTHING",
         )
-        .bind(event.tenant_id)
+        .bind(event.tenant_id.as_i64())
         .bind(&event.event_id)
         .bind(&event.dedupe_key)
         .bind(event.occurred_at)
@@ -764,8 +786,8 @@ impl ConversionEventRepository for SqlxCampaignRepository {
                 value_source, order_ref, click_ids, hashed_ids, consent, upload_states)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
-        .bind(event.id)
-        .bind(event.tenant_id)
+        .bind(event.id.as_i64())
+        .bind(event.tenant_id.as_i64())
         .bind(&event.event_id)
         .bind(&event.dedupe_key)
         .bind(&event.name)
@@ -788,7 +810,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
         let rows = sqlx::query_as::<_, ConversionEventRow>(
             "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
@@ -798,7 +820,7 @@ impl ConversionEventRepository for SqlxCampaignRepository {
              ORDER BY occurred_at DESC
              LIMIT 200",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
@@ -809,8 +831,8 @@ impl ConversionEventRepository for SqlxCampaignRepository {
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        id: Uuid,
+        tenant_id: TenantId,
+        id: ConversionId,
     ) -> Result<Option<ConversionEvent>, AdvertisingError> {
         let row = sqlx::query_as::<_, ConversionEventRow>(
             "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
@@ -818,8 +840,8 @@ impl ConversionEventRepository for SqlxCampaignRepository {
              FROM advertising.conversion_events
              WHERE tenant_id = $1 AND id = $2",
         )
-        .bind(tenant_id)
-        .bind(id)
+        .bind(tenant_id.as_i64())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
@@ -842,12 +864,12 @@ impl TrackingSettingsRepository for SqlxTrackingSettingsRepository {
     async fn get(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<TrackingSettings>, AdvertisingError> {
         use sqlx::Row;
         let row =
             sqlx::query("SELECT mappings FROM advertising.tracking_settings WHERE tenant_id = $1")
-                .bind(tenant_id)
+                .bind(tenant_id.as_i64())
                 .fetch_optional(&mut **scope.tx_mut().as_inner())
                 .await
                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
@@ -876,7 +898,7 @@ impl TrackingSettingsRepository for SqlxTrackingSettingsRepository {
         let json = serde_json::to_value(&settings.mappings)
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
         sqlx::query("INSERT INTO advertising.tracking_settings (tenant_id, mappings) VALUES ($1, $2) ON CONFLICT (tenant_id) DO UPDATE SET mappings = $2, updated_at = now()")
-            .bind(settings.tenant_id)
+            .bind(settings.tenant_id.as_i64())
             .bind(json)
             .execute(&mut **scope.tx_mut().as_inner())
             .await
@@ -887,8 +909,8 @@ impl TrackingSettingsRepository for SqlxTrackingSettingsRepository {
 
 #[derive(sqlx::FromRow)]
 struct CreativeRow {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: i64,
+    tenant_id: i64,
     external_id: Option<String>,
     specification: serde_json::Value,
     created_at: DateTime<Utc>,
@@ -897,7 +919,7 @@ struct CreativeRow {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct CreativeSpecificationPayload {
-    connection_id: Uuid,
+    connection_id: ConnectionId,
     platform: PlatformKey,
     creative: crate::domain::Creative,
     #[serde(default)]
@@ -913,8 +935,10 @@ impl TryFrom<CreativeRow> for StoredCreative {
                 AdvertisingError::Storage(format!("invalid creative specification: {error}"))
             })?;
         Ok(Self {
-            id: row.id,
-            tenant_id: row.tenant_id,
+            id: CreativeId::try_from(row.id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+            tenant_id: TenantId::try_from(row.tenant_id)
+                .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
             connection_id: payload.connection_id,
             platform: payload.platform,
             external_id: row.external_id,
@@ -954,8 +978,8 @@ impl CreativeRepository for SqlxCreativeRepository {
             "INSERT INTO advertising.creatives (id, tenant_id, external_id, specification, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6)",
         )
-        .bind(creative.id)
-        .bind(creative.tenant_id)
+        .bind(creative.id.as_i64())
+        .bind(creative.tenant_id.as_i64())
         .bind(&creative.external_id)
         .bind(specification)
         .bind(creative.created_at)
@@ -969,16 +993,16 @@ impl CreativeRepository for SqlxCreativeRepository {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        creative_id: Uuid,
+        tenant_id: TenantId,
+        creative_id: CreativeId,
     ) -> Result<Option<StoredCreative>, AdvertisingError> {
         let row = sqlx::query_as::<_, CreativeRow>(
             "SELECT id, tenant_id, external_id, specification, created_at, updated_at
              FROM advertising.creatives
              WHERE tenant_id = $1 AND id = $2",
         )
-        .bind(tenant_id)
-        .bind(creative_id)
+        .bind(tenant_id.as_i64())
+        .bind(creative_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -989,7 +1013,7 @@ impl CreativeRepository for SqlxCreativeRepository {
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<StoredCreative>, AdvertisingError> {
         let rows = sqlx::query_as::<_, CreativeRow>(
             "SELECT id, tenant_id, external_id, specification, created_at, updated_at
@@ -997,7 +1021,7 @@ impl CreativeRepository for SqlxCreativeRepository {
              WHERE tenant_id = $1
              ORDER BY created_at DESC",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -1008,15 +1032,15 @@ impl CreativeRepository for SqlxCreativeRepository {
     async fn delete(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        creative_id: Uuid,
+        tenant_id: TenantId,
+        creative_id: CreativeId,
     ) -> Result<bool, AdvertisingError> {
         let result = sqlx::query(
             "DELETE FROM advertising.creatives
              WHERE tenant_id = $1 AND id = $2",
         )
-        .bind(tenant_id)
-        .bind(creative_id)
+        .bind(tenant_id.as_i64())
+        .bind(creative_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;

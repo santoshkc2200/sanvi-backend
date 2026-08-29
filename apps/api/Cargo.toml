@@ -34,6 +34,7 @@ sanvi-tenancy.workspace = true
 sanvi-theming.workspace = true
 sanvi-domains.workspace = true
 sanvi-payments.workspace = true
+sanvi-testsupport.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

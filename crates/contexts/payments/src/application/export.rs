@@ -17,9 +17,9 @@ use std::sync::Arc;
 use actix_web::web::Bytes;
 use chrono::Utc;
 use futures_util::stream::unfold;
-use uuid::Uuid;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 
 use crate::domain::error::PaymentsError;
@@ -55,10 +55,10 @@ pub struct ExportPayments {
     audit: Arc<dyn AuditWriter>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ExportCommand {
-    pub tenant_id: Uuid,
-    pub actor: Uuid,
+    pub tenant_id: TenantId,
+    pub actor: UserId,
     pub ip: Option<IpAddr>,
     pub status: Option<String>,
     pub currency: Option<String>,
@@ -222,7 +222,7 @@ async fn stream_page(
     let tenant_id = state.tenant_id;
     let mut scope = state
         .tx_manager
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|err| PaymentsError::Storage(err.to_string()))?;
     let result = stream_page_inner(state, &mut scope, cursor).await;
@@ -293,7 +293,7 @@ struct StreamState {
     refunds: Arc<dyn RefundRepository>,
     disputes: Arc<dyn DisputeRepository>,
     checkouts: Arc<dyn crate::domain::CheckoutRepository>,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
     filter: PaymentFilter,
     cursor: Option<String>,
     header_pending: bool,
@@ -400,8 +400,8 @@ mod tests {
     #[test]
     fn created_at_is_the_real_column_even_without_a_capture() {
         let mut payment = crate::domain::PaymentRecord::new(
-            Uuid::now_v7(),
-            Uuid::now_v7(),
+            crate::domain::payment::PaymentId::try_from(100).unwrap(),
+            TenantId::try_from(101).unwrap(),
             None,
             "pi_test_1".to_string(),
             crate::domain::Money::new(1000, "JPY").unwrap(),

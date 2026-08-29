@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use sanvi_kernel::TenantId;
+
 use crate::domain::DomainsError;
 
 /// Upper bound for the in-process positive cache. When reached, expired
@@ -24,7 +26,7 @@ const LOCAL_CACHE_CAP: usize = 8192;
 
 pub struct LiveDomainCache {
     redis: Option<redis::aio::ConnectionManager>,
-    local: Mutex<HashMap<String, (uuid::Uuid, tokio::time::Instant)>>,
+    local: Mutex<HashMap<String, (TenantId, tokio::time::Instant)>>,
     ttl_secs: u64,
 }
 
@@ -37,7 +39,7 @@ impl LiveDomainCache {
         }
     }
 
-    pub async fn get(&self, normalized_hostname: &str) -> Option<uuid::Uuid> {
+    pub async fn get(&self, normalized_hostname: &str) -> Option<TenantId> {
         {
             let mut local = self.local.lock().await;
             match local.get(normalized_hostname) {
@@ -60,7 +62,7 @@ impl LiveDomainCache {
                 .ok()
                 .flatten();
             if let Some(raw) = raw {
-                if let Ok(tenant) = uuid::Uuid::parse_str(&raw) {
+                if let Ok(tenant) = raw.parse::<TenantId>() {
                     self.remember_local(normalized_hostname.to_string(), tenant)
                         .await;
                     return Some(tenant);
@@ -71,7 +73,7 @@ impl LiveDomainCache {
         None
     }
 
-    pub async fn put(&self, normalized_hostname: String, tenant: Option<uuid::Uuid>) {
+    pub async fn put(&self, normalized_hostname: String, tenant: Option<TenantId>) {
         if let Some(tenant) = tenant {
             self.remember_local(normalized_hostname.clone(), tenant)
                 .await;
@@ -105,7 +107,7 @@ impl LiveDomainCache {
         Ok(())
     }
 
-    async fn remember_local(&self, normalized_hostname: String, tenant: uuid::Uuid) {
+    async fn remember_local(&self, normalized_hostname: String, tenant: TenantId) {
         let mut local = self.local.lock().await;
         if local.len() >= LOCAL_CACHE_CAP {
             local.retain(|_, (_, at)| at.elapsed().as_secs() < self.ttl_secs);
@@ -125,12 +127,11 @@ fn cache_key(normalized_hostname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
 
     #[tokio::test]
     async fn positive_entries_hit_and_expire() {
         let cache = LiveDomainCache::new(None, 3600);
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(1i64).unwrap();
         cache
             .put("shop.example.com".to_string(), Some(tenant))
             .await;
@@ -139,7 +140,10 @@ mod tests {
         // TTL 0: every entry is immediately stale, so reads fall through.
         let expiring = LiveDomainCache::new(None, 0);
         expiring
-            .put("shop.example.com".to_string(), Some(Uuid::now_v7()))
+            .put(
+                "shop.example.com".to_string(),
+                Some(TenantId::try_from(2i64).unwrap()),
+            )
             .await;
         assert!(expiring.get("shop.example.com").await.is_none());
         assert!(expiring.local.lock().await.is_empty());

@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use tracing::info;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::{
@@ -21,7 +21,7 @@ use crate::domain::{
 const ACTOR: &str = "platform-admin";
 
 pub struct ApplySubscriptionOverrideCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub plan_key: String,
     pub reason: String,
 }
@@ -79,7 +79,7 @@ impl ApplySubscriptionOverride {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         cmd: ApplySubscriptionOverrideCommand,
     ) -> Result<(), BillingError> {
         if cmd.reason.trim().is_empty() {
@@ -148,7 +148,7 @@ impl ApplySubscriptionOverride {
                 now,
             ),
             None => Subscription::new(
-                self.ids.next_subscription_id(),
+                self.ids.next_subscription_id()?,
                 cmd.tenant_id,
                 plan.id(),
                 price_id,
@@ -231,7 +231,7 @@ impl RevokeSubscriptionOverride {
         }
     }
 
-    pub async fn execute(&self, actor: Uuid, tenant_id: Uuid) -> Result<(), BillingError> {
+    pub async fn execute(&self, actor: UserId, tenant_id: TenantId) -> Result<(), BillingError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("revoke_subscription_override", ACTOR)

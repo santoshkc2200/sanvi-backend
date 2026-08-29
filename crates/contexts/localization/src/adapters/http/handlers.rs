@@ -8,9 +8,9 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use sanvi_http::{
     ApiError, CurrentLocale, CurrentSubject, CurrentTenant, ProblemDetail, RequiredPermission,
 };
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::adapters::http::state::LocalizationState;
 use crate::application::{TranslationPatch, UpdateLocalizationSettingsCommand};
@@ -147,7 +147,7 @@ pub async fn get_localization_settings(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone(), state.ids.clone());
     let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
@@ -185,7 +185,7 @@ pub async fn put_localization_settings(
     if command.acting_locale.is_empty() {
         command.acting_locale = locale.0.locale.clone();
     }
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone(), state.ids.clone());
     let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
@@ -223,7 +223,7 @@ pub async fn get_localization_overrides(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone(), state.ids.clone());
     let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
@@ -257,7 +257,7 @@ pub async fn put_localization_overrides(
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone(), state.ids.clone());
     let mut scope = begin_tenant_scope(&tx_manager, tenant_id)
         .await
         .map_err(api_error)?;
@@ -326,7 +326,7 @@ pub async fn put_platform_translations(
     body: web::Json<Vec<TranslationPatch>>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
-    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(state.pool.clone(), state.ids.clone());
     let mut scope = begin_platform_scope(
         &tx_manager,
         "localization.translations.update",
@@ -361,10 +361,10 @@ pub async fn put_platform_translations(
 /// manager, which must live on the caller's stack.
 async fn begin_tenant_scope<'a>(
     tx_manager: &'a sanvi_persistence::TxManager,
-    tenant_id: Uuid,
+    tenant_id: TenantId,
 ) -> Result<sanvi_persistence::ScopedTx<'a>, LocalizationError> {
     tx_manager
-        .begin_for(tenant_id)
+        .begin_for(tenant_id.as_i64())
         .await
         .map_err(|err| LocalizationError::Storage(format!("failed to open tenant scope: {err}")))
 }

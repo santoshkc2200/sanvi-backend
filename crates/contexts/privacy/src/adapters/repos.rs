@@ -9,29 +9,42 @@ use std::net::IpAddr;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use sqlx::FromRow;
-use uuid::Uuid;
 
 use crate::domain::{
-    Appeal, AppealOutcome, AppealRepository, AuthorizedAgent, AuthorizedAgentRepository,
-    BreachIncident, BreachRepository, BreachRuleSet, ConsentMethod, ConsentRecord,
-    ConsentRepository, ControllerRole, DataSubject, DataSubjectRequest, DirectiveRepository, DsrId,
-    DsrKind, DsrRepository, DsrStatus, ExportArtifact, ExportArtifactRepository,
-    JurisdictionProfile, JurisdictionRef, JurisdictionRepository, LegalHold, LegalHoldRepository,
+    Appeal, AppealId, AppealOutcome, AppealRepository, AuthorizedAgent, AuthorizedAgentId,
+    AuthorizedAgentRepository, BreachIncident, BreachIncidentId, BreachRepository, BreachRuleSet,
+    ConsentId, ConsentMethod, ConsentRecord, ConsentRepository, ControllerRole, DataSubject,
+    DataSubjectRequest, DirectiveRepository, DsrId, DsrKind, DsrRepository, DsrStatus,
+    ExportArtifact, ExportArtifactId, ExportArtifactRepository, JurisdictionProfile,
+    JurisdictionRef, JurisdictionRepository, LegalHold, LegalHoldId, LegalHoldRepository,
     NotificationObligation, ObligationAudience, ParticipantRepository, ParticipantRow,
-    ParticipantStatus, PreferenceSignal, PrivacyError, ProcessingActivity,
-    ProcessingActivityRepository, ProcessingPurpose, PurposeDirective, Regime, RequestMetricRow,
-    RequestMetricsRepository, RetentionAction, RetentionRule, RetentionRuleRepository,
-    RiskAssessment, RiskAssessmentRepository, RiskAssessmentStatus, RiskAssessmentTrigger,
-    SensitivityClass, SignalRepository, SignalSource, SubProcessor, SubProcessorRepository,
-    SubProcessorRole, SubjectId, SubjectKeyRepository, SubjectKeyRow, SubjectKind, SubjectRef,
-    SubjectRepository, TransferMechanism, VerificationChallenge, VerificationRepository,
-    YearlyMetricRow,
+    ParticipantStatus, PreferenceSignal, PreferenceSignalId, PrivacyError, ProcessingActivity,
+    ProcessingActivityId, ProcessingActivityRepository, ProcessingPurpose, PurposeDirective,
+    Regime, RequestMetricRow, RequestMetricsRepository, RetentionAction, RetentionRule,
+    RetentionRuleRepository, RiskAssessment, RiskAssessmentId, RiskAssessmentRepository,
+    RiskAssessmentStatus, RiskAssessmentTrigger, SensitivityClass, SignalRepository, SignalSource,
+    SubProcessor, SubProcessorRepository, SubProcessorRole, SubjectId, SubjectKeyRepository,
+    SubjectKeyRow, SubjectKind, SubjectRef, SubjectRepository, TransferMechanism,
+    VerificationChallenge, VerificationChallengeId, VerificationRepository, YearlyMetricRow,
 };
 
 fn map_db(err: sqlx::Error) -> PrivacyError {
     PrivacyError::Storage(err.to_string())
+}
+
+fn invalid_id(kind: &str, err: impl std::fmt::Display) -> PrivacyError {
+    PrivacyError::Storage(format!("invalid {kind} id: {err}"))
+}
+
+/// Reserved node-zero seed actor: attributed to system-initiated writes with
+/// no human actor (e.g. seeding the compile-time data map's operational
+/// retention rules at boot). Node zero is reserved for stable seed
+/// constants and never collides with a runtime-generated Snowflake.
+fn system_actor() -> UserId {
+    UserId::try_from(1_i64).expect("system actor id is a valid seed constant")
 }
 
 // ---------------------------------------------------------------------------
@@ -40,8 +53,8 @@ fn map_db(err: sqlx::Error) -> PrivacyError {
 
 #[derive(Debug, Clone, FromRow)]
 struct SubjectRow {
-    id: Uuid,
-    tenant_id: Option<Uuid>,
+    id: i64,
+    tenant_id: Option<i64>,
     kind: String,
     canonical_key: String,
     identifiers: serde_json::Value,
@@ -53,12 +66,17 @@ struct SubjectRow {
 }
 
 fn to_subject(row: SubjectRow) -> Result<DataSubject, PrivacyError> {
+    let tenant_id = row
+        .tenant_id
+        .map(TenantId::try_from)
+        .transpose()
+        .map_err(|err| invalid_id("tenant", err))?;
     Ok(DataSubject {
-        id: SubjectId::from_uuid(row.id),
-        tenant_id: row.tenant_id,
+        id: SubjectId::try_from(row.id).map_err(|err| invalid_id("subject", err))?,
+        tenant_id,
         subject_ref: SubjectRef {
             kind: SubjectKind::parse(&row.kind)?,
-            tenant_id: row.tenant_id,
+            tenant_id,
             key: row.canonical_key,
             identifiers: serde_json::from_value(row.identifiers).unwrap_or_default(),
         },
@@ -73,9 +91,9 @@ fn to_subject(row: SubjectRow) -> Result<DataSubject, PrivacyError> {
 
 #[derive(Debug, Clone, FromRow)]
 struct DsrRow {
-    id: Uuid,
-    tenant_id: Option<Uuid>,
-    subject_id: Uuid,
+    id: i64,
+    tenant_id: Option<i64>,
+    subject_id: i64,
     subject_ref: serde_json::Value,
     kind: String,
     status: String,
@@ -87,22 +105,27 @@ struct DsrRow {
     completed_at: Option<DateTime<Utc>>,
     jurisdiction: String,
     submitted_by: String,
-    agent_id: Option<Uuid>,
+    agent_id: Option<i64>,
     requester_ip: Option<IpAddr>,
     requester_note: Option<String>,
     rejection_reason: Option<String>,
-    rejected_by: Option<Uuid>,
-    appeal_id: Option<Uuid>,
-    export_artifact_id: Option<Uuid>,
+    rejected_by: Option<i64>,
+    appeal_id: Option<i64>,
+    export_artifact_id: Option<i64>,
 }
 
 fn to_dsr(row: DsrRow) -> Result<DataSubjectRequest, PrivacyError> {
     let subject_ref: SubjectRef = serde_json::from_value(row.subject_ref)
         .map_err(|err| PrivacyError::Storage(err.to_string()))?;
     Ok(DataSubjectRequest {
-        id: DsrId::from_uuid(row.id),
-        tenant_id: row.tenant_id,
-        subject_id: SubjectId::from_uuid(row.subject_id),
+        id: DsrId::try_from(row.id).map_err(|err| invalid_id("dsr", err))?,
+        tenant_id: row
+            .tenant_id
+            .map(TenantId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("tenant", err))?,
+        subject_id: SubjectId::try_from(row.subject_id)
+            .map_err(|err| invalid_id("subject", err))?,
         subject_ref,
         kind: DsrKind::parse(&row.kind)?,
         status: DsrStatus::parse(&row.status)?,
@@ -114,34 +137,50 @@ fn to_dsr(row: DsrRow) -> Result<DataSubjectRequest, PrivacyError> {
         completed_at: row.completed_at,
         jurisdiction: JurisdictionRef::parse(&row.jurisdiction)?,
         submitted_by: super::super::domain::types::Requester::parse(&row.submitted_by)?,
-        agent_id: row.agent_id,
+        agent_id: row
+            .agent_id
+            .map(AuthorizedAgentId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("authorized agent", err))?,
         requester_ip: row.requester_ip,
         requester_note: row.requester_note,
         rejection_reason: row.rejection_reason,
-        rejected_by: row.rejected_by,
-        appeal_id: row.appeal_id,
-        export_artifact_id: row.export_artifact_id,
+        rejected_by: row
+            .rejected_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("user", err))?,
+        appeal_id: row
+            .appeal_id
+            .map(AppealId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("appeal", err))?,
+        export_artifact_id: row
+            .export_artifact_id
+            .map(ExportArtifactId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("export artifact", err))?,
     })
 }
 
 #[derive(Debug, Clone, FromRow)]
 struct AppealRow {
-    id: Uuid,
-    request_id: Uuid,
+    id: i64,
+    request_id: i64,
     reason: String,
     received_at: DateTime<Utc>,
     due_at: DateTime<Utc>,
     outcome: Option<String>,
     decided_at: Option<DateTime<Utc>>,
-    decided_by: Option<Uuid>,
+    decided_by: Option<i64>,
     decision_reason: Option<String>,
     authority_notice: Option<serde_json::Value>,
 }
 
 fn to_appeal(row: AppealRow) -> Result<Appeal, PrivacyError> {
     Ok(Appeal {
-        id: row.id,
-        request_id: DsrId::from_uuid(row.request_id),
+        id: AppealId::try_from(row.id).map_err(|err| invalid_id("appeal", err))?,
+        request_id: DsrId::try_from(row.request_id).map_err(|err| invalid_id("dsr", err))?,
         reason: row.reason,
         received_at: row.received_at,
         due_at: row.due_at,
@@ -156,7 +195,11 @@ fn to_appeal(row: AppealRow) -> Result<Appeal, PrivacyError> {
             }
         },
         decided_at: row.decided_at,
-        decided_by: row.decided_by,
+        decided_by: row
+            .decided_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("user", err))?,
         decision_reason: row.decision_reason,
         authority_notice: row
             .authority_notice
@@ -266,7 +309,7 @@ impl JurisdictionRepository for SqlxJurisdictionRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         profile: &JurisdictionProfile,
-        updated_by: Uuid,
+        updated_by: UserId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "INSERT INTO privacy.jurisdiction_profiles
@@ -313,7 +356,7 @@ impl JurisdictionRepository for SqlxJurisdictionRepository {
         .bind(serde_json::to_value(&profile.authority).unwrap_or_default())
         .bind(profile.effective_from)
         .bind(&profile.source_note)
-        .bind(updated_by)
+        .bind(updated_by.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -363,7 +406,7 @@ impl SubjectRepository for SqlxSubjectRepository {
                     jurisdiction_evidence, is_minor, created_at, updated_at
              FROM privacy.data_subjects WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -387,8 +430,8 @@ impl SubjectRepository for SqlxSubjectRepository {
                is_minor = EXCLUDED.is_minor,
                updated_at = now()",
         )
-        .bind(subject.id.as_uuid())
-        .bind(subject.tenant_id)
+        .bind(subject.id.as_i64())
+        .bind(subject.tenant_id.map(|id| id.as_i64()))
         .bind(subject.subject_ref.kind.as_str())
         .bind(subject.subject_ref.canonical_key())
         .bind(serde_json::to_value(&subject.subject_ref.identifiers).unwrap_or_default())
@@ -412,7 +455,7 @@ impl SubjectRepository for SqlxSubjectRepository {
         sqlx::query(
             "UPDATE privacy.data_subjects SET is_minor = $2, updated_at = now() WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .bind(is_minor)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -460,9 +503,9 @@ impl DsrRepository for SqlxDsrRepository {
                export_artifact_id = EXCLUDED.export_artifact_id,
                updated_at = now()",
         )
-        .bind(request.id.as_uuid())
-        .bind(request.tenant_id)
-        .bind(request.subject_id.as_uuid())
+        .bind(request.id.as_i64())
+        .bind(request.tenant_id.map(|id| id.as_i64()))
+        .bind(request.subject_id.as_i64())
         .bind(serde_json::to_value(&request.subject_ref).map_err(|e| PrivacyError::Storage(e.to_string()))?)
         .bind(request.kind.as_str())
         .bind(request.status.as_str())
@@ -474,13 +517,13 @@ impl DsrRepository for SqlxDsrRepository {
         .bind(request.completed_at)
         .bind(request.jurisdiction.as_str())
         .bind(request.submitted_by.as_str())
-        .bind(request.agent_id)
+        .bind(request.agent_id.map(|id| id.as_i64()))
         .bind(request.requester_ip.map(|ip| ip.to_string()))
         .bind(&request.requester_note)
         .bind(&request.rejection_reason)
-        .bind(request.rejected_by)
-        .bind(request.appeal_id)
-        .bind(request.export_artifact_id)
+        .bind(request.rejected_by.map(|id| id.as_i64()))
+        .bind(request.appeal_id.map(|id| id.as_i64()))
+        .bind(request.export_artifact_id.map(|id| id.as_i64()))
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -495,7 +538,7 @@ impl DsrRepository for SqlxDsrRepository {
         let row: Option<DsrRow> = sqlx::query_as(
             "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -510,7 +553,7 @@ impl DsrRepository for SqlxDsrRepository {
         let row: Option<DsrRow> = sqlx::query_as(
             "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -527,7 +570,7 @@ impl DsrRepository for SqlxDsrRepository {
              WHERE subject_id = $1 AND status = 'awaiting_verification'
              ORDER BY received_at DESC LIMIT 20",
         )
-        .bind(subject_id.as_uuid())
+        .bind(subject_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -578,7 +621,7 @@ impl DsrRepository for SqlxDsrRepository {
     async fn list_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         status: Option<DsrStatus>,
         limit: u32,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError> {
@@ -587,7 +630,7 @@ impl DsrRepository for SqlxDsrRepository {
              WHERE tenant_id = $1 AND ($2::text IS NULL OR status = $2)
              ORDER BY received_at DESC LIMIT $3",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(status.map(|s| s.as_str().to_string()))
         .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
@@ -610,7 +653,7 @@ impl DsrRepository for SqlxDsrRepository {
                  updated_at = now()
              WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .bind(status.as_str())
         .bind(completed_at)
         .bind(rejection_reason)
@@ -624,15 +667,15 @@ impl DsrRepository for SqlxDsrRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         id: DsrId,
-        actor: Uuid,
+        actor: UserId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.data_subject_requests
              SET rejected_by = $2, updated_at = now()
              WHERE id = $1",
         )
-        .bind(id.as_uuid())
-        .bind(actor)
+        .bind(id.as_i64())
+        .bind(actor.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -648,7 +691,7 @@ impl DsrRepository for SqlxDsrRepository {
         sqlx::query(
             "UPDATE privacy.data_subject_requests SET extended_to = $2, updated_at = now() WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .bind(extended_to)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -665,7 +708,7 @@ impl DsrRepository for SqlxDsrRepository {
         sqlx::query(
             "UPDATE privacy.data_subject_requests SET acknowledged_at = $2, updated_at = now() WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .bind(at)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -684,7 +727,7 @@ impl DsrRepository for SqlxDsrRepository {
              SET verified_at = $2, status = 'in_progress', updated_at = now()
              WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .bind(at)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -696,13 +739,13 @@ impl DsrRepository for SqlxDsrRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         id: DsrId,
-        artifact_id: Uuid,
+        artifact_id: ExportArtifactId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.data_subject_requests SET export_artifact_id = $2, updated_at = now() WHERE id = $1",
         )
-        .bind(id.as_uuid())
-        .bind(artifact_id)
+        .bind(id.as_i64())
+        .bind(artifact_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -712,14 +755,14 @@ impl DsrRepository for SqlxDsrRepository {
     async fn has_open_erasure_for_tenant(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<bool, PrivacyError> {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM privacy.data_subject_requests
              WHERE tenant_id = $1 AND kind = 'erasure'
                AND status IN ('in_progress', 'partially_complete', 'on_hold', 'under_appeal')",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -797,8 +840,8 @@ impl AppealRepository for SqlxAppealRepository {
              ON CONFLICT (id) DO UPDATE SET
                reason = EXCLUDED.reason, due_at = EXCLUDED.due_at",
         )
-        .bind(appeal.id)
-        .bind(appeal.request_id.as_uuid())
+        .bind(appeal.id.as_i64())
+        .bind(appeal.request_id.as_i64())
         .bind(&appeal.reason)
         .bind(appeal.received_at)
         .bind(appeal.due_at)
@@ -818,7 +861,7 @@ impl AppealRepository for SqlxAppealRepository {
                     decision_reason, authority_notice
              FROM privacy.request_appeals WHERE request_id = $1",
         )
-        .bind(request_id.as_uuid())
+        .bind(request_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -853,13 +896,13 @@ impl AppealRepository for SqlxAppealRepository {
                  authority_notice = $6
              WHERE id = $1",
         )
-        .bind(appeal.id)
+        .bind(appeal.id.as_i64())
         .bind(appeal.outcome.map(|o| match o {
             AppealOutcome::Upheld => "upheld",
             AppealOutcome::Denied => "denied",
         }))
         .bind(appeal.decided_at)
-        .bind(appeal.decided_by)
+        .bind(appeal.decided_by.map(|id| id.as_i64()))
         .bind(&appeal.decision_reason)
         .bind(
             appeal
@@ -900,7 +943,7 @@ impl ParticipantRepository for SqlxParticipantRepository {
                 "INSERT INTO privacy.request_participants (request_id, context)
                  VALUES ($1, $2) ON CONFLICT DO NOTHING",
             )
-            .bind(request_id.as_uuid())
+            .bind(request_id.as_i64())
             .bind(context)
             .execute(&mut **scope.tx_mut().as_inner())
             .await
@@ -927,7 +970,7 @@ impl ParticipantRepository for SqlxParticipantRepository {
             "SELECT context, status, report, attempts, last_error, updated_at
              FROM privacy.request_participants WHERE request_id = $1",
         )
-        .bind(request_id.as_uuid())
+        .bind(request_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -962,7 +1005,7 @@ impl ParticipantRepository for SqlxParticipantRepository {
              SET status = $3, report = $4, last_error = $5, updated_at = now()
              WHERE request_id = $1 AND context = $2",
         )
-        .bind(request_id.as_uuid())
+        .bind(request_id.as_i64())
         .bind(context)
         .bind(status.as_str())
         .bind(report)
@@ -983,7 +1026,7 @@ impl ParticipantRepository for SqlxParticipantRepository {
             "UPDATE privacy.request_participants SET attempts = attempts + 1, updated_at = now()
              WHERE request_id = $1 AND context = $2",
         )
-        .bind(request_id.as_uuid())
+        .bind(request_id.as_i64())
         .bind(context)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -998,9 +1041,9 @@ impl ParticipantRepository for SqlxParticipantRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct ConsentRow {
-    id: Uuid,
-    tenant_id: Option<Uuid>,
-    subject_id: Option<Uuid>,
+    id: i64,
+    tenant_id: Option<i64>,
+    subject_id: Option<i64>,
     subject_ref: serde_json::Value,
     purpose: String,
     granted: bool,
@@ -1016,9 +1059,17 @@ struct ConsentRow {
 
 fn to_consent(row: ConsentRow) -> Result<ConsentRecord, PrivacyError> {
     Ok(ConsentRecord {
-        id: row.id,
-        tenant_id: row.tenant_id,
-        subject_id: row.subject_id.map(SubjectId::from_uuid),
+        id: ConsentId::try_from(row.id).map_err(|err| invalid_id("consent", err))?,
+        tenant_id: row
+            .tenant_id
+            .map(TenantId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("tenant", err))?,
+        subject_id: row
+            .subject_id
+            .map(SubjectId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("subject", err))?,
         subject_ref: serde_json::from_value(row.subject_ref)
             .map_err(|e| PrivacyError::Storage(e.to_string()))?,
         purpose: ProcessingPurpose::parse(&row.purpose)?,
@@ -1059,9 +1110,9 @@ impl ConsentRepository for SqlxConsentRepository {
                 evidence, locale, jurisdiction, signal_source, recorded_at, withdrawn_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
-        .bind(record.id)
-        .bind(record.tenant_id)
-        .bind(record.subject_id.map(|id| id.as_uuid()))
+        .bind(record.id.as_i64())
+        .bind(record.tenant_id.map(|id| id.as_i64()))
+        .bind(record.subject_id.map(|id| id.as_i64()))
         .bind(
             serde_json::to_value(&record.subject_ref)
                 .map_err(|e| PrivacyError::Storage(e.to_string()))?,
@@ -1097,7 +1148,7 @@ impl ConsentRepository for SqlxConsentRepository {
              ORDER BY recorded_at DESC LIMIT 1",
         )
         .bind(purpose.as_str())
-        .bind(subject_id.map(|id| id.as_uuid()))
+        .bind(subject_id.map(|id| id.as_i64()))
         .bind(subject_key)
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
@@ -1118,7 +1169,7 @@ impl ConsentRepository for SqlxConsentRepository {
              WHERE subject_id = $1 OR subject_ref->>'key' = $2
              ORDER BY recorded_at ASC",
         )
-        .bind(subject_id.map(|id| id.as_uuid()))
+        .bind(subject_id.map(|id| id.as_i64()))
         .bind(subject_key)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -1149,14 +1200,14 @@ impl ConsentRepository for SqlxConsentRepository {
     async fn mark_propagated(
         &self,
         scope: &mut PlatformScope<'_>,
-        record_id: Uuid,
+        record_id: ConsentId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.consents
              SET evidence = evidence || jsonb_build_object('propagated_at', now()::text)
              WHERE id = $1",
         )
-        .bind(record_id)
+        .bind(record_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -1186,10 +1237,10 @@ impl ConsentRepository for SqlxConsentRepository {
     async fn delete(
         &self,
         scope: &mut PlatformScope<'_>,
-        record_id: Uuid,
+        record_id: ConsentId,
     ) -> Result<(), PrivacyError> {
         sqlx::query("DELETE FROM privacy.consents WHERE id = $1")
-            .bind(record_id)
+            .bind(record_id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(map_db)?;
@@ -1220,7 +1271,7 @@ impl ConsentRepository for SqlxConsentRepository {
     async fn anonymise_record(
         &self,
         scope: &mut PlatformScope<'_>,
-        record_id: Uuid,
+        record_id: ConsentId,
         anonymised: &SubjectRef,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
@@ -1228,7 +1279,7 @@ impl ConsentRepository for SqlxConsentRepository {
              SET subject_id = NULL, tenant_id = NULL, subject_ref = $2
              WHERE id = $1",
         )
-        .bind(record_id)
+        .bind(record_id.as_i64())
         .bind(serde_json::to_value(anonymised).map_err(|e| PrivacyError::Storage(e.to_string()))?)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -1243,11 +1294,11 @@ impl ConsentRepository for SqlxConsentRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct SignalRow {
-    id: Uuid,
-    tenant_id: Option<Uuid>,
+    id: i64,
+    tenant_id: Option<i64>,
     signal: String,
     device_ref: String,
-    subject_id: Option<Uuid>,
+    subject_id: Option<i64>,
     jurisdiction: Option<String>,
     purposes: Vec<String>,
     observed_at: DateTime<Utc>,
@@ -1257,11 +1308,20 @@ struct SignalRow {
 
 fn to_signal(row: SignalRow) -> Result<PreferenceSignal, PrivacyError> {
     Ok(PreferenceSignal {
-        id: row.id,
-        tenant_id: row.tenant_id,
+        id: PreferenceSignalId::try_from(row.id)
+            .map_err(|err| invalid_id("preference signal", err))?,
+        tenant_id: row
+            .tenant_id
+            .map(TenantId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("tenant", err))?,
         signal: row.signal,
         device_ref: row.device_ref,
-        subject_id: row.subject_id.map(SubjectId::from_uuid),
+        subject_id: row
+            .subject_id
+            .map(SubjectId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("subject", err))?,
         jurisdiction: row
             .jurisdiction
             .map(|j| JurisdictionRef::parse(&j))
@@ -1304,11 +1364,11 @@ impl SignalRepository for SqlxSignalRepository {
                 bound_at, evidence)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
-        .bind(signal.id)
-        .bind(signal.tenant_id)
+        .bind(signal.id.as_i64())
+        .bind(signal.tenant_id.map(|id| id.as_i64()))
         .bind(&signal.signal)
         .bind(&signal.device_ref)
-        .bind(signal.subject_id.map(|id| id.as_uuid()))
+        .bind(signal.subject_id.map(|id| id.as_i64()))
         .bind(signal.jurisdiction.as_ref().map(|j| j.as_str()))
         .bind(&purposes)
         .bind(signal.observed_at)
@@ -1365,7 +1425,7 @@ impl SignalRepository for SqlxSignalRepository {
     async fn bind(
         &self,
         scope: &mut PlatformScope<'_>,
-        signal_id: Uuid,
+        signal_id: PreferenceSignalId,
         subject_id: SubjectId,
         jurisdiction: &str,
     ) -> Result<(), PrivacyError> {
@@ -1374,8 +1434,8 @@ impl SignalRepository for SqlxSignalRepository {
              SET bound_at = now(), subject_id = $2, jurisdiction = COALESCE(jurisdiction, $3)
              WHERE id = $1 AND bound_at IS NULL",
         )
-        .bind(signal_id)
-        .bind(subject_id.as_uuid())
+        .bind(signal_id.as_i64())
+        .bind(subject_id.as_i64())
         .bind(jurisdiction)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -1397,7 +1457,7 @@ impl SignalRepository for SqlxSignalRepository {
              WHERE device_ref = $1 AND bound_at IS NULL",
         )
         .bind(device_ref)
-        .bind(subject_id.as_uuid())
+        .bind(subject_id.as_i64())
         .bind(jurisdiction)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -1416,7 +1476,7 @@ impl SignalRepository for SqlxSignalRepository {
              FROM privacy.preference_signals
              WHERE subject_id = $1 ORDER BY observed_at ASC",
         )
-        .bind(subject_id.as_uuid())
+        .bind(subject_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -1446,10 +1506,10 @@ impl SignalRepository for SqlxSignalRepository {
     async fn delete(
         &self,
         scope: &mut PlatformScope<'_>,
-        signal_id: Uuid,
+        signal_id: PreferenceSignalId,
     ) -> Result<(), PrivacyError> {
         sqlx::query("DELETE FROM privacy.preference_signals WHERE id = $1")
-            .bind(signal_id)
+            .bind(signal_id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(map_db)?;
@@ -1537,7 +1597,7 @@ impl DirectiveRepository for SqlxDirectiveRepository {
                effective_at = EXCLUDED.effective_at,
                superseded_at = NULL",
         )
-        .bind(subject.tenant_id)
+        .bind(subject.tenant_id.map(|id| id.as_i64()))
         .bind(serde_json::to_value(subject).map_err(|e| PrivacyError::Storage(e.to_string()))?)
         .bind(directive.purpose.as_str())
         .bind(directive.state.as_str())
@@ -1546,7 +1606,7 @@ impl DirectiveRepository for SqlxDirectiveRepository {
         .bind(&directive.notice_version)
         .bind(directive.effective_at)
         .bind(directive.superseded_at)
-        .bind(subject.tenant_id)
+        .bind(subject.tenant_id.map(|id| id.as_i64()))
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -1668,7 +1728,7 @@ impl RetentionRuleRepository for SqlxRetentionRuleRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         rule: &RetentionRule,
-        updated_by: Uuid,
+        updated_by: UserId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "INSERT INTO privacy.retention_rules
@@ -1689,7 +1749,7 @@ impl RetentionRuleRepository for SqlxRetentionRuleRepository {
         .bind(rule.period_days as i32)
         .bind(rule.action.as_str())
         .bind(rule.disclosed_in_notice)
-        .bind(updated_by)
+        .bind(updated_by.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -1709,7 +1769,7 @@ impl RetentionRuleRepository for SqlxRetentionRuleRepository {
                     action: def.action,
                     disclosed_in_notice: true,
                 },
-                Uuid::nil(),
+                system_actor(),
             )
             .await?;
         }
@@ -1723,13 +1783,29 @@ impl RetentionRuleRepository for SqlxRetentionRuleRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct HoldRow {
-    id: Uuid,
+    id: i64,
     scope: serde_json::Value,
     reason: String,
-    created_by: Uuid,
+    created_by: i64,
     created_at: DateTime<Utc>,
     released_at: Option<DateTime<Utc>>,
-    released_by: Option<Uuid>,
+    released_by: Option<i64>,
+}
+
+fn to_legal_hold(row: HoldRow) -> Result<LegalHold, PrivacyError> {
+    Ok(LegalHold {
+        id: LegalHoldId::try_from(row.id).map_err(|err| invalid_id("legal hold", err))?,
+        scope: row.scope,
+        reason: row.reason,
+        created_by: UserId::try_from(row.created_by).map_err(|err| invalid_id("user", err))?,
+        created_at: row.created_at,
+        released_at: row.released_at,
+        released_by: row
+            .released_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("user", err))?,
+    })
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1752,10 +1828,10 @@ impl LegalHoldRepository for SqlxLegalHoldRepository {
             "INSERT INTO privacy.legal_holds (id, scope, reason, created_by, created_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(hold.id)
+        .bind(hold.id.as_i64())
         .bind(&hold.scope)
         .bind(&hold.reason)
-        .bind(hold.created_by)
+        .bind(hold.created_by.as_i64())
         .bind(hold.created_at)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -1779,19 +1855,7 @@ impl LegalHoldRepository for SqlxLegalHoldRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(LegalHold {
-                    id: row.id,
-                    scope: row.scope,
-                    reason: row.reason,
-                    created_by: row.created_by,
-                    created_at: row.created_at,
-                    released_at: row.released_at,
-                    released_by: row.released_by,
-                })
-            })
-            .collect()
+        rows.into_iter().map(to_legal_hold).collect()
     }
 
     async fn list(
@@ -1809,32 +1873,20 @@ impl LegalHoldRepository for SqlxLegalHoldRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(LegalHold {
-                    id: row.id,
-                    scope: row.scope,
-                    reason: row.reason,
-                    created_by: row.created_by,
-                    created_at: row.created_at,
-                    released_at: row.released_at,
-                    released_by: row.released_by,
-                })
-            })
-            .collect()
+        rows.into_iter().map(to_legal_hold).collect()
     }
 
     async fn release(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
-        released_by: Uuid,
+        id: LegalHoldId,
+        released_by: UserId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.legal_holds SET released_at = now(), released_by = $2 WHERE id = $1 AND released_at IS NULL",
         )
-        .bind(id)
-        .bind(released_by)
+        .bind(id.as_i64())
+        .bind(released_by.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -1965,14 +2017,36 @@ fn to_subprocessor(row: SubProcessorRow) -> Result<SubProcessor, PrivacyError> {
 
 #[derive(Debug, Clone, FromRow)]
 struct IncidentRow {
-    id: Uuid,
+    id: i64,
     discovered_at: DateTime<Utc>,
     contained_at: Option<DateTime<Utc>>,
     affected: serde_json::Value,
     data_classes: Vec<String>,
     encrypted_at_rest: bool,
     notes: Option<String>,
-    created_by: Option<Uuid>,
+    created_by: Option<i64>,
+}
+
+fn to_incident(row: IncidentRow) -> Result<BreachIncident, PrivacyError> {
+    Ok(BreachIncident {
+        id: BreachIncidentId::try_from(row.id).map_err(|err| invalid_id("breach incident", err))?,
+        discovered_at: row.discovered_at,
+        contained_at: row.contained_at,
+        affected: serde_json::from_value(row.affected)
+            .map_err(|e| PrivacyError::Storage(e.to_string()))?,
+        data_classes: row
+            .data_classes
+            .iter()
+            .map(|c| super::super::domain::types::DataClass::parse(c))
+            .collect::<Result<_, _>>()?,
+        encrypted_at_rest: row.encrypted_at_rest,
+        notes: row.notes,
+        created_by: row
+            .created_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("user", err))?,
+    })
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -2010,14 +2084,14 @@ impl BreachRepository for SqlxBreachRepository {
                (id, discovered_at, contained_at, affected, data_classes, encrypted_at_rest, notes, created_by)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(incident.id)
+        .bind(incident.id.as_i64())
         .bind(incident.discovered_at)
         .bind(incident.contained_at)
         .bind(serde_json::to_value(&incident.affected).map_err(|e| PrivacyError::Storage(e.to_string()))?)
         .bind(&classes)
         .bind(incident.encrypted_at_rest)
         .bind(&incident.notes)
-        .bind(incident.created_by)
+        .bind(incident.created_by.map(|id| id.as_i64()))
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2027,35 +2101,18 @@ impl BreachRepository for SqlxBreachRepository {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: BreachIncidentId,
     ) -> Result<Option<BreachIncident>, PrivacyError> {
         let row: Option<IncidentRow> = sqlx::query_as(
             "SELECT id, discovered_at, contained_at, affected, data_classes, encrypted_at_rest,
                     notes, created_by
              FROM privacy.breach_incidents WHERE id = $1",
         )
-        .bind(id)
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
-        row.map(|row| {
-            Ok(BreachIncident {
-                id: row.id,
-                discovered_at: row.discovered_at,
-                contained_at: row.contained_at,
-                affected: serde_json::from_value(row.affected)
-                    .map_err(|e| PrivacyError::Storage(e.to_string()))?,
-                data_classes: row
-                    .data_classes
-                    .iter()
-                    .map(|c| super::super::domain::types::DataClass::parse(c))
-                    .collect::<Result<_, _>>()?,
-                encrypted_at_rest: row.encrypted_at_rest,
-                notes: row.notes,
-                created_by: row.created_by,
-            })
-        })
-        .transpose()
+        row.map(to_incident).transpose()
     }
 
     async fn list(
@@ -2070,31 +2127,13 @@ impl BreachRepository for SqlxBreachRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(BreachIncident {
-                    id: row.id,
-                    discovered_at: row.discovered_at,
-                    contained_at: row.contained_at,
-                    affected: serde_json::from_value(row.affected)
-                        .map_err(|e| PrivacyError::Storage(e.to_string()))?,
-                    data_classes: row
-                        .data_classes
-                        .iter()
-                        .map(|c| super::super::domain::types::DataClass::parse(c))
-                        .collect::<Result<_, _>>()?,
-                    encrypted_at_rest: row.encrypted_at_rest,
-                    notes: row.notes,
-                    created_by: row.created_by,
-                })
-            })
-            .collect()
+        rows.into_iter().map(to_incident).collect()
     }
 
     async fn save_obligation(
         &self,
         scope: &mut PlatformScope<'_>,
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
         obligation: &NotificationObligation,
     ) -> Result<(), PrivacyError> {
         let artifact = serde_json::json!({
@@ -2108,7 +2147,7 @@ impl BreachRepository for SqlxBreachRepository {
              ON CONFLICT (incident_id, jurisdiction, audience) DO UPDATE SET
                due_at = EXCLUDED.due_at, artifact = EXCLUDED.artifact",
         )
-        .bind(incident_id)
+        .bind(incident_id.as_i64())
         .bind(obligation.jurisdiction.as_str())
         .bind(obligation.audience.as_str())
         .bind(obligation.due_at)
@@ -2123,13 +2162,13 @@ impl BreachRepository for SqlxBreachRepository {
     async fn list_obligations(
         &self,
         scope: &mut PlatformScope<'_>,
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
     ) -> Result<Vec<NotificationObligation>, PrivacyError> {
         let rows: Vec<ObligationRow> = sqlx::query_as(
             "SELECT jurisdiction, audience, due_at, notified_at, artifact
              FROM privacy.breach_obligations WHERE incident_id = $1 ORDER BY due_at",
         )
-        .bind(incident_id)
+        .bind(incident_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2155,7 +2194,7 @@ impl BreachRepository for SqlxBreachRepository {
     async fn mark_notified(
         &self,
         scope: &mut PlatformScope<'_>,
-        incident_id: Uuid,
+        incident_id: BreachIncidentId,
         jurisdiction: &str,
         audience: ObligationAudience,
         artifact: Option<serde_json::Value>,
@@ -2165,7 +2204,7 @@ impl BreachRepository for SqlxBreachRepository {
              SET notified_at = now(), artifact = $4
              WHERE incident_id = $1 AND jurisdiction = $2 AND audience = $3",
         )
-        .bind(incident_id)
+        .bind(incident_id.as_i64())
         .bind(jurisdiction)
         .bind(audience.as_str())
         .bind(artifact)
@@ -2204,7 +2243,7 @@ impl SubjectKeyRepository for SqlxSubjectKeyRepository {
              VALUES ($1, $2, $3)
              ON CONFLICT (subject_id) DO NOTHING",
         )
-        .bind(subject_id.as_uuid())
+        .bind(subject_id.as_i64())
         .bind(&wrapped_dek)
         .bind(kek_id)
         .execute(&mut **scope.tx_mut().as_inner())
@@ -2222,7 +2261,7 @@ impl SubjectKeyRepository for SqlxSubjectKeyRepository {
             "SELECT wrapped_dek, kek_id, created_at, destroyed_at
              FROM privacy.subject_keys WHERE subject_id = $1",
         )
-        .bind(subject_id.as_uuid())
+        .bind(subject_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2247,7 +2286,7 @@ impl SubjectKeyRepository for SqlxSubjectKeyRepository {
              SET wrapped_dek = ''::bytea, destroyed_at = now()
              WHERE subject_id = $1 AND destroyed_at IS NULL",
         )
-        .bind(subject_id.as_uuid())
+        .bind(subject_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2263,7 +2302,7 @@ impl SubjectKeyRepository for SqlxSubjectKeyRepository {
             "SELECT COUNT(*) FROM privacy.subject_keys
                  WHERE subject_id = $1 AND destroyed_at IS NULL",
         )
-        .bind(subject_id.as_uuid())
+        .bind(subject_id.as_i64())
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2273,9 +2312,9 @@ impl SubjectKeyRepository for SqlxSubjectKeyRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct ArtifactRow {
-    id: Uuid,
-    request_id: Uuid,
-    subject_id: Uuid,
+    id: i64,
+    request_id: i64,
+    subject_id: i64,
     download_token_hash: String,
     passphrase_verifier: String,
     manifest_sha256: String,
@@ -2311,9 +2350,9 @@ impl ExportArtifactRepository for SqlxExportArtifactRepository {
                 downloaded_at, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
-        .bind(artifact.id)
-        .bind(artifact.request_id.as_uuid())
-        .bind(artifact.subject_id.as_uuid())
+        .bind(artifact.id.as_i64())
+        .bind(artifact.request_id.as_i64())
+        .bind(artifact.subject_id.as_i64())
         .bind(&artifact.download_token_hash)
         .bind(&artifact.passphrase_verifier)
         .bind(&artifact.manifest_sha256)
@@ -2333,7 +2372,7 @@ impl ExportArtifactRepository for SqlxExportArtifactRepository {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: ExportArtifactId,
     ) -> Result<Option<ExportArtifact>, PrivacyError> {
         let row: Option<ArtifactRow> = sqlx::query_as(
             "SELECT id, request_id, subject_id, download_token_hash, passphrase_verifier,
@@ -2341,7 +2380,7 @@ impl ExportArtifactRepository for SqlxExportArtifactRepository {
                     downloaded_at, created_at
              FROM privacy.export_artifacts WHERE id = $1",
         )
-        .bind(id)
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2359,7 +2398,7 @@ impl ExportArtifactRepository for SqlxExportArtifactRepository {
                     downloaded_at, created_at
              FROM privacy.export_artifacts WHERE request_id = $1",
         )
-        .bind(request_id.as_uuid())
+        .bind(request_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2369,14 +2408,14 @@ impl ExportArtifactRepository for SqlxExportArtifactRepository {
     async fn record_download(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: ExportArtifactId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.export_artifacts
              SET download_count = download_count + 1, downloaded_at = now()
              WHERE id = $1",
         )
-        .bind(id)
+        .bind(id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2401,9 +2440,13 @@ impl ExportArtifactRepository for SqlxExportArtifactRepository {
         rows.into_iter().map(to_artifact).collect()
     }
 
-    async fn delete(&self, scope: &mut PlatformScope<'_>, id: Uuid) -> Result<(), PrivacyError> {
+    async fn delete(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: ExportArtifactId,
+    ) -> Result<(), PrivacyError> {
         sqlx::query("DELETE FROM privacy.export_artifacts WHERE id = $1")
-            .bind(id)
+            .bind(id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(map_db)?;
@@ -2413,9 +2456,10 @@ impl ExportArtifactRepository for SqlxExportArtifactRepository {
 
 fn to_artifact(row: ArtifactRow) -> Result<ExportArtifact, PrivacyError> {
     Ok(ExportArtifact {
-        id: row.id,
-        request_id: DsrId::from_uuid(row.request_id),
-        subject_id: SubjectId::from_uuid(row.subject_id),
+        id: ExportArtifactId::try_from(row.id).map_err(|err| invalid_id("export artifact", err))?,
+        request_id: DsrId::try_from(row.request_id).map_err(|err| invalid_id("dsr", err))?,
+        subject_id: SubjectId::try_from(row.subject_id)
+            .map_err(|err| invalid_id("subject", err))?,
         download_token_hash: row.download_token_hash,
         passphrase_verifier: row.passphrase_verifier,
         manifest_sha256: row.manifest_sha256,
@@ -2450,8 +2494,8 @@ impl VerificationRepository for SqlxVerificationRepository {
                (id, request_id, method, token_hash, code_hash, expires_at, attempts, consumed_at, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
-        .bind(challenge.id)
-        .bind(challenge.request_id.as_uuid())
+        .bind(challenge.id.as_i64())
+        .bind(challenge.request_id.as_i64())
         .bind(&challenge.method)
         .bind(&challenge.token_hash)
         .bind(&challenge.code_hash)
@@ -2472,8 +2516,8 @@ impl VerificationRepository for SqlxVerificationRepository {
     ) -> Result<Option<VerificationChallenge>, PrivacyError> {
         #[derive(Debug, FromRow)]
         struct Row {
-            id: Uuid,
-            request_id: Uuid,
+            id: i64,
+            request_id: i64,
             method: String,
             token_hash: String,
             code_hash: String,
@@ -2487,14 +2531,16 @@ impl VerificationRepository for SqlxVerificationRepository {
                     consumed_at, created_at
              FROM privacy.verification_challenges WHERE request_id = $1",
         )
-        .bind(request_id.as_uuid())
+        .bind(request_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
         row.map(|row| {
             Ok(VerificationChallenge {
-                id: row.id,
-                request_id: DsrId::from_uuid(row.request_id),
+                id: VerificationChallengeId::try_from(row.id)
+                    .map_err(|err| invalid_id("verification challenge", err))?,
+                request_id: DsrId::try_from(row.request_id)
+                    .map_err(|err| invalid_id("dsr", err))?,
                 method: row.method,
                 token_hash: row.token_hash,
                 code_hash: row.code_hash,
@@ -2510,21 +2556,25 @@ impl VerificationRepository for SqlxVerificationRepository {
     async fn record_attempt(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: VerificationChallengeId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.verification_challenges SET attempts = attempts + 1 WHERE id = $1",
         )
-        .bind(id)
+        .bind(id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
         Ok(())
     }
 
-    async fn consume(&self, scope: &mut PlatformScope<'_>, id: Uuid) -> Result<(), PrivacyError> {
+    async fn consume(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: VerificationChallengeId,
+    ) -> Result<(), PrivacyError> {
         sqlx::query("UPDATE privacy.verification_challenges SET consumed_at = now() WHERE id = $1")
-            .bind(id)
+            .bind(id.as_i64())
             .execute(&mut **scope.tx_mut().as_inner())
             .await
             .map_err(map_db)?;
@@ -2640,16 +2690,16 @@ impl ProcessingActivityRepository for SqlxProcessingActivityRepository {
                 active, created_by)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
-        .bind(activity.id)
+        .bind(activity.id.as_i64())
         .bind(&activity.name)
         .bind(&activity.purpose)
         .bind(&classes)
         .bind(activity.controller_role.as_str())
         .bind(&activity.basis)
         .bind(activity.version)
-        .bind(activity.supersedes)
+        .bind(activity.supersedes.map(|id| id.as_i64()))
         .bind(activity.active)
-        .bind(activity.created_by)
+        .bind(activity.created_by.map(|id| id.as_i64()))
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2659,81 +2709,25 @@ impl ProcessingActivityRepository for SqlxProcessingActivityRepository {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: ProcessingActivityId,
     ) -> Result<Option<ProcessingActivity>, PrivacyError> {
-        let row: Option<(
-            Uuid,
-            String,
-            String,
-            Vec<String>,
-            String,
-            Option<String>,
-            i32,
-            Option<Uuid>,
-            bool,
-            Option<Uuid>,
-            DateTime<Utc>,
-        )> = sqlx::query_as(
+        let row: Option<ActivityRow> = sqlx::query_as(
             "SELECT id, name, purpose, data_classes, controller_role, basis, version,
                         supersedes, active, created_by, created_at
                  FROM privacy.processing_activities WHERE id = $1",
         )
-        .bind(id)
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
-        row.map(
-            |(
-                id,
-                name,
-                purpose,
-                data_classes,
-                controller_role,
-                basis,
-                version,
-                supersedes,
-                active,
-                created_by,
-                created_at,
-            )| {
-                Ok(ProcessingActivity {
-                    id,
-                    name,
-                    purpose,
-                    data_classes: data_classes
-                        .iter()
-                        .map(|c| super::super::domain::types::DataClass::parse(c))
-                        .collect::<Result<_, _>>()?,
-                    controller_role: ControllerRole::parse(&controller_role)?,
-                    basis,
-                    version,
-                    supersedes,
-                    active,
-                    created_by,
-                    created_at,
-                })
-            },
-        )
-        .transpose()
+        row.map(to_activity).transpose()
     }
 
     async fn list_active(
         &self,
         scope: &mut PlatformScope<'_>,
     ) -> Result<Vec<ProcessingActivity>, PrivacyError> {
-        let rows: Vec<(
-            Uuid,
-            String,
-            String,
-            Vec<String>,
-            String,
-            Option<String>,
-            i32,
-            Option<Uuid>,
-            bool,
-            Option<Uuid>,
-            DateTime<Utc>,
-        )> = sqlx::query_as(
+        let rows: Vec<ActivityRow> = sqlx::query_as(
             "SELECT id, name, purpose, data_classes, controller_role, basis, version,
                         supersedes, active, created_by, created_at
                  FROM privacy.processing_activities WHERE active ORDER BY name",
@@ -2741,41 +2735,61 @@ impl ProcessingActivityRepository for SqlxProcessingActivityRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
-        rows.into_iter()
-            .map(
-                |(
-                    id,
-                    name,
-                    purpose,
-                    data_classes,
-                    controller_role,
-                    basis,
-                    version,
-                    supersedes,
-                    active,
-                    created_by,
-                    created_at,
-                )| {
-                    Ok(ProcessingActivity {
-                        id,
-                        name,
-                        purpose,
-                        data_classes: data_classes
-                            .iter()
-                            .map(|c| super::super::domain::types::DataClass::parse(c))
-                            .collect::<Result<_, _>>()?,
-                        controller_role: ControllerRole::parse(&controller_role)?,
-                        basis,
-                        version,
-                        supersedes,
-                        active,
-                        created_by,
-                        created_at,
-                    })
-                },
-            )
-            .collect()
+        rows.into_iter().map(to_activity).collect()
     }
+}
+
+type ActivityRow = (
+    i64,
+    String,
+    String,
+    Vec<String>,
+    String,
+    Option<String>,
+    i32,
+    Option<i64>,
+    bool,
+    Option<i64>,
+    DateTime<Utc>,
+);
+
+fn to_activity(row: ActivityRow) -> Result<ProcessingActivity, PrivacyError> {
+    let (
+        id,
+        name,
+        purpose,
+        data_classes,
+        controller_role,
+        basis,
+        version,
+        supersedes,
+        active,
+        created_by,
+        created_at,
+    ) = row;
+    Ok(ProcessingActivity {
+        id: ProcessingActivityId::try_from(id)
+            .map_err(|err| invalid_id("processing activity", err))?,
+        name,
+        purpose,
+        data_classes: data_classes
+            .iter()
+            .map(|c| super::super::domain::types::DataClass::parse(c))
+            .collect::<Result<_, _>>()?,
+        controller_role: ControllerRole::parse(&controller_role)?,
+        basis,
+        version,
+        supersedes: supersedes
+            .map(ProcessingActivityId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("processing activity", err))?,
+        active,
+        created_by: created_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("user", err))?,
+        created_at,
+    })
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2812,14 +2826,14 @@ impl RiskAssessmentRepository for SqlxRiskAssessmentRepository {
                reviewed_at = EXCLUDED.reviewed_at,
                next_review_at = EXCLUDED.next_review_at",
         )
-        .bind(assessment.id)
-        .bind(assessment.activity_id)
+        .bind(assessment.id.as_i64())
+        .bind(assessment.activity_id.as_i64())
         .bind(&jurisdictions)
         .bind(assessment.trigger.as_str())
         .bind(assessment.status.as_str())
         .bind(&assessment.findings)
         .bind(&assessment.mitigations)
-        .bind(assessment.reviewed_by)
+        .bind(assessment.reviewed_by.map(|id| id.as_i64()))
         .bind(assessment.reviewed_at)
         .bind(assessment.next_review_at)
         .execute(&mut **scope.tx_mut().as_inner())
@@ -2831,26 +2845,14 @@ impl RiskAssessmentRepository for SqlxRiskAssessmentRepository {
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
-        id: Uuid,
+        id: RiskAssessmentId,
     ) -> Result<Option<RiskAssessment>, PrivacyError> {
-        let row: Option<(
-            Uuid,
-            Uuid,
-            Vec<String>,
-            String,
-            String,
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-            Option<Uuid>,
-            Option<DateTime<Utc>>,
-            Option<DateTime<Utc>>,
-            DateTime<Utc>,
-        )> = sqlx::query_as(
+        let row: Option<AssessmentRow> = sqlx::query_as(
             "SELECT id, activity_id, jurisdictions, trigger, status, findings, mitigations,
                         reviewed_by, reviewed_at, next_review_at, created_at
                  FROM privacy.risk_assessments WHERE id = $1",
         )
-        .bind(id)
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2861,19 +2863,7 @@ impl RiskAssessmentRepository for SqlxRiskAssessmentRepository {
         &self,
         scope: &mut PlatformScope<'_>,
     ) -> Result<Vec<RiskAssessment>, PrivacyError> {
-        let rows: Vec<(
-            Uuid,
-            Uuid,
-            Vec<String>,
-            String,
-            String,
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-            Option<Uuid>,
-            Option<DateTime<Utc>>,
-            Option<DateTime<Utc>>,
-            DateTime<Utc>,
-        )> = sqlx::query_as(
+        let rows: Vec<AssessmentRow> = sqlx::query_as(
             "SELECT id, activity_id, jurisdictions, trigger, status, findings, mitigations,
                         reviewed_by, reviewed_at, next_review_at, created_at
                  FROM privacy.risk_assessments ORDER BY created_at DESC",
@@ -2886,14 +2876,14 @@ impl RiskAssessmentRepository for SqlxRiskAssessmentRepository {
 }
 
 type AssessmentRow = (
-    Uuid,
-    Uuid,
+    i64,
+    i64,
     Vec<String>,
     String,
     String,
     Option<serde_json::Value>,
     Option<serde_json::Value>,
-    Option<Uuid>,
+    Option<i64>,
     Option<DateTime<Utc>>,
     Option<DateTime<Utc>>,
     DateTime<Utc>,
@@ -2914,8 +2904,9 @@ fn to_assessment(row: AssessmentRow) -> Result<RiskAssessment, PrivacyError> {
         created_at,
     ) = row;
     Ok(RiskAssessment {
-        id,
-        activity_id,
+        id: RiskAssessmentId::try_from(id).map_err(|err| invalid_id("risk assessment", err))?,
+        activity_id: ProcessingActivityId::try_from(activity_id)
+            .map_err(|err| invalid_id("processing activity", err))?,
         jurisdictions: jurisdictions
             .iter()
             .map(|j| JurisdictionRef::parse(j))
@@ -2924,7 +2915,10 @@ fn to_assessment(row: AssessmentRow) -> Result<RiskAssessment, PrivacyError> {
         status: RiskAssessmentStatus::parse(&status)?,
         findings,
         mitigations,
-        reviewed_by,
+        reviewed_by: reviewed_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(|err| invalid_id("user", err))?,
         reviewed_at,
         next_review_at,
         created_at,
@@ -2953,13 +2947,13 @@ impl AuthorizedAgentRepository for SqlxAuthorizedAgentRepository {
                 consumer_verified_at, verified_by)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
-        .bind(agent.id)
-        .bind(agent.request_id.as_uuid())
+        .bind(agent.id.as_i64())
+        .bind(agent.request_id.as_i64())
         .bind(&agent.agent_name)
         .bind(&agent.agent_contact)
         .bind(&agent.authorization_evidence)
         .bind(agent.consumer_verified_at)
-        .bind(agent.verified_by)
+        .bind(agent.verified_by.map(|id| id.as_i64()))
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2972,20 +2966,20 @@ impl AuthorizedAgentRepository for SqlxAuthorizedAgentRepository {
         request_id: DsrId,
     ) -> Result<Option<AuthorizedAgent>, PrivacyError> {
         let row: Option<(
-            Uuid,
-            Uuid,
+            i64,
+            i64,
             String,
             Option<serde_json::Value>,
             serde_json::Value,
             Option<DateTime<Utc>>,
-            Option<Uuid>,
+            Option<i64>,
             DateTime<Utc>,
         )> = sqlx::query_as(
             "SELECT id, request_id, agent_name, agent_contact, authorization_evidence,
                         consumer_verified_at, verified_by, created_at
                  FROM privacy.authorized_agents WHERE request_id = $1",
         )
-        .bind(request_id.as_uuid())
+        .bind(request_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -3001,13 +2995,18 @@ impl AuthorizedAgentRepository for SqlxAuthorizedAgentRepository {
                 created_at,
             )| {
                 Ok(AuthorizedAgent {
-                    id,
-                    request_id: DsrId::from_uuid(request_id),
+                    id: AuthorizedAgentId::try_from(id)
+                        .map_err(|err| invalid_id("authorized agent", err))?,
+                    request_id: DsrId::try_from(request_id)
+                        .map_err(|err| invalid_id("dsr", err))?,
                     agent_name,
                     agent_contact,
                     authorization_evidence,
                     consumer_verified_at,
-                    verified_by,
+                    verified_by: verified_by
+                        .map(UserId::try_from)
+                        .transpose()
+                        .map_err(|err| invalid_id("user", err))?,
                     created_at,
                 })
             },
@@ -3019,15 +3018,15 @@ impl AuthorizedAgentRepository for SqlxAuthorizedAgentRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         request_id: DsrId,
-        verified_by: Uuid,
+        verified_by: UserId,
     ) -> Result<(), PrivacyError> {
         sqlx::query(
             "UPDATE privacy.authorized_agents
              SET consumer_verified_at = now(), verified_by = $2
              WHERE request_id = $1 AND consumer_verified_at IS NULL",
         )
-        .bind(request_id.as_uuid())
-        .bind(verified_by)
+        .bind(request_id.as_i64())
+        .bind(verified_by.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;

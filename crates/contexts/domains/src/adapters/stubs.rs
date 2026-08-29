@@ -2,9 +2,10 @@
 //! ports (the worker drives `configure_dns` without the purchase gate).
 
 use async_trait::async_trait;
-use uuid::Uuid;
 
-use crate::domain::{DomainFeatureGate, DomainsError, PurchaseCharger};
+use sanvi_kernel::TenantId;
+
+use crate::domain::{DomainFeatureGate, DomainOrderId, DomainsError, PurchaseCharger};
 
 /// A gate that denies everything: for use in processes where the purchase
 /// flow itself is never reachable (the worker only resumes orders; the API
@@ -14,7 +15,7 @@ pub struct AlwaysDisabledGate;
 
 #[async_trait]
 impl DomainFeatureGate for AlwaysDisabledGate {
-    async fn is_enabled(&self, _tenant_id: Uuid, _feature: &str) -> Result<bool, DomainsError> {
+    async fn is_enabled(&self, _tenant_id: TenantId, _feature: &str) -> Result<bool, DomainsError> {
         Ok(false)
     }
 }
@@ -32,8 +33,8 @@ pub struct SandboxPurchaseCharger;
 impl PurchaseCharger for SandboxPurchaseCharger {
     async fn charge(
         &self,
-        _tenant_id: Uuid,
-        order_id: Uuid,
+        _tenant_id: TenantId,
+        order_id: DomainOrderId,
         amount_minor: i64,
         currency: &str,
         description: &str,
@@ -50,8 +51,8 @@ impl PurchaseCharger for SandboxPurchaseCharger {
 
     async fn refund(
         &self,
-        _tenant_id: Uuid,
-        order_id: Uuid,
+        _tenant_id: TenantId,
+        order_id: DomainOrderId,
         charge_id: &str,
     ) -> Result<(), DomainsError> {
         tracing::info!(order_id = %order_id, charge_id, "sandbox refund recorded");

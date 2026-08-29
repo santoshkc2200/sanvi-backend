@@ -3,9 +3,10 @@
 
 use std::sync::Arc;
 
+use crate::domain::model::{ConnectionId, CreativeId};
 use chrono::Utc;
+use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::{
     application::PlatformRegistry,
@@ -20,7 +21,7 @@ use crate::{
 /// the platform's capability matrix.
 #[derive(Debug, Clone)]
 pub struct NewCreativeFields {
-    pub connection_id: Uuid,
+    pub connection_id: ConnectionId,
     pub placement: String,
     pub texts: Vec<CreativeText>,
     pub asset_references: Vec<String>,
@@ -32,6 +33,7 @@ pub struct CreateCreative {
     creatives: Arc<dyn CreativeRepository>,
     connections: Arc<dyn AdvertisingConnectionRepository>,
     platforms: Arc<PlatformRegistry>,
+    ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
 fn validate_assets(spec: &CreativeAssetSpec, assets: &[AssetMetadata]) -> Vec<ValidationViolation> {
@@ -60,23 +62,25 @@ impl CreateCreative {
         creatives: Arc<dyn CreativeRepository>,
         connections: Arc<dyn AdvertisingConnectionRepository>,
         platforms: Arc<PlatformRegistry>,
+        ids: Arc<dyn crate::domain::IdGenerator>,
     ) -> Self {
         Self {
             tx,
             creatives,
             connections,
             platforms,
+            ids,
         }
     }
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         fields: NewCreativeFields,
     ) -> Result<StoredCreative, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
 
@@ -112,7 +116,7 @@ impl CreateCreative {
             return Err(AdvertisingError::Validation(violations));
         }
 
-        let id = Uuid::now_v7();
+        let id = self.ids.next_creative_id()?;
         let stored = StoredCreative {
             id,
             tenant_id,
@@ -140,12 +144,12 @@ impl CreateCreative {
 
     pub async fn platform_for_connection(
         &self,
-        tenant_id: Uuid,
-        connection_id: Uuid,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
     ) -> Result<crate::domain::PlatformKey, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let connection = self
@@ -177,12 +181,12 @@ impl GetCreative {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        creative_id: Uuid,
+        tenant_id: TenantId,
+        creative_id: CreativeId,
     ) -> Result<Option<StoredCreative>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         self.creatives
@@ -201,10 +205,13 @@ impl ListCreatives {
         Self { tx, creatives }
     }
 
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<Vec<StoredCreative>, AdvertisingError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<StoredCreative>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         self.creatives.list_by_tenant(&mut scope, tenant_id).await
@@ -223,12 +230,12 @@ impl DeleteCreative {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        creative_id: Uuid,
+        tenant_id: TenantId,
+        creative_id: CreativeId,
     ) -> Result<(), AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let deleted = self
@@ -276,13 +283,13 @@ impl GetCreativePreviews {
 
     pub async fn execute(
         &self,
-        tenant_id: Uuid,
-        creative_id: Uuid,
+        tenant_id: TenantId,
+        creative_id: CreativeId,
         placement_filter: Option<String>,
     ) -> Result<Vec<PlacementPreview>, AdvertisingError> {
         let mut scope = self
             .tx
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
 

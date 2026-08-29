@@ -1864,6 +1864,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "id-forge"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a063290257f1ad185ba381a000cd6b958b6a784582329a8115ffa0b1a309b9f4"
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3323,6 +3329,7 @@ dependencies = [
  "sanvi-system",
  "sanvi-telemetry",
  "sanvi-tenancy",
+ "sanvi-testsupport",
  "sanvi-theming",
  "serde",
  "serde_json",
@@ -3425,6 +3432,7 @@ dependencies = [
  "sanvi-domains",
  "sanvi-http",
  "sanvi-identity",
+ "sanvi-kernel",
  "sanvi-localization",
  "sanvi-payments",
  "sanvi-persistence",
@@ -3543,12 +3551,13 @@ dependencies = [
 name = "sanvi-kernel"
 version = "0.10.0"
 dependencies = [
+ "anyhow",
  "chrono",
+ "id-forge",
  "proptest",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "uuid",
 ]
 
 [[package]]
@@ -3644,6 +3653,7 @@ name = "sanvi-persistence"
 version = "0.10.0"
 dependencies = [
  "anyhow",
+ "sanvi-kernel",
  "sanvi-testsupport",
  "serde",
  "serde_json",
@@ -3796,7 +3806,6 @@ dependencies = [
  "tokio",
  "tracing",
  "utoipa",
- "uuid",
 ]
 
 [[package]]
@@ -3804,6 +3813,7 @@ name = "sanvi-testsupport"
 version = "0.10.0"
 dependencies = [
  "hex",
+ "sanvi-kernel",
  "sanvi-persistence",
  "sha2 0.10.9",
  "sqlx",
@@ -3867,6 +3877,7 @@ dependencies = [
  "sanvi-domains",
  "sanvi-http",
  "sanvi-identity",
+ "sanvi-kernel",
  "sanvi-localization",
  "sanvi-messaging",
  "sanvi-payments",

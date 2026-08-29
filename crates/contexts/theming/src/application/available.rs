@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::TenantId;
 use sanvi_persistence::PgPool;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::application::views::AvailableThemeView;
 use crate::domain::error::ThemingError;
@@ -42,7 +42,7 @@ impl ListAvailableThemes {
         }
     }
 
-    pub async fn execute(&self, tenant_id: Uuid) -> Result<AvailableThemesView, ThemingError> {
+    pub async fn execute(&self, tenant_id: TenantId) -> Result<AvailableThemesView, ThemingError> {
         let registry = self.themes.list(&self.pool).await?;
         let mut views = Vec::new();
         for theme in registry {

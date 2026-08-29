@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::application::storage;
 use crate::domain::AccessError;
@@ -40,7 +40,7 @@ impl CheckPermission {
     /// The uncached core of the check.
     pub async fn check_raw(
         &self,
-        user_id: Uuid,
+        user_id: UserId,
         permission: &Permission,
         resource: &ResourceRef,
     ) -> Result<Decision, AccessError> {
@@ -100,7 +100,7 @@ impl CheckPermission {
 /// The Keto role object for a candidate: platform roles are global
 /// (`platform:{key}`); system tenant templates materialize per tenant
 /// (`{tenant_id}:{key}`) because membership is always tenant-scoped.
-fn role_tuple_object(role: &crate::domain::Role, tenant_id: Option<Uuid>) -> String {
+fn role_tuple_object(role: &crate::domain::Role, tenant_id: Option<TenantId>) -> String {
     match role.scope() {
         RoleScope::Platform => format!("platform:{}", role.key()),
         RoleScope::Tenant => match (role.tenant_id(), tenant_id) {
@@ -127,7 +127,7 @@ impl CachedAuthorizer {
         }
     }
 
-    fn cache_key(&self, user_id: Uuid, permission: &str, resource: &ResourceRef) -> String {
+    fn cache_key(&self, user_id: UserId, permission: &str, resource: &ResourceRef) -> String {
         let resource_key = match resource {
             ResourceRef::Tenant(id) => format!("tenant:{id}"),
             ResourceRef::User(id) => format!("user:{id}"),
@@ -141,7 +141,7 @@ impl CachedAuthorizer {
 impl Authorizer for CachedAuthorizer {
     async fn check(
         &self,
-        user_id: Uuid,
+        user_id: UserId,
         permission: &Permission,
         resource: &ResourceRef,
     ) -> Result<Decision, AccessError> {

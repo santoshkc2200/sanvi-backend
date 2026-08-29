@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 
-use uuid::Uuid;
+use sanvi_kernel::TenantId;
 
 use crate::domain::{ArtifactStore, BrandAssetStore, ThemingError};
 
@@ -33,7 +33,7 @@ impl LocalFileStore {
         Self { root: root.into() }
     }
 
-    fn brand_path(&self, tenant_id: Uuid, digest: &str, ext: &str) -> PathBuf {
+    fn brand_path(&self, tenant_id: TenantId, digest: &str, ext: &str) -> PathBuf {
         self.root
             .join("brand")
             .join(tenant_id.to_string())
@@ -91,7 +91,7 @@ impl LocalFileStore {
 impl BrandAssetStore for LocalFileStore {
     async fn put(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         digest: &str,
         ext: &str,
         bytes: &[u8],
@@ -100,7 +100,12 @@ impl BrandAssetStore for LocalFileStore {
         self.write_file(&path, bytes).await
     }
 
-    async fn delete(&self, tenant_id: Uuid, digest: &str, ext: &str) -> Result<(), ThemingError> {
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        digest: &str,
+        ext: &str,
+    ) -> Result<(), ThemingError> {
         let path = self.brand_path(tenant_id, digest, ext);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
@@ -143,7 +148,7 @@ mod tests {
     async fn stores_and_deletes_brand_assets() {
         let root = temp_root();
         let store = LocalFileStore::new(root.clone());
-        let tenant = Uuid::now_v7();
+        let tenant = TenantId::try_from(1_000_001_i64).unwrap();
         let digest = "a".repeat(64);
         <LocalFileStore as BrandAssetStore>::put(&store, tenant, &digest, "png", b"data")
             .await

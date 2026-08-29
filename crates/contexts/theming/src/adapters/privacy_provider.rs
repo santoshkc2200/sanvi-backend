@@ -41,7 +41,7 @@ impl PersonalDataProvider for ThemingPrivacyProvider {
     async fn collect(&self, subject: &SubjectRef) -> Result<DataBundle, PrivacyError> {
         let user_id = subject.identifiers.iter().find_map(|id| {
             (id.id_type == "user_id")
-                .then(|| uuid::Uuid::parse_str(&id.value).ok())
+                .then(|| id.value.parse::<sanvi_kernel::UserId>().ok())
                 .flatten()
         });
         let Some(user_id) = user_id else {
@@ -58,7 +58,7 @@ impl PersonalDataProvider for ThemingPrivacyProvider {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let rows = sqlx::query!(
             "SELECT state, updated_at FROM theming.tenant_themes WHERE updated_by = $1",
-            user_id
+            user_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -66,7 +66,7 @@ impl PersonalDataProvider for ThemingPrivacyProvider {
         let revision_rows = sqlx::query!(
             "SELECT revision, published_at FROM theming.tenant_theme_revisions
              WHERE published_by = $1",
-            user_id
+            user_id.as_i64()
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -104,7 +104,7 @@ impl PersonalDataProvider for ThemingPrivacyProvider {
     ) -> Result<EraseReport, PrivacyError> {
         let user_id = subject.identifiers.iter().find_map(|id| {
             (id.id_type == "user_id")
-                .then(|| uuid::Uuid::parse_str(&id.value).ok())
+                .then(|| id.value.parse::<sanvi_kernel::UserId>().ok())
                 .flatten()
         });
         let Some(user_id) = user_id else {
@@ -123,7 +123,7 @@ impl PersonalDataProvider for ThemingPrivacyProvider {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let themes = sqlx::query!(
             "UPDATE theming.tenant_themes SET updated_by = NULL WHERE updated_by = $1",
-            user_id
+            user_id.as_i64()
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -131,7 +131,7 @@ impl PersonalDataProvider for ThemingPrivacyProvider {
         let revisions = sqlx::query!(
             "UPDATE theming.tenant_theme_revisions SET published_by = NULL
              WHERE published_by = $1",
-            user_id
+            user_id.as_i64()
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await

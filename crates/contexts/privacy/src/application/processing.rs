@@ -18,7 +18,7 @@ use sanvi_persistence::TxManager;
 
 use crate::domain::{
     Clock, ConsentRepository, DataBundle, DsrKind, DsrRepository, DsrStatus, EnvelopeCrypto,
-    EraseReport, EventPublisher, ExportArtifactRepository, ExportPackager, Hasher,
+    EraseReport, EventPublisher, ExportArtifactRepository, ExportPackager, Hasher, IdGenerator,
     LegalHoldRepository, Notifications, ParticipantRepository, ParticipantRow, ParticipantStatus,
     PrivacyError, PrivacyEvent, ProviderRegistry, SubProcessorNotifier, SubProcessorRepository,
 };
@@ -48,6 +48,7 @@ pub struct ProcessDsrBatch {
     notifications: Arc<dyn Notifications>,
     events: Arc<dyn EventPublisher>,
     hasher: Arc<dyn Hasher>,
+    ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
     export_dir: String,
     export_ttl_days: i64,
@@ -69,6 +70,7 @@ impl ProcessDsrBatch {
         notifications: Arc<dyn Notifications>,
         events: Arc<dyn EventPublisher>,
         hasher: Arc<dyn Hasher>,
+        ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
         export_dir: String,
         export_ttl_days: i64,
@@ -87,6 +89,7 @@ impl ProcessDsrBatch {
             notifications,
             events,
             hasher,
+            ids,
             clock,
             export_dir,
             export_ttl_days,
@@ -322,7 +325,7 @@ impl ProcessDsrBatch {
                             tracing::warn!(
                                 error = %err,
                                 context = name,
-                                request_id = %request.id.as_uuid(),
+                                request_id = %request.id.as_i64(),
                                 "DSR participant failed",
                             );
                             any_failed = true;
@@ -382,6 +385,7 @@ impl ProcessDsrBatch {
                 self.artifacts.as_ref(),
                 self.hasher.as_ref(),
                 self.crypto.as_ref(),
+                self.ids.as_ref(),
                 request.id,
                 request.subject_id,
                 archive,
@@ -404,14 +408,14 @@ impl ProcessDsrBatch {
                     &request.subject_ref,
                     &token,
                     &passphrase,
-                    &request.id.as_uuid().to_string(),
+                    &request.id.as_i64().to_string(),
                 )
                 .await?;
             self.events
                 .publish(
                     scope,
                     &[PrivacyEvent::DsrClosed {
-                        request_id: request.id.as_uuid(),
+                        request_id: request.id,
                         subject: request.subject_ref.clone(),
                         dsr_kind: request.kind.as_str().to_string(),
                         status: "completed".to_string(),
@@ -448,7 +452,7 @@ impl ProcessDsrBatch {
                             tenant_id: request.tenant_id,
                         },
                         PrivacyEvent::DsrClosed {
-                            request_id: request.id.as_uuid(),
+                            request_id: request.id,
                             subject: request.subject_ref.clone(),
                             dsr_kind: "erasure".to_string(),
                             status: "completed".to_string(),
@@ -472,7 +476,7 @@ impl ProcessDsrBatch {
             .publish(
                 scope,
                 &[PrivacyEvent::DsrClosed {
-                    request_id: request.id.as_uuid(),
+                    request_id: request.id,
                     subject: request.subject_ref.clone(),
                     dsr_kind: request.kind.as_str().to_string(),
                     status: "completed".to_string(),

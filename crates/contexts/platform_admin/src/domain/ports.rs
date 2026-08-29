@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::PlatformScope;
-use uuid::Uuid;
 
 use crate::domain::approvals::{ApprovalId, PendingApproval};
 use crate::domain::error::PlatformAdminError;
@@ -30,7 +30,7 @@ pub trait ImpersonationGrantRepository: Send + Sync {
     async fn list_active(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
         now: DateTime<Utc>,
         limit: u32,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError>;
@@ -39,14 +39,14 @@ pub trait ImpersonationGrantRepository: Send + Sync {
     async fn list_by_actor(
         &self,
         scope: &mut PlatformScope<'_>,
-        actor_id: Uuid,
+        actor_id: UserId,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError>;
 
     /// Phase-05: grants into which a user was the impersonation target.
     async fn list_by_target(
         &self,
         scope: &mut PlatformScope<'_>,
-        target_user_id: Uuid,
+        target_user_id: UserId,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError>;
 
     /// Phase-05 erasure: revoke every grant a user authored (soft revoke —
@@ -54,7 +54,7 @@ pub trait ImpersonationGrantRepository: Send + Sync {
     async fn revoke_all_for_actor(
         &self,
         scope: &mut PlatformScope<'_>,
-        actor_id: Uuid,
+        actor_id: UserId,
     ) -> Result<usize, PlatformAdminError>;
 
     /// Phase-05 erasure: redact `target_user_id` on every grant a user was
@@ -63,14 +63,14 @@ pub trait ImpersonationGrantRepository: Send + Sync {
     async fn anonymise_target(
         &self,
         scope: &mut PlatformScope<'_>,
-        target_user_id: Uuid,
+        target_user_id: UserId,
     ) -> Result<usize, PlatformAdminError>;
 
     /// How many active grants exist into a tenant (admin view summary).
     async fn count_active(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         now: DateTime<Utc>,
     ) -> Result<u32, PlatformAdminError>;
 }
@@ -101,7 +101,7 @@ pub trait PendingApprovalRepository: Send + Sync {
     async fn list_by_requester(
         &self,
         scope: &mut PlatformScope<'_>,
-        requested_by: Uuid,
+        requested_by: UserId,
     ) -> Result<Vec<PendingApproval>, PlatformAdminError>;
 
     /// Phase-05 erasure: replace the requester/decider references with
@@ -109,7 +109,7 @@ pub trait PendingApprovalRepository: Send + Sync {
     async fn anonymise_for_user(
         &self,
         scope: &mut PlatformScope<'_>,
-        user_id: Uuid,
+        user_id: UserId,
     ) -> Result<usize, PlatformAdminError>;
 }
 
@@ -132,7 +132,7 @@ pub trait TenantAdminViewRepository: Send + Sync {
     async fn get(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<TenantAdminView>, PlatformAdminError>;
 }
 
@@ -141,7 +141,7 @@ pub trait TenantAdminViewRepository: Send + Sync {
 /// into a locked tenant is refused.
 #[async_trait]
 pub trait PrivacyLock: Send + Sync {
-    async fn is_locked(&self, tenant_id: Uuid) -> Result<bool, PlatformAdminError>;
+    async fn is_locked(&self, tenant_id: TenantId) -> Result<bool, PlatformAdminError>;
 }
 
 /// Publishes platform-admin events into the transactional outbox.
@@ -156,8 +156,8 @@ pub trait EventPublisher: Send + Sync {
 
 /// Source of new ids (tests substitute deterministic generators).
 pub trait IdGenerator: Send + Sync {
-    fn next_grant_id(&self) -> ImpersonationGrantId;
-    fn next_approval_id(&self) -> ApprovalId;
+    fn next_grant_id(&self) -> Result<ImpersonationGrantId, PlatformAdminError>;
+    fn next_approval_id(&self) -> Result<ApprovalId, PlatformAdminError>;
 }
 
 /// The system clock (tests substitute fixed times).
@@ -175,8 +175,8 @@ pub trait EntitlementAdmin: Send + Sync {
     /// four-eyes policy).
     async fn grant_override(
         &self,
-        actor_id: Uuid,
-        tenant_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
         feature_key: String,
         enabled: bool,
         limit: Option<i64>,
@@ -187,8 +187,8 @@ pub trait EntitlementAdmin: Send + Sync {
     /// The approval-execution path: re-run a grant with four-eyes skipped.
     async fn grant_override_approved(
         &self,
-        requested_by: Uuid,
-        tenant_id: Uuid,
+        requested_by: UserId,
+        tenant_id: TenantId,
         feature_key: String,
         enabled: bool,
         limit: Option<i64>,
@@ -198,22 +198,22 @@ pub trait EntitlementAdmin: Send + Sync {
 
     async fn revoke_override(
         &self,
-        actor_id: Uuid,
-        tenant_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
         feature_key: String,
     ) -> Result<(), PlatformAdminError>;
 
     /// The tenant's stored override rows (operator console).
     async fn list_overrides(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<sanvi_access::domain::Entitlement>, PlatformAdminError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantOverrideOutcome {
     Granted,
-    ApprovalRequired { approval_id: Uuid },
+    ApprovalRequired { approval_id: ApprovalId },
 }
 
 /// The platform's per-tenant application-fee administration (09.6). The
@@ -225,7 +225,7 @@ pub trait ApplicationFeeAdmin: Send + Sync {
     /// fees off).
     async fn get(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<crate::domain::fees::ApplicationFeeConfig>, PlatformAdminError>;
 
     /// Create or update the configuration (audited). Validates before
@@ -233,15 +233,15 @@ pub trait ApplicationFeeAdmin: Send + Sync {
     async fn set(
         &self,
         config: crate::domain::fees::ApplicationFeeConfig,
-        actor_id: Option<Uuid>,
+        actor_id: Option<UserId>,
         reason: Option<String>,
     ) -> Result<(), PlatformAdminError>;
 
     /// Disable (the rollback path: data, no deploy). Audited.
     async fn disable(
         &self,
-        tenant_id: Uuid,
-        actor_id: Option<Uuid>,
+        tenant_id: TenantId,
+        actor_id: Option<UserId>,
         reason: Option<String>,
     ) -> Result<(), PlatformAdminError>;
 }

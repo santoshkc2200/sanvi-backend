@@ -21,6 +21,12 @@
 6. **SQL.** Migrations are timestamped, context-tagged, reversible, and only
    touch their own schema. Query macros (`query_as!`) + committed `.sqlx`
    cache; run `cargo sqlx prepare --workspace` when queries change.
+7. **IDs.** First-party entity IDs use `sanvi_kernel::Id<Tag>` Snowflakes:
+   raw SQL rows use `i64`, domain mapping uses `TryFrom`, and transport uses
+   decimal strings. Do not add UUID entity IDs or `Id::from_uuid`/`as_uuid`.
+   UUID is limited to named external/correlation fields listed in
+   `scripts/id-policy-uuid-exceptions.txt`; run `just id-policy` before
+   submitting ID-related work.
 
 ## Adding a use case (the recipe)
 

@@ -9,9 +9,9 @@ use std::sync::Arc;
 use sanvi_http::{
     ApiError, ImpersonatedSubject, ImpersonationMode as HttpMode, ImpersonationVerifier, Subject,
 };
-use sanvi_identity::domain::{MembershipRepository, UserId};
+use sanvi_identity::domain::MembershipRepository;
+use sanvi_kernel::{SnowflakeId, TenantId};
 use sanvi_persistence::TxManager;
-use uuid::Uuid;
 
 use crate::domain::PlatformAdminError;
 use crate::domain::impersonation::{ImpersonationGrantId, ImpersonationMode};
@@ -48,9 +48,9 @@ fn map_error(err: PlatformAdminError) -> ApiError {
 impl ImpersonationVerifier for SqlxImpersonationVerifier {
     fn verify<'a>(
         &'a self,
-        grant_id: Uuid,
+        grant_id: SnowflakeId,
         _actor: &'a Subject,
-        _tenant_id: Option<Uuid>,
+        _tenant_id: Option<TenantId>,
     ) -> Pin<
         Box<
             dyn std::future::Future<Output = Result<Option<ImpersonatedSubject>, ApiError>>
@@ -67,7 +67,7 @@ impl ImpersonationVerifier for SqlxImpersonationVerifier {
                     .map_err(|err| ApiError::internal(format!("storage failure: {err}")))?;
                 let grant = self
                     .grants
-                    .find_by_id(&mut scope, ImpersonationGrantId::from_uuid(grant_id))
+                    .find_by_id(&mut scope, ImpersonationGrantId::from_snowflake(grant_id))
                     .await
                     .map_err(map_error)?;
                 scope
@@ -91,16 +91,12 @@ impl ImpersonationVerifier for SqlxImpersonationVerifier {
             let roles = {
                 let mut scope = self
                     .tx_manager
-                    .begin_for(grant.tenant_id())
+                    .begin_for(grant.tenant_id().as_i64())
                     .await
                     .map_err(|err| ApiError::internal(format!("storage failure: {err}")))?;
                 let membership = self
                     .memberships
-                    .find(
-                        &mut scope,
-                        grant.tenant_id(),
-                        UserId::from_uuid(grant.target_user_id()),
-                    )
+                    .find(&mut scope, grant.tenant_id(), grant.target_user_id())
                     .await
                     .map_err(|err: sanvi_identity::domain::IdentityError| {
                         map_error(PlatformAdminError::Storage(err.to_string()))
@@ -123,7 +119,7 @@ impl ImpersonationVerifier for SqlxImpersonationVerifier {
                 ImpersonationMode::ReadWrite => HttpMode::ReadWrite,
             };
             Ok(Some(ImpersonatedSubject {
-                grant_id: grant.id().as_uuid(),
+                grant_id: grant.id().as_snowflake(),
                 actor_user_id: grant.actor_id(),
                 target_user_id: grant.target_user_id(),
                 tenant_id: grant.tenant_id(),

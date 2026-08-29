@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::TxManager;
 use serde::Serialize;
 use tracing::info;
@@ -40,7 +41,7 @@ fn random_suffix(len: usize) -> String {
 }
 
 pub struct CreateCheckoutSessionCommand {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub price_id: PriceId,
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
@@ -118,7 +119,7 @@ impl CreateCheckoutSession {
 
     pub async fn execute(
         &self,
-        actor: Uuid,
+        actor: UserId,
         cmd: CreateCheckoutSessionCommand,
     ) -> Result<CheckoutSessionView, BillingError> {
         let mut scope = self

@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sanvi_access::domain::EntitlementRepository;
 use sanvi_identity::domain::MembershipRepository;
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::PlatformScope;
 use sanvi_tenancy::domain::{TenantRepository, TenantSearch, TenantSearchCursor, TenantStatus};
 use sqlx::FromRow;
-use uuid::Uuid;
 
 use crate::domain::PlatformAdminError;
 use crate::domain::approvals::{ApprovalId, ApprovalStatus, PendingApproval};
@@ -23,36 +23,41 @@ fn storage(err: impl std::fmt::Display) -> PlatformAdminError {
     PlatformAdminError::Storage(err.to_string())
 }
 
+const ANONYMISED_USER_ID: i64 = 1;
+
 // ---------------------------------------------------------------------------
 // Impersonation grants
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, FromRow)]
 struct GrantRow {
-    id: Uuid,
-    actor_id: Uuid,
-    tenant_id: Uuid,
-    target_user_id: Uuid,
+    id: i64,
+    actor_id: i64,
+    tenant_id: i64,
+    target_user_id: i64,
     reason: String,
     mode: String,
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
-    revoked_by: Option<Uuid>,
+    revoked_by: Option<i64>,
 }
 
 fn to_grant(row: GrantRow) -> Result<ImpersonationGrant, PlatformAdminError> {
     Ok(ImpersonationGrant::from_parts(
-        ImpersonationGrantId::from_uuid(row.id),
-        row.actor_id,
-        row.tenant_id,
-        row.target_user_id,
+        ImpersonationGrantId::try_from(row.id).map_err(storage)?,
+        UserId::try_from(row.actor_id).map_err(storage)?,
+        TenantId::try_from(row.tenant_id).map_err(storage)?,
+        UserId::try_from(row.target_user_id).map_err(storage)?,
         row.reason,
         ImpersonationMode::parse(&row.mode)?,
         row.created_at,
         row.expires_at,
         row.revoked_at,
-        row.revoked_by,
+        row.revoked_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(storage)?,
     ))
 }
 
@@ -81,16 +86,16 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
                revoked_at = EXCLUDED.revoked_at,
                revoked_by = EXCLUDED.revoked_by",
         )
-        .bind(grant.id().as_uuid())
-        .bind(grant.actor_id())
-        .bind(grant.tenant_id())
-        .bind(grant.target_user_id())
+        .bind(grant.id().as_i64())
+        .bind(grant.actor_id().as_i64())
+        .bind(grant.tenant_id().as_i64())
+        .bind(grant.target_user_id().as_i64())
         .bind(grant.reason())
         .bind(grant.mode().as_str())
         .bind(grant.created_at())
         .bind(grant.expires_at())
         .bind(grant.revoked_at())
-        .bind(grant.revoked_by())
+        .bind(grant.revoked_by().map(UserId::as_i64))
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -107,7 +112,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
                     created_at, expires_at, revoked_at, revoked_by
              FROM platform_admin.impersonation_grants WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -117,7 +122,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
     async fn list_active(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Option<Uuid>,
+        tenant_id: Option<TenantId>,
         now: DateTime<Utc>,
         limit: u32,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError> {
@@ -126,11 +131,11 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
                     created_at, expires_at, revoked_at, revoked_by
              FROM platform_admin.impersonation_grants
              WHERE revoked_at IS NULL AND expires_at > $1
-               AND ($2::uuid IS NULL OR tenant_id = $2)
+               AND ($2::bigint IS NULL OR tenant_id = $2)
              ORDER BY created_at DESC LIMIT $3",
         )
         .bind(now)
-        .bind(tenant_id)
+        .bind(tenant_id.map(TenantId::as_i64))
         .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -141,7 +146,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
     async fn list_by_actor(
         &self,
         scope: &mut PlatformScope<'_>,
-        actor_id: Uuid,
+        actor_id: UserId,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError> {
         let rows: Vec<GrantRow> = sqlx::query_as(
             "SELECT id, actor_id, tenant_id, target_user_id, reason, mode,
@@ -149,7 +154,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
              FROM platform_admin.impersonation_grants WHERE actor_id = $1
              ORDER BY created_at DESC",
         )
-        .bind(actor_id)
+        .bind(actor_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -159,7 +164,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
     async fn list_by_target(
         &self,
         scope: &mut PlatformScope<'_>,
-        target_user_id: Uuid,
+        target_user_id: UserId,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError> {
         let rows: Vec<GrantRow> = sqlx::query_as(
             "SELECT id, actor_id, tenant_id, target_user_id, reason, mode,
@@ -167,7 +172,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
              FROM platform_admin.impersonation_grants WHERE target_user_id = $1
              ORDER BY created_at DESC",
         )
-        .bind(target_user_id)
+        .bind(target_user_id.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -177,15 +182,15 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
     async fn revoke_all_for_actor(
         &self,
         scope: &mut PlatformScope<'_>,
-        actor_id: Uuid,
+        actor_id: UserId,
     ) -> Result<usize, PlatformAdminError> {
         let result = sqlx::query(
             "UPDATE platform_admin.impersonation_grants
              SET revoked_at = now(), revoked_by = $1
              WHERE actor_id = $2 AND revoked_at IS NULL",
         )
-        .bind(Uuid::nil())
-        .bind(actor_id)
+        .bind(ANONYMISED_USER_ID)
+        .bind(actor_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -195,15 +200,15 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
     async fn anonymise_target(
         &self,
         scope: &mut PlatformScope<'_>,
-        target_user_id: Uuid,
+        target_user_id: UserId,
     ) -> Result<usize, PlatformAdminError> {
         let result = sqlx::query(
             "UPDATE platform_admin.impersonation_grants
              SET target_user_id = $1
              WHERE target_user_id = $2",
         )
-        .bind(Uuid::nil())
-        .bind(target_user_id)
+        .bind(ANONYMISED_USER_ID)
+        .bind(target_user_id.as_i64())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -213,14 +218,14 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
     async fn count_active(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         now: DateTime<Utc>,
     ) -> Result<u32, PlatformAdminError> {
         let count: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM platform_admin.impersonation_grants
              WHERE tenant_id = $1 AND revoked_at IS NULL AND expires_at > $2",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(now)
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
@@ -235,25 +240,28 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
 
 #[derive(Debug, Clone, FromRow)]
 struct ApprovalRow {
-    id: Uuid,
-    requested_by: Uuid,
+    id: i64,
+    requested_by: i64,
     action_type: String,
     payload: serde_json::Value,
     status: String,
     requested_at: DateTime<Utc>,
-    decided_by: Option<Uuid>,
+    decided_by: Option<i64>,
     decided_at: Option<DateTime<Utc>>,
 }
 
 fn to_approval(row: ApprovalRow) -> Result<PendingApproval, PlatformAdminError> {
     Ok(PendingApproval::from_parts(
-        ApprovalId::from_uuid(row.id),
-        row.requested_by,
+        ApprovalId::try_from(row.id).map_err(storage)?,
+        UserId::try_from(row.requested_by).map_err(storage)?,
         row.action_type,
         row.payload,
         ApprovalStatus::parse(&row.status)?,
         row.requested_at,
-        row.decided_by,
+        row.decided_by
+            .map(UserId::try_from)
+            .transpose()
+            .map_err(storage)?,
         row.decided_at,
     ))
 }
@@ -284,13 +292,13 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
                decided_by = EXCLUDED.decided_by,
                decided_at = EXCLUDED.decided_at",
         )
-        .bind(approval.id().as_uuid())
-        .bind(approval.requested_by())
+        .bind(approval.id().as_i64())
+        .bind(approval.requested_by().as_i64())
         .bind(approval.action_type())
         .bind(approval.payload())
         .bind(approval.status().as_str())
         .bind(approval.requested_at())
-        .bind(approval.decided_by())
+        .bind(approval.decided_by().map(UserId::as_i64))
         .bind(approval.decided_at())
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -308,7 +316,7 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
                     decided_by, decided_at
              FROM platform_admin.pending_approvals WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -318,7 +326,7 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
     async fn list_by_requester(
         &self,
         scope: &mut PlatformScope<'_>,
-        requested_by: Uuid,
+        requested_by: UserId,
     ) -> Result<Vec<PendingApproval>, PlatformAdminError> {
         let rows: Vec<ApprovalRow> = sqlx::query_as(
             "SELECT id, requested_by, action_type, payload, status, requested_at,
@@ -326,7 +334,7 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
              FROM platform_admin.pending_approvals WHERE requested_by = $1
              ORDER BY requested_at DESC",
         )
-        .bind(requested_by)
+        .bind(requested_by.as_i64())
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -336,7 +344,7 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
     async fn anonymise_for_user(
         &self,
         scope: &mut PlatformScope<'_>,
-        user_id: Uuid,
+        user_id: UserId,
     ) -> Result<usize, PlatformAdminError> {
         let result = sqlx::query(
             "UPDATE platform_admin.pending_approvals
@@ -344,8 +352,8 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
                  decided_by = CASE WHEN decided_by = $1 THEN $2 ELSE decided_by END
              WHERE requested_by = $1 OR decided_by = $1",
         )
-        .bind(user_id)
-        .bind(Uuid::nil())
+        .bind(user_id.as_i64())
+        .bind(ANONYMISED_USER_ID)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -432,7 +440,7 @@ impl TenantAdminViewRepository for SqlxTenantAdminViewRepository {
                     status,
                     after: search.after.map(|cursor| TenantSearchCursor {
                         created_at: cursor.created_at,
-                        id: sanvi_tenancy::domain::TenantId::from_uuid(cursor.tenant_id),
+                        id: cursor.tenant_id,
                     }),
                     limit: search.limit,
                 },
@@ -442,7 +450,7 @@ impl TenantAdminViewRepository for SqlxTenantAdminViewRepository {
         let views = self.assemble(scope, &tenants).await?;
         let cursor = next_cursor.map(|cursor| TenantViewCursor {
             created_at: cursor.created_at,
-            tenant_id: cursor.id.as_uuid(),
+            tenant_id: cursor.id,
         });
         Ok((views, cursor))
     }
@@ -450,11 +458,11 @@ impl TenantAdminViewRepository for SqlxTenantAdminViewRepository {
     async fn get(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<TenantAdminView>, PlatformAdminError> {
         let Some(tenant) = self
             .tenants
-            .find_by_id(scope, sanvi_tenancy::domain::TenantId::from_uuid(tenant_id))
+            .find_by_id(scope, tenant_id)
             .await
             .map_err(|err| PlatformAdminError::Storage(err.to_string()))?
         else {
@@ -473,7 +481,7 @@ impl SqlxTenantAdminViewRepository {
     ) -> Result<Vec<TenantAdminView>, PlatformAdminError> {
         let mut views = Vec::with_capacity(tenants.len());
         for tenant in tenants {
-            let tenant_id = tenant.id().as_uuid();
+            let tenant_id = tenant.id();
             let member_count = self
                 .memberships
                 .count_members_platform(scope, tenant_id)
@@ -517,7 +525,7 @@ use crate::domain::ports::ApplicationFeeAdmin;
 
 #[derive(Debug, FromRow)]
 struct FeeRow {
-    tenant_id: Uuid,
+    tenant_id: i64,
     basis_points: Option<i32>,
     fixed_amount_minor: Option<i64>,
     fixed_currency: Option<String>,
@@ -530,7 +538,7 @@ impl TryFrom<FeeRow> for ApplicationFeeConfig {
 
     fn try_from(row: FeeRow) -> Result<Self, Self::Error> {
         Ok(Self {
-            tenant_id: row.tenant_id,
+            tenant_id: TenantId::try_from(row.tenant_id).map_err(storage)?,
             basis_points: row
                 .basis_points
                 .map(|v| u32::try_from(v.max(0) as i64).unwrap_or(0)),
@@ -571,7 +579,7 @@ impl SqlxFeeRepository {
     async fn read(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<ApplicationFeeConfig>, PlatformAdminError> {
         let row = sqlx::query_as::<_, FeeRow>(
             "SELECT tenant_id, basis_points, fixed_amount_minor, fixed_currency,
@@ -579,7 +587,7 @@ impl SqlxFeeRepository {
              FROM platform_admin.application_fees
              WHERE tenant_id = $1",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -589,7 +597,7 @@ impl SqlxFeeRepository {
     async fn write(
         &self,
         config: ApplicationFeeConfig,
-        actor_id: Option<Uuid>,
+        actor_id: Option<UserId>,
         reason: Option<String>,
         action: &str,
         before: Option<ApplicationFeeConfig>,
@@ -618,13 +626,13 @@ impl SqlxFeeRepository {
                        reason = EXCLUDED.reason,
                        updated_at = now()",
                 )
-                .bind(config.tenant_id)
+                .bind(config.tenant_id.as_i64())
                 .bind(config.basis_points.map(|v| v as i32))
                 .bind(config.fixed_amount_minor)
                 .bind(&config.fixed_currency)
                 .bind(config.minimum_minor)
                 .bind(config.enabled)
-                .bind(actor_id)
+                .bind(actor_id.map(UserId::as_i64))
                 .bind(&reason)
                 .execute(&mut **scope.tx_mut().as_inner())
                 .await
@@ -636,8 +644,8 @@ impl SqlxFeeRepository {
                      SET enabled = false, set_by = $2, reason = $3, updated_at = now()
                      WHERE tenant_id = $1",
                 )
-                .bind(config.tenant_id)
-                .bind(actor_id)
+                .bind(config.tenant_id.as_i64())
+                .bind(actor_id.map(UserId::as_i64))
                 .bind(&reason)
                 .execute(&mut **scope.tx_mut().as_inner())
                 .await
@@ -679,7 +687,7 @@ impl SqlxFeeRepository {
 impl ApplicationFeeAdmin for SqlxFeeRepository {
     async fn get(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<ApplicationFeeConfig>, PlatformAdminError> {
         let mut scope = self
             .tx_manager
@@ -694,7 +702,7 @@ impl ApplicationFeeAdmin for SqlxFeeRepository {
     async fn set(
         &self,
         config: ApplicationFeeConfig,
-        actor_id: Option<Uuid>,
+        actor_id: Option<UserId>,
         reason: Option<String>,
     ) -> Result<(), PlatformAdminError> {
         // Read the previous value first (best-effort: an unreadable
@@ -713,8 +721,8 @@ impl ApplicationFeeAdmin for SqlxFeeRepository {
 
     async fn disable(
         &self,
-        tenant_id: Uuid,
-        actor_id: Option<Uuid>,
+        tenant_id: TenantId,
+        actor_id: Option<UserId>,
         reason: Option<String>,
     ) -> Result<(), PlatformAdminError> {
         let before = self.get(tenant_id).await.ok().flatten();

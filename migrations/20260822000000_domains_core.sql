@@ -25,8 +25,8 @@ CREATE SCHEMA IF NOT EXISTS domains;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE domains.custom_domains (
-  id                    uuid        PRIMARY KEY,
-  tenant_id             uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id                    bigint        PRIMARY KEY,
+  tenant_id             bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   hostname              text        NOT NULL,
   normalized_hostname   text        NOT NULL,
   kind                  text        NOT NULL,
@@ -84,7 +84,7 @@ SELECT platform.enable_tenant_rls('domains', 'custom_domains');
 
 CREATE TABLE domains.live_hostnames (
   normalized_hostname text        PRIMARY KEY,
-  tenant_id           uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  tenant_id           bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   status              text        NOT NULL,
   updated_at          timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT live_hostnames_status_check
@@ -96,8 +96,8 @@ CREATE TABLE domains.live_hostnames (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE domains.orders (
-  id                 uuid        PRIMARY KEY,
-  tenant_id          uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id                 bigint        PRIMARY KEY,
+  tenant_id          bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   hostname           text        NOT NULL,
   normalized_hostname text       NOT NULL,
   term_years         int         NOT NULL,
@@ -107,7 +107,7 @@ CREATE TABLE domains.orders (
   auto_renew         boolean     NOT NULL DEFAULT true,
   whois_privacy      boolean     NOT NULL DEFAULT true,
   registrant_contact jsonb       NOT NULL,
-  ordered_by         uuid,
+  ordered_by         bigint,
   idempotency_key    uuid,
   external_order_ref text,
   charge_id          text,
@@ -140,9 +140,9 @@ SELECT platform.enable_tenant_rls('domains', 'orders');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE domains.certificates (
-  id                 uuid        PRIMARY KEY,
-  domain_id          uuid        NOT NULL REFERENCES domains.custom_domains(id) ON DELETE CASCADE,
-  tenant_id          uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id                 bigint        PRIMARY KEY,
+  domain_id          bigint        NOT NULL REFERENCES domains.custom_domains(id) ON DELETE CASCADE,
+  tenant_id          bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   hostname           text        NOT NULL,
   issuer             text        NOT NULL,
   serial             text        NOT NULL,
@@ -166,9 +166,9 @@ SELECT platform.enable_tenant_rls('domains', 'certificates');
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE domains.dns_records (
-  id          uuid        PRIMARY KEY,
-  domain_id   uuid        REFERENCES domains.custom_domains(id) ON DELETE CASCADE,
-  tenant_id   uuid        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
+  id          bigint        PRIMARY KEY,
+  domain_id   bigint        REFERENCES domains.custom_domains(id) ON DELETE CASCADE,
+  tenant_id   bigint        NOT NULL REFERENCES tenancy.tenants(id) ON DELETE CASCADE,
   record_type text        NOT NULL,
   name        text        NOT NULL,
   value       text        NOT NULL,

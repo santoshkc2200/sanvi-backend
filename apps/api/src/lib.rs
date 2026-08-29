@@ -42,9 +42,9 @@ use sanvi_access::{
 use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
-        FakeAdPlatform, OutboxEventPublisher as AdvertisingEvents,
-        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
-        SqlxCreativeRepository, SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
+        FakeAdPlatform, SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
+        SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
+        SqlxTenantEnvelopeCrypto,
     },
     application::{
         AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
@@ -132,6 +132,7 @@ use sanvi_identity::{
     },
     routes as identity_routes,
 };
+use sanvi_kernel::UserId;
 use sanvi_localization::{
     LocalizationConfig,
     adapters::{
@@ -275,7 +276,6 @@ use sanvi_theming::{
     },
     routes as theming_routes,
 };
-use uuid::Uuid;
 
 pub use config::AppConfig;
 pub use openapi::ApiDoc;
@@ -317,16 +317,18 @@ pub fn build_system_state(
 /// feature flag is off).
 pub fn build_tenancy_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     redis: Option<redis::aio::ConnectionManager>,
     config: &TenancyConfig,
     custom_domains: Option<Arc<dyn sanvi_tenancy::adapters::resolution::CustomDomainLookup>>,
 ) -> TenancyState {
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let settings: Arc<dyn TenantSettingsRepository> = Arc::new(SqlxTenantSettingsRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events: Arc<dyn TenancyEventPublisherTrait> = Arc::new(TenancyEventPublisher::new());
-    let ids: Arc<dyn TenancyIdGeneratorTrait> = Arc::new(TenancyIdGenerator);
+    let events: Arc<dyn TenancyEventPublisherTrait> =
+        Arc::new(TenancyEventPublisher::new(ids.clone()));
+    let ids: Arc<dyn TenancyIdGeneratorTrait> = Arc::new(TenancyIdGenerator::new(ids));
     let clock: Arc<dyn sanvi_tenancy::domain::Clock> = Arc::new(TenancyClock);
     let cache: Arc<dyn TenantResolutionCache> = match &redis {
         Some(manager) => Arc::new(sanvi_tenancy::adapters::RedisTenantResolutionCache::new(
@@ -417,7 +419,7 @@ struct LocalizedIdentityNotifications {
 impl Notifications for LocalizedIdentityNotifications {
     async fn send_invitation(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         email: &sanvi_identity::domain::Email,
         tenant_name: &str,
         invite_url: &str,
@@ -479,30 +481,37 @@ impl Notifications for LocalizedIdentityNotifications {
     }
 }
 
+/// External repository, catalog, and localizer dependencies for identity state.
+pub struct IdentityDependencies {
+    pub role_catalog: Arc<dyn RoleCatalog>,
+    pub tenant_catalog: Arc<dyn TenantCatalog>,
+    pub notification_localizer: Option<Arc<NotificationLocalizer>>,
+}
+
 /// Build the identity context's application state.
 pub fn build_identity_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     redis: Option<redis::aio::ConnectionManager>,
     config: &IdentityConfig,
     kratos_public_url: &str,
     kratos_admin_url: &str,
-    role_catalog: Arc<dyn RoleCatalog>,
-    tenant_catalog: Arc<dyn TenantCatalog>,
-    notification_localizer: Option<Arc<NotificationLocalizer>>,
+    deps: IdentityDependencies,
 ) -> IdentityWiring {
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let users: Arc<dyn UserRepository> = Arc::new(SqlxUserRepository::new());
     let memberships: Arc<dyn MembershipRepository> = Arc::new(SqlxMembershipRepository::new());
     let linked: Arc<dyn LinkedAccountRepository> = Arc::new(SqlxLinkedAccountRepository::new());
     let invitations: Arc<dyn InvitationRepository> = Arc::new(SqlxInvitationRepository::new());
     let link_intents: Arc<dyn LinkIntentRepository> = Arc::new(SqlxLinkIntentRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(IdentityEventPublisher::new());
-    let notifications: Arc<dyn Notifications> = match notification_localizer {
+    let events: Arc<dyn EventPublisher> = Arc::new(IdentityEventPublisher::new(ids.clone()));
+    let notifications: Arc<dyn Notifications> = match deps.notification_localizer {
         Some(localizer) => Arc::new(LocalizedIdentityNotifications { localizer }),
         None => Arc::new(LoggingNotifications::new()),
     };
-    let ids: Arc<dyn sanvi_identity::domain::IdGenerator> = Arc::new(SystemIdGenerator);
+    let ids: Arc<dyn sanvi_identity::domain::IdGenerator> = Arc::new(SystemIdGenerator::new(ids));
     let clock: Arc<dyn sanvi_identity::domain::Clock> = Arc::new(SystemClock);
+    let role_catalog = deps.role_catalog;
     let kratos: Arc<dyn KratosClient> = Arc::new(
         HttpKratosClient::new(
             kratos_public_url.to_string(),
@@ -549,7 +558,7 @@ pub fn build_identity_state(
             users.clone(),
             memberships.clone(),
             role_catalog.clone(),
-            tenant_catalog,
+            deps.tenant_catalog,
         )),
         list_sessions: Arc::new(ListSessions::new(kratos.clone())),
         revoke_session: Arc::new(RevokeSession::new(
@@ -754,7 +763,7 @@ impl AccessFeatureGate {
 impl HttpFeatureGatePort for AccessFeatureGate {
     fn check<'a>(
         &'a self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         feature: &'a str,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<bool, sanvi_http::ApiError>> + Send + 'a>>
     {
@@ -787,6 +796,7 @@ impl HttpFeatureGatePort for AccessFeatureGate {
 #[allow(clippy::too_many_arguments)]
 pub fn build_access_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &AccessConfig,
     keto_read_url: &str,
     keto_write_url: &str,
@@ -796,7 +806,7 @@ pub fn build_access_state(
     registry: &prometheus::Registry,
     redis: Option<redis::aio::ConnectionManager>,
 ) -> AccessWiring {
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
     let store: Arc<dyn PermissionStore> = Arc::new(
         HttpKetoClient::new(keto_read_url.to_string(), keto_write_url.to_string())
@@ -808,10 +818,10 @@ pub fn build_access_state(
     let features: Arc<dyn FeatureRepository> = Arc::new(SqlxFeatureRepository::new());
     let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
     let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());
-    let events: Arc<dyn AccessEventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn AccessEventPublisher> = Arc::new(OutboxEventPublisher::new(ids.clone()));
     let clock: Arc<dyn sanvi_access::domain::Clock> = Arc::new(sanvi_access::adapters::SystemClock);
     let ids: Arc<dyn sanvi_access::domain::IdGenerator> =
-        Arc::new(sanvi_access::adapters::SystemRoleIdGenerator);
+        Arc::new(sanvi_access::adapters::SystemRoleIdGenerator::new(ids));
 
     let check = Arc::new(CheckPermission::new(
         tx_manager.clone(),
@@ -987,9 +997,13 @@ pub struct AuditWiring {
 }
 
 /// Build the audit context's application state.
-pub fn build_audit_state(pool: sanvi_persistence::PgPool, config: &AuditConfig) -> AuditWiring {
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
-    let writer: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new());
+pub fn build_audit_state(
+    pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
+    config: &AuditConfig,
+) -> AuditWiring {
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
+    let writer: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new(ids.clone()));
     let reader: Arc<dyn AuditReader> = Arc::new(SqlxAuditReader::new());
     let list = Arc::new(ListAuditLog::new(tx_manager.clone(), reader.clone()));
     let verify = Arc::new(VerifyAuditChain::new(
@@ -1052,8 +1066,8 @@ fn map_access_err(
 impl EntitlementAdmin for AccessEntitlementAdmin {
     async fn grant_override(
         &self,
-        actor_id: Uuid,
-        tenant_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
         feature_key: String,
         enabled: bool,
         limit: Option<i64>,
@@ -1087,7 +1101,9 @@ impl EntitlementAdmin for AccessEntitlementAdmin {
             }
             Ok(GrantEntitlementOutput::ApprovalRequired { approval_id }) => Ok(
                 sanvi_platform_admin::domain::GrantOverrideOutcome::ApprovalRequired {
-                    approval_id,
+                    approval_id: sanvi_platform_admin::domain::ApprovalId::from_snowflake(
+                        approval_id,
+                    ),
                 },
             ),
             Err(err) => Err(map_access_err(err)),
@@ -1096,8 +1112,8 @@ impl EntitlementAdmin for AccessEntitlementAdmin {
 
     async fn grant_override_approved(
         &self,
-        requested_by: Uuid,
-        tenant_id: Uuid,
+        requested_by: UserId,
+        tenant_id: TenantId,
         feature_key: String,
         enabled: bool,
         limit: Option<i64>,
@@ -1127,8 +1143,8 @@ impl EntitlementAdmin for AccessEntitlementAdmin {
 
     async fn revoke_override(
         &self,
-        actor_id: Uuid,
-        tenant_id: Uuid,
+        actor_id: UserId,
+        tenant_id: TenantId,
         feature_key: String,
     ) -> Result<(), sanvi_platform_admin::domain::PlatformAdminError> {
         let feature =
@@ -1148,7 +1164,7 @@ impl EntitlementAdmin for AccessEntitlementAdmin {
 
     async fn list_overrides(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<
         Vec<sanvi_access::domain::Entitlement>,
         sanvi_platform_admin::domain::PlatformAdminError,
@@ -1167,33 +1183,39 @@ pub struct PlatformAdminWiring {
     pub approval_gate: Arc<dyn ApprovalGate>,
 }
 
+/// External repository and adapter dependencies for platform admin state.
+pub struct PlatformAdminDependencies {
+    pub tenants: Arc<dyn TenantRepository>,
+    pub memberships: Arc<dyn MembershipRepository>,
+    pub entitlements: Arc<dyn EntitlementRepository>,
+    pub entitlement_admin: Arc<dyn EntitlementAdmin>,
+    pub audit_writer: Arc<dyn AuditWriter>,
+    pub privacy_lock: Arc<dyn PrivacyLock>,
+}
+
 /// Build the platform_admin context's application state. `entitlement_admin`
 /// is the composition root's adapter over the access context's use cases;
 /// the returned `approval_gate` is the same adapter the access context's
 /// `GrantEntitlement` consumes.
 pub fn build_platform_admin_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &PlatformAdminConfig,
-    tenants: Arc<dyn TenantRepository>,
-    memberships: Arc<dyn MembershipRepository>,
-    entitlements: Arc<dyn EntitlementRepository>,
-    entitlement_admin: Arc<dyn EntitlementAdmin>,
-    audit_writer: Arc<dyn AuditWriter>,
-    privacy_lock: Arc<dyn PrivacyLock>,
+    deps: PlatformAdminDependencies,
 ) -> PlatformAdminWiring {
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let grants: Arc<dyn ImpersonationGrantRepository> =
         Arc::new(SqlxImpersonationGrantRepository::new());
     let approvals: Arc<dyn PendingApprovalRepository> =
         Arc::new(SqlxPendingApprovalRepository::new());
     let clock: Arc<dyn PlatformAdminClockTrait> = Arc::new(PlatformAdminClock);
-    let ids: Arc<dyn PlatformAdminIdsTrait> = Arc::new(PlatformAdminIds);
-    let events: Arc<dyn PlatformAdminEventsTrait> = Arc::new(PlatformAdminEvents::new());
+    let events: Arc<dyn PlatformAdminEventsTrait> = Arc::new(PlatformAdminEvents::new(ids.clone()));
+    let ids: Arc<dyn PlatformAdminIdsTrait> = Arc::new(PlatformAdminIds::new(ids));
 
     let views: Arc<dyn TenantAdminViewRepository> = Arc::new(SqlxTenantAdminViewRepository::new(
-        tenants,
-        memberships.clone(),
-        entitlements,
+        deps.tenants,
+        deps.memberships.clone(),
+        deps.entitlements,
         grants.clone(),
         clock.clone(),
     ));
@@ -1201,12 +1223,12 @@ pub fn build_platform_admin_state(
     let create_impersonation = Arc::new(CreateImpersonation::new(
         tx_manager.clone(),
         grants.clone(),
-        memberships.clone(),
-        privacy_lock,
+        deps.memberships.clone(),
+        deps.privacy_lock,
         events.clone(),
         ids.clone(),
         clock.clone(),
-        audit_writer.clone(),
+        deps.audit_writer.clone(),
         config.impersonation_max_minutes,
     ));
     let list_impersonations = Arc::new(ListImpersonations::new(
@@ -1219,7 +1241,7 @@ pub fn build_platform_admin_state(
         grants.clone(),
         events.clone(),
         clock.clone(),
-        audit_writer.clone(),
+        deps.audit_writer.clone(),
     ));
 
     let record_approval = Arc::new(RecordApprovalRequest::new(
@@ -1230,14 +1252,14 @@ pub fn build_platform_admin_state(
     let decide = Arc::new(DecideApproval::new(
         tx_manager.clone(),
         approvals.clone(),
-        entitlement_admin.clone(),
+        deps.entitlement_admin.clone(),
         clock.clone(),
-        audit_writer.clone(),
+        deps.audit_writer.clone(),
     ));
 
     let verifier = Arc::new(SqlxImpersonationVerifier::new(
         grants.clone(),
-        memberships,
+        deps.memberships,
         tx_manager.clone(),
         clock,
     ));
@@ -1252,7 +1274,7 @@ pub fn build_platform_admin_state(
         create_impersonation,
         list_impersonations,
         revoke_impersonation,
-        entitlements: entitlement_admin,
+        entitlements: deps.entitlement_admin,
         list_approvals: Arc::new(ListPendingApprovals::new(
             tx_manager.clone(),
             approvals.clone(),
@@ -1262,7 +1284,7 @@ pub fn build_platform_admin_state(
         fees: Some(Arc::new(
             sanvi_platform_admin::adapters::SqlxFeeRepository::new(
                 tx_manager.clone(),
-                audit_writer,
+                deps.audit_writer,
             ),
         )),
     };
@@ -1394,7 +1416,7 @@ impl DsrPrivacyLock {
 impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
     async fn is_locked(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<bool, sanvi_platform_admin::domain::PlatformAdminError> {
         let mut scope = self
             .tx_manager
@@ -1424,6 +1446,7 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
 #[allow(clippy::too_many_arguments)]
 pub fn build_privacy_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &PrivacyConfig,
     providers: ProviderRegistry,
     audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter>,
@@ -1446,7 +1469,7 @@ pub fn build_privacy_state(
         sanvi_privacy::domain::CONTEXT_NAMES.len(),
         "privacy provider registry contains duplicate contexts"
     );
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let audit: Arc<dyn PrivacyAuditWriter> = Arc::new(
         sanvi_audit::adapters::PrivacyAuditWriterAdapter::new(audit_writer.clone()),
     );
@@ -1475,13 +1498,13 @@ pub fn build_privacy_state(
     let assessments: Arc<dyn PrivacyAssessmentRepository> =
         Arc::new(SqlxRiskAssessmentRepository::new());
 
-    let events: Arc<dyn PrivacyEventPublisher> = Arc::new(PrivacyEvents::new());
+    let events: Arc<dyn PrivacyEventPublisher> = Arc::new(PrivacyEvents::new(ids.clone()));
     let notifications: Arc<dyn PrivacyNotifications> = match notification_localizer {
         Some(localizer) => Arc::new(LocalizedPrivacyNotifications { localizer }),
         None => Arc::new(PrivacyLoggingNotifications),
     };
     let clock: Arc<dyn PrivacyClock> = Arc::new(PrivacySystemClock);
-    let ids: Arc<dyn PrivacyIds> = Arc::new(PrivacySystemIdGenerator);
+    let ids: Arc<dyn PrivacyIds> = Arc::new(PrivacySystemIdGenerator::new(ids));
     let hasher: Arc<dyn Hasher> = Arc::new(Sha256Hasher::new(if config.kek.is_empty() {
         "dev-pepper-insecure".to_string()
     } else {
@@ -1614,6 +1637,7 @@ pub fn build_privacy_state(
         consents.clone(),
         directives.clone(),
         events.clone(),
+        ids.clone(),
         clock.clone(),
     ));
     let record_opt_out = Arc::new(RecordOptOut::new(
@@ -1624,6 +1648,7 @@ pub fn build_privacy_state(
         signals.clone(),
         directives.clone(),
         events.clone(),
+        ids.clone(),
         clock.clone(),
         config.notice_version.clone(),
     ));
@@ -1737,6 +1762,7 @@ pub fn build_privacy_state(
         notifications.clone(),
         events.clone(),
         hasher.clone(),
+        ids.clone(),
         clock.clone(),
         config.export_dir.clone(),
         config.export_ttl_days,
@@ -1775,6 +1801,7 @@ pub fn build_privacy_state(
         signals.clone(),
         subjects.clone(),
         clock.clone(),
+        ids.clone(),
         config.device_cookie_name.clone(),
         config.device_cookie_ttl_days,
     );
@@ -1841,13 +1868,14 @@ pub fn build_privacy_state(
 /// The billing context's application state.
 pub fn build_billing_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &BillingConfig,
     entitlements_repo: Arc<dyn sanvi_access::domain::EntitlementRepository>,
     features_repo: Arc<dyn sanvi_access::domain::FeatureRepository>,
     audit_writer: Arc<dyn AuditWriter>,
     registry: &prometheus::Registry,
 ) -> sanvi_billing::adapters::http::BillingState {
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
 
     let plans: Arc<dyn PlanRepository> = Arc::new(SqlxPlanRepository::new());
     let prices: Arc<dyn PlanPriceRepository> = Arc::new(SqlxPlanPriceRepository::new());
@@ -1859,7 +1887,8 @@ pub fn build_billing_state(
     let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
     let webhook_events: Arc<dyn WebhookEventRepository> =
         Arc::new(SqlxWebhookEventRepository::new());
-    let ids: Arc<dyn BillingIds> = Arc::new(BillingSystemIdGenerator);
+    let raw_ids = ids.clone();
+    let ids: Arc<dyn BillingIds> = Arc::new(BillingSystemIdGenerator::new(ids));
     let clock: Arc<dyn BillingClock> = Arc::new(BillingSystemClock);
 
     let stripe_metrics = StripeMetrics::new(registry);
@@ -1875,7 +1904,7 @@ pub fn build_billing_state(
     ));
 
     let syncer: Arc<dyn EntitlementSyncer> =
-        Arc::new(AccessEntitlementSyncer::new(entitlements_repo));
+        Arc::new(AccessEntitlementSyncer::new(entitlements_repo, raw_ids));
 
     sanvi_billing::adapters::http::BillingState {
         list_public_plans: Arc::new(ListPublicPlans::new(
@@ -1995,16 +2024,18 @@ pub struct LocalizationWiring {
 /// so negotiation never hits the database on the hot path.
 pub fn build_localization_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &LocalizationConfig,
     registry: &prometheus::Registry,
 ) -> LocalizationWiring {
-    let tx_manager = sanvi_persistence::TxManager::new(pool.clone());
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let tenant_locales: Arc<dyn TenantLocaleRepository> =
         Arc::new(SqlxTenantLocaleRepository::new());
     let supported: Arc<dyn SupportedLocaleRepository> =
         Arc::new(SqlxSupportedLocaleRepository::new());
     let translations: Arc<dyn TranslationRepository> = Arc::new(SqlxTranslationRepository::new());
-    let events: Arc<dyn LocalizationEventPublisher> = Arc::new(LocalizationEvents::new());
+    let events: Arc<dyn LocalizationEventPublisher> =
+        Arc::new(LocalizationEvents::new(ids.clone()));
     let clock: Arc<dyn LocalizationClockTrait> = Arc::new(LocalizationClock);
     let users = Arc::new(PoolUserLocaleProvider::new(pool.clone()));
 
@@ -2012,6 +2043,7 @@ pub fn build_localization_state(
     let metrics = Arc::new(LocalizationMetrics::new(registry));
     let service = Arc::new(LocalizationService::new(
         pool.clone(),
+        ids.clone(),
         translations.clone(),
         cache.clone(),
         metrics.clone(),
@@ -2046,6 +2078,7 @@ pub fn build_localization_state(
         catalog: catalog.clone(),
         supported: supported.clone(),
         pool: pool.clone(),
+        ids: ids.clone(),
         get_settings: Arc::new(GetLocalizationSettings::new(tenant_locales.clone())),
         update_settings: Arc::new(UpdateLocalizationSettings::new(
             tenant_locales,
@@ -2108,7 +2141,7 @@ impl ThemingAccessGate {
 impl ThemeFeatureGate for ThemingAccessGate {
     async fn is_enabled(
         &self,
-        tenant_id: Uuid,
+        tenant_id: sanvi_kernel::TenantId,
         feature: &str,
     ) -> Result<bool, sanvi_theming::domain::ThemingError> {
         let key = sanvi_access::domain::FeatureKey::parse(feature).map_err(|err| {
@@ -2128,16 +2161,18 @@ impl ThemeFeatureGate for ThemingAccessGate {
 /// (Redis, or a local fallback when Redis is disabled) and the resolution service.
 pub fn build_theming_state(
     pool: sanvi_persistence::PgPool,
+    ids: Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &ThemingConfig,
     registry: &prometheus::Registry,
     redis: Option<redis::aio::ConnectionManager>,
     feature_gate: Arc<dyn FeatureGate>,
     tenant_resolver: Arc<dyn sanvi_http::TenantResolver>,
 ) -> ThemingWiring {
+    let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let themes: Arc<dyn ThemeRepository> = Arc::new(SqlxThemeRepository::new());
     let tenants: Arc<dyn TenantThemeRepository> = Arc::new(SqlxTenantThemeRepository::new());
     let gate: Arc<dyn ThemeFeatureGate> = Arc::new(ThemingAccessGate::new(feature_gate));
-    let events: Arc<dyn ThemingEventPublisher> = Arc::new(ThemingEvents::new());
+    let events: Arc<dyn ThemingEventPublisher> = Arc::new(ThemingEvents::new(ids.clone()));
     let clock: Arc<dyn ThemingClockTrait> = Arc::new(ThemingClock);
     let file_store = Arc::new(LocalFileStore::new(config.artifact_dir.clone()));
     let store: Arc<dyn BrandAssetStore> = file_store.clone();
@@ -2155,12 +2190,14 @@ pub fn build_theming_state(
         metrics.clone(),
         clock.clone(),
         pool.clone(),
+        ids.clone(),
         config.asset_base_url.clone(),
         config.resolved_cache_ttl_secs,
     ));
 
     let state = sanvi_theming::adapters::http::ThemingState {
         pool: pool.clone(),
+        tx_manager,
         config: config.clone(),
         service: service.clone(),
         get_public_theme: Arc::new(ResolvePublicTheme::new(service.clone())),
@@ -2222,6 +2259,7 @@ pub fn build_theming_state(
             clock.clone(),
             pool.clone(),
             artifact_store,
+            ids.clone(),
         )),
         yank_version: Arc::new(sanvi_theming::application::install::YankThemeVersion::new(
             themes.clone(),
@@ -2266,7 +2304,7 @@ impl DomainsAccessGate {
 
 #[async_trait::async_trait]
 impl DomainFeatureGate for DomainsAccessGate {
-    async fn is_enabled(&self, tenant_id: Uuid, feature: &str) -> Result<bool, DomainsError> {
+    async fn is_enabled(&self, tenant_id: TenantId, feature: &str) -> Result<bool, DomainsError> {
         let key = sanvi_access::domain::FeatureKey::parse(feature).map_err(|err| {
             DomainsError::Storage(format!("invalid feature key {feature:?}: {err}"))
         })?;
@@ -2336,7 +2374,7 @@ impl TenantCatalogAdapter {
 impl TenantCatalog for TenantCatalogAdapter {
     async fn summaries(
         &self,
-        tenant_ids: &[Uuid],
+        tenant_ids: &[TenantId],
     ) -> Result<Vec<IdentityTenantSummary>, IdentityError> {
         if tenant_ids.is_empty() {
             return Ok(Vec::new());
@@ -2350,14 +2388,14 @@ impl TenantCatalog for TenantCatalogAdapter {
         for &tenant_id in tenant_ids {
             let tenant = self
                 .tenants
-                .find_by_id(&mut scope, TenantId::from_uuid(tenant_id))
+                .find_by_id(&mut scope, tenant_id)
                 .await
                 .map_err(|err| IdentityError::Storage(err.to_string()))?;
             // A membership referencing a since-deleted tenant is skipped
             // rather than surfaced with blank metadata (see get_me.rs).
             if let Some(tenant) = tenant {
                 summaries.push(IdentityTenantSummary {
-                    tenant_id: tenant.id().as_uuid(),
+                    tenant_id: tenant.id(),
                     slug: tenant.slug().as_str().to_string(),
                     name: tenant.display_name().as_str().to_string(),
                 });
@@ -2385,10 +2423,10 @@ impl DomainsTenantStateAdapter {
 
 #[async_trait::async_trait]
 impl TenantState for DomainsTenantStateAdapter {
-    async fn is_active(&self, tenant_id: Uuid) -> Result<bool, DomainsError> {
+    async fn is_active(&self, tenant_id: TenantId) -> Result<bool, DomainsError> {
         let tenant = self
             .resolve
-            .by_id(sanvi_tenancy::domain::TenantId::from_uuid(tenant_id))
+            .by_id(tenant_id)
             .await
             .map_err(|err| DomainsError::Storage(err.to_string()))?;
         Ok(matches!(
@@ -2415,7 +2453,7 @@ impl sanvi_tenancy::adapters::resolution::CustomDomainLookup for DomainsTenantLo
     async fn lookup(
         &self,
         host: &str,
-    ) -> Result<Option<Uuid>, sanvi_tenancy::domain::TenancyError> {
+    ) -> Result<Option<TenantId>, sanvi_tenancy::domain::TenancyError> {
         Ok(self.lookup.resolve(host).await)
     }
 }
@@ -2432,8 +2470,8 @@ pub struct SandboxPurchaseCharger;
 impl PurchaseCharger for SandboxPurchaseCharger {
     async fn charge(
         &self,
-        _tenant_id: Uuid,
-        order_id: Uuid,
+        _tenant_id: TenantId,
+        order_id: sanvi_domains::domain::DomainOrderId,
         amount_minor: i64,
         currency: &str,
         description: &str,
@@ -2450,8 +2488,8 @@ impl PurchaseCharger for SandboxPurchaseCharger {
 
     async fn refund(
         &self,
-        _tenant_id: Uuid,
-        order_id: Uuid,
+        _tenant_id: TenantId,
+        order_id: sanvi_domains::domain::DomainOrderId,
         charge_id: &str,
     ) -> Result<(), DomainsError> {
         tracing::info!(order_id = %order_id, charge_id, "sandbox refund recorded");
@@ -2491,17 +2529,17 @@ struct DomainsLiveAllowList {
 impl sanvi_payments::TenantDomainAllowList for DomainsLiveAllowList {
     async fn allows(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
         hostname: &str,
     ) -> Result<bool, sanvi_payments::PaymentsError> {
-        let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+        let row: Option<(i64,)> = sqlx::query_as(
             "SELECT tenant_id FROM domains.live_hostnames WHERE normalized_hostname = $1",
         )
         .bind(hostname.trim_end_matches('.').to_ascii_lowercase())
         .fetch_optional(&self.pool)
         .await
         .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
-        Ok(row.is_some_and(|(owner,)| owner == tenant_id))
+        Ok(row.map(|(id,)| id == tenant_id.as_i64()).unwrap_or(false))
     }
 }
 
@@ -2518,12 +2556,12 @@ struct PlatformApplicationFeeStore {
 impl sanvi_payments::domain::ports::ApplicationFeeStore for PlatformApplicationFeeStore {
     async fn configuration_for(
         &self,
-        tenant_id: uuid::Uuid,
+        tenant_id: TenantId,
     ) -> Result<Option<sanvi_payments::domain::fees::FeeConfiguration>, sanvi_payments::PaymentsError>
     {
         let mut scope = self
             .tx_manager
-            .begin_for(tenant_id)
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
         let row: Option<(Option<i32>, Option<i64>, Option<String>, i64, bool)> = sqlx::query_as(
@@ -2531,7 +2569,7 @@ impl sanvi_payments::domain::ports::ApplicationFeeStore for PlatformApplicationF
              FROM platform_admin.application_fees
              WHERE tenant_id = $1 AND enabled",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| sanvi_payments::PaymentsError::Storage(err.to_string()))?;
@@ -2562,6 +2600,7 @@ impl sanvi_payments::domain::ports::ApplicationFeeStore for PlatformApplicationF
 #[allow(clippy::too_many_arguments)]
 pub fn build_payments_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &PaymentsConfig,
     registry: &prometheus::Registry,
     environment: &str,
@@ -2598,14 +2637,18 @@ pub fn build_payments_state(
     let connections: std::sync::Arc<dyn sanvi_payments::domain::ProviderConnectionRepository> =
         std::sync::Arc::new(SqlxProviderConnectionRepository::new());
     let events: std::sync::Arc<dyn sanvi_payments::domain::EventPublisher> =
-        std::sync::Arc::new(PaymentsEvents::new());
-    let tx = sanvi_persistence::TxManager::new(pool.clone());
+        std::sync::Arc::new(PaymentsEvents::new(ids.clone()));
+    let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> = std::sync::Arc::new(
+        sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()),
+    );
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let create_connection = std::sync::Arc::new(StartProviderConnection::new(
         tx.clone(),
         providers.clone(),
         connections.clone(),
         events,
         audit_writer.clone(),
+        payment_ids.clone(),
     ));
     let account_session =
         std::sync::Arc::new(sanvi_payments::application::CreateAccountSession::new(
@@ -2624,7 +2667,7 @@ pub fn build_payments_state(
             std::sync::Arc::new(sanvi_payments::adapters::SqlxPaymentRepository::new()),
             std::sync::Arc::new(sanvi_payments::adapters::SqlxDisputeRepository::new()),
             std::sync::Arc::new(SqlxPayoutRepository::new()),
-            std::sync::Arc::new(PaymentsEvents::new()),
+            std::sync::Arc::new(PaymentsEvents::new(ids.clone())),
             audit_writer.clone(),
         ));
 
@@ -2677,13 +2720,14 @@ pub fn build_payments_state(
         connections.clone(),
         checkouts.clone(),
         std::sync::Arc::new(DomainsLiveAllowList { pool: pool.clone() }),
-        std::sync::Arc::new(PaymentsEvents::new()),
+        std::sync::Arc::new(PaymentsEvents::new(ids.clone())),
         std::sync::Arc::new(ConfiguredApplicationFeePolicy::new(std::sync::Arc::new(
             PlatformApplicationFeeStore {
                 tx_manager: tx.clone(),
             },
         ))),
         tax_settings.clone(),
+        payment_ids.clone(),
     ));
     let checkout_throttle: std::sync::Arc<dyn sanvi_payments::domain::CheckoutThrottle> =
         std::sync::Arc::new(FixedWindowThrottle::new(
@@ -2716,8 +2760,9 @@ pub fn build_payments_state(
         refunds.clone(),
         connections.clone(),
         checkouts.clone(),
-        std::sync::Arc::new(PaymentsEvents::new()),
+        std::sync::Arc::new(PaymentsEvents::new(ids.clone())),
         audit_writer.clone(),
+        payment_ids,
     ));
     let list_disputes = std::sync::Arc::new(sanvi_payments::application::ListDisputes::new(
         tx.clone(),
@@ -2793,6 +2838,7 @@ pub fn build_payments_state(
 /// its own to consult instead.
 pub async fn build_advertising_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &AdvertisingConfig,
     directive_resolver: Arc<dyn DirectiveResolver>,
     subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository>,
@@ -2810,7 +2856,7 @@ pub async fn build_advertising_state(
             ),
         },
     ));
-    let tx = sanvi_persistence::TxManager::new(pool);
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
     let oauth_state =
         OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store);
@@ -2827,8 +2873,13 @@ pub async fn build_advertising_state(
         std::sync::Arc::new(SqlxCreativeRepository::new());
     let connections: std::sync::Arc<dyn sanvi_advertising::AdvertisingConnectionRepository> =
         std::sync::Arc::new(SqlxAdvertisingConnectionRepository::new());
-    let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> =
-        std::sync::Arc::new(AdvertisingEvents::new());
+    let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> = std::sync::Arc::new(
+        sanvi_advertising::adapters::OutboxEventPublisher::new(ids.clone()),
+    );
+    let advertising_ids: std::sync::Arc<dyn sanvi_advertising::domain::IdGenerator> =
+        std::sync::Arc::new(sanvi_advertising::adapters::SystemIdGenerator::new(
+            ids.clone(),
+        ));
 
     // 10.5: conversion capture & the directive gate. The sub-processor
     // role snapshot is loaded once here rather than per beacon hit — see
@@ -2867,6 +2918,7 @@ pub async fn build_advertising_state(
             payment_lookup,
             vendor_role,
             directive_resolver,
+            advertising_ids.clone(),
         ),
     );
     let settings_mgr = std::sync::Arc::new(
@@ -2896,12 +2948,14 @@ pub async fn build_advertising_state(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
+            advertising_ids.clone(),
         )),
         resolve_campaign_drift: std::sync::Arc::new(ResolveCampaignDrift::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         create_campaign: std::sync::Arc::new(CreateCampaign::new(
             tx.clone(),
@@ -2909,6 +2963,7 @@ pub async fn build_advertising_state(
             connections.clone(),
             registry.clone(),
             events.clone(),
+            advertising_ids.clone(),
         )),
         get_campaign: std::sync::Arc::new(GetCampaign::new(tx.clone(), campaigns.clone())),
         list_campaigns: std::sync::Arc::new(ListCampaigns::new(tx.clone(), campaigns.clone())),
@@ -2924,6 +2979,7 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         publish_campaign: std::sync::Arc::new(PublishCampaign::new(
             tx.clone(),
@@ -2931,18 +2987,21 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         pause_campaign: std::sync::Arc::new(PauseCampaign::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         resume_campaign: std::sync::Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         list_campaign_changes: std::sync::Arc::new(ListCampaignChanges::new(
             tx.clone(),
@@ -2953,12 +3012,14 @@ pub async fn build_advertising_state(
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         update_ad_group: std::sync::Arc::new(UpdateAdGroup::new(
             tx.clone(),
             campaigns.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         add_ad: std::sync::Arc::new(AddAd::new(
             tx.clone(),
@@ -2966,6 +3027,7 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events.clone(),
             registry.clone(),
+            advertising_ids.clone(),
         )),
         update_ad: std::sync::Arc::new(UpdateAd::new(
             tx.clone(),
@@ -2973,10 +3035,12 @@ pub async fn build_advertising_state(
             creatives.clone(),
             events,
             registry.clone(),
+            advertising_ids.clone(),
         )),
         start_authorization: std::sync::Arc::new(StartAuthorization::new(
             registry.clone(),
             oauth_state.clone(),
+            advertising_ids.clone(),
         )),
         handle_callback: std::sync::Arc::new(HandleCallback::new(
             tx.clone(),
@@ -2984,6 +3048,7 @@ pub async fn build_advertising_state(
             registry.clone(),
             oauth_state.clone(),
             token_vault,
+            advertising_ids.clone(),
         )),
         create_connection: std::sync::Arc::new(CreateConnection::new(
             tx.clone(),
@@ -3003,6 +3068,7 @@ pub async fn build_advertising_state(
             creatives.clone(),
             connections,
             registry.clone(),
+            advertising_ids.clone(),
         )),
         get_creative: std::sync::Arc::new(GetCreative::new(tx.clone(), creatives.clone())),
         list_creatives: std::sync::Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),
@@ -3036,6 +3102,7 @@ pub async fn build_advertising_state(
 #[allow(clippy::too_many_arguments)]
 pub fn build_domains_state(
     pool: sanvi_persistence::PgPool,
+    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &DomainsConfig,
     registry: &prometheus::Registry,
     redis: Option<redis::aio::ConnectionManager>,
@@ -3044,16 +3111,16 @@ pub fn build_domains_state(
     lookup: Arc<LiveDomainLookupService>,
     tenancy_resolve: Arc<sanvi_tenancy::application::ResolveTenant>,
 ) -> DomainsWiring {
-    let tx = sanvi_persistence::TxManager::new(pool.clone());
+    let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
 
     let domains: Arc<dyn CustomDomainRepository> = Arc::new(SqlxCustomDomainRepository::new());
     let orders: Arc<dyn DomainOrderRepository> = Arc::new(SqlxDomainOrderRepository::new());
     let certs: Arc<dyn sanvi_domains::domain::CertificateRepository> =
         Arc::new(SqlxCertificateRepository::new());
     let records: Arc<dyn sanvi_domains::domain::DnsRecordRepository> =
-        Arc::new(SqlxDnsRecordRepository::new());
+        Arc::new(SqlxDnsRecordRepository::new(ids.clone()));
     let gate: Arc<dyn DomainFeatureGate> = Arc::new(DomainsAccessGate::new(feature_gate));
-    let events: Arc<dyn DomainsEventPublisher> = Arc::new(DomainsEvents::new());
+    let events: Arc<dyn DomainsEventPublisher> = Arc::new(DomainsEvents::new(ids.clone()));
     let clock: Arc<dyn sanvi_domains::domain::Clock> = Arc::new(DomainsClock);
     let metrics = Arc::new(DomainsMetrics::new(registry));
 
@@ -3064,8 +3131,9 @@ pub fn build_domains_state(
         ));
     let provider: Arc<dyn sanvi_domains::domain::DnsProviderPort> =
         Arc::new(SqlxDnsProvider::new(records.clone()));
-    let ca: Arc<dyn sanvi_domains::domain::CertificateAuthorityPort> =
-        Arc::new(SandboxCertificateAuthority::new(config.cert_lifetime_days));
+    let ca: Arc<dyn sanvi_domains::domain::CertificateAuthorityPort> = Arc::new(
+        SandboxCertificateAuthority::new(config.cert_lifetime_days, ids.clone()),
+    );
     let charger: Arc<dyn PurchaseCharger> = Arc::new(SandboxPurchaseCharger);
     let tenant_state: Arc<dyn TenantState> =
         Arc::new(DomainsTenantStateAdapter::new(tenancy_resolve));
@@ -3081,6 +3149,7 @@ pub fn build_domains_state(
         gate.clone(),
         events.clone(),
         clock.clone(),
+        ids.clone(),
         tx.clone(),
         config.platform_domain.clone(),
         config.edge_hostname.clone(),
@@ -3092,6 +3161,7 @@ pub fn build_domains_state(
 
     let state = sanvi_domains::adapters::http::DomainsState {
         pool: pool.clone(),
+        tx: tx.clone(),
         config: config.clone(),
         metrics: metrics.clone(),
         lookup: lookup.clone(),
@@ -3101,6 +3171,7 @@ pub fn build_domains_state(
             gate.clone(),
             events.clone(),
             clock.clone(),
+            ids.clone(),
             tx.clone(),
             config.platform_domain.clone(),
             config.connect_entitlement_key.clone(),

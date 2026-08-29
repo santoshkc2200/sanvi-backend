@@ -125,6 +125,12 @@ pub fn api_error(err: IdentityError) -> ApiError {
             tracing::error!(error = %detail, "identity storage failure");
             ApiError::internal("storage failure")
         }
+        IdentityError::IdGeneration(detail) => {
+            tracing::error!(error = %detail, "identity ID generation failure");
+            ApiError::ServiceUnavailable {
+                detail: "ID generation is temporarily unavailable".to_string(),
+            }
+        }
     }
 }
 
@@ -157,7 +163,7 @@ pub async fn get_me(
     subject: CurrentSubject,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let user_id = UserId::from_uuid(subject.0.user_id);
+    let user_id = subject.0.user_id;
     respond(
         state.get_me.execute(user_id).await,
         actix_web::http::StatusCode::OK,
@@ -207,7 +213,7 @@ pub async fn revoke_session(
     token: SessionToken,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let user_id = UserId::from_uuid(subject.0.user_id);
+    let user_id = subject.0.user_id;
     match state
         .revoke_session
         .execute(user_id, &path.into_inner(), &token.0, token.1)
@@ -275,11 +281,7 @@ pub async fn complete_link_challenge(
         })
         .unwrap_or_default();
 
-    let user = match state
-        .get_me
-        .execute(UserId::from_uuid(subject.0.user_id))
-        .await
-    {
+    let user = match state.get_me.execute(subject.0.user_id).await {
         Ok(user) => user,
         Err(err) => {
             let error = api_error(err);
@@ -296,7 +298,7 @@ pub async fn complete_link_challenge(
 
     match state
         .complete_link_challenge
-        .execute(&nonce, UserId::from_uuid(subject.0.user_id), &email)
+        .execute(&nonce, subject.0.user_id, &email)
         .await
     {
         Ok(crate::application::LinkChallengeResult::Linked {
@@ -389,7 +391,7 @@ pub async fn grant_member(
     body: web::Json<crate::application::GrantMembershipCommand>,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let actor = UserId::from_uuid(subject.0.user_id);
+    let actor = subject.0.user_id;
     respond(
         state
             .grant_member
@@ -463,7 +465,7 @@ pub async fn remove_member(
                 .json(ApiError::bad_request("invalid user id").problem());
         }
     };
-    let actor = UserId::from_uuid(subject.0.user_id);
+    let actor = subject.0.user_id;
     match state
         .remove_member
         .execute(current.0.tenant_id, user_id, actor)
@@ -519,7 +521,7 @@ pub async fn invite_member(
     body: web::Json<crate::application::InviteMemberCommand>,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let actor = UserId::from_uuid(subject.0.user_id);
+    let actor = subject.0.user_id;
     match state
         .invite_member
         .execute(current.0.tenant_id, body.into_inner(), actor)
@@ -554,11 +556,7 @@ pub async fn accept_invitation(
     body: web::Json<crate::application::AcceptInvitationCommand>,
     _guard: RequiredPermission,
 ) -> impl Responder {
-    let email = match state
-        .get_me
-        .execute(UserId::from_uuid(subject.0.user_id))
-        .await
-    {
+    let email = match state.get_me.execute(subject.0.user_id).await {
         Ok(user) => match crate::domain::Email::parse(&user.email) {
             Ok(email) => email,
             Err(err) => {
@@ -576,7 +574,7 @@ pub async fn accept_invitation(
         .execute(
             current.0.tenant_id,
             body.into_inner(),
-            UserId::from_uuid(subject.0.user_id),
+            subject.0.user_id,
             &email,
         )
         .await

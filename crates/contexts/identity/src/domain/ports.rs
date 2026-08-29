@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sanvi_kernel::EventEnvelope;
+use sanvi_kernel::{EventEnvelope, RoleId, TenantId};
 use sanvi_persistence::{PlatformScope, ScopedTx};
 use uuid::Uuid;
 
@@ -58,14 +58,14 @@ pub trait MembershipRepository: Send + Sync {
     async fn find(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
     ) -> Result<Option<Membership>, IdentityError>;
 
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Membership>, IdentityError>;
 
     /// Membership rows joined with the member's email (the read model for
@@ -74,13 +74,13 @@ pub trait MembershipRepository: Send + Sync {
     async fn list_with_emails(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<(Membership, Email)>, IdentityError>;
 
     async fn remove(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         user_id: UserId,
     ) -> Result<(), IdentityError>;
 
@@ -104,15 +104,15 @@ pub trait MembershipRepository: Send + Sync {
     async fn count_members_platform(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<u32, IdentityError>;
 
     /// True when `user_id` holds `role_key` in `tenant_id` (last-owner guard).
     async fn count_role_holders(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        role_id: Uuid,
+        tenant_id: TenantId,
+        role_id: RoleId,
     ) -> Result<u32, IdentityError>;
 
     /// Every active membership `user_id` holds, across every tenant (the
@@ -169,21 +169,21 @@ pub trait InvitationRepository: Send + Sync {
     async fn find_by_token_hash(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         token_hash: &str,
     ) -> Result<Option<Invitation>, IdentityError>;
 
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         id: InvitationId,
     ) -> Result<Option<Invitation>, IdentityError>;
 
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
     ) -> Result<Vec<Invitation>, IdentityError>;
 
     /// Phase-05 erasure: delete invitations carrying this email address
@@ -197,7 +197,7 @@ pub trait InvitationRepository: Send + Sync {
     async fn remove(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         id: InvitationId,
     ) -> Result<(), IdentityError>;
 }
@@ -309,7 +309,7 @@ pub trait SessionCache: Send + Sync {
 pub trait Notifications: Send + Sync {
     async fn send_invitation(
         &self,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         email: &Email,
         tenant_name: &str,
         invite_url: &str,
@@ -331,14 +331,16 @@ pub trait Notifications: Send + Sync {
 pub trait RoleCatalog: Send + Sync {
     /// All assignable roles for a tenant: its custom roles plus the system
     /// templates. Returns the role key for each id (needed for guards).
-    async fn assignable_roles(&self, tenant_id: Uuid)
-    -> Result<Vec<(Uuid, String)>, IdentityError>;
+    async fn assignable_roles(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<(RoleId, String)>, IdentityError>;
 
     /// The role key for a tenant-scoped role id, if assignable there.
     async fn role_key(
         &self,
-        tenant_id: Uuid,
-        role_id: Uuid,
+        tenant_id: TenantId,
+        role_id: RoleId,
     ) -> Result<Option<String>, IdentityError>;
 
     /// The union of every permission the given roles grant — the `GET
@@ -348,8 +350,8 @@ pub trait RoleCatalog: Send + Sync {
     /// the frontend renders from this list).
     async fn permissions_for_roles(
         &self,
-        tenant_id: Uuid,
-        role_ids: &[Uuid],
+        tenant_id: TenantId,
+        role_ids: &[RoleId],
     ) -> Result<Vec<String>, IdentityError>;
 }
 
@@ -365,13 +367,14 @@ pub trait TenantCatalog: Send + Sync {
     /// batch through this rather than looping single lookups, since each
     /// call opens the audited unscoped-transaction escape hatch exactly
     /// once regardless of `tenant_ids.len()`.
-    async fn summaries(&self, tenant_ids: &[Uuid]) -> Result<Vec<TenantSummary>, IdentityError>;
+    async fn summaries(&self, tenant_ids: &[TenantId])
+    -> Result<Vec<TenantSummary>, IdentityError>;
 }
 
 /// The subset of a tenant's identity a membership listing needs to render.
 #[derive(Debug, Clone)]
 pub struct TenantSummary {
-    pub tenant_id: Uuid,
+    pub tenant_id: TenantId,
     pub slug: String,
     pub name: String,
 }
@@ -400,8 +403,8 @@ pub trait EventPublisher: Send + Sync {
 
 /// Source of new user/invitation ids (tests substitute deterministic ones).
 pub trait IdGenerator: Send + Sync {
-    fn next_user_id(&self) -> UserId;
-    fn next_invitation_id(&self) -> InvitationId;
+    fn next_user_id(&self) -> Result<UserId, IdentityError>;
+    fn next_invitation_id(&self) -> Result<InvitationId, IdentityError>;
 }
 
 /// The system clock (tests substitute fixed times).

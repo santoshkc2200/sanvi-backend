@@ -7,16 +7,18 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_persistence::{PgPool, PlatformScope, ScopedTx};
 use semver::{Version, VersionReq};
-use uuid::Uuid;
 
 use crate::domain::error::ThemingError;
 use crate::domain::manifest::Manifest;
 use crate::domain::tenant_theme::{
     BrandAssets, LayoutOverride, TenantTheme, TenantThemeSnapshot, ThemeState,
 };
-use crate::domain::theme::{Theme, ThemeStatus, ThemeVersion, ThemeVisibility, TokenModes};
+use crate::domain::theme::{
+    Theme, ThemeId, ThemeStatus, ThemeVersion, ThemeVersionId, ThemeVisibility, TokenModes,
+};
 use crate::domain::tokens::TokenValue;
 use crate::domain::{TenantThemeRepository, ThemeRepository};
 
@@ -35,7 +37,7 @@ impl SqlxThemeRepository {
 
 #[derive(Debug, sqlx::FromRow)]
 struct ThemeRow {
-    id: Uuid,
+    id: i64,
     key: String,
     publisher: String,
     visibility: String,
@@ -46,8 +48,8 @@ struct ThemeRow {
 
 #[derive(Debug, sqlx::FromRow)]
 struct ThemeVersionRow {
-    id: Uuid,
-    theme_id: Uuid,
+    id: i64,
+    theme_id: i64,
     semver: String,
     theme_api_range: String,
     manifest: serde_json::Value,
@@ -60,7 +62,8 @@ struct ThemeVersionRow {
 
 fn theme_from_row(row: ThemeRow) -> Result<Theme, ThemingError> {
     Ok(Theme {
-        id: row.id,
+        id: ThemeId::try_from(row.id)
+            .map_err(|err| storage(format!("stored theme has invalid id: {err}")))?,
         key: row.key,
         publisher: row.publisher,
         visibility: ThemeVisibility::parse(&row.visibility)
@@ -90,8 +93,10 @@ fn version_from_row(row: ThemeVersionRow) -> Result<ThemeVersion, ThemingError> 
     let tokens = TokenModes::parse(&row.tokens)
         .map_err(|err| storage(format!("stored tokens are invalid: {err}")))?;
     Ok(ThemeVersion {
-        id: row.id,
-        theme_id: row.theme_id,
+        id: ThemeVersionId::try_from(row.id)
+            .map_err(|err| storage(format!("stored version has invalid id: {err}")))?,
+        theme_id: ThemeId::try_from(row.theme_id)
+            .map_err(|err| storage(format!("stored version has invalid theme_id: {err}")))?,
         semver,
         theme_api_range,
         manifest,
@@ -139,7 +144,7 @@ impl ThemeRepository for SqlxThemeRepository {
             "INSERT INTO theming.themes (id, key, publisher, visibility, required_feature, status)
              VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (key) DO NOTHING",
-            theme.id,
+            theme.id.as_i64(),
             theme.key,
             theme.publisher,
             theme.visibility.as_str(),
@@ -155,12 +160,12 @@ impl ThemeRepository for SqlxThemeRepository {
     async fn set_status(
         &self,
         scope: &mut PlatformScope<'_>,
-        theme_id: Uuid,
+        theme_id: ThemeId,
         status: &str,
     ) -> Result<(), ThemingError> {
         sqlx::query!(
             "UPDATE theming.themes SET status = $2 WHERE id = $1",
-            theme_id,
+            theme_id.as_i64(),
             status
         )
         .execute(&mut **scope.tx_mut().as_inner())
@@ -172,7 +177,7 @@ impl ThemeRepository for SqlxThemeRepository {
     async fn list_versions(
         &self,
         pool: &PgPool,
-        theme_id: Uuid,
+        theme_id: ThemeId,
     ) -> Result<Vec<ThemeVersion>, ThemingError> {
         let rows = sqlx::query_as!(
             ThemeVersionRow,
@@ -180,7 +185,7 @@ impl ThemeRepository for SqlxThemeRepository {
                     artifact_digest, published_at, yanked_at
              FROM theming.theme_versions WHERE theme_id = $1
              ORDER BY published_at DESC",
-            theme_id
+            theme_id.as_i64()
         )
         .fetch_all(pool)
         .await
@@ -241,8 +246,8 @@ impl ThemeRepository for SqlxThemeRepository {
             "INSERT INTO theming.theme_versions
                (id, theme_id, semver, theme_api_range, manifest, tokens, artifact_uri, artifact_digest)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            version.id,
-            version.theme_id,
+            version.id.as_i64(),
+            version.theme_id.as_i64(),
             version.semver.to_string(),
             version.theme_api_range.to_string(),
             serde_json::to_value(&version.manifest).expect("manifests serialize"),
@@ -259,14 +264,14 @@ impl ThemeRepository for SqlxThemeRepository {
     async fn yank_version(
         &self,
         scope: &mut PlatformScope<'_>,
-        theme_id: Uuid,
+        theme_id: ThemeId,
         semver: &str,
         at: DateTime<Utc>,
     ) -> Result<(), ThemingError> {
         let result = sqlx::query!(
             "UPDATE theming.theme_versions SET yanked_at = $3
              WHERE theme_id = $1 AND semver = $2 AND yanked_at IS NULL",
-            theme_id,
+            theme_id.as_i64(),
             semver,
             at
         )
@@ -294,9 +299,9 @@ impl SqlxTenantThemeRepository {
 
 #[derive(Debug, sqlx::FromRow)]
 struct TenantThemeRow {
-    tenant_id: Uuid,
+    tenant_id: i64,
     state: String,
-    theme_id: Uuid,
+    theme_id: i64,
     theme_key: String,
     semver: String,
     token_overrides: serde_json::Value,
@@ -304,7 +309,7 @@ struct TenantThemeRow {
     assets: serde_json::Value,
     custom_css: Option<String>,
     revision: i32,
-    updated_by: Option<Uuid>,
+    updated_by: Option<i64>,
     updated_at: DateTime<Utc>,
 }
 
@@ -319,11 +324,20 @@ fn tenant_from_row(row: TenantThemeRow) -> Result<TenantTheme, ThemingError> {
             .map_err(|err| storage(format!("stored layout_overrides are invalid: {err}")))?;
     let assets: BrandAssets = serde_json::from_value(row.assets)
         .map_err(|err| storage(format!("stored assets are invalid: {err}")))?;
+    let updated_by = match row.updated_by {
+        Some(uid) => Some(
+            UserId::try_from(uid)
+                .map_err(|err| storage(format!("stored updated_by is invalid: {err}")))?,
+        ),
+        None => None,
+    };
     Ok(TenantTheme {
-        tenant_id: row.tenant_id,
+        tenant_id: TenantId::try_from(row.tenant_id)
+            .map_err(|err| storage(format!("stored tenant_id is invalid: {err}")))?,
         state: ThemeState::parse(&row.state)
             .map_err(|err| storage(format!("stored state is invalid: {err}")))?,
-        theme_id: row.theme_id,
+        theme_id: ThemeId::try_from(row.theme_id)
+            .map_err(|err| storage(format!("stored theme_id is invalid: {err}")))?,
         theme_key: row.theme_key,
         semver,
         token_overrides,
@@ -331,7 +345,7 @@ fn tenant_from_row(row: TenantThemeRow) -> Result<TenantTheme, ThemingError> {
         assets,
         custom_css: row.custom_css,
         revision: row.revision,
-        updated_by: row.updated_by,
+        updated_by,
         updated_at: row.updated_at,
     })
 }
@@ -341,7 +355,7 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
     async fn get(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         state: ThemeState,
     ) -> Result<Option<TenantTheme>, ThemingError> {
         let row = sqlx::query_as!(
@@ -354,7 +368,7 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
             JOIN theming.themes t ON t.id = tt.theme_id
             WHERE tt.tenant_id = $1 AND tt.state = $2
             "#,
-            tenant_id,
+            tenant_id.as_i64(),
             state.as_str()
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -383,16 +397,16 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
                revision = EXCLUDED.revision,
                updated_by = EXCLUDED.updated_by,
                updated_at = EXCLUDED.updated_at",
-            theme.tenant_id,
+            theme.tenant_id.as_i64(),
             theme.state.as_str(),
-            theme.theme_id,
+            theme.theme_id.as_i64(),
             theme.semver.to_string(),
             serde_json::to_value(&theme.token_overrides).expect("overrides serialize"),
             serde_json::to_value(&theme.layout_overrides).expect("layouts serialize"),
             serde_json::to_value(&theme.assets).expect("assets serialize"),
             theme.custom_css,
             theme.revision,
-            theme.updated_by,
+            theme.updated_by.map(UserId::as_i64),
             theme.updated_at,
         )
         .execute(&mut **scope.tx_mut().as_inner())
@@ -404,8 +418,8 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
     async fn publish(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        published_by: Option<Uuid>,
+        tenant_id: TenantId,
+        published_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<i32, ThemingError> {
         let draft = self
@@ -431,11 +445,11 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
                    (tenant_id, revision, snapshot, published_at, published_by)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (tenant_id, revision) DO NOTHING",
-                tenant_id,
+                tenant_id.as_i64(),
                 previous.revision,
                 serde_json::to_value(&snapshot).expect("snapshots serialize"),
                 previous.updated_at,
-                previous.updated_by
+                previous.updated_by.map(UserId::as_i64)
             )
             .execute(&mut **scope.tx_mut().as_inner())
             .await
@@ -455,11 +469,11 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
                (tenant_id, revision, snapshot, published_at, published_by)
              VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (tenant_id, revision) DO NOTHING",
-            tenant_id,
+            tenant_id.as_i64(),
             revision,
             serde_json::to_value(&snapshot).expect("snapshots serialize"),
             now,
-            published_by
+            published_by.map(UserId::as_i64)
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -471,8 +485,8 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
     async fn rollback(
         &self,
         scope: &mut ScopedTx<'_>,
-        tenant_id: Uuid,
-        published_by: Option<Uuid>,
+        tenant_id: TenantId,
+        published_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<i32, ThemingError> {
         let live = self
@@ -492,7 +506,7 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
             SnapshotRow,
             "SELECT snapshot FROM theming.tenant_theme_revisions
              WHERE tenant_id = $1 AND revision = $2",
-            tenant_id,
+            tenant_id.as_i64(),
             target
         )
         .fetch_optional(&mut **scope.tx_mut().as_inner())
@@ -518,11 +532,11 @@ impl TenantThemeRepository for SqlxTenantThemeRepository {
             "INSERT INTO theming.tenant_theme_revisions
                (tenant_id, revision, snapshot, published_at, published_by)
              VALUES ($1, $2, $3, $4, $5)",
-            tenant_id,
+            tenant_id.as_i64(),
             revision,
             serde_json::to_value(&snapshot_again).expect("snapshots serialize"),
             now,
-            published_by
+            published_by.map(UserId::as_i64)
         )
         .execute(&mut **scope.tx_mut().as_inner())
         .await

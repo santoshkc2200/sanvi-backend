@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use actix_web::HttpMessage;
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::authn::Subject;
 use crate::error::ApiError;
@@ -52,8 +52,8 @@ pub trait PermissionGate: Send + Sync {
 /// A concrete resource reference resolved at request time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceRef {
-    Tenant(Uuid),
-    User(Uuid),
+    Tenant(TenantId),
+    User(UserId),
     Platform,
 }
 

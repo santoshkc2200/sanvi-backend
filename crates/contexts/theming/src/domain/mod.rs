@@ -29,7 +29,7 @@ pub use manifest::{
     THEME_API_VERSION, TokenRefs, validate_manifest,
 };
 pub use ports::{
-    ArtifactStore, BrandAssetStore, Clock, EventPublisher, ResolvedTenantRef,
+    ArtifactStore, BrandAssetStore, Clock, EventPublisher, IdGenerator, ResolvedTenantRef,
     TenantContextResolver, TenantThemeRepository, ThemeFeatureGate, ThemeRepository,
 };
 pub use preview::{PreviewTokenPayload, sign_preview_token, verify_preview_token};
@@ -42,7 +42,10 @@ pub use tenant_theme::{
     BrandAsset, BrandAssetKind, BrandAssets, LayoutOverride, TenantTheme, TenantThemeSnapshot,
     ThemeState, validate_layout_overrides,
 };
-pub use theme::{DEFAULT_THEME_KEY, Theme, ThemeStatus, ThemeVersion, ThemeVisibility, TokenModes};
+pub use theme::{
+    DEFAULT_THEME_KEY, Theme, ThemeId, ThemeStatus, ThemeTag, ThemeVersion, ThemeVersionId,
+    ThemeVersionTag, ThemeVisibility, TokenModes,
+};
 pub use tokens::{
     KNOWN_TOKEN_TYPES, TokenNode, TokenValue, apply_overrides, flatten, merge_tokens,
     parse_hex_color, parse_token_document,

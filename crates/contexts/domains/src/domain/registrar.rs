@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::domain::{DomainsError, Hostname, Money, TldPrice};
 
@@ -137,7 +136,7 @@ pub trait DomainRegistrarPort: Send + Sync {
     /// Register. Idempotent on `order_id`; fails if the domain is taken.
     async fn register(
         &self,
-        order_id: Uuid,
+        order_id: crate::domain::DomainOrderId,
         hostname: &Hostname,
         term_years: u8,
         whois_privacy: bool,

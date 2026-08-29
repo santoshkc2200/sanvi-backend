@@ -19,5 +19,5 @@ INSERT INTO privacy.retention_rules
 VALUES
   ('transaction_record', 'sensitive', 'statutory_retention',
    make_interval(days => 3650), 'archive', true,
-   '00000000-0000-0000-0000-000000000097')
+   '97')
 ON CONFLICT (data_class) DO NOTHING;

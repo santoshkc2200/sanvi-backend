@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use sanvi_kernel::RawIdGenerator;
 use sanvi_persistence::TxManager;
 use sanvi_tenancy::{
     adapters::{
@@ -44,14 +45,19 @@ fn command(slug: &str) -> ProvisionTenantCommand {
     }
 }
 
+fn raw_ids() -> Arc<dyn RawIdGenerator> {
+    sanvi_testsupport::test_ids()
+}
+
 #[tokio::test]
 async fn lifecycle_transitions_emit_events_to_the_outbox() {
     let (pool, _owner, _admin, _node) = prepare().await;
-    let tx_manager = TxManager::new(pool.clone());
+    let raw_ids = raw_ids();
+    let tx_manager = TxManager::new(pool.clone(), raw_ids.clone());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
-    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator);
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids.clone()));
+    let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(raw_ids));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
 
     let provision = ProvisionTenant::new(
@@ -85,7 +91,7 @@ async fn lifecycle_transitions_emit_events_to_the_outbox() {
 
     // Lifecycle state persisted.
     let row: (String,) = sqlx::query_as("SELECT status FROM tenancy.tenants WHERE id = $1")
-        .bind(id.as_uuid())
+        .bind(id.as_i64())
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -95,10 +101,11 @@ async fn lifecycle_transitions_emit_events_to_the_outbox() {
 #[tokio::test]
 async fn concurrent_provisions_of_the_same_slug_one_wins_one_conflicts() {
     let (pool, _owner, _admin, _node) = prepare().await;
-    let tx_manager = TxManager::new(pool.clone());
+    let raw_ids = raw_ids();
+    let tx_manager = TxManager::new(pool.clone(), raw_ids.clone());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
 
     let provision = Arc::new(ProvisionTenant::new(
@@ -106,7 +113,7 @@ async fn concurrent_provisions_of_the_same_slug_one_wins_one_conflicts() {
         tenants.clone(),
         slugs.clone(),
         events.clone(),
-        Arc::new(SystemIdGenerator),
+        Arc::new(SystemIdGenerator::new(raw_ids.clone())),
         clock.clone(),
     ));
     let provision_b = Arc::new(ProvisionTenant::new(
@@ -114,7 +121,7 @@ async fn concurrent_provisions_of_the_same_slug_one_wins_one_conflicts() {
         tenants.clone(),
         slugs,
         events.clone(),
-        Arc::new(SystemIdGenerator),
+        Arc::new(SystemIdGenerator::new(raw_ids)),
         clock.clone(),
     ));
 
@@ -142,12 +149,13 @@ async fn concurrent_provisions_of_the_same_slug_one_wins_one_conflicts() {
 #[tokio::test]
 async fn tenant_scoped_settings_are_isolated_by_rls() {
     let (pool, owner, _admin, _node) = prepare().await;
-    let tx_manager = TxManager::new(pool.clone());
+    let raw_ids = raw_ids();
+    let tx_manager = TxManager::new(pool.clone(), raw_ids.clone());
     let settings: Arc<dyn TenantSettingsRepository> = Arc::new(SqlxTenantSettingsRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids));
 
-    let tenant_a = TenantId::new();
-    let tenant_b = TenantId::new();
+    let tenant_a = TenantId::try_from(201_i64).unwrap();
+    let tenant_b = TenantId::try_from(202_i64).unwrap();
     // Tenants must exist for the FK; insert via the platform-scoped path.
     for (id, slug) in [(tenant_a, "isoa"), (tenant_b, "isob")] {
         let (tenant, _) = sanvi_tenancy::Tenant::provision(
@@ -212,7 +220,7 @@ async fn tenant_scoped_settings_are_isolated_by_rls() {
     let a_rows: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM tenancy.tenant_settings WHERE tenant_id = $1 AND value = '\"#ffffff\"'::jsonb",
     )
-    .bind(tenant_a.as_uuid())
+    .bind(tenant_a.as_i64())
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -285,8 +293,11 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
     // Behaviour: tenant A must not see/update/delete tenant B's rows.
     // (tenant_settings is the phase-01 tenant-scoped table; the loop above
     // covers every future table by construction.)
-    let (a, b) = (TenantId::new(), TenantId::new());
-    let manager = TxManager::new(pool.clone());
+    let (a, b) = (
+        TenantId::try_from(301_i64).unwrap(),
+        TenantId::try_from(302_i64).unwrap(),
+    );
+    let manager = TxManager::new(pool.clone(), raw_ids());
     for (id, slug) in [(a, "matrixa"), (b, "matrixb")] {
         let (tenant, _) = sanvi_tenancy::Tenant::provision(
             id,
@@ -307,12 +318,12 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
     {
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("SELECT set_config('sanvi.tenant_id', $1, true)")
-            .bind(a.as_uuid().to_string())
+            .bind(a.as_i64().to_string())
             .execute(&mut *tx)
             .await
             .unwrap();
         sqlx::query("INSERT INTO tenancy.tenant_settings (tenant_id, key, value) VALUES ($1, 'k', '1'::jsonb)")
-            .bind(a.as_uuid())
+            .bind(a.as_i64())
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -321,12 +332,12 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
     {
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("SELECT set_config('sanvi.tenant_id', $1, true)")
-            .bind(b.as_uuid().to_string())
+            .bind(b.as_i64().to_string())
             .execute(&mut *tx)
             .await
             .unwrap();
         sqlx::query("INSERT INTO tenancy.tenant_settings (tenant_id, key, value) VALUES ($1, 'k', '2'::jsonb)")
-            .bind(b.as_uuid())
+            .bind(b.as_i64())
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -336,7 +347,7 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
     // As tenant A: see only A's row.
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SELECT set_config('sanvi.tenant_id', $1, true)")
-        .bind(a.as_uuid().to_string())
+        .bind(a.as_i64().to_string())
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -351,7 +362,7 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
     let updated = sqlx::query(
         "UPDATE tenancy.tenant_settings SET value = '\"x\"'::jsonb WHERE tenant_id = $1",
     )
-    .bind(b.as_uuid())
+    .bind(b.as_i64())
     .execute(&mut *tx)
     .await
     .unwrap()
@@ -360,7 +371,7 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
 
     // Delete B's row as A: nothing happens.
     let deleted = sqlx::query("DELETE FROM tenancy.tenant_settings WHERE tenant_id = $1")
-        .bind(b.as_uuid())
+        .bind(b.as_i64())
         .execute(&mut *tx)
         .await
         .unwrap()
@@ -371,7 +382,7 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
     let insert = sqlx::query(
         "INSERT INTO tenancy.tenant_settings (tenant_id, key, value) VALUES ($1, 'k2', '1'::jsonb)",
     )
-    .bind(b.as_uuid())
+    .bind(b.as_i64())
     .execute(&mut *tx)
     .await;
     assert!(
@@ -384,13 +395,14 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
 #[tokio::test]
 async fn purge_sweep_requests_purge_only_once_for_due_archived_tenants() {
     let (pool, _owner, _admin, _node) = prepare().await;
-    let tx_manager = TxManager::new(pool.clone());
+    let raw_ids = raw_ids();
+    let tx_manager = TxManager::new(pool.clone(), raw_ids.clone());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
 
     // Create + activate + archive a tenant directly through the aggregate.
-    let id = TenantId::new();
+    let id = TenantId::try_from(401_i64).unwrap();
     let (mut tenant, _) = sanvi_tenancy::Tenant::provision(
         id,
         sanvi_tenancy::TenantSlug::parse("sweepme").unwrap(),
@@ -413,7 +425,7 @@ async fn purge_sweep_requests_purge_only_once_for_due_archived_tenants() {
     sqlx::query(
         "UPDATE tenancy.tenants SET archived_at = now() - interval '31 days' WHERE id = $1",
     )
-    .bind(id.as_uuid())
+    .bind(id.as_i64())
     .execute(&pool)
     .await
     .unwrap();
@@ -445,17 +457,18 @@ async fn purge_sweep_requests_purge_only_once_for_due_archived_tenants() {
 #[tokio::test]
 async fn list_tenants_paginates_by_cursor_and_filters_by_status() {
     let (pool, _owner, _admin, _node) = prepare().await;
-    let tx_manager = TxManager::new(pool.clone());
+    let raw_ids = raw_ids();
+    let tx_manager = TxManager::new(pool.clone(), raw_ids.clone());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let provision = ProvisionTenant::new(
         tx_manager.clone(),
         tenants.clone(),
         slugs,
         events,
-        Arc::new(SystemIdGenerator),
+        Arc::new(SystemIdGenerator::new(raw_ids)),
         clock,
     );
 
@@ -484,10 +497,11 @@ async fn list_tenants_paginates_by_cursor_and_filters_by_status() {
 #[tokio::test]
 async fn suspension_reason_roundtrips_through_storage() {
     let (pool, _owner, _admin, _node) = prepare().await;
-    let tx_manager = TxManager::new(pool.clone());
+    let raw_ids = raw_ids();
+    let tx_manager = TxManager::new(pool.clone(), raw_ids.clone());
     let tenants: Arc<dyn TenantRepository> = Arc::new(SqlxTenantRepository::new());
     let slugs: Arc<dyn SlugReservationPort> = Arc::new(SqlxSlugReservationPort::new());
-    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new());
+    let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(raw_ids.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
 
     let provision = ProvisionTenant::new(
@@ -495,7 +509,7 @@ async fn suspension_reason_roundtrips_through_storage() {
         tenants.clone(),
         slugs,
         events.clone(),
-        Arc::new(SystemIdGenerator),
+        Arc::new(SystemIdGenerator::new(raw_ids)),
         clock.clone(),
     );
     let view = provision.execute(command("suspendme")).await.unwrap();

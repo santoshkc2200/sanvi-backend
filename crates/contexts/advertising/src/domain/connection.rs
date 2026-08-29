@@ -1,13 +1,14 @@
 //! The durable tenant-to-ad-account relationship.
 
 use chrono::{DateTime, Utc};
+use sanvi_kernel::{TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use uuid::Uuid;
 
 use super::{
     AdvertisingError, ConnectionHealth, ConnectionStatus, PlatformAccount, PlatformKey, SecretRef,
 };
+use crate::domain::model::ConnectionId;
 
 /// ISO-4217's reserved "no currency involved" code — the correct placeholder
 /// for a pending connection whose account (and therefore real currency)
@@ -48,8 +49,8 @@ impl SyncError {
 
 #[derive(Clone)]
 pub struct AdvertisingConnection {
-    id: Uuid,
-    tenant_id: Uuid,
+    id: ConnectionId,
+    tenant_id: TenantId,
     platform: PlatformKey,
     external_account_id: String,
     account_name: Option<String>,
@@ -58,7 +59,7 @@ pub struct AdvertisingConnection {
     status: ConnectionStatus,
     granted_scopes: Vec<String>,
     token_ref: SecretRef,
-    connected_by: Option<Uuid>,
+    connected_by: Option<UserId>,
     connected_at: DateTime<Utc>,
     token_expires_at: Option<DateTime<Utc>>,
     last_synced_at: Option<DateTime<Utc>>,
@@ -74,13 +75,14 @@ pub struct AdvertisingConnection {
 impl AdvertisingConnection {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        tenant_id: Uuid,
+        id: ConnectionId,
+        tenant_id: TenantId,
         platform: PlatformKey,
         external_account_id: impl Into<String>,
         currency: impl Into<String>,
         timezone: impl Into<String>,
         token_ref: SecretRef,
-        connected_by: Option<Uuid>,
+        connected_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<Self, AdvertisingError> {
         let external_account_id = normalize_external_account_id(external_account_id.into())?;
@@ -106,7 +108,7 @@ impl AdvertisingConnection {
             ));
         }
         Ok(Self {
-            id: Uuid::now_v7(),
+            id,
             tenant_id,
             platform,
             external_account_id,
@@ -135,14 +137,14 @@ impl AdvertisingConnection {
     /// — before this returns, instead of mutating it in afterward.
     #[allow(clippy::too_many_arguments)]
     pub fn new_pending(
-        id: Uuid,
-        tenant_id: Uuid,
+        id: ConnectionId,
+        tenant_id: TenantId,
         platform: PlatformKey,
         token_ref: SecretRef,
         granted_scopes: Vec<String>,
         token_expires_at: Option<DateTime<Utc>>,
         accounts: Vec<PlatformAccount>,
-        connected_by: Option<Uuid>,
+        connected_by: Option<UserId>,
         now: DateTime<Utc>,
     ) -> Result<Self, AdvertisingError> {
         if accounts.is_empty() {
@@ -151,6 +153,7 @@ impl AdvertisingConnection {
             ));
         }
         let mut connection = Self::new(
+            id,
             tenant_id,
             platform,
             format!("pending:{id}"),
@@ -226,8 +229,8 @@ impl AdvertisingConnection {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_persisted(
-        id: Uuid,
-        tenant_id: Uuid,
+        id: ConnectionId,
+        tenant_id: TenantId,
         platform: PlatformKey,
         external_account_id: String,
         account_name: Option<String>,
@@ -236,7 +239,7 @@ impl AdvertisingConnection {
         status: ConnectionStatus,
         granted_scopes: Vec<String>,
         token_ref: SecretRef,
-        connected_by: Option<Uuid>,
+        connected_by: Option<UserId>,
         connected_at: DateTime<Utc>,
         token_expires_at: Option<DateTime<Utc>>,
         last_synced_at: Option<DateTime<Utc>>,
@@ -246,6 +249,7 @@ impl AdvertisingConnection {
         pending_accounts: Option<Vec<PlatformAccount>>,
     ) -> Result<Self, AdvertisingError> {
         let mut connection = Self::new(
+            id,
             tenant_id,
             platform,
             external_account_id,
@@ -342,10 +346,10 @@ impl AdvertisingConnection {
         &self.granted_scopes
     }
 
-    pub fn id(&self) -> Uuid {
+    pub fn id(&self) -> ConnectionId {
         self.id
     }
-    pub(crate) fn tenant_id(&self) -> Uuid {
+    pub(crate) fn tenant_id(&self) -> TenantId {
         self.tenant_id
     }
     pub(crate) fn platform(&self) -> &PlatformKey {
@@ -369,7 +373,7 @@ impl AdvertisingConnection {
     pub(crate) fn token_ref(&self) -> &SecretRef {
         &self.token_ref
     }
-    pub(crate) fn connected_by(&self) -> Option<Uuid> {
+    pub(crate) fn connected_by(&self) -> Option<UserId> {
         self.connected_by
     }
     pub(crate) fn connected_at(&self) -> DateTime<Utc> {
@@ -416,19 +420,31 @@ fn normalize_scopes(scopes: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
+    use sanvi_kernel::{TenantId, UserId};
     use serde_json::json;
 
     use super::*;
 
+    fn test_connection_id(n: i64) -> ConnectionId {
+        ConnectionId::try_from(n).unwrap()
+    }
+    fn test_tenant_id(n: i64) -> TenantId {
+        TenantId::try_from(n).unwrap()
+    }
+    fn test_user_id(n: i64) -> UserId {
+        UserId::try_from(n).unwrap()
+    }
+
     fn connection() -> AdvertisingConnection {
         AdvertisingConnection::new(
-            Uuid::now_v7(),
+            test_connection_id(1_000_001),
+            test_tenant_id(1_000_002),
             PlatformKey::parse("network_a").unwrap(),
             "123-456-7890",
             "jpy",
             "Asia/Tokyo",
             SecretRef::new("opaque-vault-reference"),
-            Some(Uuid::now_v7()),
+            Some(test_user_id(1_000_003)),
             Utc::now(),
         )
         .unwrap()
@@ -452,7 +468,8 @@ mod tests {
     #[test]
     fn account_id_is_canonical_and_empty_secret_reference_is_rejected() {
         let connection = AdvertisingConnection::new(
-            Uuid::now_v7(),
+            test_connection_id(1_000_004),
+            test_tenant_id(1_000_005),
             PlatformKey::parse("network_b").unwrap(),
             "  123-456-7890  ",
             "JPY",
@@ -464,7 +481,8 @@ mod tests {
         .unwrap();
         assert_eq!(connection.external_account_id(), "123-456-7890");
         let result = AdvertisingConnection::new(
-            Uuid::now_v7(),
+            test_connection_id(1_000_006),
+            test_tenant_id(1_000_007),
             PlatformKey::parse("network_b").unwrap(),
             "123-456-7890",
             "JPY",

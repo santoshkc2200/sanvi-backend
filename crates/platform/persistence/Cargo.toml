@@ -11,6 +11,7 @@ publish.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sanvi-kernel.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

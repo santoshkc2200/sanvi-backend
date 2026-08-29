@@ -35,7 +35,6 @@ paths:
           content:
             text/plain:
               schema:
-                format: uuid
                 type: string
           description: Recorded
       summary: |-
@@ -67,7 +66,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -123,7 +125,6 @@ paths:
           content:
             text/plain:
               schema:
-                format: uuid
                 type: string
           description: Recorded
       summary: '`POST /api/v1/platform/privacy/assessments` — record an assessment.'
@@ -157,7 +158,6 @@ paths:
           content:
             text/plain:
               schema:
-                format: uuid
                 type: string
           description: Hold applied
       summary: |-
@@ -174,7 +174,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -226,7 +229,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -251,7 +257,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -335,7 +344,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -359,7 +371,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -588,7 +603,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Challenge token (for unauthenticated requesters)
         in: query
@@ -623,7 +641,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -656,7 +677,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Download token
         in: query
@@ -702,7 +726,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -725,7 +752,10 @@ paths:
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:

@@ -6,6 +6,10 @@
 
 readiness_probe_secs = 2
 
+[ids]
+# Node defaults are intentionally absent: local API/worker/CLI reserve 1/2/3;
+# staging and production overlays must set an explicit node for each replica.
+
 [server]
 host = "0.0.0.0"
 port = 8080

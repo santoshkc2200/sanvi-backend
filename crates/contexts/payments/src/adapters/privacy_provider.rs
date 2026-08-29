@@ -4,9 +4,11 @@
 //! while the tenant-provided `customer_ref` is personal context and is
 //! removed for the matching end-user subject during erasure.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use sanvi_kernel::TenantId;
 use serde_json::Value;
-use uuid::Uuid;
 
 use sanvi_persistence::{PlatformScope, TxManager};
 use sanvi_privacy::domain::{
@@ -26,7 +28,7 @@ impl PaymentsPrivacyProvider {
     async fn matching_checkouts(
         &self,
         scope: &mut PlatformScope<'_>,
-        tenant_id: Uuid,
+        tenant_id: TenantId,
         external_id: &str,
     ) -> Result<Vec<CheckoutPrivacyRow>, PrivacyError> {
         sqlx::query_as(
@@ -60,7 +62,7 @@ impl PaymentsPrivacyProvider {
                )
              ORDER BY created_at, id",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(external_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -70,7 +72,7 @@ impl PaymentsPrivacyProvider {
 
 #[derive(sqlx::FromRow)]
 struct CheckoutPrivacyRow {
-    id: Uuid,
+    id: i64,
     reference: String,
     customer_ref: Option<Value>,
     status: String,
@@ -79,7 +81,7 @@ struct CheckoutPrivacyRow {
     has_transaction: bool,
 }
 
-fn end_user(subject: &SubjectRef) -> Option<(Uuid, &str)> {
+fn end_user(subject: &SubjectRef) -> Option<(TenantId, &str)> {
     let tenant_id = subject.tenant_id?;
     let external_id = subject
         .identifiers
@@ -213,7 +215,7 @@ impl PersonalDataProvider for PaymentsPrivacyProvider {
                      AND value = to_jsonb($2::text)
                )",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(external_id)
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
@@ -246,7 +248,7 @@ impl PersonalDataProvider for PaymentsPrivacyProvider {
                      AND value = to_jsonb($2::text)
                )",
         )
-        .bind(tenant_id)
+        .bind(tenant_id.as_i64())
         .bind(external_id)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -287,9 +289,13 @@ mod tests {
 
     #[tokio::test]
     async fn the_statutory_override_is_registered_in_the_data_map() {
+        let ids = Arc::new(sanvi_kernel::SnowflakeGenerator::new(
+            sanvi_kernel::NodeId::new(1).unwrap(),
+        ));
         let provider = PaymentsPrivacyProvider::new(TxManager::new(
             sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                 .expect("lazy pool construction is configuration only"),
+            ids,
         ));
         let classes = provider.data_classes();
         assert!(classes.iter().any(|def| def.class == DataClass::Billing));
@@ -309,9 +315,13 @@ mod tests {
 
     #[tokio::test]
     async fn non_end_user_subjects_report_no_payment_data() {
+        let ids = Arc::new(sanvi_kernel::SnowflakeGenerator::new(
+            sanvi_kernel::NodeId::new(1).unwrap(),
+        ));
         let provider = PaymentsPrivacyProvider::new(TxManager::new(
             sqlx::PgPool::connect_lazy("postgres://sanvi_app:app@127.0.0.1:1/sanvi_test")
                 .expect("lazy pool construction is configuration only"),
+            ids,
         ));
         let subject = SubjectRef::contact("payer@example.test");
         let report = provider.erase(&subject, EraseMode::Full).await.unwrap();
