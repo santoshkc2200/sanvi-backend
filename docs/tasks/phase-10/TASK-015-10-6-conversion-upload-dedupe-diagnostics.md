@@ -50,7 +50,7 @@ causes a tenant can fix from the ones they must respect.
 - [ ] **Audience sync** — customer-list build and refresh requiring `sale_or_share` **and**
       `targeted_advertising` per subject. Opted-out subjects are excluded from a new list and **removed
       from existing ones on the next refresh**, not merely skipped. Refresh is scheduled, not manual.
-- [ ] **Retraction propagation** — a withdrawal or opt-out after upload triggers a deletion/suppression
+- [x] **Retraction propagation** — a withdrawal or opt-out after upload triggers a deletion/suppression
       request to each platform that supports one, recorded with its outcome. Where a platform offers no
       such API, the failure to propagate is recorded **explicitly** rather than silently accepted.
 - [ ] **Diagnostics projection** — a read model assembling capture, gate, and attempt history per event
@@ -78,7 +78,7 @@ causes a tenant can fix from the ones they must respect.
       expiry parks the event and surfaces as a connection problem, not a data problem.
 - [ ] An opted-out subject is absent from a newly built list **and removed from an existing one on the
       next refresh**, verified against the platform's own list state.
-- [ ] A post-upload withdrawal issues a deletion request where supported and records an explicit
+- [x] A post-upload withdrawal issues a deletion request where supported and records an explicit
       unpropagated outcome where not.
 - [ ] Every taxonomy category renders its own diagnostic reason; the enum is asserted exhaustively so
       no category falls through to a generic string.

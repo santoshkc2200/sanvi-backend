@@ -353,6 +353,8 @@ advertising_partition_maintenance_interval_secs = 86400
 advertising_reconciliation_interval_secs = 86400
 # 10.6: conversion upload worker sweep.
 advertising_conversion_upload_interval_secs = 60
+# 10.6: conversion retraction worker sweep.
+advertising_conversion_retraction_interval_secs = 60
 
 [payments]
 # Phase 09: tenant payment providers (Stripe Connect, direct charges —

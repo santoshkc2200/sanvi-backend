@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 pub struct AdvertisingMetrics {
     conversion_upload_total: prometheus::IntCounterVec,
     conversion_suppressed_total: prometheus::IntCounterVec,
+    conversion_retraction_total: prometheus::IntCounterVec,
     conversion_upload_lag_seconds: prometheus::Histogram,
     conversion_dlq_depth: prometheus::IntGauge,
 }
@@ -32,6 +33,15 @@ impl AdvertisingMetrics {
         )
         .expect("conversion suppressed counter construction is infallible");
 
+        let conversion_retraction_total = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "conversion_retraction_total",
+                "Total advertising conversion retraction attempts by platform and result",
+            ),
+            &["platform", "result"],
+        )
+        .expect("conversion retraction counter construction is infallible");
+
         let conversion_upload_lag_seconds =
             prometheus::Histogram::with_opts(prometheus::HistogramOpts::new(
                 "conversion_upload_lag_seconds",
@@ -47,12 +57,14 @@ impl AdvertisingMetrics {
 
         let _ = registry.register(Box::new(conversion_upload_total.clone()));
         let _ = registry.register(Box::new(conversion_suppressed_total.clone()));
+        let _ = registry.register(Box::new(conversion_retraction_total.clone()));
         let _ = registry.register(Box::new(conversion_upload_lag_seconds.clone()));
         let _ = registry.register(Box::new(conversion_dlq_depth.clone()));
 
         Self {
             conversion_upload_total,
             conversion_suppressed_total,
+            conversion_retraction_total,
             conversion_upload_lag_seconds,
             conversion_dlq_depth,
         }
@@ -64,6 +76,10 @@ impl AdvertisingMetrics {
 
     pub fn conversion_suppressed_total(&self) -> &prometheus::IntCounterVec {
         &self.conversion_suppressed_total
+    }
+
+    pub fn conversion_retraction_total(&self) -> &prometheus::IntCounterVec {
+        &self.conversion_retraction_total
     }
 
     pub fn conversion_upload_lag_seconds(&self) -> &prometheus::Histogram {

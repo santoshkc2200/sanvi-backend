@@ -24,7 +24,7 @@ use sanvi_advertising::adapters::{
     SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository, http::AdvertisingState,
 };
 use sanvi_advertising::application::tracking::{
-    UploadPendingConversions,
+    RetractWithdrawnConversions, UploadPendingConversions,
     capture::{CaptureConversion, TrackConversionCommand},
     conversions::{GetConversionDiagnostics, ListConversions},
     retry::RetryConversion,
@@ -2445,4 +2445,424 @@ async fn upload_sweep_observability_metrics_recorded_accurately() {
         1
     );
     assert_eq!(metrics.conversion_dlq_depth().get(), 1);
+}
+
+#[tokio::test]
+async fn retraction_sweep_uploaded_withdrawn_event_retracts_while_consented_left_alone() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retract-withdrawn-vs-consented").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+
+    // 1. Capture two events under different device subjects
+    let command_withdrawn = TrackConversionCommand {
+        tenant_id,
+        event_name: "purchase".to_string(),
+        event_id: "evt-retract-withdrawn".to_string(),
+        order_ref: None,
+        subject: SubjectRef::tenant_device(tenant_id, "dev-withdrawn-1"),
+        email: None,
+        phone: None,
+        value: Some(1000),
+        currency: Some("USD".to_string()),
+        click_ids: ClickIds::default(),
+        platforms: vec![PlatformKey::parse("google_ads").unwrap()],
+        platforms_incomplete: false,
+    };
+    capture.execute(command_withdrawn).await.unwrap();
+
+    let command_consented = TrackConversionCommand {
+        tenant_id,
+        event_name: "purchase".to_string(),
+        event_id: "evt-retract-consented".to_string(),
+        order_ref: None,
+        subject: SubjectRef::tenant_device(tenant_id, "dev-consented-2"),
+        email: None,
+        phone: None,
+        value: Some(2000),
+        currency: Some("USD".to_string()),
+        click_ids: ClickIds::default(),
+        platforms: vec![PlatformKey::parse("google_ads").unwrap()],
+        platforms_incomplete: false,
+    };
+    capture.execute(command_consented).await.unwrap();
+
+    // 2. Upload both events
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let upload_worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks.clone(),
+        Arc::new(AdvertisingMetrics::default()),
+    );
+    let upload_report = upload_worker.execute(100).await.unwrap();
+    assert_eq!(upload_report.uploaded, 2);
+
+    let row1 = fetch_row(&pool, tenant_id, "evt-retract-withdrawn").await;
+    assert_eq!(row1["upload_states"]["google_ads"]["status"], "uploaded");
+    let row2 = fetch_row(&pool, tenant_id, "evt-retract-consented").await;
+    assert_eq!(row2["upload_states"]["google_ads"]["status"], "uploaded");
+
+    // 3. Directive resolver that denies ads_measurement for dev-withdrawn-1 only
+    struct SubjectResolver {
+        denied_device: String,
+    }
+
+    #[async_trait]
+    impl DirectiveResolver for SubjectResolver {
+        async fn resolve(
+            &self,
+            subject: &SubjectRef,
+            purpose: ProcessingPurpose,
+        ) -> Result<PurposeDirective, PrivacyError> {
+            let is_denied = subject
+                .identifiers
+                .iter()
+                .any(|identifier| identifier.value == self.denied_device);
+            let state = if is_denied {
+                DirectiveState::Denied
+            } else {
+                DirectiveState::Allowed
+            };
+            Ok(PurposeDirective {
+                purpose,
+                state,
+                source: DirectiveSource::OptOut,
+                jurisdiction: JurisdictionRef::from_static("eu"),
+                notice_version: None,
+                effective_at: Utc::now(),
+                superseded_at: None,
+            })
+        }
+
+        async fn snapshot(&self, subject: &SubjectRef) -> Result<DirectiveSnapshot, PrivacyError> {
+            Ok(DirectiveSnapshot {
+                subject: subject.clone(),
+                jurisdiction: JurisdictionRef::from_static("eu"),
+                directives: vec![],
+                minor_opt_in_age: None,
+                honours_universal_opt_out: false,
+            })
+        }
+    }
+
+    let resolver = Arc::new(SubjectResolver {
+        denied_device: "dev-withdrawn-1".to_string(),
+    });
+
+    let metrics = Arc::new(AdvertisingMetrics::default());
+    let retract_worker = RetractWithdrawnConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        resolver,
+        sinks,
+        metrics.clone(),
+    );
+
+    let report = retract_worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 2);
+    assert_eq!(report.retracted, 1);
+    assert_eq!(report.unpropagated, 0);
+    assert_eq!(report.failed, 0);
+
+    // Assert sink received retract call only for the withdrawn event
+    let retracted_events = google_sink.retracted_events();
+    assert_eq!(retracted_events.len(), 1);
+    assert_eq!(retracted_events[0].event_id, "evt-retract-withdrawn");
+
+    // Check DB states: withdrawn -> retracted, consented -> uploaded
+    let row_withdrawn_after = fetch_row(&pool, tenant_id, "evt-retract-withdrawn").await;
+    assert_eq!(
+        row_withdrawn_after["upload_states"]["google_ads"]["status"],
+        "retracted"
+    );
+
+    let row_consented_after = fetch_row(&pool, tenant_id, "evt-retract-consented").await;
+    assert_eq!(
+        row_consented_after["upload_states"]["google_ads"]["status"],
+        "uploaded"
+    );
+}
+
+#[tokio::test]
+async fn retraction_sweep_unsupported_adapter_transitions_to_explicit_unpropagated_state() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retract-unsupported-explicit").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-retract-unsupported");
+    capture.execute(command).await.unwrap();
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let upload_worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks.clone(),
+        Arc::new(AdvertisingMetrics::default()),
+    );
+    upload_worker.execute(100).await.unwrap();
+
+    let row_before = fetch_row(&pool, tenant_id, "evt-retract-unsupported").await;
+    assert_eq!(
+        row_before["upload_states"]["google_ads"]["status"],
+        "uploaded"
+    );
+
+    // Configure sink to return an explicit unsupported error on retract
+    google_sink.set_retract_error(Some(AdvertisingError::PlatformUnavailable(
+        "conversion retraction is not supported by this platform".to_string(),
+    )));
+
+    let withdrawn_resolver = Arc::new(FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::AdsMeasurement,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    ));
+
+    let registry = prometheus::Registry::new();
+    let metrics = Arc::new(AdvertisingMetrics::new(&registry));
+    let retract_worker = RetractWithdrawnConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        withdrawn_resolver,
+        sinks,
+        metrics.clone(),
+    );
+
+    let report = retract_worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.retracted, 0);
+    assert_eq!(report.unpropagated, 1);
+    assert_eq!(report.failed, 0);
+
+    // Verify DB state is explicitly unpropagated with the reason recorded
+    let row_after = fetch_row(&pool, tenant_id, "evt-retract-unsupported").await;
+    assert_eq!(
+        row_after["upload_states"]["google_ads"]["status"],
+        "unpropagated"
+    );
+    let reason = row_after["upload_states"]["google_ads"]["reason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("not supported"));
+
+    // Verify metric recorded as unpropagated
+    assert_eq!(
+        metrics
+            .conversion_retraction_total()
+            .with_label_values(&["google_ads", "unpropagated"])
+            .get(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn retraction_sweep_no_uploaded_platforms_is_zero_cost_noop() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retract-zero-cost-noop").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    // Event 1: Suppressed at capture (empty upload_states)
+    let denied_resolver = FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::AdsMeasurement,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    );
+    let capture_denied = capture_with(tx.clone(), denied_resolver, None, VendorRole::ThirdParty);
+    capture_denied
+        .execute(command_with_device_subject(
+            tenant_id,
+            "evt-noop-suppressed",
+        ))
+        .await
+        .unwrap();
+
+    // Event 2: Pending upload (not yet uploaded)
+    let capture_allowed = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    capture_allowed
+        .execute(command_with_device_subject(tenant_id, "evt-noop-pending"))
+        .await
+        .unwrap();
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let retract_worker = RetractWithdrawnConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks,
+        Arc::new(AdvertisingMetrics::default()),
+    );
+
+    let report = retract_worker.execute(100).await.unwrap();
+    assert_eq!(report.checked, 0);
+    assert_eq!(report.retracted, 0);
+    assert_eq!(report.unpropagated, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(google_sink.retracted_events().len(), 0);
+}
+
+#[tokio::test]
+async fn retraction_sweep_observability_metrics_and_transient_failure() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "retract-metrics-transient").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(
+        FakeAdPlatform::fixtures()[0].clone(),
+    ));
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
+
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    let command = command_with_device_subject(tenant_id, "evt-retract-transient");
+    capture.execute(command).await.unwrap();
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let upload_worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks.clone(),
+        Arc::new(AdvertisingMetrics::default()),
+    );
+    upload_worker.execute(100).await.unwrap();
+
+    // Set transient 503 error on retract
+    google_sink.set_retract_error(Some(AdvertisingError::PlatformUnavailable(
+        "503 Service Unavailable".to_string(),
+    )));
+
+    let withdrawn_resolver = Arc::new(FakeDirectiveResolver::allow_all().with(
+        ProcessingPurpose::AdsMeasurement,
+        DirectiveState::Denied,
+        DirectiveSource::OptOut,
+    ));
+
+    let registry = prometheus::Registry::new();
+    let metrics = Arc::new(AdvertisingMetrics::new(&registry));
+    let retract_worker = RetractWithdrawnConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        withdrawn_resolver,
+        sinks.clone(),
+        metrics.clone(),
+    );
+
+    // First attempt: transient failure, leaves state as uploaded for retry
+    let report1 = retract_worker.execute(100).await.unwrap();
+    assert_eq!(report1.checked, 1);
+    assert_eq!(report1.failed, 1);
+    assert_eq!(report1.retracted, 0);
+    assert_eq!(report1.unpropagated, 0);
+    assert_eq!(
+        metrics
+            .conversion_retraction_total()
+            .with_label_values(&["google_ads", "failed"])
+            .get(),
+        1
+    );
+
+    let row_transient = fetch_row(&pool, tenant_id, "evt-retract-transient").await;
+    assert_eq!(
+        row_transient["upload_states"]["google_ads"]["status"],
+        "uploaded"
+    );
+
+    // Fix error: next pass succeeds
+    google_sink.set_retract_error(None);
+    let report2 = retract_worker.execute(100).await.unwrap();
+    assert_eq!(report2.checked, 1);
+    assert_eq!(report2.retracted, 1);
+    assert_eq!(report2.failed, 0);
+    assert_eq!(report2.unpropagated, 0);
+    assert_eq!(
+        metrics
+            .conversion_retraction_total()
+            .with_label_values(&["google_ads", "retracted"])
+            .get(),
+        1
+    );
+
+    let row_retracted = fetch_row(&pool, tenant_id, "evt-retract-transient").await;
+    assert_eq!(
+        row_retracted["upload_states"]["google_ads"]["status"],
+        "retracted"
+    );
 }

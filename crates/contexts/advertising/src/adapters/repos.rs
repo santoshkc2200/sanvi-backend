@@ -906,6 +906,30 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         rows.into_iter().map(row_to_conversion_event).collect()
     }
 
+    async fn list_uploaded(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, ConversionEventRow>(
+            "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states, subject_key
+             FROM advertising.conversion_events
+             WHERE EXISTS (
+                 SELECT 1 FROM jsonb_each(upload_states) AS kv
+                 WHERE kv.value->>'status' = 'uploaded'
+             )
+             ORDER BY occurred_at ASC, id ASC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        rows.into_iter().map(row_to_conversion_event).collect()
+    }
+
     // TODO: If conversion_events partition size grows large in production, consider adding a partial
     // GIN or functional index on `(upload_states)` (e.g. `WHERE jsonb_path_exists(upload_states, '$.* ? (@.status == "parked")')`)
     // to accelerate DLQ depth counting across all partitions.
