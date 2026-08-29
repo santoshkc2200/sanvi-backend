@@ -1,7 +1,7 @@
 # TASK-015: 10.6 Conversion upload, dedupe & diagnostics
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress
 **Requirement(s):** FR-1010, FR-1011, NFR-1001, NFR-1002
 **Depends on:** TASK-014
 **Created:** 2026-08-20

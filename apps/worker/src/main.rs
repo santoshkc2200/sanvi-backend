@@ -36,11 +36,15 @@ use sanvi_access::{
     },
 };
 use sanvi_advertising::{
+    ConversionSinkPort, PlatformKey,
     adapters::{
-        FakeAdPlatform, OutboxEventPublisher as AdvertisingEventPublisher, SqlxCampaignRepository,
+        FakeAdPlatform, FakeConversionSink, OutboxEventPublisher as AdvertisingEventPublisher,
+        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
     },
-    application::{ReconcileCampaign, ReconcileDueCampaigns},
+    application::{ReconcileCampaign, ReconcileDueCampaigns, UploadPendingConversions},
+    domain::AdvertisingConnectionRepository,
     domain::CampaignRepository as AdvertisingCampaignRepository,
+    domain::ConversionEventRepository,
     domain::EventPublisher as AdvertisingEvents,
 };
 use sanvi_audit::{
@@ -109,16 +113,16 @@ use sanvi_privacy::{
         ZipPackager,
     },
     application::{
-        CleanupExpiredExports, GenerateAnnualMetrics, ProcessDsrBatch, PropagateOptOuts,
-        RetentionSweep,
+        CleanupExpiredExports, GenerateAnnualMetrics, PersistedDirectiveResolver, ProcessDsrBatch,
+        PropagateOptOuts, RetentionSweep,
     },
     domain::{
         AppealRepository, AuthorizedAgentRepository, BreachRepository, ConsentRepository,
-        DirectiveRepository, DsrRepository, EnvelopeCrypto, ExportArtifactRepository, Hasher,
-        JurisdictionRepository, LegalHoldRepository, Notifications as PrivacyNotificationsTrait,
-        ParticipantRepository, ProviderRegistry, RequestMetricsRepository, RetentionRuleRepository,
-        SignalRepository, SubProcessorNotifier, SubProcessorRepository, SubjectKeyRepository,
-        SubjectRepository, VerificationRepository,
+        DirectiveRepository, DirectiveResolver, DsrRepository, EnvelopeCrypto,
+        ExportArtifactRepository, Hasher, JurisdictionRepository, LegalHoldRepository,
+        Notifications as PrivacyNotificationsTrait, ParticipantRepository, ProviderRegistry,
+        RequestMetricsRepository, RetentionRuleRepository, SignalRepository, SubProcessorNotifier,
+        SubProcessorRepository, SubjectKeyRepository, SubjectRepository, VerificationRepository,
     },
 };
 use sanvi_telemetry::TelemetryConfig;
@@ -567,6 +571,8 @@ pub struct SchedulerConfig {
     /// nightly safety net alongside on-demand reconciliation. Never mutates
     /// a platform; only observes and records drift.
     pub advertising_reconciliation_interval_secs: u64,
+    /// Conversion upload worker sweep (TASK-015, 10.6).
+    pub advertising_conversion_upload_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -599,6 +605,7 @@ impl Default for SchedulerConfig {
             payments_tax_check_interval_secs: 86_400,
             advertising_partition_maintenance_interval_secs: 86_400,
             advertising_reconciliation_interval_secs: 86_400,
+            advertising_conversion_upload_interval_secs: 60,
         }
     }
 }
@@ -1481,6 +1488,16 @@ async fn main() -> ExitCode {
         privacy_metrics.clone(),
         privacy_clock.clone(),
     ));
+    let privacy_directive_resolver: std::sync::Arc<dyn DirectiveResolver> =
+        std::sync::Arc::new(PersistedDirectiveResolver::new(
+            privacy_tx.clone(),
+            privacy_subjects.clone(),
+            privacy_jurisdictions.clone(),
+            privacy_consents.clone(),
+            privacy_signals.clone(),
+            privacy_directives.clone(),
+            privacy_clock.clone(),
+        ));
     let _ = (
         privacy_jurisdictions,
         privacy_appeals,
@@ -1550,6 +1567,27 @@ async fn main() -> ExitCode {
         advertising_platforms,
         advertising_reconcile_campaign,
     ));
+    let advertising_connections: Arc<dyn AdvertisingConnectionRepository> =
+        Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let mut advertising_conversion_sinks: std::collections::BTreeMap<
+        PlatformKey,
+        Arc<dyn ConversionSinkPort>,
+    > = std::collections::BTreeMap::new();
+    for descriptor in FakeAdPlatform::fixtures().into_iter().take(2) {
+        advertising_conversion_sinks.insert(
+            descriptor.key.clone(),
+            Arc::new(FakeConversionSink::new(descriptor)),
+        );
+    }
+    let advertising_conversion_events: Arc<dyn ConversionEventRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let advertising_conversion_upload_sweep = Arc::new(UploadPendingConversions::new(
+        tx_manager.clone(),
+        advertising_conversion_events,
+        advertising_connections,
+        privacy_directive_resolver,
+        advertising_conversion_sinks,
+    ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
         Arc::new(FnJob::new(
@@ -1593,6 +1631,33 @@ async fn main() -> ExitCode {
                                 drifted = report.drifted,
                                 errors = report.errors,
                                 "advertising reconciliation sweep pass"
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "advertising.conversion_upload",
+            Duration::from_secs(config.scheduler.advertising_conversion_upload_interval_secs),
+            {
+                let sweep = advertising_conversion_upload_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                uploaded = report.uploaded,
+                                failed = report.failed,
+                                parked = report.parked,
+                                suppressed_late = report.suppressed_late,
+                                "advertising conversion upload sweep pass"
                             );
                         }
                         Ok(())
