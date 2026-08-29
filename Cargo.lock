@@ -3279,6 +3279,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "hmac 0.12.1",
+ "prometheus",
  "rand 0.8.7",
  "sanvi-http",
  "sanvi-kernel",

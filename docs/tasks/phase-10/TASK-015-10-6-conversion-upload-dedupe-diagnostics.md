@@ -57,9 +57,13 @@ causes a tenant can fix from the ones they must respect.
       without a fan-out of queries per row.
 - [ ] **Manual retry** — for parked events only, permission-gated, idempotent, and audited. It
       re-checks the directive like any other attempt.
-- [ ] **Observability** — `conversion_upload_total{platform,result}`,
-      `conversion_suppressed_total{reason,source}`, `conversion_upload_lag_seconds`, DLQ depth, with a
-      DLQ depth alert.
+- [x] **Observability** — `conversion_upload_total{platform,result}`,
+      `conversion_suppressed_total{reason,source}`, `conversion_upload_lag_seconds`, DLQ depth
+      (`conversion_dlq_depth`, via a new `ConversionEventRepository::count_parked`), all wired into the
+      `UploadPendingConversions` sweep and registered in the worker composition root. Alert rule on
+      `conversion_dlq_depth` is external ops config, not repo code — none exists in-repo for any
+      metric here (see `billing`'s `metrics.rs` for the same pattern) — flag to ops when a rule is
+      wanted.
 
 ## Acceptance criteria
 

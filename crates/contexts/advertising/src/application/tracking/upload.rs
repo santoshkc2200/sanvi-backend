@@ -3,11 +3,13 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use chrono::Utc;
 use sanvi_persistence::TxManager;
 use sanvi_privacy::domain::{DirectiveResolver, DirectiveState, ProcessingPurpose};
 use serde::Serialize;
 
 use super::retry::rebuild_subject;
+use crate::adapters::AdvertisingMetrics;
 use crate::domain::{
     AdvertisingConnectionRepository, AdvertisingError, ConnectionHandle, ConnectionStatus,
     ConversionEventRepository, ConversionSinkPort, PlatformKey, UploadState,
@@ -32,6 +34,7 @@ pub struct UploadPendingConversions {
     connections: Arc<dyn AdvertisingConnectionRepository>,
     directive_resolver: Arc<dyn DirectiveResolver>,
     sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>>,
+    metrics: Arc<AdvertisingMetrics>,
 }
 
 impl UploadPendingConversions {
@@ -41,6 +44,7 @@ impl UploadPendingConversions {
         connections: Arc<dyn AdvertisingConnectionRepository>,
         directive_resolver: Arc<dyn DirectiveResolver>,
         sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>>,
+        metrics: Arc<AdvertisingMetrics>,
     ) -> Self {
         Self {
             tx,
@@ -48,6 +52,7 @@ impl UploadPendingConversions {
             connections,
             directive_resolver,
             sinks,
+            metrics,
         }
     }
 
@@ -76,21 +81,39 @@ impl UploadPendingConversions {
 
             // 1. Rebuild subject & re-check ads_measurement directive
             let subject = rebuild_subject(event.tenant_id, &event.subject_key);
-            let directive_allowed = match subject {
-                Some(ref sub) => match self
+            let resolved_directive = match subject {
+                Some(ref sub) => self
                     .directive_resolver
                     .resolve(sub, ProcessingPurpose::AdsMeasurement)
                     .await
-                {
-                    Ok(directive) => directive.state != DirectiveState::Denied,
-                    Err(_) => false,
-                },
-                None => false, // Contact-identified subject cannot be safely re-queried
+                    .ok(),
+                None => None,
+            };
+
+            let directive_allowed = match &resolved_directive {
+                Some(directive) => directive.state != DirectiveState::Denied,
+                None => false, // Contact-identified subject cannot be safely re-queried or resolver failed
             };
 
             if !directive_allowed {
+                let (reason, source) = if let Some(denied_purpose) = event
+                    .consent
+                    .answers
+                    .iter()
+                    .find(|(_, state)| *state == "denied")
+                    .map(|(p, _)| p.as_str())
+                {
+                    (denied_purpose, event.consent.signal_source.as_str())
+                } else {
+                    let src = resolved_directive
+                        .as_ref()
+                        .map(|d| d.source.as_str())
+                        .unwrap_or(event.consent.signal_source.as_str());
+                    (ProcessingPurpose::AdsMeasurement.as_str(), src)
+                };
+
                 let mut modified = false;
-                for state in event.upload_states.values_mut() {
+                for (platform, state) in event.upload_states.iter_mut() {
                     match state {
                         UploadState::Pending { attempt_count } => {
                             *state = UploadState::Failed {
@@ -99,17 +122,25 @@ impl UploadPendingConversions {
                                 attempt_count: *attempt_count,
                             };
                             modified = true;
+                            self.metrics
+                                .conversion_upload_total()
+                                .with_label_values(&[platform.as_str(), "suppressed_late"])
+                                .inc();
                         }
                         UploadState::Failed {
                             attempt_count,
-                            reason,
-                        } if !reason.contains("suppressed_late") => {
+                            reason: prev_reason,
+                        } if !prev_reason.contains("suppressed_late") => {
                             *state = UploadState::Failed {
                                 reason: "suppressed_late: consent withdrawn since capture"
                                     .to_string(),
                                 attempt_count: *attempt_count,
                             };
                             modified = true;
+                            self.metrics
+                                .conversion_upload_total()
+                                .with_label_values(&[platform.as_str(), "suppressed_late"])
+                                .inc();
                         }
                         _ => {}
                     }
@@ -134,6 +165,11 @@ impl UploadPendingConversions {
                         .await
                         .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
                 }
+
+                self.metrics
+                    .conversion_suppressed_total()
+                    .with_label_values(&[reason, source])
+                    .inc();
 
                 report.suppressed_late += 1;
                 continue;
@@ -202,6 +238,11 @@ impl UploadPendingConversions {
                 let new_state = match upload_result {
                     Ok(_) => {
                         report.uploaded += 1;
+                        self.metrics
+                            .conversion_upload_total()
+                            .with_label_values(&[platform.as_str(), "uploaded"])
+                            .inc();
+                        self.metrics.observe_lag(event.occurred_at, Utc::now());
                         UploadState::Uploaded {
                             attempt_count: current_attempts,
                         }
@@ -210,12 +251,20 @@ impl UploadPendingConversions {
                         let next_attempts = current_attempts + 1;
                         if next_attempts >= MAX_ATTEMPTS {
                             report.parked += 1;
+                            self.metrics
+                                .conversion_upload_total()
+                                .with_label_values(&[platform.as_str(), "parked"])
+                                .inc();
                             UploadState::Parked {
                                 reason: err.to_string(),
                                 attempts: next_attempts,
                             }
                         } else {
                             report.failed += 1;
+                            self.metrics
+                                .conversion_upload_total()
+                                .with_label_values(&[platform.as_str(), "failed"])
+                                .inc();
                             UploadState::Failed {
                                 reason: err.to_string(),
                                 attempt_count: next_attempts,
@@ -247,6 +296,21 @@ impl UploadPendingConversions {
                     .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
             }
         }
+
+        let dlq_count = {
+            let mut scope = self
+                .tx
+                .begin_unscoped("advertising_conversion_dlq_depth", ACTOR)
+                .await
+                .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+            let count = self.conversion_repo.count_parked(&mut scope).await?;
+            scope
+                .commit()
+                .await
+                .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+            count
+        };
+        self.metrics.conversion_dlq_depth().set(dlq_count);
 
         Ok(report)
     }
