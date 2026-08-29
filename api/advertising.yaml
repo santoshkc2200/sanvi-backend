@@ -132,7 +132,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -163,7 +166,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required. The campaign's current revision; a stale value returns 409 with the current state.
         in: header
@@ -232,7 +238,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required. The campaign's current revision.
         in: header
@@ -301,13 +310,20 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Ad group id
         in: path
         name: ad_group_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required. The campaign's current revision.
         in: header
@@ -376,13 +392,20 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Ad group id
         in: path
         name: ad_group_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required. The campaign's current revision.
         in: header
@@ -451,19 +474,30 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Ad group id
         in: path
         name: ad_group_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Ad id
         in: path
         name: ad_id
         required: true
         schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required. The campaign's current revision.
         in: header
@@ -532,7 +566,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -564,7 +601,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required. A retry of this drift resolution returns its original result.
         in: header
@@ -631,7 +671,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required.
         in: header
@@ -688,7 +731,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required. A retry after a timeout returns the one campaign that was created, never a second.
         in: header
@@ -745,7 +791,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Required.
         in: header
@@ -802,7 +851,10 @@ paths:
         name: campaign_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       requestBody:
         content:
@@ -900,7 +952,10 @@ paths:
         name: connection_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '204':
@@ -1029,12 +1084,15 @@ paths:
     get:
       operationId: get_conversion_diagnostics
       parameters:
-      - description: Conversion event UUID
+      - description: Conversion event Snowflake ID
         in: path
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -1061,12 +1119,15 @@ paths:
     post:
       operationId: retry_conversion
       parameters:
-      - description: Conversion event UUID
+      - description: Conversion event Snowflake ID
         in: path
         name: id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '403':
@@ -1159,7 +1220,10 @@ paths:
         name: creative_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '204':
@@ -1186,7 +1250,10 @@ paths:
         name: creative_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
         '200':
@@ -1218,7 +1285,10 @@ paths:
         name: creative_id
         required: true
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - in: query
         name: placement

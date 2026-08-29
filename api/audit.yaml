@@ -15,19 +15,25 @@ paths:
         previous page).
       operationId: list_audit
       parameters:
-      - description: Restrict to one tenant
+      - description: Restrict to one tenant (decimal Snowflake)
         in: query
         name: tenant_id
         required: false
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
-      - description: Restrict to one actor
+      - description: Restrict to one actor (decimal Snowflake)
         in: query
         name: actor_id
         required: false
         schema:
-          format: uuid
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - description: Exact action name, e.g. tenancy.suspend
         in: query

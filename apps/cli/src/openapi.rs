@@ -16,7 +16,8 @@ const API_DIR: &str = "api";
 
 pub fn run(check: bool, write: bool) -> anyhow::Result<()> {
     let doc = ApiDoc::openapi();
-    let json = serde_json::to_value(&doc).context("failed to serialize openapi document")?;
+    let mut json = serde_json::to_value(&doc).context("failed to serialize openapi document")?;
+    annotate_snowflake_ids(&mut json);
 
     if !check && !write {
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
@@ -49,6 +50,110 @@ pub fn run(check: bool, write: bool) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Keep generated contracts aligned with the typed ID boundary without
+/// repeating Utoipa's schema attributes in every context DTO.
+fn annotate_snowflake_ids(document: &mut serde_json::Value) {
+    let schema = serde_json::to_value(sanvi_http::openapi::snowflake_id_schema().build())
+        .expect("the fixed Snowflake schema serializes");
+    annotate_value(document, &schema);
+}
+
+fn annotate_value(value: &mut serde_json::Value, snowflake_schema: &serde_json::Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+
+    if let Some(properties) = object
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (name, property) in properties {
+            if is_snowflake_field(name) {
+                replace_id_schema(property, snowflake_schema);
+            } else {
+                annotate_value(property, snowflake_schema);
+            }
+        }
+    }
+
+    if let Some(parameters) = object
+        .get_mut("parameters")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for parameter in parameters {
+            let name = parameter.get("name").and_then(serde_json::Value::as_str);
+            if name.is_some_and(is_snowflake_field) {
+                if let Some(schema) = parameter.get_mut("schema") {
+                    *schema = snowflake_schema.clone();
+                }
+            }
+        }
+    }
+
+    for nested in object.values_mut() {
+        annotate_value(nested, snowflake_schema);
+    }
+}
+
+fn replace_id_schema(property: &mut serde_json::Value, snowflake_schema: &serde_json::Value) {
+    if property.get("type") == Some(&serde_json::Value::String("array".to_string())) {
+        if let Some(items) = property.get_mut("items") {
+            *items = snowflake_schema.clone();
+        }
+    } else {
+        *property = snowflake_schema.clone();
+    }
+}
+
+fn is_snowflake_field(name: &str) -> bool {
+    matches!(
+        name,
+        "id" | "after_id"
+            | "tenant_id"
+            | "user_id"
+            | "actor_id"
+            | "role_id"
+            | "role_ids"
+            | "invitation_id"
+            | "plan_id"
+            | "price_id"
+            | "subscription_id"
+            | "invoice_id"
+            | "connection_id"
+            | "checkout_id"
+            | "payment_id"
+            | "refund_id"
+            | "dispute_id"
+            | "payout_id"
+            | "domain_id"
+            | "order_id"
+            | "certificate_id"
+            | "theme_id"
+            | "theme_version_id"
+            | "dsr_id"
+            | "subject_id"
+            | "appeal_id"
+            | "authorized_agent_id"
+            | "breach_incident_id"
+            | "consent_id"
+            | "export_artifact_id"
+            | "legal_hold_id"
+            | "preference_signal_id"
+            | "processing_activity_id"
+            | "risk_assessment_id"
+            | "verification_challenge_id"
+            | "campaign_id"
+            | "campaign_change_id"
+            | "conversion_id"
+            | "conversion_event_id"
+            | "creative_id"
+            | "ad_group_id"
+            | "ad_id"
+            | "impersonation_grant_id"
+            | "approval_id"
+    )
 }
 
 /// (Re)write api/{tag}.yaml for every tag present in the generated paths.
@@ -199,6 +304,33 @@ mod tests {
             }
         });
         assert_eq!(all_tags(&doc), vec!["billing", "system"]);
+    }
+
+    #[test]
+    fn snowflake_fields_use_the_shared_decimal_schema() {
+        let mut document = json!({
+            "components": {
+                "schemas": {
+                    "TenantView": {
+                        "properties": {
+                            "id": { "type": "string" },
+                            "tenant_id": { "type": "string" },
+                            "provider_event_id": { "type": "string" },
+                            "role_ids": { "type": "array", "items": { "type": "string" } }
+                        }
+                    }
+                }
+            }
+        });
+        annotate_snowflake_ids(&mut document);
+        let properties = &document["components"]["schemas"]["TenantView"]["properties"];
+        assert_eq!(properties["id"]["format"], "snowflake-id");
+        assert_eq!(properties["tenant_id"]["pattern"], "^[1-9][0-9]{0,18}$");
+        assert_eq!(properties["role_ids"]["items"]["format"], "snowflake-id");
+        assert_eq!(
+            properties["provider_event_id"]["format"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]

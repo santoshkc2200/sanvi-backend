@@ -15,9 +15,9 @@ use actix_web::{
     dev::{ServiceRequest, ServiceResponse},
     http::header,
 };
+use sanvi_kernel::{RoleId, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use sanvi_kernel::{RoleId, TenantId, UserId};
 
 use crate::error::ApiError;
 use crate::middleware::RequestId;
@@ -26,15 +26,15 @@ use crate::middleware::RequestId;
 /// assurance level.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Subject {
-    #[schema(value_type = String)]
+    #[schema(value_type = crate::openapi::SnowflakeId)]
     pub user_id: UserId,
     pub session_id: String,
     pub aal: String,
     pub methods: Vec<String>,
     /// Roles held in the *current* tenant (empty on platform routes).
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<crate::openapi::SnowflakeId>)]
     pub tenant_id: Option<TenantId>,
-    #[schema(value_type = Vec<String>)]
+    #[schema(value_type = Vec<crate::openapi::SnowflakeId>)]
     pub role_ids: Vec<RoleId>,
     /// When the session was (re)authenticated — the freshness clock for
     /// the fresh-MFA requirement.
