@@ -1130,18 +1130,30 @@ paths:
           pattern: ^[1-9][0-9]{0,18}$
           type: string
       responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversionEvent'
+          description: Conversion event re-queued for upload
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission
-        '501':
+        '404':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Conversion upload retry is not implemented yet
+          description: Conversion not found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Conversion retry refused
       tags:
       - advertising
   /api/v1/tenant/ads/creatives:

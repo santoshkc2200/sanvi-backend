@@ -291,6 +291,14 @@ pub trait ConversionEventRepository: Send + Sync {
         tenant_id: TenantId,
         id: ConversionId,
     ) -> Result<Option<super::model::ConversionEvent>, AdvertisingError>;
+
+    async fn update_upload_states(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        id: ConversionId,
+        upload_states: BTreeMap<super::model::PlatformKey, super::model::UploadState>,
+    ) -> Result<(), AdvertisingError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -12,13 +12,46 @@ use chrono::Utc;
 use sanvi_kernel::TenantId;
 use sanvi_persistence::{ScopedTx, TxManager};
 
-use sanvi_privacy::domain::{DirectiveResolver, DirectiveState, ProcessingPurpose, SubjectRef};
+use sanvi_privacy::domain::{
+    DirectiveResolver, DirectiveState, ProcessingPurpose, SubjectKind, SubjectRef,
+};
 
 use crate::domain::{
     AdvertisingError, ClickIds, ConsentSnapshot, ConversionEvent, ConversionEventRepository, Money,
-    PaymentLookupPort, PlatformKey, ValueSource, VendorRole, VendorRolePort,
+    PaymentLookupPort, PlatformKey, SubjectKeyRef, ValueSource, VendorRole, VendorRolePort,
     hashing::{hash_email, hash_phone},
 };
+
+/// Extracts the non-PII key material a later withdrawal re-check needs to
+/// rebuild this exact `SubjectRef` — never the raw email a `Contact`
+/// subject carries in its `identifiers` (TASK-014 forbids persisting that
+/// here). A missing identifier for the expected kind is a resolver
+/// contract violation, not a value to guess at, so it also falls back to
+/// `Contact` (refuse-on-retry) rather than fabricate a key.
+fn subject_key_ref(subject: &SubjectRef) -> SubjectKeyRef {
+    let find = |id_type: &str| {
+        subject
+            .identifiers
+            .iter()
+            .find(|identifier| identifier.id_type == id_type)
+            .map(|identifier| identifier.value.clone())
+    };
+    match subject.kind {
+        SubjectKind::Device => match find("device_ref") {
+            Some(device_ref) => SubjectKeyRef::TenantDevice { device_ref },
+            None => SubjectKeyRef::Contact,
+        },
+        SubjectKind::EndUser => match find("external_id") {
+            Some(external_id) => SubjectKeyRef::EndUser { external_id },
+            None => SubjectKeyRef::Contact,
+        },
+        SubjectKind::TenantUser => match find("user_id").and_then(|v| v.parse::<i64>().ok()) {
+            Some(user_id) => SubjectKeyRef::TenantUser { user_id },
+            None => SubjectKeyRef::Contact,
+        },
+        SubjectKind::Contact => SubjectKeyRef::Contact,
+    }
+}
 
 /// Versions this gate's own purpose-mapping logic (which purposes a
 /// platform's sub-processor role requires), not the phase-05 resolver
@@ -153,6 +186,7 @@ impl CaptureConversion {
             hashed_identifiers.insert("phone".to_string(), hash_phone(phone));
         }
 
+        let subject_key = subject_key_ref(&command.subject);
         let (value, value_source, payment_event_id) = self.resolve_value(scope, &command).await?;
         let event_id = payment_event_id.clone().unwrap_or(command.event_id.clone());
         let dedupe_key = conversion_dedupe_key(
@@ -176,6 +210,7 @@ impl CaptureConversion {
             hashed_identifiers,
             consent,
             upload_states: BTreeMap::new(),
+            subject_key,
         })
     }
 

@@ -289,15 +289,32 @@ pub enum ValueSource {
 /// `ConsentSnapshot` already carries which purpose was denied and by which
 /// signal source. Duplicating that here would give suppression two homes
 /// that can disagree.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UploadState {
-    #[default]
-    Pending,
-    Uploaded,
+    Pending {
+        #[serde(default)]
+        attempt_count: u32,
+    },
+    Uploaded {
+        #[serde(default)]
+        attempt_count: u32,
+    },
     Failed {
         reason: String,
+        #[serde(default)]
+        attempt_count: u32,
     },
+    Parked {
+        reason: String,
+        attempts: u32,
+    },
+}
+
+impl Default for UploadState {
+    fn default() -> Self {
+        Self::Pending { attempt_count: 0 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -305,6 +322,32 @@ pub struct UploadReceipt {
     pub platform: PlatformKey,
     pub external_id: String,
     pub uploaded_at: DateTime<Utc>,
+}
+
+/// Enough of the capturing subject's identity to rebuild the exact
+/// `SubjectRef` a later withdrawal re-check must query — without ever
+/// persisting the raw email/phone TASK-014 forbids in this context. A
+/// device ref, a tenant's own customer ref, and a platform user id are not
+/// themselves the raw PII that rule targets, so they are stored verbatim;
+/// an email-identified (`Contact`) subject stores nothing reconstructable,
+/// and the retry path refuses rather than re-deriving a directive answer
+/// against the wrong subject.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SubjectKeyRef {
+    TenantDevice {
+        device_ref: String,
+    },
+    EndUser {
+        external_id: String,
+    },
+    TenantUser {
+        user_id: i64,
+    },
+    /// Captured under an email-identified subject. No key material is
+    /// stored; a later withdrawal re-check has nothing safe to query and
+    /// must refuse rather than guess.
+    Contact,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -329,6 +372,12 @@ pub struct ConversionEvent {
     pub consent: ConsentSnapshot,
     #[serde(default)]
     pub upload_states: BTreeMap<PlatformKey, UploadState>,
+    #[serde(default = "default_subject_key")]
+    pub subject_key: SubjectKeyRef,
+}
+
+fn default_subject_key() -> SubjectKeyRef {
+    SubjectKeyRef::Contact
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

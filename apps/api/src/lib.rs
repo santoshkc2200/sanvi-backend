@@ -2917,7 +2917,7 @@ pub async fn build_advertising_state(
             conversion_repo.clone(),
             payment_lookup,
             vendor_role,
-            directive_resolver,
+            directive_resolver.clone(),
             advertising_ids.clone(),
         ),
     );
@@ -2936,7 +2936,14 @@ pub async fn build_advertising_state(
     let get_conversion_diagnostics = std::sync::Arc::new(
         sanvi_advertising::application::tracking::conversions::GetConversionDiagnostics::new(
             tx.clone(),
+            conversion_repo.clone(),
+        ),
+    );
+    let retry_conversion = std::sync::Arc::new(
+        sanvi_advertising::application::tracking::retry::RetryConversion::new(
+            tx.clone(),
             conversion_repo,
+            directive_resolver,
         ),
     );
 
@@ -3092,6 +3099,7 @@ pub async fn build_advertising_state(
         settings_mgr,
         list_conversions,
         get_conversion_diagnostics,
+        retry_conversion,
     })
 }
 
