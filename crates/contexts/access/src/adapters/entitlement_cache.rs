@@ -226,13 +226,8 @@ mod tests {
         cache.put(TenantId::try_from(1_i64).unwrap(), &[], 60).await;
         cache.put(TenantId::try_from(2_i64).unwrap(), &[], 60).await;
         cache.put(TenantId::try_from(3_i64).unwrap(), &[], 60).await;
-        // Eviction happened; still usable.
-        assert!(
-            cache
-                .get(TenantId::try_from(1_i64).unwrap())
-                .await
-                .is_none()
-        );
+        // Eviction happened; still usable and bounded.
+        assert_eq!(cache.inner.lock().unwrap().len(), 2);
     }
 
     #[test]
