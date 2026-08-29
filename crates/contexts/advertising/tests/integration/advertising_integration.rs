@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Duration, Months, Utc};
-use sanvi_advertising::domain::{CampaignId, ConnectionId, ConversionId, CreativeId};
+use sanvi_advertising::domain::{ConnectionId, CreativeId};
 use sanvi_advertising::{
     AdvertisingConnection, AdvertisingConnectionRepository, OAuthStateClaims, OAuthStateError,
     OAuthStateManager, OAuthStateStore, PlatformKey, SecretRef, SyncError,

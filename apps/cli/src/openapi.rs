@@ -83,11 +83,15 @@ fn annotate_value(value: &mut serde_json::Value, snowflake_schema: &serde_json::
         .and_then(serde_json::Value::as_array_mut)
     {
         for parameter in parameters {
-            let name = parameter.get("name").and_then(serde_json::Value::as_str);
-            if name.is_some_and(is_snowflake_field) {
-                if let Some(schema) = parameter.get_mut("schema") {
-                    *schema = snowflake_schema.clone();
-                }
+            let is_snowflake = parameter
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(is_snowflake_field);
+            if !is_snowflake {
+                continue;
+            }
+            if let Some(schema) = parameter.get_mut("schema") {
+                *schema = snowflake_schema.clone();
             }
         }
     }

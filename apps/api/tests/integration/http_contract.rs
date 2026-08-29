@@ -6,8 +6,9 @@
 
 use actix_web::{http::StatusCode, test};
 use sanvi_api::{
-    AccessEntitlementAdmin, AppConfig, TenantCatalogAdapter, build_access_state, build_app,
-    build_audit_state, build_identity_state, build_platform_admin_state, build_system_state,
+    AccessEntitlementAdmin, AppConfig, IdentityDependencies, PlatformAdminDependencies,
+    TenantCatalogAdapter, build_access_state, build_app, build_audit_state, build_identity_state,
+    build_platform_admin_state, build_system_state,
 };
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
@@ -71,9 +72,11 @@ fn test_app() -> actix_web::App<
         &config.identity,
         &config.ory.kratos_public_url,
         &config.ory.kratos_admin_url,
-        role_catalog,
-        tenant_catalog,
-        None,
+        IdentityDependencies {
+            role_catalog,
+            tenant_catalog,
+            notification_localizer: None,
+        },
     );
     let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);
     let access = build_access_state(
@@ -99,12 +102,16 @@ fn test_app() -> actix_web::App<
         pool.clone(),
         ids,
         &config.platform_admin,
-        std::sync::Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
-        identity.memberships.clone(),
-        std::sync::Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
-        entitlement_admin,
-        audit.writer.clone(),
-        std::sync::Arc::new(sanvi_platform_admin::adapters::NoopPrivacyLock),
+        PlatformAdminDependencies {
+            tenants: std::sync::Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+            memberships: identity.memberships.clone(),
+            entitlements: std::sync::Arc::new(
+                sanvi_access::adapters::SqlxEntitlementRepository::new(),
+            ),
+            entitlement_admin,
+            audit_writer: audit.writer.clone(),
+            privacy_lock: std::sync::Arc::new(sanvi_platform_admin::adapters::NoopPrivacyLock),
+        },
     );
 
     build_app(

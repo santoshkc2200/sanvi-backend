@@ -690,25 +690,6 @@ fn load_config() -> anyhow::Result<WorkerConfig> {
     Ok(config)
 }
 
-#[cfg(test)]
-mod config_tests {
-    use sanvi_kernel::IdsConfig;
-
-    #[test]
-    fn staging_requires_an_explicit_node_id() {
-        let err = IdsConfig::default().resolve("staging", 2).unwrap_err();
-
-        assert!(err.to_string().contains("staging"));
-    }
-
-    #[test]
-    fn local_worker_uses_reserved_node_two_when_unset() {
-        let node = IdsConfig::default().resolve("local", 2).unwrap();
-
-        assert_eq!(node.get(), 2);
-    }
-}
-
 #[tokio::main]
 async fn main() -> ExitCode {
     let config = match load_config() {
@@ -2378,4 +2359,23 @@ async fn main() -> ExitCode {
 
     telemetry_guard.shutdown();
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod config_tests {
+    use sanvi_kernel::IdsConfig;
+
+    #[test]
+    fn staging_requires_an_explicit_node_id() {
+        let err = IdsConfig::default().resolve("staging", 2).unwrap_err();
+
+        assert!(err.to_string().contains("staging"));
+    }
+
+    #[test]
+    fn local_worker_uses_reserved_node_two_when_unset() {
+        let node = IdsConfig::default().resolve("local", 2).unwrap();
+
+        assert_eq!(node.get(), 2);
+    }
 }

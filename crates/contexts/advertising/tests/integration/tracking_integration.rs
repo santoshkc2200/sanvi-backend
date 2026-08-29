@@ -40,13 +40,12 @@ use sanvi_advertising::domain::{
     ClickIds, Money, OAuthStateManager, PaymentLookup, PaymentLookupPort, PlatformKey, TokenVault,
     VendorRole, VendorRolePort,
 };
-use sanvi_kernel::{TenantId, UserId};
+use sanvi_kernel::TenantId;
 use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
 use sanvi_privacy::domain::{
     DirectiveResolver, DirectiveSnapshot, DirectiveSource, DirectiveState, JurisdictionRef,
     PrivacyError, ProcessingPurpose, PurposeDirective, SubjectRef,
 };
-use uuid::Uuid;
 
 async fn seed_tenant(pool: &sanvi_persistence::PgPool, slug: &str) -> TenantId {
     let tenant_id =

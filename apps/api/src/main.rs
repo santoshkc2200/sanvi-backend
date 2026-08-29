@@ -16,11 +16,11 @@ use figment::{
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsGuideTranslatorAdapter, DomainsTenantLookupAdapter,
-    FallbackGuideTranslator, TenantCatalogAdapter, build_access_state, build_advertising_state,
-    build_app, build_audit_state, build_billing_state, build_domains_lookup, build_domains_state,
-    build_identity_state, build_localization_state, build_payments_state,
-    build_platform_admin_state, build_privacy_state, build_system_state, build_tenancy_state,
-    build_theming_state,
+    FallbackGuideTranslator, IdentityDependencies, PlatformAdminDependencies, TenantCatalogAdapter,
+    build_access_state, build_advertising_state, build_app, build_audit_state, build_billing_state,
+    build_domains_lookup, build_domains_state, build_identity_state, build_localization_state,
+    build_payments_state, build_platform_admin_state, build_privacy_state, build_system_state,
+    build_tenancy_state, build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
@@ -183,9 +183,11 @@ async fn main() -> ExitCode {
         &config.identity,
         &config.ory.kratos_public_url,
         &config.ory.kratos_admin_url,
-        role_catalog,
-        tenant_catalog,
-        notification_localizer.clone(),
+        IdentityDependencies {
+            role_catalog,
+            tenant_catalog,
+            notification_localizer: notification_localizer.clone(),
+        },
     );
 
     // The audit writer/reader are shared by the access and platform_admin
@@ -238,12 +240,14 @@ async fn main() -> ExitCode {
         pool.clone(),
         ids.clone(),
         &config.platform_admin,
-        Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
-        identity.memberships.clone(),
-        Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
-        entitlement_admin,
-        audit.writer.clone(),
-        privacy_lock.clone(),
+        PlatformAdminDependencies {
+            tenants: Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+            memberships: identity.memberships.clone(),
+            entitlements: Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
+            entitlement_admin,
+            audit_writer: audit.writer.clone(),
+            privacy_lock: privacy_lock.clone(),
+        },
     );
 
     // Phase 04: the billing context consumes the access context's

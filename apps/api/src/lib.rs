@@ -481,6 +481,13 @@ impl Notifications for LocalizedIdentityNotifications {
     }
 }
 
+/// External repository, catalog, and localizer dependencies for identity state.
+pub struct IdentityDependencies {
+    pub role_catalog: Arc<dyn RoleCatalog>,
+    pub tenant_catalog: Arc<dyn TenantCatalog>,
+    pub notification_localizer: Option<Arc<NotificationLocalizer>>,
+}
+
 /// Build the identity context's application state.
 pub fn build_identity_state(
     pool: sanvi_persistence::PgPool,
@@ -489,9 +496,7 @@ pub fn build_identity_state(
     config: &IdentityConfig,
     kratos_public_url: &str,
     kratos_admin_url: &str,
-    role_catalog: Arc<dyn RoleCatalog>,
-    tenant_catalog: Arc<dyn TenantCatalog>,
-    notification_localizer: Option<Arc<NotificationLocalizer>>,
+    deps: IdentityDependencies,
 ) -> IdentityWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let users: Arc<dyn UserRepository> = Arc::new(SqlxUserRepository::new());
@@ -500,12 +505,13 @@ pub fn build_identity_state(
     let invitations: Arc<dyn InvitationRepository> = Arc::new(SqlxInvitationRepository::new());
     let link_intents: Arc<dyn LinkIntentRepository> = Arc::new(SqlxLinkIntentRepository::new());
     let events: Arc<dyn EventPublisher> = Arc::new(IdentityEventPublisher::new(ids.clone()));
-    let notifications: Arc<dyn Notifications> = match notification_localizer {
+    let notifications: Arc<dyn Notifications> = match deps.notification_localizer {
         Some(localizer) => Arc::new(LocalizedIdentityNotifications { localizer }),
         None => Arc::new(LoggingNotifications::new()),
     };
     let ids: Arc<dyn sanvi_identity::domain::IdGenerator> = Arc::new(SystemIdGenerator::new(ids));
     let clock: Arc<dyn sanvi_identity::domain::Clock> = Arc::new(SystemClock);
+    let role_catalog = deps.role_catalog;
     let kratos: Arc<dyn KratosClient> = Arc::new(
         HttpKratosClient::new(
             kratos_public_url.to_string(),
@@ -551,7 +557,7 @@ pub fn build_identity_state(
             users.clone(),
             memberships.clone(),
             role_catalog.clone(),
-            tenant_catalog,
+            deps.tenant_catalog,
         )),
         list_sessions: Arc::new(ListSessions::new(kratos.clone())),
         revoke_session: Arc::new(RevokeSession::new(
@@ -1176,6 +1182,16 @@ pub struct PlatformAdminWiring {
     pub approval_gate: Arc<dyn ApprovalGate>,
 }
 
+/// External repository and adapter dependencies for platform admin state.
+pub struct PlatformAdminDependencies {
+    pub tenants: Arc<dyn TenantRepository>,
+    pub memberships: Arc<dyn MembershipRepository>,
+    pub entitlements: Arc<dyn EntitlementRepository>,
+    pub entitlement_admin: Arc<dyn EntitlementAdmin>,
+    pub audit_writer: Arc<dyn AuditWriter>,
+    pub privacy_lock: Arc<dyn PrivacyLock>,
+}
+
 /// Build the platform_admin context's application state. `entitlement_admin`
 /// is the composition root's adapter over the access context's use cases;
 /// the returned `approval_gate` is the same adapter the access context's
@@ -1184,12 +1200,7 @@ pub fn build_platform_admin_state(
     pool: sanvi_persistence::PgPool,
     ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &PlatformAdminConfig,
-    tenants: Arc<dyn TenantRepository>,
-    memberships: Arc<dyn MembershipRepository>,
-    entitlements: Arc<dyn EntitlementRepository>,
-    entitlement_admin: Arc<dyn EntitlementAdmin>,
-    audit_writer: Arc<dyn AuditWriter>,
-    privacy_lock: Arc<dyn PrivacyLock>,
+    deps: PlatformAdminDependencies,
 ) -> PlatformAdminWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let grants: Arc<dyn ImpersonationGrantRepository> =
@@ -1201,9 +1212,9 @@ pub fn build_platform_admin_state(
     let ids: Arc<dyn PlatformAdminIdsTrait> = Arc::new(PlatformAdminIds::new(ids));
 
     let views: Arc<dyn TenantAdminViewRepository> = Arc::new(SqlxTenantAdminViewRepository::new(
-        tenants,
-        memberships.clone(),
-        entitlements,
+        deps.tenants,
+        deps.memberships.clone(),
+        deps.entitlements,
         grants.clone(),
         clock.clone(),
     ));
@@ -1211,12 +1222,12 @@ pub fn build_platform_admin_state(
     let create_impersonation = Arc::new(CreateImpersonation::new(
         tx_manager.clone(),
         grants.clone(),
-        memberships.clone(),
-        privacy_lock,
+        deps.memberships.clone(),
+        deps.privacy_lock,
         events.clone(),
         ids.clone(),
         clock.clone(),
-        audit_writer.clone(),
+        deps.audit_writer.clone(),
         config.impersonation_max_minutes,
     ));
     let list_impersonations = Arc::new(ListImpersonations::new(
@@ -1229,7 +1240,7 @@ pub fn build_platform_admin_state(
         grants.clone(),
         events.clone(),
         clock.clone(),
-        audit_writer.clone(),
+        deps.audit_writer.clone(),
     ));
 
     let record_approval = Arc::new(RecordApprovalRequest::new(
@@ -1240,14 +1251,14 @@ pub fn build_platform_admin_state(
     let decide = Arc::new(DecideApproval::new(
         tx_manager.clone(),
         approvals.clone(),
-        entitlement_admin.clone(),
+        deps.entitlement_admin.clone(),
         clock.clone(),
-        audit_writer.clone(),
+        deps.audit_writer.clone(),
     ));
 
     let verifier = Arc::new(SqlxImpersonationVerifier::new(
         grants.clone(),
-        memberships,
+        deps.memberships,
         tx_manager.clone(),
         clock,
     ));
@@ -1262,7 +1273,7 @@ pub fn build_platform_admin_state(
         create_impersonation,
         list_impersonations,
         revoke_impersonation,
-        entitlements: entitlement_admin,
+        entitlements: deps.entitlement_admin,
         list_approvals: Arc::new(ListPendingApprovals::new(
             tx_manager.clone(),
             approvals.clone(),
@@ -1272,7 +1283,7 @@ pub fn build_platform_admin_state(
         fees: Some(Arc::new(
             sanvi_platform_admin::adapters::SqlxFeeRepository::new(
                 tx_manager.clone(),
-                audit_writer,
+                deps.audit_writer,
             ),
         )),
     };
