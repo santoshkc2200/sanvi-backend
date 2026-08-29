@@ -1,7 +1,9 @@
 # TASK-015: 10.6 Conversion upload, dedupe & diagnostics
 
 **Phase:** 10
-**Status:** in-progress
+**Status:** 🟡 partial — every item below is code-complete against the fake adapter; the one
+open gap is the real Google Ads/Meta `ConversionSinkPort` implementations, blocked on live
+platform credentials (same blocker as 10.2/10.3 — see `../phase-10-advertising/implementation-plan.md`).
 **Requirement(s):** FR-1010, FR-1011, NFR-1001, NFR-1002
 **Depends on:** TASK-014
 **Created:** 2026-08-20
@@ -28,7 +30,7 @@ causes a tenant can fix from the ones they must respect.
 
 ## What to do
 
-- [ ] **Contract** — `GET /ads/conversions` gains its upload columns (per-platform state, attempt
+- [x] **Contract** — `GET /ads/conversions` gains its upload columns (per-platform state, attempt
       count, last error, dedupe outcome, suppression reason);
       `GET /ads/conversions/{id}/diagnostics` returns the full per-event story — captured at, click ids
       present/absent, value source, directive snapshot, and each platform's attempt history with the
@@ -37,15 +39,17 @@ causes a tenant can fix from the ones they must respect.
       hashes; raw customer data appears nowhere.
 - [ ] **`ConversionSinkPort` implementations** — Google Ads offline/enhanced conversions and Meta
       Conversions API. Both take the `ConsentSnapshot` as a **required argument** (TASK-009's gate makes
-      the alternative uncompilable) and both send hashed identifiers only.
-- [ ] **Upload workers** — batched per platform to the platform's preferred batch size, exponential
+      the alternative uncompilable) and both send hashed identifiers only. **Open:** only the fake
+      adapter exists (`FakeConversionSink`); blocked on live Google Ads/Meta credentials, same as the
+      10.2/10.3 OAuth and campaign adapters.
+- [x] **Upload workers** — batched per platform to the platform's preferred batch size, exponential
       backoff with jitter. Distinguish permanent failures (bad identifier format, unknown conversion
       action, revoked token) from transient ones: permanent failures stop retrying and surface,
       transient ones retry to a bounded ceiling and then park in a DLQ.
-- [ ] **Withdrawal re-check** — before each attempt, confirm the directive still permits. A withdrawal
+- [x] **Withdrawal re-check** — before each attempt, confirm the directive still permits. A withdrawal
       between capture and upload stops the upload and records `suppressed_late` with the source, which
       is a different diagnostic message from suppressed at capture.
-- [ ] **Per-platform upload state** — an event succeeds on Google and fails on Meta independently.
+- [x] **Per-platform upload state** — an event succeeds on Google and fails on Meta independently.
       State is per platform, never a single boolean, or a partial success reports as total failure.
 - [x] **Audience sync** — customer-list build and refresh requiring `sale_or_share` **and**
       `targeted_advertising` per subject. Opted-out subjects are excluded from a new list and **removed
@@ -53,9 +57,9 @@ causes a tenant can fix from the ones they must respect.
 - [x] **Retraction propagation** — a withdrawal or opt-out after upload triggers a deletion/suppression
       request to each platform that supports one, recorded with its outcome. Where a platform offers no
       such API, the failure to propagate is recorded **explicitly** rather than silently accepted.
-- [ ] **Diagnostics projection** — a read model assembling capture, gate, and attempt history per event
+- [x] **Diagnostics projection** — a read model assembling capture, gate, and attempt history per event
       without a fan-out of queries per row.
-- [ ] **Manual retry** — for parked events only, permission-gated, idempotent, and audited. It
+- [x] **Manual retry** — for parked events only, permission-gated, idempotent, and audited. It
       re-checks the directive like any other attempt.
 - [x] **Observability** — `conversion_upload_total{platform,result}`,
       `conversion_suppressed_total{reason,source}`, `conversion_upload_lag_seconds`, DLQ depth

@@ -1,6 +1,7 @@
 # Phase 10 — Advertising & Campaign Management (backend)
 
-**Version:** 0.11.0 · **Status:** in progress — slices 10.0–10.3 shipped against the fake adapter
+**Version:** 0.11.0 · **Status:** in progress — slices 10.0–10.6 shipped against the fake adapter;
+see § 2 for the one open gap common to 10.2–10.6 (live platform credentials)
 **Depends on:** 01, 02, 03 (entitlements), 05 (directives, envelope crypto), 06, 08 (tenant domains),
 09 (revenue) · **Unlocks:** tenants running and measuring paid acquisition inside Sanvi
 
@@ -19,7 +20,12 @@ The platform abstraction must make the third and fourth ad network **an adapter,
 
 ## 2. Progress
 
-Verified 2026-08-25 against the working tree (`cargo test -p sanvi-advertising --lib`: 38 passed).
+Verified 2026-08-30 against the working tree and `docs/tasks/backlog.md` (the authoritative
+per-task status — this table summarizes it; the two are kept in sync but check the backlog row
+directly if they ever drift). 10.6's row below was verified directly this session (build, full
+`sanvi-advertising` test suite via `scripts/test.sh -p sanvi-advertising`, clippy, fmt, and
+`check-openapi.sh`, all clean on `main` at `508db37`). 10.4/10.5's entries are carried over from
+their own `TASK-01{3,4}` status lines, not independently re-verified this session.
 
 | Slice | Task | Status | Shipped | Open |
 |---|---|---|---|---|
@@ -27,17 +33,18 @@ Verified 2026-08-25 against the working tree (`cargo test -p sanvi-advertising -
 | 10.1 domain & capability matrix | TASK-010 | ✅ code complete | `domain/{model,matrix,validation,ports,events}.rs`; `AdPlatformPort` (auth, accounts, campaign CRUD, pause/resume/delete, `fetch_metrics`, `upload`); `FakeAdPlatform` + `fixtures/capability-matrices.json` exported for `sanvi-frontend`; outbox event round-trip test green; `GET /ads/platforms` catalog | — |
 | 10.2 connections & OAuth | TASK-011 | 🟡 partial | signed-state OAuth start/callback (forgery, expiry, replay, cross-tenant redemption all rejected); per-tenant encrypted refresh tokens; refresh scheduler + expiry; pending/reconnect lifecycle; `FreshAal2Required` step-up on connect/disconnect; health derived from each adapter's `required_scopes` | **real Google & Meta OAuth adapters and live `list_accounts`** — blocked on Google developer-token approval and Meta app review |
 | 10.3 campaigns, Google adapter & drift | TASK-012 | 🟡 partial | campaign intent snapshots; optimistic revisions (`409` on stale); mutation change log; draft/validate/publish/patch/pause/resume + ad-groups/ads; drift detection with `KeepTheirs`/`ReapplyOurs`; nightly cross-tenant `ReconcileDueCampaigns` sweep in `apps/worker` (drift-only, never writes back); `RateLimitedAdapter` per-connection + platform-wide quota queue in api and worker | **real Google Ads adapter**; review-status polling (needs the real adapter to mean anything) |
-| 10.4 Meta adapter & creatives | TASK-013 | ⬜ todo | — | blocked on 10.3 |
-| 10.5 conversion capture & directive gate | TASK-014 | ⬜ todo | — | unblocked by 10.2 — **next available slice** |
-| 10.6 upload, dedupe & diagnostics | TASK-015 | ⬜ todo | — | blocked on 10.5 |
+| 10.4 Meta adapter & creatives | TASK-013 | 🟡 partial | creative CRUD (contract, `CreativeRepository`, `application::creatives`, HTTP), upload-time spec/text validation, broadened Meta capability matrix, per-platform rate-limit budgets, Meta drift test | **real Meta Marketing API adapter** — blocked on Meta app review, same as 10.2/10.3's Google adapter; campaign-budget-optimization `BudgetType` variant |
+| 10.5 conversion capture & directive gate | TASK-014 | 🟡 partial | directive-gated capture, `PaymentLookupPort`-derived conversion id, immutable order/name dedupe, click-id capture with Referer redaction | Docker-backed integration/CI verification of the latest review-hardening revision; mounting `/public/track` on the tenant's own phase-08 domain (deferred, needs frontend/infra coordination) |
+| 10.6 upload, dedupe & diagnostics | TASK-015 | 🟡 partial | upload sweep with per-platform state, withdrawal re-check (`suppressed_late`), DLQ after 5 attempts; `RetractWithdrawnConversions` (post-upload retraction, explicit `Unpropagated{reason}` when a platform can't remove a member); `SyncAudiences` + `/ads/audiences` CRUD/refresh (dual-consent `sale_or_share` **and** `targeted_advertising`, opted-out subjects actively removed from existing lists); diagnostics projection + manual retry; full `AdvertisingMetrics` coverage across all four sweeps | **real Google/Meta `ConversionSinkPort`/`AudienceSyncPort` implementations** — blocked on live credentials, same as 10.2/10.3/10.4 |
 | 10.7 metrics, rollups & ROAS | TASK-016 | ⬜ todo | — | blocked on 10.3 |
 | 10.8 budget guardrails & alerts | TASK-017 | ⬜ todo | — | blocked on 10.7 |
 | 10.9 privacy, hardening & release | TASK-018 | ⬜ todo | — | blocked on 10.4, 10.6, 10.8 |
 
-**Critical path note.** Both remaining 10.2/10.3 gaps are the same external blocker: no live platform
-credentials. The fake adapter carries the abstraction until they land, exactly as the cross-track plan
-intends. Do **not** idle on the queue — 10.5 depends only on 10.2's connection lifecycle and the
-phase-05 resolver, so conversion capture proceeds in parallel.
+**Critical path note.** Every remaining gap in 10.2 through 10.6 is the same external blocker: no
+live Google/Meta platform credentials. The fake adapter carries the abstraction until they land,
+exactly as the cross-track plan intends — 10.6 (this session) is proof the pattern scales to a
+fourth slice cleanly. 10.7 is now the next slice with no external blocker: it depends only on
+10.3's campaign tree, which is already in place.
 
 ## 3. Scope
 
