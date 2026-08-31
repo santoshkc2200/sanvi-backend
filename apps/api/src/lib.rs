@@ -3243,7 +3243,7 @@ pub fn build_domains_state(
             config.verification_timeout_hours,
             config.verification_backoff_base_secs,
         )),
-        list_domains: Arc::new(ListCustomDomains::new(domains.clone())),
+        list_domains: Arc::new(ListCustomDomains::new(domains.clone(), certs.clone())),
         list_orders: Arc::new(ListDomainOrders::new(orders.clone())),
         instructions: Arc::new(GetDomainInstructions::new(
             domains.clone(),

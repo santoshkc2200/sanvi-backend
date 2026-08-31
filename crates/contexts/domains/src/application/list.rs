@@ -4,15 +4,22 @@ use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
 use crate::application::views::{CustomDomainView, OrderView};
-use crate::domain::{CustomDomainRepository, DomainOrderRepository, DomainsError};
+use crate::domain::{
+    CertificateRepository, CertificateStatus, CustomDomainRepository, DomainOrderRepository,
+    DomainsError,
+};
 
 pub struct ListCustomDomains {
     domains: Arc<dyn CustomDomainRepository>,
+    certs: Arc<dyn CertificateRepository>,
 }
 
 impl ListCustomDomains {
-    pub fn new(domains: Arc<dyn CustomDomainRepository>) -> Self {
-        Self { domains }
+    pub fn new(
+        domains: Arc<dyn CustomDomainRepository>,
+        certs: Arc<dyn CertificateRepository>,
+    ) -> Self {
+        Self { domains, certs }
     }
 
     pub async fn execute(
@@ -21,7 +28,19 @@ impl ListCustomDomains {
         tenant_id: TenantId,
     ) -> Result<Vec<CustomDomainView>, DomainsError> {
         let domains = self.domains.list(scope, tenant_id).await?;
-        Ok(domains.iter().map(CustomDomainView::of).collect())
+        let mut views = Vec::with_capacity(domains.len());
+        for domain in &domains {
+            let mut view = CustomDomainView::of(domain);
+            let cert = self
+                .certs
+                .find_for_domain(scope, tenant_id, domain.id)
+                .await?;
+            view.cert_expires_at = cert
+                .filter(|cert| cert.status == CertificateStatus::Active)
+                .map(|cert| cert.not_after);
+            views.push(view);
+        }
+        Ok(views)
     }
 }
 

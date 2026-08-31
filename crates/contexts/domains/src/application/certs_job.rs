@@ -116,6 +116,7 @@ impl RunCertIssuanceSweep {
                     domain.failure = Some(crate::domain::DomainFailure {
                         code: "cert_issuance_failed".to_string(),
                         detail: err.to_string(),
+                        ..Default::default()
                     });
                     self.persist_domain(&domain).await?;
                     report.failures += 1;

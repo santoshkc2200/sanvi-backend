@@ -42,6 +42,9 @@ pub struct CustomDomainView {
     pub verified_at: Option<DateTime<Utc>>,
     pub challenge: Option<ChallengeView>,
     pub failure: Option<DomainFailure>,
+    /// The active certificate's expiry, when one has been issued. `None`
+    /// while the domain has no active cert (not yet issued, or removed).
+    pub cert_expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -61,6 +64,7 @@ impl CustomDomainView {
                 .as_ref()
                 .map(|challenge| ChallengeView::of(challenge, &domain.hostname)),
             failure: domain.failure.clone(),
+            cert_expires_at: None,
             created_at: domain.created_at,
             updated_at: domain.updated_at,
         }

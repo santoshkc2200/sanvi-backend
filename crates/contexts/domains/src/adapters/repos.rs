@@ -80,12 +80,29 @@ fn domain_from_row(row: CustomDomainRow) -> Result<CustomDomain, DomainsError> {
         _ => None,
     };
     let failure = match (row.failure_code, row.failure_detail) {
-        (Some(code), detail) => Some(DomainFailure {
-            code,
-            detail: detail
-                .and_then(|value| value.as_str().map(str::to_string))
-                .unwrap_or_default(),
-        }),
+        (Some(code), detail) => {
+            let (detail, txt_ok, routing_ok) = match detail {
+                // Current shape: `{"detail": ..., "txt_ok": ..., "routing_ok": ...}`.
+                Some(serde_json::Value::Object(map)) => (
+                    map.get("detail")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    map.get("txt_ok").and_then(|value| value.as_bool()),
+                    map.get("routing_ok").and_then(|value| value.as_bool()),
+                ),
+                // Legacy shape (rows written before this field existed): a
+                // bare JSON string holding just the detail text.
+                Some(serde_json::Value::String(detail)) => (detail, None, None),
+                _ => (String::new(), None, None),
+            };
+            Some(DomainFailure {
+                code,
+                detail,
+                txt_ok,
+                routing_ok,
+            })
+        }
         _ => None,
     };
     Ok(CustomDomain {
@@ -141,7 +158,13 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
             domain
                 .failure
                 .as_ref()
-                .map(|f| serde_json::Value::String(f.detail.clone())),
+                .map(|f| {
+                    serde_json::json!({
+                        "detail": f.detail,
+                        "txt_ok": f.txt_ok,
+                        "routing_ok": f.routing_ok,
+                    })
+                }),
             domain.created_at,
             domain.updated_at,
         )
@@ -242,10 +265,13 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
             domain.next_check_at,
             domain.verification_attempts as i32,
             domain.failure.as_ref().map(|f| f.code.as_str()),
-            domain
-                .failure
-                .as_ref()
-                .map(|f| serde_json::Value::String(f.detail.clone())),
+            domain.failure.as_ref().map(|f| {
+                serde_json::json!({
+                    "detail": f.detail,
+                    "txt_ok": f.txt_ok,
+                    "routing_ok": f.routing_ok,
+                })
+            }),
             domain.updated_at,
             domain.tenant_id.as_i64(),
         )
@@ -283,10 +309,13 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
             domain.next_check_at,
             domain.verification_attempts as i32,
             domain.failure.as_ref().map(|f| f.code.as_str()),
-            domain
-                .failure
-                .as_ref()
-                .map(|f| serde_json::Value::String(f.detail.clone())),
+            domain.failure.as_ref().map(|f| {
+                serde_json::json!({
+                    "detail": f.detail,
+                    "txt_ok": f.txt_ok,
+                    "routing_ok": f.routing_ok,
+                })
+            }),
             domain.updated_at,
         )
         .execute(&mut **scope.tx_mut().as_inner())

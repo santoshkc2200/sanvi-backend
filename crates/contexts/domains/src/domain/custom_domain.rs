@@ -180,10 +180,18 @@ impl VerificationChallenge {
 }
 
 /// Why a domain failed or degraded, as a stable code plus free detail.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DomainFailure {
     pub code: String,
     pub detail: String,
+    /// The last verification attempt's independent TXT-ownership result.
+    /// `None` when this failure isn't a verification failure, or the check
+    /// didn't run that attempt (not "passed").
+    #[serde(default)]
+    pub txt_ok: Option<bool>,
+    /// Same as `txt_ok`, for the routing (CNAME/A) check.
+    #[serde(default)]
+    pub routing_ok: Option<bool>,
 }
 
 /// Failure codes — stable identifiers the UI maps to localized messages.
@@ -302,10 +310,13 @@ impl CustomDomain {
 
     /// A polling attempt ran and failed: stay `verifying`, record why, and
     /// schedule the next attempt with backoff.
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_verification_failed(
         &mut self,
         code: &str,
         detail: String,
+        txt_ok: Option<bool>,
+        routing_ok: Option<bool>,
         now: DateTime<Utc>,
         backoff_base_secs: u64,
         backoff_max_secs: u64,
@@ -320,6 +331,8 @@ impl CustomDomain {
         self.failure = Some(DomainFailure {
             code: code.to_string(),
             detail,
+            txt_ok,
+            routing_ok,
         });
         self.next_check_at = Some(
             now + Duration::seconds(verification_backoff(
@@ -368,6 +381,7 @@ impl CustomDomain {
         self.failure = Some(DomainFailure {
             code: code.to_string(),
             detail,
+            ..Default::default()
         });
         self.updated_at = now;
         Ok(())
@@ -387,6 +401,7 @@ impl CustomDomain {
         self.failure = Some(DomainFailure {
             code: code.to_string(),
             detail,
+            ..Default::default()
         });
         self.next_check_at = None;
         self.updated_at = now;
@@ -498,10 +513,21 @@ mod tests {
         let now = Utc::now();
         domain.start_verification(now).unwrap();
         domain
-            .mark_verification_failed("txt_missing", "no record".to_string(), now, 10, 300)
+            .mark_verification_failed(
+                "txt_missing",
+                "no record".to_string(),
+                Some(false),
+                Some(true),
+                now,
+                10,
+                300,
+            )
             .unwrap();
         assert_eq!(domain.verification_attempts, 1);
         assert!(domain.next_check_at.unwrap() > now);
+        let failure = domain.failure.as_ref().unwrap();
+        assert_eq!(failure.txt_ok, Some(false));
+        assert_eq!(failure.routing_ok, Some(true));
     }
 
     #[test]

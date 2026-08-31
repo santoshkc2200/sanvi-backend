@@ -169,8 +169,14 @@ impl RunVerificationSweep {
                         error = %err,
                         "DNS verification failed at the resolver layer; will retry"
                     );
-                    self.schedule_failure(domain, DomainErrorCode::TXT_MISSING, now)
-                        .await?;
+                    self.schedule_failure(
+                        domain,
+                        DomainErrorCode::TXT_MISSING,
+                        Some(false),
+                        None,
+                        now,
+                    )
+                    .await?;
                     report.failed = 1;
                     return Ok(report);
                 }
@@ -243,14 +249,26 @@ impl RunVerificationSweep {
                     report.verified = 1;
                 }
             }
-            (false, _) => {
-                self.schedule_failure(domain, DomainErrorCode::TXT_MISSING, now)
-                    .await?;
+            (false, routing_ok) => {
+                self.schedule_failure(
+                    domain,
+                    DomainErrorCode::TXT_MISSING,
+                    Some(false),
+                    Some(routing_ok),
+                    now,
+                )
+                .await?;
                 report.failed = 1;
             }
             (true, false) => {
-                self.schedule_failure(domain, DomainErrorCode::ROUTING_MISSING, now)
-                    .await?;
+                self.schedule_failure(
+                    domain,
+                    DomainErrorCode::ROUTING_MISSING,
+                    Some(true),
+                    Some(false),
+                    now,
+                )
+                .await?;
                 report.failed = 1;
             }
         }
@@ -278,11 +296,15 @@ impl RunVerificationSweep {
         &self,
         domain: &mut CustomDomain,
         code: &str,
+        txt_ok: Option<bool>,
+        routing_ok: Option<bool>,
         now: DateTime<Utc>,
     ) -> Result<(), DomainsError> {
         domain.mark_verification_failed(
             code,
             "DNS does not yet reflect the required records".to_string(),
+            txt_ok,
+            routing_ok,
             now,
             self.backoff_base_secs,
             self.backoff_max_secs,
