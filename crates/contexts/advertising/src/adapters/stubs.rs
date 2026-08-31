@@ -240,6 +240,17 @@ fn descriptor(
     }
 }
 
+/// Cheap, dependency-free deterministic hash for seeding
+/// [`FakeAdPlatform::fetch_metrics`]'s synthetic figures — not a
+/// cryptographic or collision-resistant hash, just a stable seed.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    bytes.iter().fold(OFFSET_BASIS, |hash, byte| {
+        (hash ^ *byte as u64).wrapping_mul(PRIME)
+    })
+}
+
 #[async_trait]
 impl AdPlatformPort for FakeAdPlatform {
     fn descriptor(&self) -> PlatformDescriptor {
@@ -405,20 +416,61 @@ impl AdPlatformPort for FakeAdPlatform {
         let campaigns = self.campaigns.lock().map_err(|_| {
             AdvertisingError::PlatformUnavailable("fake state lock poisoned".to_string())
         })?;
-        Ok(campaigns
-            .values()
-            .map(|campaign| MetricPoint {
-                campaign_id: campaign.id.clone(),
-                date: request.from.clone(),
-                impressions: 0,
-                clicks: 0,
-                spend: Money {
-                    amount_minor: 0,
-                    currency: campaign.budget.amount.currency.clone(),
-                },
-                conversions: 0,
-            })
-            .collect())
+        let from = chrono::NaiveDate::parse_from_str(&request.from, "%Y-%m-%d").map_err(|_| {
+            AdvertisingError::InvalidInput(
+                "fake ad platform: invalid metrics query from".to_string(),
+            )
+        })?;
+        let to = chrono::NaiveDate::parse_from_str(&request.to, "%Y-%m-%d").map_err(|_| {
+            AdvertisingError::InvalidInput("fake ad platform: invalid metrics query to".to_string())
+        })?;
+
+        let mut points = Vec::new();
+        let mut date = from;
+        let mut day_index: i64 = 0;
+        while date <= to {
+            for campaign in campaigns.values() {
+                // Deterministic, non-zero, per-campaign-per-day figures — no
+                // real reporting API to call while live credentials are
+                // blocked (same gap as every other adapter in this phase).
+                // Stable across runs so ingestion/rollup/ROAS tests can
+                // assert on it, and varied enough day-to-day and
+                // campaign-to-campaign to exercise idempotent restatement.
+                let seed = fnv1a(campaign.id.as_bytes())
+                    ^ (day_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let impressions = 1_000 + (seed % 5_000) as i64;
+                let clicks = 20 + (seed % 200) as i64;
+                let spend_minor = 5_000 + (seed % 50_000) as i64;
+                // Fractional on purpose: real platforms weight view-through
+                // and cross-device conversions rather than always reporting
+                // whole units, and `MetricPoint::conversions` is `f64` for
+                // exactly that reason.
+                let conversions = 1.0 + (seed % 1000) as f64 / 100.0;
+                let conversion_value_minor = spend_minor + (seed % 20_000) as i64;
+                let currency = campaign.budget.amount.currency.clone();
+                points.push(MetricPoint {
+                    campaign_id: campaign.id.clone(),
+                    date: date.format("%Y-%m-%d").to_string(),
+                    impressions,
+                    clicks,
+                    spend: Money {
+                        amount_minor: spend_minor,
+                        currency: currency.clone(),
+                    },
+                    conversions,
+                    conversion_value: Money {
+                        amount_minor: conversion_value_minor,
+                        currency,
+                    },
+                });
+            }
+            let Some(next) = date.succ_opt() else {
+                break;
+            };
+            date = next;
+            day_index += 1;
+        }
+        Ok(points)
     }
 
     async fn upload(

@@ -107,6 +107,17 @@ pub trait AdvertisingConnectionRepository: Send + Sync {
         tenant_id: TenantId,
         connection_id: ConnectionId,
     ) -> Result<Option<AdvertisingConnection>, AdvertisingError>;
+
+    /// Cross-tenant, oldest-`last_synced_at`-first: the metrics ingestion
+    /// sweep's feed (TASK-016). Staggers every connection through the
+    /// scheduler so one tenant's connections cannot starve another's.
+    /// Mirrors `CampaignRepository::list_published_due_for_reconciliation`'s
+    /// `PlatformScope` pattern exactly.
+    async fn list_due_for_metrics_ingestion(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,14 +185,25 @@ pub struct MetricQuery {
 
 /// A provider-normalized metrics row. Later reporting work may add dimensions without
 /// returning a request-shaped value from this port.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `spend` and `conversion_value` are always in the ad account's own currency
+/// (TASK-016, slice 10.7) — the platform's own attribution of conversions to
+/// this campaign, reported alongside (never blended with) Sanvi's own
+/// order-based revenue view.
+///
+/// `conversions` is fractional: a platform's modeled/weighted attribution
+/// (view-through, cross-device) can report a value like `1.5`, not just
+/// whole units — an integer here would silently truncate real attribution
+/// data before it ever reaches the rollup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricPoint {
     pub campaign_id: String,
     pub date: String,
     pub impressions: i64,
     pub clicks: i64,
     pub spend: super::Money,
-    pub conversions: i64,
+    pub conversions: f64,
+    pub conversion_value: super::Money,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,6 +317,16 @@ pub trait ConversionEventRepository: Send + Sync {
         tenant_id: TenantId,
         id: ConversionId,
     ) -> Result<Option<super::model::ConversionEvent>, AdvertisingError>;
+
+    /// Events for one tenant whose `occurred_at` falls within `[from, to]`
+    /// (inclusive) — the revenue join's per-window feed (TASK-016).
+    async fn list_by_date_range(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        from: chrono::DateTime<chrono::Utc>,
+        to: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
 
     async fn update_upload_states(
         &self,
@@ -478,4 +510,26 @@ pub trait AudienceRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         audience: &Audience,
     ) -> Result<(), AdvertisingError>;
+}
+
+/// A daily FX snapshot for display-only conversion (TASK-016, slice 10.7).
+/// `rate` converts one unit of `base` into `quote`. Never persisted onto a
+/// stored metric — the query layer applies it fresh on every read.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FxRate {
+    pub rate: f64,
+    pub date: chrono::NaiveDate,
+}
+
+/// Display-time currency conversion. Absence of a rate is a normal, expected
+/// outcome (no snapshot for that pair/date yet) — callers render the
+/// source-currency amount without a `rendered_*` view rather than fail.
+#[async_trait]
+pub trait FxRatePort: Send + Sync {
+    async fn rate(
+        &self,
+        base: &str,
+        quote: &str,
+        date: chrono::NaiveDate,
+    ) -> Result<Option<FxRate>, AdvertisingError>;
 }

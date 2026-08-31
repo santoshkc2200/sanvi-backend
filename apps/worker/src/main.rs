@@ -581,6 +581,10 @@ pub struct SchedulerConfig {
     pub advertising_conversion_retraction_interval_secs: u64,
     /// Audience sync worker sweep (TASK-015, 10.6).
     pub advertising_audience_sync_interval_secs: u64,
+    /// Metrics ingestion sweep (TASK-016, 10.7). One schedule covers both
+    /// "hourly for today" and the trailing backfill — see
+    /// `RunMetricsIngestion::execute`'s doc comment for why.
+    pub advertising_metrics_ingestion_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -616,6 +620,7 @@ impl Default for SchedulerConfig {
             advertising_conversion_upload_interval_secs: 60,
             advertising_conversion_retraction_interval_secs: 60,
             advertising_audience_sync_interval_secs: 3600,
+            advertising_metrics_ingestion_interval_secs: 3600,
         }
     }
 }
@@ -1573,8 +1578,8 @@ async fn main() -> ExitCode {
     ));
     let advertising_reconciliation_sweep = Arc::new(ReconcileDueCampaigns::new(
         tx_manager.clone(),
-        advertising_campaigns,
-        advertising_platforms,
+        advertising_campaigns.clone(),
+        advertising_platforms.clone(),
         advertising_reconcile_campaign,
     ));
     let advertising_connections: Arc<dyn AdvertisingConnectionRepository> =
@@ -1624,12 +1629,42 @@ async fn main() -> ExitCode {
     let advertising_audience_sync_sweep = Arc::new(SyncAudiences::new(
         tx_manager.clone(),
         advertising_audiences,
-        advertising_conversion_events,
-        advertising_connections,
+        advertising_conversion_events.clone(),
+        advertising_connections.clone(),
         privacy_directive_resolver,
         advertising_audience_sinks,
-        advertising_metrics,
+        advertising_metrics.clone(),
     ));
+
+    // TASK-016 (10.7): metrics ingestion, revenue join & the ROAS query
+    // layer's ingestion sweep.
+    let advertising_metrics_repo: Arc<dyn sanvi_advertising::domain::MetricsRepository> =
+        Arc::new(sanvi_advertising::adapters::SqlxMetricsRepository::new());
+    let advertising_ingest_metrics = Arc::new(
+        sanvi_advertising::application::IngestConnectionMetrics::new(
+            tx_manager.clone(),
+            advertising_platforms,
+            advertising_campaigns.clone(),
+            advertising_metrics_repo.clone(),
+        ),
+    );
+    let advertising_revenue_join =
+        Arc::new(sanvi_advertising::application::JoinCampaignRevenue::new(
+            tx_manager.clone(),
+            advertising_campaigns,
+            advertising_connections.clone(),
+            advertising_conversion_events,
+            advertising_metrics_repo,
+        ));
+    let advertising_metrics_ingestion_sweep =
+        Arc::new(sanvi_advertising::application::RunMetricsIngestion::new(
+            tx_manager.clone(),
+            advertising_connections,
+            advertising_ingest_metrics,
+            advertising_revenue_join,
+            advertising_metrics,
+            config.advertising.metrics_ingestion_backfill_days,
+        ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
         Arc::new(FnJob::new(
@@ -1673,6 +1708,31 @@ async fn main() -> ExitCode {
                                 drifted = report.drifted,
                                 errors = report.errors,
                                 "advertising reconciliation sweep pass"
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "advertising.metrics_ingestion",
+            Duration::from_secs(config.scheduler.advertising_metrics_ingestion_interval_secs),
+            {
+                let sweep = advertising_metrics_ingestion_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.connections_checked > 0 || report.errors > 0 {
+                            tracing::info!(
+                                connections_checked = report.connections_checked,
+                                rows_ingested = report.rows_ingested,
+                                errors = report.errors,
+                                "advertising metrics ingestion sweep pass"
                             );
                         }
                         Ok(())

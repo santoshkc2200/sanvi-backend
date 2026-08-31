@@ -69,4 +69,10 @@ pub struct AdvertisingState {
     pub create_audience: Arc<crate::application::tracking::audiences::CreateAudience>,
     pub list_audiences: Arc<crate::application::tracking::audiences::ListAudiences>,
     pub refresh_audience: Arc<crate::application::tracking::audiences::RefreshAudience>,
+
+    /// Metrics ingestion, rollups & the ROAS query layer (TASK-016, 10.7).
+    /// Also backs `/ads/metrics/summary` and `/ads/metrics/export`, which
+    /// share this one query use case rather than each getting their own.
+    pub query_metrics: Arc<crate::application::QueryMetrics>,
+    pub get_freshness: Arc<crate::application::GetFreshness>,
 }

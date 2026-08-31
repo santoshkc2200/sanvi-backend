@@ -32,6 +32,7 @@ struct ConnectionRow {
     connected_at: DateTime<Utc>,
     token_expires_at: Option<DateTime<Utc>>,
     last_synced_at: Option<DateTime<Utc>>,
+    last_metrics_ingested_at: Option<DateTime<Utc>>,
     last_error: Option<serde_json::Value>,
     disconnected_notified_at: Option<DateTime<Utc>>,
     dependent_jobs_paused_at: Option<DateTime<Utc>>,
@@ -86,6 +87,7 @@ impl TryFrom<ConnectionRow> for AdvertisingConnection {
             row.connected_at,
             row.token_expires_at,
             row.last_synced_at,
+            row.last_metrics_ingested_at,
             last_error,
             row.disconnected_notified_at,
             row.dependent_jobs_paused_at,
@@ -482,23 +484,25 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
             "INSERT INTO advertising.connections
              (id, tenant_id, platform, external_account_id, account_name, currency, timezone,
               status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-              last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
-              pending_accounts)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+              last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+              dependent_jobs_paused_at, pending_accounts)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
              ON CONFLICT (tenant_id, platform, external_account_id) DO UPDATE SET
                account_name = EXCLUDED.account_name, currency = EXCLUDED.currency,
                timezone = EXCLUDED.timezone, status = EXCLUDED.status, scopes = EXCLUDED.scopes,
                token_ref = EXCLUDED.token_ref, connected_by = EXCLUDED.connected_by,
                connected_at = EXCLUDED.connected_at, token_expires_at = EXCLUDED.token_expires_at,
-               last_synced_at = EXCLUDED.last_synced_at, last_error = EXCLUDED.last_error,
+               last_synced_at = EXCLUDED.last_synced_at,
+               last_metrics_ingested_at = EXCLUDED.last_metrics_ingested_at,
+               last_error = EXCLUDED.last_error,
                disconnected_notified_at = EXCLUDED.disconnected_notified_at,
                dependent_jobs_paused_at = EXCLUDED.dependent_jobs_paused_at,
                pending_accounts = EXCLUDED.pending_accounts,
                updated_at = now()
              RETURNING id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
-               pending_accounts",
+               last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+               dependent_jobs_paused_at, pending_accounts",
         )
         .bind(connection.id().as_i64())
         .bind(connection.tenant_id().as_i64())
@@ -514,6 +518,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         .bind(connection.connected_at())
         .bind(connection.token_expires_at())
         .bind(connection.last_synced_at())
+        .bind(connection.last_metrics_ingested_at())
         .bind(
             connection
                 .last_error()
@@ -543,13 +548,14 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
             "UPDATE advertising.connections SET
                external_account_id = $3, account_name = $4, currency = $5, timezone = $6,
                status = $7, scopes = $8, token_ref = $9, token_expires_at = $10,
-               last_synced_at = $11, last_error = $12, disconnected_notified_at = $13,
-               dependent_jobs_paused_at = $14, pending_accounts = $15, updated_at = now()
+               last_synced_at = $11, last_metrics_ingested_at = $12, last_error = $13,
+               disconnected_notified_at = $14, dependent_jobs_paused_at = $15,
+               pending_accounts = $16, updated_at = now()
              WHERE tenant_id = $1 AND id = $2
              RETURNING id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
-               pending_accounts",
+               last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+               dependent_jobs_paused_at, pending_accounts",
         )
         .bind(connection.tenant_id().as_i64())
         .bind(connection.id().as_i64())
@@ -562,6 +568,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         .bind(connection.token_ref().persisted_locator())
         .bind(connection.token_expires_at())
         .bind(connection.last_synced_at())
+        .bind(connection.last_metrics_ingested_at())
         .bind(
             connection
                 .last_error()
@@ -643,8 +650,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         let rows = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
-               pending_accounts
+               last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+               dependent_jobs_paused_at, pending_accounts
              FROM advertising.connections
              WHERE tenant_id = $1 ORDER BY connected_at DESC, id DESC",
         )
@@ -664,8 +671,8 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         let row = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
                timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
-               last_synced_at, last_error, disconnected_notified_at, dependent_jobs_paused_at,
-               pending_accounts
+               last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+               dependent_jobs_paused_at, pending_accounts
              FROM advertising.connections
              WHERE tenant_id = $1 AND id = $2",
         )
@@ -675,6 +682,28 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         .await
         .map_err(storage)?;
         row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list_due_for_metrics_ingestion(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, ConnectionRow>(
+            "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
+               timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
+               last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+               dependent_jobs_paused_at, pending_accounts
+             FROM advertising.connections
+             WHERE status = 'active'
+             ORDER BY last_metrics_ingested_at ASC NULLS FIRST, id ASC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 }
 
@@ -858,6 +887,30 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
         row.map(row_to_conversion_event).transpose()
+    }
+
+    async fn list_by_date_range(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, ConversionEventRow>(
+            "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states, subject_key
+             FROM advertising.conversion_events
+             WHERE tenant_id = $1 AND occurred_at BETWEEN $2 AND $3
+             ORDER BY occurred_at ASC",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(from)
+        .bind(to)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        rows.into_iter().map(row_to_conversion_event).collect()
     }
 
     async fn update_upload_states(

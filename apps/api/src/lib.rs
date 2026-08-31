@@ -43,15 +43,16 @@ use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
         FakeAdPlatform, SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
-        SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
-        SqlxTenantEnvelopeCrypto,
+        SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxMetricsRepository,
+        SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
     },
     application::{
         AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
-        DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, HandleCallback,
-        ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives, ListPlatformCatalog,
-        PatchCampaign, PauseCampaign, PublishCampaign, ReconcileCampaign, ResolveCampaignDrift,
-        ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup, ValidateCampaign,
+        DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, GetFreshness,
+        HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives,
+        ListPlatformCatalog, PatchCampaign, PauseCampaign, PublishCampaign, QueryMetrics,
+        ReconcileCampaign, ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd,
+        UpdateAdGroup, ValidateCampaign,
     },
     domain::TokenVault,
     routes as advertising_routes,
@@ -3113,7 +3114,7 @@ pub async fn build_advertising_state(
         create_creative: std::sync::Arc::new(CreateCreative::new(
             tx.clone(),
             creatives.clone(),
-            connections,
+            connections.clone(),
             registry.clone(),
             advertising_ids.clone(),
         )),
@@ -3121,7 +3122,20 @@ pub async fn build_advertising_state(
         list_creatives: std::sync::Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),
         delete_creative: std::sync::Arc::new(DeleteCreative::new(tx.clone(), creatives.clone())),
         get_creative_previews: std::sync::Arc::new(GetCreativePreviews::new(
-            tx, creatives, registry,
+            tx.clone(),
+            creatives,
+            registry,
+        )),
+        query_metrics: std::sync::Arc::new(QueryMetrics::new(
+            tx.clone(),
+            std::sync::Arc::new(SqlxMetricsRepository::new()),
+            config.metrics_max_query_span_days,
+            config.metrics_restatement_days,
+        )),
+        get_freshness: std::sync::Arc::new(GetFreshness::new(
+            tx,
+            connections,
+            config.metrics_freshness_stalled_after_hours,
         )),
         oauth_state,
         // Concurrency caps on the public track beacon: a coarse abuse

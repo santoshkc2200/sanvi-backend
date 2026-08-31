@@ -1377,6 +1377,190 @@ paths:
           description: Creative not found
       tags:
       - advertising
+  /api/v1/tenant/ads/metrics:
+    get:
+      operationId: get_ads_metrics
+      parameters:
+      - description: Inclusive range start, `YYYY-MM-DD`.
+        example: 2026-08-01
+        in: query
+        name: from
+        required: true
+        schema:
+          type: string
+      - description: Inclusive range end, `YYYY-MM-DD`.
+        example: 2026-08-24
+        in: query
+        name: to
+        required: true
+        schema:
+          type: string
+      - description: '`campaign` (default), `platform`, or `tenant`.'
+        example: campaign
+        in: query
+        name: group_by
+        required: false
+        schema:
+          type: string
+      - example: google_ads
+        in: query
+        name: platform
+        required: false
+        schema:
+          type: string
+      - in: query
+        name: campaign_id
+        required: false
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsQueryResponse'
+          description: Rollup rows for the requested range and grain, both ROAS numbers labelled separately
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid date range, unknown group_by, or a span exceeding the configured maximum
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.metrics.read permission
+      tags:
+      - advertising
+  /api/v1/tenant/ads/metrics/export:
+    get:
+      operationId: get_ads_metrics_export
+      parameters:
+      - description: Inclusive range start, `YYYY-MM-DD`.
+        example: 2026-08-01
+        in: query
+        name: from
+        required: true
+        schema:
+          type: string
+      - description: Inclusive range end, `YYYY-MM-DD`.
+        example: 2026-08-24
+        in: query
+        name: to
+        required: true
+        schema:
+          type: string
+      - description: '`campaign` (default), `platform`, or `tenant`.'
+        example: campaign
+        in: query
+        name: group_by
+        required: false
+        schema:
+          type: string
+      - example: google_ads
+        in: query
+        name: platform
+        required: false
+        schema:
+          type: string
+      - in: query
+        name: campaign_id
+        required: false
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      responses:
+        '200':
+          content:
+            text/csv: {}
+          description: The same labelled columns as /ads/metrics, streamed as CSV — no blended ROAS column
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid date range, unknown group_by, or a span exceeding the configured maximum
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.metrics.read permission
+      tags:
+      - advertising
+  /api/v1/tenant/ads/metrics/freshness:
+    get:
+      operationId: get_ads_metrics_freshness
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsFreshnessView'
+          description: Per-connection last-ingested-at and lag — what a stalled sync looks like, not a guess based on the clock
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.metrics.read permission
+      tags:
+      - advertising
+  /api/v1/tenant/ads/metrics/summary:
+    get:
+      operationId: get_ads_metrics_summary
+      parameters:
+      - example: 2026-08-01
+        in: query
+        name: from
+        required: true
+        schema:
+          type: string
+      - example: 2026-08-24
+        in: query
+        name: to
+        required: true
+        schema:
+          type: string
+      - description: |-
+          Start date of an equal-length prior period to compare against
+          (`YYYY-MM-DD`). Omit for no comparison.
+        example: 2026-07-01
+        in: query
+        name: compare_to
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSummaryResponse'
+          description: Whole-range totals per currency, with an optional prior-period comparison
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid date range or a span exceeding the configured maximum
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.metrics.read permission
+      tags:
+      - advertising
   /api/v1/tenant/ads/platforms:
     get:
       operationId: list_ad_platforms

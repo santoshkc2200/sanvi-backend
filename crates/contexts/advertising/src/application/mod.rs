@@ -5,6 +5,7 @@ pub mod catalog;
 pub mod connections;
 pub mod creatives;
 pub mod drift_resolution;
+pub mod metrics;
 pub mod reconciliation;
 pub mod reconciliation_sweep;
 pub mod registry;
@@ -25,6 +26,10 @@ pub use creatives::{
     NewCreativeFields, PlacementPreview,
 };
 pub use drift_resolution::{DriftResolution, ResolveCampaignDrift, ResolvedCampaignDrift};
+pub use metrics::{
+    GetFreshness, IngestConnectionMetrics, JoinCampaignRevenue, MetricsIngestionSweepReport,
+    QueryMetrics, RunMetricsIngestion,
+};
 pub use reconciliation::ReconcileCampaign;
 pub use reconciliation_sweep::{ReconcileDueCampaigns, ReconciliationSweepReport};
 pub use registry::PlatformRegistry;

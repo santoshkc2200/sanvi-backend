@@ -63,6 +63,12 @@ pub struct AdvertisingConnection {
     connected_at: DateTime<Utc>,
     token_expires_at: Option<DateTime<Utc>>,
     last_synced_at: Option<DateTime<Utc>>,
+    /// Last successful metrics ingestion (TASK-016, slice 10.7). Deliberately
+    /// separate from `last_synced_at`, which the OAuth refresh lifecycle
+    /// owns — a token refresh must never make `/ads/metrics/freshness`
+    /// report current data for a connection whose metrics ingestion is
+    /// failing or has never run.
+    last_metrics_ingested_at: Option<DateTime<Utc>>,
     last_error: Option<SyncError>,
     disconnected_notified_at: Option<DateTime<Utc>>,
     dependent_jobs_paused_at: Option<DateTime<Utc>>,
@@ -122,6 +128,7 @@ impl AdvertisingConnection {
             connected_at: now,
             token_expires_at: None,
             last_synced_at: None,
+            last_metrics_ingested_at: None,
             last_error: None,
             disconnected_notified_at: None,
             dependent_jobs_paused_at: None,
@@ -243,6 +250,7 @@ impl AdvertisingConnection {
         connected_at: DateTime<Utc>,
         token_expires_at: Option<DateTime<Utc>>,
         last_synced_at: Option<DateTime<Utc>>,
+        last_metrics_ingested_at: Option<DateTime<Utc>>,
         last_error: Option<SyncError>,
         disconnected_notified_at: Option<DateTime<Utc>>,
         dependent_jobs_paused_at: Option<DateTime<Utc>>,
@@ -265,6 +273,7 @@ impl AdvertisingConnection {
         connection.granted_scopes = normalize_scopes(granted_scopes);
         connection.token_expires_at = token_expires_at;
         connection.last_synced_at = last_synced_at;
+        connection.last_metrics_ingested_at = last_metrics_ingested_at;
         connection.last_error = last_error;
         connection.disconnected_notified_at = disconnected_notified_at;
         connection.dependent_jobs_paused_at = dependent_jobs_paused_at;
@@ -330,6 +339,18 @@ impl AdvertisingConnection {
         self.last_error = Some(error);
     }
 
+    /// Records a successful metrics ingestion pass (TASK-016, slice 10.7).
+    /// Deliberately narrower than `record_refresh_success`: this touches
+    /// only its own dedicated cursor — never `last_synced_at`, connection
+    /// status, or token state, which stay owned by the OAuth refresh
+    /// lifecycle — so an unrelated token refresh can never make
+    /// `/ads/metrics/freshness` report current data for a connection whose
+    /// metrics ingestion is failing or has never run, and a metrics-only
+    /// sync can never mark a genuinely disconnected connection `Active`.
+    pub fn record_metrics_sync(&mut self, now: DateTime<Utc>) {
+        self.last_metrics_ingested_at = Some(now);
+    }
+
     pub fn health(&self, required_scopes: &[String], now: DateTime<Utc>) -> ConnectionHealth {
         ConnectionHealth::from_connection(
             self.status,
@@ -384,6 +405,9 @@ impl AdvertisingConnection {
     }
     pub(crate) fn last_synced_at(&self) -> Option<DateTime<Utc>> {
         self.last_synced_at
+    }
+    pub(crate) fn last_metrics_ingested_at(&self) -> Option<DateTime<Utc>> {
+        self.last_metrics_ingested_at
     }
     pub(crate) fn last_error(&self) -> Option<&SyncError> {
         self.last_error.as_ref()

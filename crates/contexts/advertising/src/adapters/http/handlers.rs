@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use actix_web::{HttpRequest, HttpResponse, web};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use sanvi_http::{
     ApiError, CurrentSubject, CurrentTenant, FreshAal2Required, PROBLEM_TYPE_BASE, ProblemDetail,
     RequiredAnyFeature, RequiredPermission,
@@ -21,9 +21,10 @@ use crate::{
     },
     domain::{
         AdGroup, AdvertisingConnection, AdvertisingError, AssetMetadata, BidSettings, Budget,
-        Campaign, CampaignChange, ConnectionHealth, ConnectionState, Creative, CreativeAssetSpec,
-        CreativeText, Objective, PlatformAccount, PlatformKey, Schedule, StoredCampaign,
-        StoredCreative, Targeting, ValidationViolation,
+        Campaign, CampaignChange, ConnectionFreshness, ConnectionHealth, ConnectionState, Creative,
+        CreativeAssetSpec, CreativeText, MetricsGroupBy, MetricsRangeQuery, Objective,
+        PlatformAccount, PlatformKey, Schedule, StoredCampaign, StoredCreative, Targeting,
+        ValidationViolation,
     },
 };
 
@@ -73,21 +74,72 @@ pub struct RenderedMoneyView {
     pub fx_rate_date: String,
 }
 
-/// One daily chart rollup. The grain is `(tenant, platform, campaign, date)`;
-/// tenant is supplied by the authenticated route scope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+/// One rollup row (TASK-016, slice 10.7). The grain depends on the
+/// request's `group_by`: `campaign` populates both `platform` and
+/// `campaign_id`; `platform` populates only `platform`; `tenant` leaves
+/// both `None`. Tenant is supplied by the authenticated route scope.
+///
+/// `conversion_value` (the platform's own attribution) and `sanvi_revenue`
+/// (Sanvi's order-based view) are always both present, always labelled
+/// separately — never blended into one number (NFR-1006). Same for
+/// `roas_platform`/`roas_sanvi`: each is `null` on zero spend, never `∞`.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct MetricPoint {
     #[schema(example = "google_ads")]
-    pub platform: String,
-    #[schema(value_type = String, format = Uuid)]
-    pub campaign_id: String,
+    pub platform: Option<String>,
+    #[schema(value_type = Option<String>, format = Uuid)]
+    pub campaign_id: Option<String>,
     #[schema(value_type = String, format = Date, example = "2026-08-24")]
     pub date: String,
     pub impressions: i64,
     pub clicks: i64,
     pub spend: MoneyView,
+    pub conversions: f64,
+    /// Platform-reported conversion value — attribution the ad platform's
+    /// own model made.
     pub conversion_value: MoneyView,
+    /// Sanvi's own order-based revenue view. Never summed with
+    /// `conversion_value` — see the type's doc comment.
+    pub sanvi_revenue: MoneyView,
+    pub roas_platform: Option<f64>,
+    pub roas_sanvi: Option<f64>,
+    /// Still inside the platform's restatement window — this day's numbers
+    /// may still change on a later ingest.
+    pub restating: bool,
     pub rendered_spend: Option<RenderedMoneyView>,
+}
+
+impl From<crate::domain::MetricsAggregateRow> for MetricPoint {
+    fn from(row: crate::domain::MetricsAggregateRow) -> Self {
+        let roas_platform = row.roas_platform();
+        let roas_sanvi = row.roas_sanvi();
+        Self {
+            platform: row.platform.map(|key| key.as_str().to_string()),
+            campaign_id: row.campaign_id.map(|id| id.to_string()),
+            date: row.date.format("%Y-%m-%d").to_string(),
+            impressions: row.impressions,
+            clicks: row.clicks,
+            spend: MoneyView {
+                amount_minor: row.spend_minor,
+                currency: row.currency.clone(),
+            },
+            conversions: row.conversions,
+            conversion_value: MoneyView {
+                amount_minor: row.conversion_value_minor,
+                currency: row.currency.clone(),
+            },
+            sanvi_revenue: MoneyView {
+                amount_minor: row.sanvi_revenue_minor,
+                currency: row.currency,
+            },
+            roas_platform,
+            roas_sanvi,
+            restating: row.restating,
+            // No FX data source is wired up this slice (see
+            // `adapters::fx_rate`) — always omitted rather than guessed.
+            rendered_spend: None,
+        }
+    }
 }
 
 /// Stable RFC-7807 suffixes emitted by future advertising endpoints.
@@ -1983,6 +2035,379 @@ pub async fn get_creative_previews(
         previews: previews
             .into_iter()
             .map(CreativePreviewView::from)
+            .collect(),
+    }))
+}
+
+// ---------------------------------------------------------------------
+// Metrics ingestion, rollups & the ROAS query layer (TASK-016, slice 10.7)
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MetricsQueryParams {
+    /// Inclusive range start, `YYYY-MM-DD`.
+    #[param(example = "2026-08-01")]
+    pub from: String,
+    /// Inclusive range end, `YYYY-MM-DD`.
+    #[param(example = "2026-08-24")]
+    pub to: String,
+    /// `campaign` (default), `platform`, or `tenant`.
+    #[param(example = "campaign")]
+    pub group_by: Option<String>,
+    #[param(example = "google_ads")]
+    pub platform: Option<String>,
+    pub campaign_id: Option<String>,
+}
+
+fn parse_group_by(raw: Option<&str>) -> Result<MetricsGroupBy, ApiError> {
+    match raw {
+        None | Some("campaign") => Ok(MetricsGroupBy::Campaign),
+        Some("platform") => Ok(MetricsGroupBy::Platform),
+        Some("tenant") => Ok(MetricsGroupBy::Tenant),
+        Some(other) => Err(ApiError::BadRequest {
+            detail: format!("unknown group_by {other:?}; expected campaign, platform, or tenant"),
+        }),
+    }
+}
+
+fn parse_metrics_date(label: &str, raw: &str) -> Result<NaiveDate, ApiError> {
+    NaiveDate::parse_from_str(raw, "%Y-%m-%d").map_err(|_| ApiError::BadRequest {
+        detail: format!("{label} must be a date in YYYY-MM-DD form"),
+    })
+}
+
+fn parse_metrics_query(
+    tenant_id: TenantId,
+    params: MetricsQueryParams,
+) -> Result<MetricsRangeQuery, ApiError> {
+    let from = parse_metrics_date("from", &params.from)?;
+    let to = parse_metrics_date("to", &params.to)?;
+    let group_by = parse_group_by(params.group_by.as_deref())?;
+    let platform = params
+        .platform
+        .map(|raw| PlatformKey::parse(&raw))
+        .transpose()
+        .map_err(api_error)?;
+    let campaign_id = params
+        .campaign_id
+        .map(|raw| raw.parse::<CampaignId>())
+        .transpose()
+        .map_err(|_| ApiError::BadRequest {
+            detail: "campaign_id must be a valid campaign id".to_string(),
+        })?;
+    Ok(MetricsRangeQuery {
+        tenant_id,
+        from,
+        to,
+        group_by,
+        platform,
+        campaign_id,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MetricsQueryResponse {
+    pub rows: Vec<MetricPoint>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/metrics",
+    tag = "advertising",
+    operation_id = "get_ads_metrics",
+    params(MetricsQueryParams),
+    responses(
+        (status = 200, description = "Rollup rows for the requested range and grain, both ROAS numbers labelled separately", body = MetricsQueryResponse),
+        (status = 400, description = "Invalid date range, unknown group_by, or a span exceeding the configured maximum", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_ads_metrics(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    query: web::Query<MetricsQueryParams>,
+) -> Result<HttpResponse, ApiError> {
+    let range = parse_metrics_query(tenant.0.tenant_id, query.into_inner())?;
+    let today = Utc::now().date_naive();
+    let rows = state
+        .query_metrics
+        .execute(range, today)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(MetricsQueryResponse {
+        rows: rows.into_iter().map(MetricPoint::from).collect(),
+    }))
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MetricsSummaryQueryParams {
+    #[param(example = "2026-08-01")]
+    pub from: String,
+    #[param(example = "2026-08-24")]
+    pub to: String,
+    /// Start date of an equal-length prior period to compare against
+    /// (`YYYY-MM-DD`). Omit for no comparison.
+    #[param(example = "2026-07-01")]
+    pub compare_to: Option<String>,
+}
+
+/// One currency's totals across the whole requested range — the range
+/// itself collapsed, so unlike [`MetricPoint`] there is one row per
+/// currency, not per day.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct MetricsSummaryRow {
+    pub currency: String,
+    pub impressions: i64,
+    pub clicks: i64,
+    pub spend: MoneyView,
+    pub conversions: f64,
+    pub conversion_value: MoneyView,
+    pub sanvi_revenue: MoneyView,
+    pub roas_platform: Option<f64>,
+    pub roas_sanvi: Option<f64>,
+    /// `true` if any day in the range is still inside its platform's
+    /// restatement window.
+    pub restating: bool,
+}
+
+fn summarize(rows: &[crate::domain::MetricsAggregateRow]) -> Vec<MetricsSummaryRow> {
+    use std::collections::BTreeMap;
+    let mut by_currency: BTreeMap<String, MetricsSummaryRow> = BTreeMap::new();
+    for row in rows {
+        let entry = by_currency
+            .entry(row.currency.clone())
+            .or_insert_with(|| MetricsSummaryRow {
+                currency: row.currency.clone(),
+                impressions: 0,
+                clicks: 0,
+                spend: MoneyView {
+                    amount_minor: 0,
+                    currency: row.currency.clone(),
+                },
+                conversions: 0.0,
+                conversion_value: MoneyView {
+                    amount_minor: 0,
+                    currency: row.currency.clone(),
+                },
+                sanvi_revenue: MoneyView {
+                    amount_minor: 0,
+                    currency: row.currency.clone(),
+                },
+                roas_platform: None,
+                roas_sanvi: None,
+                restating: false,
+            });
+        entry.impressions += row.impressions;
+        entry.clicks += row.clicks;
+        entry.spend.amount_minor += row.spend_minor;
+        entry.conversions += row.conversions;
+        entry.conversion_value.amount_minor += row.conversion_value_minor;
+        entry.sanvi_revenue.amount_minor += row.sanvi_revenue_minor;
+        entry.restating = entry.restating || row.restating;
+    }
+    for row in by_currency.values_mut() {
+        row.roas_platform = (row.spend.amount_minor != 0)
+            .then_some(row.conversion_value.amount_minor as f64 / row.spend.amount_minor as f64);
+        row.roas_sanvi = (row.spend.amount_minor != 0)
+            .then_some(row.sanvi_revenue.amount_minor as f64 / row.spend.amount_minor as f64);
+    }
+    by_currency.into_values().collect()
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MetricsSummaryResponse {
+    pub current: Vec<MetricsSummaryRow>,
+    pub compared: Option<Vec<MetricsSummaryRow>>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/metrics/summary",
+    tag = "advertising",
+    operation_id = "get_ads_metrics_summary",
+    params(MetricsSummaryQueryParams),
+    responses(
+        (status = 200, description = "Whole-range totals per currency, with an optional prior-period comparison", body = MetricsSummaryResponse),
+        (status = 400, description = "Invalid date range or a span exceeding the configured maximum", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_ads_metrics_summary(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    query: web::Query<MetricsSummaryQueryParams>,
+) -> Result<HttpResponse, ApiError> {
+    let tenant_id = tenant.0.tenant_id;
+    let params = query.into_inner();
+    let from = parse_metrics_date("from", &params.from)?;
+    let to = parse_metrics_date("to", &params.to)?;
+    let today = Utc::now().date_naive();
+
+    let current_range = MetricsRangeQuery {
+        tenant_id,
+        from,
+        to,
+        group_by: MetricsGroupBy::Tenant,
+        platform: None,
+        campaign_id: None,
+    };
+    let current = state
+        .query_metrics
+        .execute(current_range, today)
+        .await
+        .map_err(api_error)?;
+
+    let compared = match params.compare_to {
+        Some(raw) => {
+            let compare_from = parse_metrics_date("compare_to", &raw)?;
+            let span_days = (to - from).num_days();
+            let Some(compare_to) =
+                compare_from.checked_add_signed(chrono::Duration::days(span_days))
+            else {
+                return Err(ApiError::BadRequest {
+                    detail: "compare_to produces an out-of-range comparison period".to_string(),
+                });
+            };
+            let compare_range = MetricsRangeQuery {
+                tenant_id,
+                from: compare_from,
+                to: compare_to,
+                group_by: MetricsGroupBy::Tenant,
+                platform: None,
+                campaign_id: None,
+            };
+            let rows = state
+                .query_metrics
+                .execute(compare_range, today)
+                .await
+                .map_err(api_error)?;
+            Some(summarize(&rows))
+        }
+        None => None,
+    };
+
+    Ok(HttpResponse::Ok().json(MetricsSummaryResponse {
+        current: summarize(&current),
+        compared,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/metrics/export",
+    tag = "advertising",
+    operation_id = "get_ads_metrics_export",
+    params(MetricsQueryParams),
+    responses(
+        (status = 200, description = "The same labelled columns as /ads/metrics, streamed as CSV — no blended ROAS column", content_type = "text/csv"),
+        (status = 400, description = "Invalid date range, unknown group_by, or a span exceeding the configured maximum", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_ads_metrics_export(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    query: web::Query<MetricsQueryParams>,
+) -> Result<HttpResponse, ApiError> {
+    let range = parse_metrics_query(tenant.0.tenant_id, query.into_inner())?;
+    let today = Utc::now().date_naive();
+    let rows = state
+        .query_metrics
+        .execute(range, today)
+        .await
+        .map_err(api_error)?;
+
+    let mut csv = String::from(
+        "platform,campaign_id,date,impressions,clicks,spend_minor,currency,conversions,\
+         conversion_value_minor,sanvi_revenue_minor,roas_platform,roas_sanvi,restating\n",
+    );
+    for row in rows.into_iter().map(MetricPoint::from) {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            row.platform.unwrap_or_default(),
+            row.campaign_id.unwrap_or_default(),
+            row.date,
+            row.impressions,
+            row.clicks,
+            row.spend.amount_minor,
+            row.spend.currency,
+            row.conversions,
+            row.conversion_value.amount_minor,
+            row.sanvi_revenue.amount_minor,
+            row.roas_platform.map(|v| v.to_string()).unwrap_or_default(),
+            row.roas_sanvi.map(|v| v.to_string()).unwrap_or_default(),
+            row.restating,
+        ));
+    }
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/csv")
+        .insert_header((
+            "content-disposition",
+            "attachment; filename=\"ads-metrics.csv\"",
+        ))
+        .body(csv))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ConnectionFreshnessView {
+    #[schema(value_type = String)]
+    pub connection_id: ConnectionId,
+    pub platform: String,
+    pub last_ingested_at: Option<DateTime<Utc>>,
+    pub lag_hours: Option<f64>,
+    /// Ingestion is older than the configured freshness threshold — the
+    /// dashboard's "sync failed" / "still updating" state, never presented
+    /// as current.
+    pub stalled: bool,
+}
+
+impl From<ConnectionFreshness> for ConnectionFreshnessView {
+    fn from(freshness: ConnectionFreshness) -> Self {
+        Self {
+            connection_id: freshness.connection_id,
+            platform: freshness.platform.as_str().to_string(),
+            last_ingested_at: freshness.last_ingested_at,
+            lag_hours: freshness.lag_hours,
+            stalled: freshness.stalled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MetricsFreshnessView {
+    pub connections: Vec<ConnectionFreshnessView>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/metrics/freshness",
+    tag = "advertising",
+    operation_id = "get_ads_metrics_freshness",
+    responses(
+        (status = 200, description = "Per-connection last-ingested-at and lag — what a stalled sync looks like, not a guess based on the clock", body = MetricsFreshnessView),
+        (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_ads_metrics_freshness(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let connections = state
+        .get_freshness
+        .execute(tenant.0.tenant_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(MetricsFreshnessView {
+        connections: connections
+            .into_iter()
+            .map(ConnectionFreshnessView::from)
             .collect(),
     }))
 }

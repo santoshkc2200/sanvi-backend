@@ -1,6 +1,7 @@
 //! Advertising domain metrics: conversion upload totals by platform and result,
 //! conversion suppression totals by reason and signal source, upload lag histogram,
-//! and conversion DLQ depth gauge (TASK-015, slice 10.6).
+//! conversion DLQ depth gauge (TASK-015, slice 10.6), and metrics-ingestion
+//! duration/failure/lag observability (TASK-016, slice 10.7).
 
 use chrono::{DateTime, Utc};
 
@@ -12,6 +13,9 @@ pub struct AdvertisingMetrics {
     conversion_upload_lag_seconds: prometheus::Histogram,
     conversion_dlq_depth: prometheus::IntGauge,
     audience_sync_total: prometheus::IntCounterVec,
+    ads_sync_duration_seconds: prometheus::HistogramVec,
+    ads_sync_failures_total: prometheus::IntCounterVec,
+    metrics_ingestion_lag_hours: prometheus::Gauge,
 }
 
 impl AdvertisingMetrics {
@@ -65,12 +69,39 @@ impl AdvertisingMetrics {
         )
         .expect("audience sync counter construction is infallible");
 
+        let ads_sync_duration_seconds = prometheus::HistogramVec::new(
+            prometheus::HistogramOpts::new(
+                "ads_sync_duration_seconds",
+                "Duration of one connection's metrics ingestion pass, by platform",
+            ),
+            &["platform"],
+        )
+        .expect("ads sync duration histogram construction is infallible");
+
+        let ads_sync_failures_total = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "ads_sync_failures_total",
+                "Total advertising metrics ingestion failures by platform and error code",
+            ),
+            &["platform", "code"],
+        )
+        .expect("ads sync failures counter construction is infallible");
+
+        let metrics_ingestion_lag_hours = prometheus::Gauge::new(
+            "metrics_ingestion_lag_hours",
+            "Worst observed lag, in hours, among connections checked on the most recent ingestion sweep pass",
+        )
+        .expect("metrics ingestion lag gauge construction is infallible");
+
         let _ = registry.register(Box::new(conversion_upload_total.clone()));
         let _ = registry.register(Box::new(conversion_suppressed_total.clone()));
         let _ = registry.register(Box::new(conversion_retraction_total.clone()));
         let _ = registry.register(Box::new(conversion_upload_lag_seconds.clone()));
         let _ = registry.register(Box::new(conversion_dlq_depth.clone()));
         let _ = registry.register(Box::new(audience_sync_total.clone()));
+        let _ = registry.register(Box::new(ads_sync_duration_seconds.clone()));
+        let _ = registry.register(Box::new(ads_sync_failures_total.clone()));
+        let _ = registry.register(Box::new(metrics_ingestion_lag_hours.clone()));
 
         Self {
             conversion_upload_total,
@@ -79,6 +110,9 @@ impl AdvertisingMetrics {
             conversion_upload_lag_seconds,
             conversion_dlq_depth,
             audience_sync_total,
+            ads_sync_duration_seconds,
+            ads_sync_failures_total,
+            metrics_ingestion_lag_hours,
         }
     }
 
@@ -104,6 +138,18 @@ impl AdvertisingMetrics {
 
     pub fn audience_sync_total(&self) -> &prometheus::IntCounterVec {
         &self.audience_sync_total
+    }
+
+    pub fn ads_sync_duration_seconds(&self) -> &prometheus::HistogramVec {
+        &self.ads_sync_duration_seconds
+    }
+
+    pub fn ads_sync_failures_total(&self) -> &prometheus::IntCounterVec {
+        &self.ads_sync_failures_total
+    }
+
+    pub fn metrics_ingestion_lag_hours(&self) -> &prometheus::Gauge {
+        &self.metrics_ingestion_lag_hours
     }
 
     /// Observe the lag of one successfully uploaded conversion event.

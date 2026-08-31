@@ -21,7 +21,8 @@ use sanvi_advertising::adapters::{
     AdvertisingMetrics, CheckoutPaymentLookup, FakeAdPlatform, FakeAudienceSync,
     FakeConversionSink, OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
     SqlxCampaignRepository, SqlxConnectionTokenRepository, SqlxCreativeRepository,
-    SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository, http::AdvertisingState,
+    SqlxMetricsRepository, SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository,
+    http::AdvertisingState,
 };
 use sanvi_advertising::application::tracking::{
     CreateAudience, ListAudiences, RefreshAudience, RetractWithdrawnConversions, SyncAudiences,
@@ -34,11 +35,11 @@ use sanvi_advertising::application::tracking::{
 };
 use sanvi_advertising::application::{
     AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
-    DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, HandleCallback,
+    DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, GetFreshness, HandleCallback,
     ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives, ListPlatformCatalog,
-    PatchCampaign, PauseCampaign, PlatformRegistry, PublishCampaign, ReconcileCampaign,
-    ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup,
-    ValidateCampaign,
+    PatchCampaign, PauseCampaign, PlatformRegistry, PublishCampaign, QueryMetrics,
+    ReconcileCampaign, ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd,
+    UpdateAdGroup, ValidateCampaign,
 };
 use sanvi_advertising::domain::{
     AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, AudienceId,
@@ -1144,12 +1145,19 @@ fn create_test_advertising_state(
                 tx.clone(),
                 campaign_repo.clone(),
                 campaign_repo,
-                connections,
+                connections.clone(),
                 directive_resolver,
                 audience_sinks,
                 Arc::new(AdvertisingMetrics::default()),
             ))
         },
+        query_metrics: Arc::new(QueryMetrics::new(
+            tx.clone(),
+            Arc::new(SqlxMetricsRepository::new()),
+            92,
+            7,
+        )),
+        get_freshness: Arc::new(GetFreshness::new(tx, connections, 26.0)),
         oauth_state,
         tracking_ip_limiter: Arc::new(QuotaLimiter::new(100, ip_permits)),
         tracking_domain_limiter: Arc::new(QuotaLimiter::new(100, domain_permits)),

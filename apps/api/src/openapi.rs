@@ -1,11 +1,12 @@
 use sanvi_advertising::adapters::http::handlers::{
     AccountView, AdvertisingProblemType, CampaignChangesView, CampaignView, CampaignsView,
-    ConnectionHealthView, ConnectionView, ConnectionsView, CreateAdGroupRequest, CreateAdRequest,
-    CreateCampaignRequest, CreateConnectionRequest, CreateCreativeRequest, CreativePreviewView,
-    CreativePreviewsView, CreativeView, CreativesView, MetricPoint, MoneyView, OAuthCallbackQuery,
-    PatchAdGroupRequest, PatchAdRequest, PatchCampaignRequest, PendingConnectionView,
-    RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView, StartOAuthRequest,
-    StartOAuthResponse, ValidationResultView,
+    ConnectionFreshnessView, ConnectionHealthView, ConnectionView, ConnectionsView,
+    CreateAdGroupRequest, CreateAdRequest, CreateCampaignRequest, CreateConnectionRequest,
+    CreateCreativeRequest, CreativePreviewView, CreativePreviewsView, CreativeView, CreativesView,
+    MetricPoint, MetricsFreshnessView, MetricsQueryResponse, MetricsSummaryResponse,
+    MetricsSummaryRow, MoneyView, OAuthCallbackQuery, PatchAdGroupRequest, PatchAdRequest,
+    PatchCampaignRequest, PendingConnectionView, RenderedMoneyView, ResolveCampaignDriftRequest,
+    ResolvedCampaignDriftView, StartOAuthRequest, StartOAuthResponse, ValidationResultView,
 };
 use sanvi_advertising::adapters::http::tracking_handlers::{
     CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest,
@@ -205,6 +206,10 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::handlers::list_creatives,
         sanvi_advertising::adapters::http::handlers::delete_creative,
         sanvi_advertising::adapters::http::handlers::get_creative_previews,
+        sanvi_advertising::adapters::http::handlers::get_ads_metrics,
+        sanvi_advertising::adapters::http::handlers::get_ads_metrics_summary,
+        sanvi_advertising::adapters::http::handlers::get_ads_metrics_export,
+        sanvi_advertising::adapters::http::handlers::get_ads_metrics_freshness,
         sanvi_advertising::adapters::http::tracking_handlers::public_track_conversion,
         sanvi_advertising::adapters::http::tracking_handlers::get_tracking_settings,
         sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
@@ -228,7 +233,9 @@ use utoipa::OpenApi;
         TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, ConversionEvent,
         ConversionDiagnostics, ConsentSnapshot, ClickIds, ValueSource,
         UploadReceipt, UploadState, AdvertisingMoney, HashedIdentifier,
-        CreateAudienceRequest, Audience, AudienceStatus
+        CreateAudienceRequest, Audience, AudienceStatus,
+        MetricsQueryResponse, MetricsSummaryResponse, MetricsSummaryRow,
+        MetricsFreshnessView, ConnectionFreshnessView
     )),
     tags(
         (name = "system", description = "System, health and build information"),
@@ -524,5 +531,47 @@ mod tests {
                 "missing {slug}"
             );
         }
+
+        // TASK-016 (10.7): the metrics endpoints exist, and no schema
+        // anywhere in the document blends the two ROAS numbers into one
+        // field (NFR-1006) — labelled `roas_platform`/`roas_sanvi` only.
+        for path in [
+            "/api/v1/tenant/ads/metrics",
+            "/api/v1/tenant/ads/metrics/summary",
+            "/api/v1/tenant/ads/metrics/export",
+            "/api/v1/tenant/ads/metrics/freshness",
+        ] {
+            assert!(document["paths"].get(path).is_some(), "missing {path}");
+        }
+        for schema in [
+            "MetricsQueryResponse",
+            "MetricsSummaryResponse",
+            "MetricsSummaryRow",
+            "MetricsFreshnessView",
+            "ConnectionFreshnessView",
+        ] {
+            assert!(
+                schemas.get(schema).is_some(),
+                "missing advertising schema {schema}"
+            );
+        }
+        for field in ["roas_platform", "roas_sanvi"] {
+            assert!(
+                schemas["MetricPoint"]["properties"].get(field).is_some(),
+                "missing MetricPoint field {field}"
+            );
+            assert!(
+                schemas["MetricsSummaryRow"]["properties"]
+                    .get(field)
+                    .is_some(),
+                "missing MetricsSummaryRow field {field}"
+            );
+        }
+        let component_json =
+            serde_json::to_string(&document["components"]).expect("components serialize");
+        assert!(
+            !component_json.contains("\"roas\""),
+            "a bare, unlabelled roas field must never exist alongside roas_platform/roas_sanvi"
+        );
     }
 }

@@ -1,7 +1,7 @@
 # TASK-016: 10.7 Metrics ingestion, rollups & ROAS query layer
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress — see `../backlog.md`'s TASK-016 row for the shipped/open split; not yet committed
 **Requirement(s):** FR-1012, NFR-1005, NFR-1006, NFR-1009
 **Depends on:** TASK-012, TASK-015
 **Created:** 2026-08-20

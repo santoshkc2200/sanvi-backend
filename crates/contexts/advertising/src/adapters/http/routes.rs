@@ -3,7 +3,8 @@ use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
 use super::handlers::{
     add_ad, add_ad_group, create_campaign, create_connection, create_creative, delete_connection,
-    delete_creative, get_campaign, get_creative, get_creative_previews, list_ad_platforms,
+    delete_creative, get_ads_metrics, get_ads_metrics_export, get_ads_metrics_freshness,
+    get_ads_metrics_summary, get_campaign, get_creative, get_creative_previews, list_ad_platforms,
     list_campaign_changes, list_campaigns, list_connections, list_creatives, oauth_callback,
     patch_campaign, pause_campaign, publish_campaign, resolve_campaign_drift, resume_campaign,
     start_oauth, update_ad, update_ad_group, validate_campaign,
@@ -17,6 +18,7 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     let read = require_permission!("advertising.read", tenant);
     let write = require_permission!("advertising.campaign.write", tenant);
     let connect = require_permission!("advertising.connect", tenant);
+    let metrics_read = require_permission!("advertising.metrics.read", tenant);
     let feature_gate = || sanvi_http::RequiredAnyFeature::declared(ADVERTISING_ENTITLEMENTS);
 
     cfg.service(
@@ -142,6 +144,26 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
             .app_data(feature_gate())
             .route(web::get().to(get_creative_previews)),
+    );
+    cfg.service(
+        web::resource("/ads/metrics")
+            .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
+            .route(web::get().to(get_ads_metrics)),
+    );
+    cfg.service(
+        web::resource("/ads/metrics/summary")
+            .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
+            .route(web::get().to(get_ads_metrics_summary)),
+    );
+    cfg.service(
+        web::resource("/ads/metrics/export")
+            .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
+            .route(web::get().to(get_ads_metrics_export)),
+    );
+    cfg.service(
+        web::resource("/ads/metrics/freshness")
+            .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
+            .route(web::get().to(get_ads_metrics_freshness)),
     );
 }
 

@@ -5,6 +5,7 @@ pub mod connection;
 pub mod connection_lifecycle;
 pub mod events;
 pub mod matrix;
+pub mod metrics;
 pub mod model;
 pub mod oauth_state;
 pub mod ports;
@@ -52,9 +53,14 @@ pub use model::{
     ConversionDiagnostics, ConversionEvent, SubjectKeyRef, UploadReceipt, UploadState, ValueSource,
 };
 pub use ports::{
-    AudienceRepository, AudienceSyncPort, ConversionEventRepository, ConversionSinkPort,
-    PaymentLookup, PaymentLookupPort, TrackingSettings, TrackingSettingsRepository, VendorRole,
-    VendorRolePort,
+    AudienceRepository, AudienceSyncPort, ConversionEventRepository, ConversionSinkPort, FxRate,
+    FxRatePort, PaymentLookup, PaymentLookupPort, TrackingSettings, TrackingSettingsRepository,
+    VendorRole, VendorRolePort,
 };
 
 pub use hashing::HashedIdentifier;
+
+pub use metrics::{
+    ConnectionFreshness, MetricsAggregateRow, MetricsDailyRow, MetricsGroupBy, MetricsRangeQuery,
+    MetricsRepository,
+};

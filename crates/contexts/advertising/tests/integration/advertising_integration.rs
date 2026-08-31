@@ -5,27 +5,30 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, Duration, Months, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
 use sanvi_advertising::domain::{ConnectionId, CreativeId};
 use sanvi_advertising::{
     AdvertisingConnection, AdvertisingConnectionRepository, OAuthStateClaims, OAuthStateError,
     OAuthStateManager, OAuthStateStore, PlatformKey, SecretRef, SyncError,
     adapters::{
         FakeAdPlatform, OutboxEventPublisher, SqlxAdvertisingConnectionRepository,
-        SqlxCampaignRepository, SqlxCreativeRepository, SqlxOAuthStateStore, SystemIdGenerator,
+        SqlxCampaignRepository, SqlxCreativeRepository, SqlxMetricsRepository, SqlxOAuthStateStore,
+        SystemIdGenerator,
     },
     application::{
         AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign,
         CreateConnection, CreateCreative, DeleteCreative, GetCampaign, GetCreative,
-        GetCreativePreviews, ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields,
-        NewAdGroupFields, NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign,
-        PublishCampaign, ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, UpdateAd,
-        UpdateAdGroup, ValidateCampaign,
+        GetCreativePreviews, IngestConnectionMetrics, JoinCampaignRevenue, ListCampaignChanges,
+        ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields, NewCampaignFields,
+        NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign, QueryMetrics,
+        ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, UpdateAd, UpdateAdGroup,
+        ValidateCampaign,
     },
     domain::{
         AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
-        CreativeRepository, CreativeText, Money, Objective, PlatformAccount, StoredCreative,
-        Targeting, TargetingDimension, TenantEnvelopeCrypto,
+        CreativeRepository, CreativeText, MetricsDailyRow, MetricsGroupBy, MetricsRangeQuery,
+        MetricsRepository, Money, Objective, PlatformAccount, StoredCreative, Targeting,
+        TargetingDimension, TenantEnvelopeCrypto,
     },
 };
 use sanvi_kernel::{TenantId, UserId};
@@ -3225,4 +3228,654 @@ async fn deleting_referenced_creative_fails_publish() {
         ),
         "expected CreativeNotFound on PatchCampaign with deleted creative, got {patch_name_err:?}"
     );
+}
+
+// ---------------------------------------------------------------------
+// Metrics ingestion, rollups & the ROAS query layer (TASK-016, slice 10.7)
+// ---------------------------------------------------------------------
+
+/// Inserts a connection and publishes one campaign against it through the
+/// real `CreateCampaign`/`PublishCampaign` use cases and the given fake
+/// adapter registry, so the campaign has a real external id and satisfies
+/// `metrics_daily`'s FK — mirrors
+/// `campaign_lifecycle_draft_publish_patch_pause_resume_and_changes`'s
+/// setup. Takes the registry as a parameter (rather than building its own)
+/// because `FakeAdPlatform` keeps campaigns in an in-process map: a caller
+/// that later fetches metrics through the same registry needs the exact
+/// instance the campaign was published into, not a fresh empty one.
+async fn create_connection_and_published_campaign(
+    pool: &sanvi_persistence::PgPool,
+    tenant_id: TenantId,
+    registry: Arc<sanvi_advertising::application::PlatformRegistry>,
+    currency: &str,
+    name: &str,
+) -> (AdvertisingConnection, sanvi_advertising::domain::CampaignId) {
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
+
+    let connections_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        format!("acct-{}", Uuid::now_v7()),
+        currency,
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    connections_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connections_repo);
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections,
+        registry.clone(),
+        events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let publish = PublishCampaign::new(
+        manager,
+        campaigns,
+        Arc::new(SqlxCreativeRepository::new()),
+        events,
+        registry,
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection.id(),
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: name.to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(5_000, currency).unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+    let published = publish
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
+        .await
+        .unwrap();
+    assert!(published.external_id.is_some());
+
+    (connection, draft.id)
+}
+
+async fn insert_revenue_conversion_event(
+    pool: &sanvi_persistence::PgPool,
+    tenant_id: TenantId,
+    platform: &PlatformKey,
+    occurred_at: DateTime<Utc>,
+    value_minor: i64,
+    currency: &str,
+) {
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let tx = scope.tx_mut().as_inner();
+    let event_id = format!("event-{}", Uuid::now_v7());
+    let order_ref = format!("order-{}", Uuid::now_v7());
+
+    sqlx::query(
+        "INSERT INTO advertising.conversion_event_dedup
+           (tenant_id, event_id, dedupe_key, occurred_at)
+         VALUES ($1, $2, $2, $3)",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(&event_id)
+    .bind(occurred_at)
+    .execute(&mut **tx)
+    .await
+    .unwrap();
+
+    let mut upload_states = std::collections::BTreeMap::new();
+    upload_states.insert(
+        platform.as_str().to_string(),
+        serde_json::json!({"status": "pending", "attempt_count": 0}),
+    );
+    let consent = serde_json::json!({
+        "resolver_version": "v1",
+        "jurisdiction": "US",
+        "purposes_asked": [],
+        "answers": {},
+        "signal_source": "test"
+    });
+
+    sqlx::query(
+        "INSERT INTO advertising.conversion_events
+         (id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
+          value_source, order_ref, click_ids, hashed_ids, consent, upload_states, subject_key)
+         VALUES ($1, $2, $3, $3, 'purchase', $4, $5, $6, 'payment_record', $7, '{}'::jsonb,
+                 '{}'::jsonb, $8, $9, '{\"kind\": \"contact\"}'::jsonb)",
+    )
+    .bind(sanvi_testsupport::test_ids().next_id().unwrap().as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(&event_id)
+    .bind(occurred_at)
+    .bind(value_minor)
+    .bind(currency)
+    .bind(order_ref)
+    .bind(consent)
+    .bind(serde_json::to_value(upload_states).unwrap())
+    .execute(&mut **tx)
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+}
+
+/// The task's own stated priority: re-ingesting a day must replace the row,
+/// never add to it — at the `metrics_daily` grain and at every rollup level.
+#[tokio::test]
+async fn metrics_daily_upsert_is_idempotent_at_row_and_rollup_grain() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "advertising-metrics-idempotency").await;
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+    let (connection, campaign_id) = create_connection_and_published_campaign(
+        &pool,
+        tenant_id,
+        registry,
+        "JPY",
+        "Idempotency check",
+    )
+    .await;
+
+    let repo = SqlxMetricsRepository::new();
+    let date = Utc::now().date_naive();
+    let platform = PlatformKey::parse("google_ads").unwrap();
+
+    let first_pass = MetricsDailyRow {
+        tenant_id,
+        platform: platform.clone(),
+        connection_id: connection.id(),
+        campaign_id,
+        date,
+        impressions: 1_000,
+        clicks: 10,
+        spend: Money::new(5_000, "JPY").unwrap(),
+        conversions: 1.0,
+        conversion_value: Money::new(6_000, "JPY").unwrap(),
+    };
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    repo.upsert_daily(&mut scope, std::slice::from_ref(&first_pass))
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    // A restated pull for the same day arrives with different numbers.
+    let restated = MetricsDailyRow {
+        impressions: 4_000,
+        clicks: 40,
+        spend: Money::new(20_000, "JPY").unwrap(),
+        conversions: 3.0,
+        conversion_value: Money::new(24_000, "JPY").unwrap(),
+        ..first_pass
+    };
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    repo.upsert_daily(&mut scope, std::slice::from_ref(&restated))
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    // Row grain: exactly one row, holding only the restated values.
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let row_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM advertising.metrics_daily WHERE tenant_id = $1 AND campaign_id = $2 AND date = $3",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(campaign_id.as_i64())
+    .bind(date)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(
+        row_count, 1,
+        "re-ingesting a day must never append a second row"
+    );
+    let (impressions, spend_minor): (i64, i64) = sqlx::query_as(
+        "SELECT impressions, spend_minor FROM advertising.metrics_daily WHERE tenant_id = $1 AND campaign_id = $2 AND date = $3",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(campaign_id.as_i64())
+    .bind(date)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(
+        impressions, 4_000,
+        "must hold only the restated value, never 1_000 + 4_000"
+    );
+    assert_eq!(spend_minor, 20_000);
+
+    // Rollup grain: the platform-level aggregate agrees — never 24_000 (=
+    // 5_000 + 20_000, the append-bug's telltale sum).
+    let query = MetricsRangeQuery {
+        tenant_id,
+        from: date,
+        to: date,
+        group_by: MetricsGroupBy::Platform,
+        platform: None,
+        campaign_id: None,
+    };
+    let rollup = repo.query_range(&mut scope, &query, date, 7).await.unwrap();
+    assert_eq!(rollup.len(), 1);
+    assert_eq!(rollup[0].spend_minor, 20_000);
+    assert_eq!(rollup[0].impressions, 4_000);
+}
+
+/// Review fix: a restatement that no longer reports a previously ingested
+/// day for a connection must delete that row, not leave it stale.
+/// `IngestConnectionMetrics` always replaces the whole requested window
+/// (`MetricsRepository::replace_window`); this exercises the repository
+/// primitive directly.
+#[tokio::test]
+async fn replace_window_deletes_a_day_the_restatement_no_longer_reports() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "advertising-metrics-replace-window").await;
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+    let (connection, campaign_id) = create_connection_and_published_campaign(
+        &pool,
+        tenant_id,
+        registry,
+        "JPY",
+        "Replace window check",
+    )
+    .await;
+
+    let repo = SqlxMetricsRepository::new();
+    let platform = PlatformKey::parse("google_ads").unwrap();
+    let day_one = Utc::now().date_naive();
+    let day_two = day_one.succ_opt().unwrap();
+
+    let row = |date: NaiveDate| MetricsDailyRow {
+        tenant_id,
+        platform: platform.clone(),
+        connection_id: connection.id(),
+        campaign_id,
+        date,
+        impressions: 1_000,
+        clicks: 10,
+        spend: Money::new(5_000, "JPY").unwrap(),
+        conversions: 1.0,
+        conversion_value: Money::new(6_000, "JPY").unwrap(),
+    };
+
+    // First pass: the platform reports both days.
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    repo.replace_window(
+        &mut scope,
+        tenant_id,
+        &platform,
+        connection.id(),
+        day_one,
+        day_two,
+        &[row(day_one), row(day_two)],
+    )
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let count_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM advertising.metrics_daily WHERE tenant_id = $1 AND connection_id = $2",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(connection.id().as_i64())
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(count_before, 2);
+    scope.rollback().await.unwrap();
+
+    // Restatement: the campaign was paused, so day two no longer appears in
+    // the fetch at all — `rows` only covers day one.
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    repo.replace_window(
+        &mut scope,
+        tenant_id,
+        &platform,
+        connection.id(),
+        day_one,
+        day_two,
+        &[row(day_one)],
+    )
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let count_after: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM advertising.metrics_daily WHERE tenant_id = $1 AND connection_id = $2",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(connection.id().as_i64())
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(
+        count_after, 1,
+        "day two must be deleted, not left behind with stale non-zero values"
+    );
+    let remaining_date: NaiveDate = sqlx::query_scalar(
+        "SELECT date FROM advertising.metrics_daily WHERE tenant_id = $1 AND connection_id = $2",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(connection.id().as_i64())
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(remaining_date, day_one);
+}
+
+/// End-to-end: `fetch_metrics` → campaign external-id mapping → idempotent
+/// upsert → the ROAS query layer, against the fake adapter (real Google/Meta
+/// reporting adapters are blocked on live credentials, same as every other
+/// gap in this phase).
+#[tokio::test]
+async fn ingest_connection_metrics_round_trips_through_the_query_layer() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "advertising-metrics-ingest").await;
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let platforms = Arc::new(FakeAdPlatform::registered_catalog());
+    let (connection, campaign_id) = create_connection_and_published_campaign(
+        &pool,
+        tenant_id,
+        platforms.clone(),
+        "JPY",
+        "Ingest round trip",
+    )
+    .await;
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let metrics_repo: Arc<dyn MetricsRepository> = Arc::new(SqlxMetricsRepository::new());
+    let ingest =
+        IngestConnectionMetrics::new(manager.clone(), platforms, campaigns, metrics_repo.clone());
+
+    let date = Utc::now().date_naive();
+    let first = ingest.execute(&connection, date, date).await.unwrap();
+    assert_eq!(first, 1, "one campaign, one day");
+    // A second pass over the identical window must succeed and never
+    // duplicate the row (the fake adapter is deterministic per day/campaign).
+    let second = ingest.execute(&connection, date, date).await.unwrap();
+    assert_eq!(second, 1);
+
+    let query_metrics = QueryMetrics::new(manager, metrics_repo, 92, 7);
+    let rows = query_metrics
+        .execute(
+            MetricsRangeQuery {
+                tenant_id,
+                from: date,
+                to: date,
+                group_by: MetricsGroupBy::Campaign,
+                platform: None,
+                campaign_id: Some(campaign_id),
+            },
+            date,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].campaign_id, Some(campaign_id));
+    assert!(
+        rows[0].spend_minor > 0,
+        "fake adapter always seeds non-zero spend"
+    );
+    assert!(
+        rows[0].restating,
+        "today is inside every restatement window"
+    );
+}
+
+/// The revenue-attribution rule this slice exists to get right: exactly one
+/// active campaign on the connection attributes deterministically; more than
+/// one is never distributed by a guess and lands at platform level instead.
+#[tokio::test]
+async fn revenue_join_attributes_single_campaign_and_parks_ambiguous_revenue_at_platform_level() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "advertising-revenue-join").await;
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let platforms = Arc::new(FakeAdPlatform::registered_catalog());
+    let google_ads = PlatformKey::parse("google_ads").unwrap();
+
+    // Scenario A: exactly one active campaign on the connection.
+    let (connection_a, campaign_a) = create_connection_and_published_campaign(
+        &pool,
+        tenant_id,
+        platforms.clone(),
+        "JPY",
+        "Single campaign",
+    )
+    .await;
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> =
+        Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let conversions: Arc<dyn sanvi_advertising::domain::ConversionEventRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let metrics_repo: Arc<dyn MetricsRepository> = Arc::new(SqlxMetricsRepository::new());
+    let date = Utc::now().date_naive();
+
+    // Metrics must be ingested first so the target `metrics_daily` row
+    // exists — `set_campaign_revenue` is an UPDATE, not an upsert, by
+    // design (see `MetricsRepository::set_campaign_revenue`'s doc comment).
+    IngestConnectionMetrics::new(
+        manager.clone(),
+        platforms.clone(),
+        campaigns.clone(),
+        metrics_repo.clone(),
+    )
+    .execute(&connection_a, date, date)
+    .await
+    .unwrap();
+
+    let occurred_at = date.and_hms_opt(12, 0, 0).unwrap().and_utc();
+    insert_revenue_conversion_event(&pool, tenant_id, &google_ads, occurred_at, 15_000, "JPY")
+        .await;
+
+    let revenue_join = JoinCampaignRevenue::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        conversions.clone(),
+        metrics_repo.clone(),
+    );
+    revenue_join
+        .execute(tenant_id, &google_ads, date, date)
+        .await
+        .unwrap();
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let attributed: i64 = sqlx::query_scalar(
+        "SELECT sanvi_revenue_minor FROM advertising.metrics_daily WHERE tenant_id = $1 AND campaign_id = $2 AND date = $3",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(campaign_a.as_i64())
+    .bind(date)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(
+        attributed, 15_000,
+        "the sole active campaign must receive the revenue"
+    );
+    scope.rollback().await.unwrap();
+
+    // Review fix: the join clears the window before rebuilding it. Simulate
+    // the event no longer qualifying (`order_ref` cleared — conversion_events
+    // rows are never actually deleted in production; retraction is a state
+    // change, not a row deletion) and re-run — the campaign's revenue must
+    // reset to zero, not keep the stale 15,000.
+    {
+        let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+        sqlx::query(
+            "UPDATE advertising.conversion_events SET order_ref = NULL WHERE tenant_id = $1",
+        )
+        .bind(tenant_id.as_i64())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+        scope.commit().await.unwrap();
+    }
+    revenue_join
+        .execute(tenant_id, &google_ads, date, date)
+        .await
+        .unwrap();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let reset: i64 = sqlx::query_scalar(
+        "SELECT sanvi_revenue_minor FROM advertising.metrics_daily WHERE tenant_id = $1 AND campaign_id = $2 AND date = $3",
+    )
+    .bind(tenant_id.as_i64())
+    .bind(campaign_a.as_i64())
+    .bind(date)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(
+        reset, 0,
+        "a retracted event's revenue must reset to zero, not linger from the prior pass"
+    );
+    scope.rollback().await.unwrap();
+
+    // Scenario B: a second active campaign on a second connection makes
+    // attribution ambiguous — revenue must land at platform level, never
+    // split across the two candidates. A separate tenant keeps this isolated
+    // from scenario A's event: `ConversionEvent.upload_states` is keyed by
+    // platform, not connection, so two same-platform connections under one
+    // tenant would otherwise both match the same event (a pre-existing
+    // TASK-014/015 modeling constraint this test works around rather than
+    // one this slice introduces).
+    let tenant_b = seed_tenant(&pool, "advertising-revenue-join-ambiguous").await;
+    let manager_b = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let campaigns_b: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections_b: Arc<dyn AdvertisingConnectionRepository> =
+        Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let conversions_b: Arc<dyn sanvi_advertising::domain::ConversionEventRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let metrics_repo_b: Arc<dyn MetricsRepository> = Arc::new(SqlxMetricsRepository::new());
+    let platforms_b = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let (connection_b, campaign_b1) = create_connection_and_published_campaign(
+        &pool,
+        tenant_b,
+        platforms_b.clone(),
+        "JPY",
+        "Ambiguous 1",
+    )
+    .await;
+    // A second campaign on the SAME connection, so `active_campaigns.len() == 2`.
+    let create = CreateCampaign::new(
+        manager_b.clone(),
+        campaigns_b.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
+        platforms_b.clone(),
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let publish = PublishCampaign::new(
+        manager_b.clone(),
+        campaigns_b.clone(),
+        Arc::new(SqlxCreativeRepository::new()),
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+        platforms_b.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let draft_2 = create
+        .execute(
+            tenant_b,
+            connection_b.id(),
+            Uuid::now_v7(),
+            test_actor(),
+            NewCampaignFields {
+                name: "Ambiguous 2".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(5_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+    publish
+        .execute(tenant_b, draft_2.id, Uuid::now_v7(), test_actor())
+        .await
+        .unwrap();
+    let _ = campaign_b1;
+
+    IngestConnectionMetrics::new(
+        manager_b.clone(),
+        platforms_b,
+        campaigns_b.clone(),
+        metrics_repo_b.clone(),
+    )
+    .execute(&connection_b, date, date)
+    .await
+    .unwrap();
+    insert_revenue_conversion_event(&pool, tenant_b, &google_ads, occurred_at, 9_000, "JPY").await;
+    JoinCampaignRevenue::new(
+        manager_b.clone(),
+        campaigns_b,
+        connections_b,
+        conversions_b,
+        metrics_repo_b,
+    )
+    .execute(tenant_b, &google_ads, date, date)
+    .await
+    .unwrap();
+
+    let mut scope = manager_b.begin_for(tenant_b.as_i64()).await.unwrap();
+    let unattributed_total: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(sanvi_revenue_minor), 0)::bigint FROM advertising.metrics_daily
+         WHERE tenant_id = $1 AND connection_id = $2 AND date = $3",
+    )
+    .bind(tenant_b.as_i64())
+    .bind(connection_b.id().as_i64())
+    .bind(date)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(
+        unattributed_total, 0,
+        "ambiguous revenue must never be distributed across candidate campaigns"
+    );
+    let unattributed_bucket: i64 = sqlx::query_scalar(
+        "SELECT revenue_minor FROM advertising.metrics_unattributed_revenue_daily
+         WHERE tenant_id = $1 AND platform = $2 AND date = $3",
+    )
+    .bind(tenant_b.as_i64())
+    .bind(google_ads.as_str())
+    .bind(date)
+    .fetch_one(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    assert_eq!(unattributed_bucket, 9_000);
 }

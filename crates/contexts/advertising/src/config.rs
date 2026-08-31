@@ -35,6 +35,25 @@ pub struct AdvertisingConfig {
     /// tenant's bulk edit cannot claim every platform-wide slot.
     #[serde(default = "default_quota_per_connection_permits")]
     pub quota_per_connection_permits: usize,
+    /// Hard cap on a `/ads/metrics*` query's `[from, to]` span — a bounded
+    /// read is served from the rollup fast; an unbounded one is rejected
+    /// outright rather than left to time out (TASK-016, slice 10.7).
+    #[serde(default = "default_metrics_max_query_span_days")]
+    pub metrics_max_query_span_days: i64,
+    /// Days a rollup row stays marked `restating` — ad platforms keep
+    /// revising conversions for roughly this long after the fact.
+    #[serde(default = "default_metrics_restatement_days")]
+    pub metrics_restatement_days: i64,
+    /// Trailing window the ingestion sweep re-fetches on every tick, so a
+    /// platform's later restatement of an already-ingested day is picked up
+    /// without a separate backfill schedule.
+    #[serde(default = "default_metrics_ingestion_backfill_days")]
+    pub metrics_ingestion_backfill_days: i64,
+    /// A connection whose last successful metrics ingestion is older than
+    /// this is reported `stalled` by `/ads/metrics/freshness` rather than
+    /// presented as current.
+    #[serde(default = "default_metrics_freshness_stalled_after_hours")]
+    pub metrics_freshness_stalled_after_hours: f64,
 }
 
 const fn default_quota_platform_wide_permits() -> usize {
@@ -43,6 +62,22 @@ const fn default_quota_platform_wide_permits() -> usize {
 
 const fn default_quota_per_connection_permits() -> usize {
     3
+}
+
+const fn default_metrics_max_query_span_days() -> i64 {
+    92
+}
+
+const fn default_metrics_restatement_days() -> i64 {
+    7
+}
+
+const fn default_metrics_ingestion_backfill_days() -> i64 {
+    7
+}
+
+const fn default_metrics_freshness_stalled_after_hours() -> f64 {
+    26.0
 }
 
 fn default_token_kek_id() -> String {
@@ -71,6 +106,19 @@ impl std::fmt::Debug for AdvertisingConfig {
                 "quota_per_connection_permits",
                 &self.quota_per_connection_permits,
             )
+            .field(
+                "metrics_max_query_span_days",
+                &self.metrics_max_query_span_days,
+            )
+            .field("metrics_restatement_days", &self.metrics_restatement_days)
+            .field(
+                "metrics_ingestion_backfill_days",
+                &self.metrics_ingestion_backfill_days,
+            )
+            .field(
+                "metrics_freshness_stalled_after_hours",
+                &self.metrics_freshness_stalled_after_hours,
+            )
             .finish()
     }
 }
@@ -91,6 +139,10 @@ impl Default for AdvertisingConfig {
             meta_api_version: "v24.0".to_string(),
             quota_platform_wide_permits: default_quota_platform_wide_permits(),
             quota_per_connection_permits: default_quota_per_connection_permits(),
+            metrics_max_query_span_days: default_metrics_max_query_span_days(),
+            metrics_restatement_days: default_metrics_restatement_days(),
+            metrics_ingestion_backfill_days: default_metrics_ingestion_backfill_days(),
+            metrics_freshness_stalled_after_hours: default_metrics_freshness_stalled_after_hours(),
         }
     }
 }
@@ -108,6 +160,18 @@ impl AdvertisingConfig {
             anyhow::bail!(
                 "advertising per-connection quota permits cannot exceed the platform-wide budget"
             );
+        }
+        if self.metrics_max_query_span_days <= 0 {
+            anyhow::bail!("advertising metrics_max_query_span_days must be positive");
+        }
+        if self.metrics_restatement_days < 0 {
+            anyhow::bail!("advertising metrics_restatement_days must not be negative");
+        }
+        if self.metrics_ingestion_backfill_days <= 0 {
+            anyhow::bail!("advertising metrics_ingestion_backfill_days must be positive");
+        }
+        if self.metrics_freshness_stalled_after_hours <= 0.0 {
+            anyhow::bail!("advertising metrics_freshness_stalled_after_hours must be positive");
         }
         Ok(())
     }

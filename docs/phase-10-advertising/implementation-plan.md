@@ -22,8 +22,11 @@ The platform abstraction must make the third and fourth ad network **an adapter,
 
 Verified 2026-08-30 against the working tree and `docs/tasks/backlog.md` (the authoritative
 per-task status — this table summarizes it; the two are kept in sync but check the backlog row
-directly if they ever drift). 10.6's row below was verified directly this session (build, full
-`sanvi-advertising` test suite via `scripts/test.sh -p sanvi-advertising`, clippy, fmt, and
+directly if they ever drift). 10.7's row below was verified directly this session (full
+`sanvi-advertising` test suite via `cargo nextest run -p sanvi-advertising`, workspace clippy/fmt,
+`just layering`/`ads-invariants`/`connect-invariants`/`id-policy`/`openapi`/`i18n`, and the full
+workspace `scripts/test.sh --quiet` — 919/919 — all clean on an uncommitted working tree). 10.6's
+row was verified in the prior session (build, full `sanvi-advertising` test suite, clippy, fmt, and
 `check-openapi.sh`, all clean on `main` at `508db37`). 10.4/10.5's entries are carried over from
 their own `TASK-01{3,4}` status lines, not independently re-verified this session.
 
@@ -36,15 +39,16 @@ their own `TASK-01{3,4}` status lines, not independently re-verified this sessio
 | 10.4 Meta adapter & creatives | TASK-013 | 🟡 partial | creative CRUD (contract, `CreativeRepository`, `application::creatives`, HTTP), upload-time spec/text validation, broadened Meta capability matrix, per-platform rate-limit budgets, Meta drift test | **real Meta Marketing API adapter** — blocked on Meta app review, same as 10.2/10.3's Google adapter; campaign-budget-optimization `BudgetType` variant |
 | 10.5 conversion capture & directive gate | TASK-014 | 🟡 partial | directive-gated capture, `PaymentLookupPort`-derived conversion id, immutable order/name dedupe, click-id capture with Referer redaction | Docker-backed integration/CI verification of the latest review-hardening revision; mounting `/public/track` on the tenant's own phase-08 domain (deferred, needs frontend/infra coordination) |
 | 10.6 upload, dedupe & diagnostics | TASK-015 | 🟡 partial | upload sweep with per-platform state, withdrawal re-check (`suppressed_late`), DLQ after 5 attempts; `RetractWithdrawnConversions` (post-upload retraction, explicit `Unpropagated{reason}` when a platform can't remove a member); `SyncAudiences` + `/ads/audiences` CRUD/refresh (dual-consent `sale_or_share` **and** `targeted_advertising`, opted-out subjects actively removed from existing lists); diagnostics projection + manual retry; full `AdvertisingMetrics` coverage across all four sweeps | **real Google/Meta `ConversionSinkPort`/`AudienceSyncPort` implementations** — blocked on live credentials, same as 10.2/10.3/10.4 |
-| 10.7 metrics, rollups & ROAS | TASK-016 | ⬜ todo | — | blocked on 10.3 |
-| 10.8 budget guardrails & alerts | TASK-017 | ⬜ todo | — | blocked on 10.7 |
+| 10.7 metrics, rollups & ROAS | TASK-016 | 🟡 partial | idempotent `metrics_daily` upsert (replace-not-append, proven by test at row and rollup grain); campaign-day revenue join — a connection's sole active campaign attributes deterministically, an ambiguous or zero-candidate day parks in the new `metrics_unattributed_revenue_daily` table (surfaced only at platform/tenant grain, never split into a campaign row), a currency-mismatched conversion is skipped rather than mixed into one ratio; ROAS query layer (`GET /ads/metrics`, `/summary`, `/export`, `/freshness`) with `roas_platform`/`roas_sanvi` always both present and `null` (never `∞`) on zero spend, a `restating` flag, and a hard max-span rejection; `FakeAdPlatform.fetch_metrics` upgraded to a deterministic multi-day series carrying `conversion_value`; cross-tenant `RunMetricsIngestion` sweep in `apps/worker` (one schedule covers hourly-today and the trailing backfill); `ads_sync_duration_seconds`/`ads_sync_failures_total`/`metrics_ingestion_lag_hours` added to `AdvertisingMetrics` | **real Google/Meta reporting adapters** — blocked on live credentials, same as 10.2–10.6; a live FX rate source (`FxRatePort` exists, `rendered_spend` stays `None` — nothing calls a real provider yet); per-event click-id campaign attribution (needs the live adapter); the 500-campaign × 90-day load target and platform-parity verification (need a test account). Not yet committed |
+| 10.8 budget guardrails & alerts | TASK-017 | ⬜ todo | — | blocked on 10.7's provisional numbers becoming restatement-aware (they already are) — otherwise unblocked |
 | 10.9 privacy, hardening & release | TASK-018 | ⬜ todo | — | blocked on 10.4, 10.6, 10.8 |
 
-**Critical path note.** Every remaining gap in 10.2 through 10.6 is the same external blocker: no
-live Google/Meta platform credentials. The fake adapter carries the abstraction until they land,
-exactly as the cross-track plan intends — 10.6 (this session) is proof the pattern scales to a
-fourth slice cleanly. 10.7 is now the next slice with no external blocker: it depends only on
-10.3's campaign tree, which is already in place.
+**Critical path note.** Every remaining gap in 10.2 through 10.7 is the same external blocker: no
+live Google/Meta platform credentials (10.7 adds one more instance of it — reporting adapters — plus
+a live FX data source, itself never blocking anything else). The fake adapter carries the
+abstraction until they land, exactly as the cross-track plan intends — 10.7 (this session) is proof
+the pattern scales to ingestion/rollups, not just campaign CRUD. 10.8 is next with no external
+blocker of its own: it only needs 10.7's restatement-aware spend number, which is already in place.
 
 ## 3. Scope
 
