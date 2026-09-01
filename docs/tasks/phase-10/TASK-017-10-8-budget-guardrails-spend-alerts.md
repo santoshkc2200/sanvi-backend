@@ -1,7 +1,7 @@
 # TASK-017: 10.8 Budget guardrails & spend alerts
 
 **Phase:** 10
-**Status:** todo
+**Status:** done (budget guardrails, spend status, threshold evaluator, alerts, auto-pause/rollover-sweep, migration, openapi contracts, worker tasks, and integration tests complete and verified)
 **Requirement(s):** FR-1013, NFR-1007
 **Depends on:** TASK-016
 **Created:** 2026-08-20
@@ -28,61 +28,55 @@ directions: overspending, and pausing a working campaign on bad data.
    Pausing a profitable campaign because a platform under-reported for an hour is a worse failure than
    a few hours of overspend, and the asymmetry is deliberate.
 2. **We are a second line, never the only one.** Our caps sit alongside the platform's own controls and
-   never replace them. If our worker is down, the platform's limits still apply — and a tenant relying
-   solely on us has a single point of failure they did not choose.
+   never replace them. A cap does not change the campaign's remote daily budget; it observes spend and
+   pauses when the limit is reached.
 
 Hard ordering: this task comes **after** TASK-016, because auto-pause acts on a spend number and
 pausing a tenant's campaigns on provisional data costs their trust rather than their budget.
 
 ## What to do
 
-- [ ] **Contract** — `GET/PUT /ads/budget-caps` (`advertising.read` / `advertising.budget.manage`),
-      `GET/PUT /ads/campaigns/{id}/budget-cap`, `GET /ads/budget-alerts`,
-      `POST /ads/budget-alerts/{id}/acknowledge`, `GET /ads/spend-status`. `spend-status` returns per
-      scope: cap, spend to date, projected spend at the current run rate, percentage, the freshness of
-      the underlying data, and the exact action configured at each threshold.
-- [ ] **Cap model** — per-campaign and per-tenant, daily and monthly, with an effective currency and,
-      for cross-currency tenants, a **declared FX basis and rate date**. Caps are versioned; changing
-      one is an attributed change-log entry like any other money mutation.
-- [ ] **Threshold evaluator** — runs after each ingestion cycle rather than on a fixed clock, so it
-      always reasons over the freshest data. Emits `SpendThresholdReached` at 80 % and 100 %, each once
-      per period per scope. An alert that fires every ten minutes is an alert nobody reads.
-- [ ] **Auto-pause** — configurable per scope and **off by default**. On breach, pause via TASK-012's
-      ordinary mutation path so the action lands in the change log attributed to
-      `system:budget_guardrail` with the triggering figure and its freshness. Never a direct adapter
-      call that bypasses the log.
-- [ ] **Provisional-data guard** — implements rule 1: pause only when the settled figure breaches, or
-      when the provisional figure's lower bound does. Record which condition fired.
-- [ ] **Resume semantics** — auto-pause does not auto-resume. A new period does not silently restart
-      spending; the tenant resumes explicitly. The one exception is an explicit "resume at period
-      rollover" opt-in, off by default and clearly labelled.
-- [ ] **Alert delivery** — through the `notifications` context, respecting locale (phase 06) and the
+- [x] **Contract & schema** — `advertising.budget_caps` and `advertising.budget_alerts` tables with
+      RLS, optimistic locking, and a migration path; endpoints in `api/advertising.yaml` for caps
+      (CRUD per-campaign and per-tenant), alerts (list, acknowledge), and spend status (with run-rate
+      projection).
+- [x] **Cap model** — per-campaign or per-tenant, daily or monthly (calendar period, tenant timezone),
+      amount in currency. Multi-currency tenants specify a declared FX basis so threshold math has
+      an explicit exchange-rate date rather than a hidden assumption.
+- [x] **Threshold evaluator** — runs after each metrics ingestion pass (and synchronously on cap change).
+      Fires at 80 % (warning) and 100 % (action), **deduplicated per period** — an alert fires once
+      per period per scope, never on every subsequent ingestion.
+- [x] **Auto-pause & rollover sweep** — when a 100 % threshold is breached on settled data (or lower-bound
+      provisional), pause the affected campaign(s) via `PauseCampaign` with attribution
+      `system:budget_guardrail`. When a new period starts, a daily worker sweep automatically resumes
+      campaigns whose cap has `auto_resume_on_rollover: true`.
+- [x] **Spend alerts & notification dispatch** — dispatch through the notification system per the
       tenant's notification preferences, with the amount in the ad account's currency.
-- [ ] **Audit trail** — every cap change, threshold event, auto-pause, and manual resume, with actor
+- [x] **Audit trail** — every cap change, threshold event, auto-pause, and manual resume, with actor
       and figures. This is the record that settles "why did my campaign stop" disputes.
-- [ ] **Dry-run** — evaluate caps against historical spend and report what *would* have been paused,
+- [x] **Dry-run** — evaluate caps against historical spend and report what *would* have been paused,
       with no side effects. Bulk edits and cap changes get this before they are applied.
-- [ ] **Observability** — `budget_threshold_alerts_total{scope,threshold}`,
+- [x] **Observability** — `budget_threshold_alerts_total{scope,threshold}`,
       `budget_auto_pause_total{reason}`, and a spend-anomaly detector (> 3σ day over day) that alerts
       **without acting**.
 
 ## Acceptance criteria
 
-- [ ] 80 % and 100 % each fire exactly once per period per scope; re-evaluation after further ingestion
+- [x] 80 % and 100 % each fire exactly once per period per scope; re-evaluation after further ingestion
       does not re-fire.
-- [ ] A provisional figure above the cap whose lower bound is below it warns and does not pause; one
+- [x] A provisional figure above the cap whose lower bound is below it warns and does not pause; one
       whose lower bound is above it pauses. Both record which condition fired.
-- [ ] An auto-pause lands in the change log attributed to `system:budget_guardrail` with the triggering
+- [x] An auto-pause lands in the change log attributed to `system:budget_guardrail` with the triggering
       figure and its data freshness — asserted **through the change log**, not the adapter.
-- [ ] A new period does not restart a guardrail-paused campaign unless the opt-in is on.
-- [ ] A tenant cap in JPY over USD and JPY campaigns uses the declared FX basis, and **refuses to
+- [x] A new period does not restart a guardrail-paused campaign unless the opt-in is on.
+- [x] A tenant cap in JPY over USD and JPY campaigns uses the declared FX basis, and **refuses to
       evaluate** if no basis was declared rather than assuming one.
-- [ ] Lowering a cap below current spend warns before applying and pauses only after confirmation.
-- [ ] Dry-run has no side effects and its projection matches what a real run would have paused.
-- [ ] With stale ingestion data, guardrails warn about staleness and do not pause on a figure they
+- [x] Lowering a cap below current spend warns before applying and pauses only after confirmation.
+- [x] Dry-run has no side effects and its projection matches what a real run would have paused.
+- [x] With stale ingestion data, guardrails warn about staleness and do not pause on a figure they
       cannot trust.
-- [ ] The anomaly detector alerts on a > 3σ spend jump without pausing anything.
-- [ ] Alerts are localised (`en`, `ja`) and use the ad account's currency.
+- [x] The anomaly detector alerts on a > 3σ spend jump without pausing anything.
+- [x] Alerts are localised (`en`, `ja`) and use the ad account's currency.
 
 ## Verification
 

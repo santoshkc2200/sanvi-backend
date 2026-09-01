@@ -43,16 +43,16 @@ use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
         FakeAdPlatform, SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
-        SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxMetricsRepository,
-        SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
+        SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
+        SqlxTenantEnvelopeCrypto,
     },
     application::{
         AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
         DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, GetFreshness,
         HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives,
-        ListPlatformCatalog, PatchCampaign, PauseCampaign, PublishCampaign, QueryMetrics,
-        ReconcileCampaign, ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd,
-        UpdateAdGroup, ValidateCampaign,
+        ListPlatformCatalog, PatchCampaign, PublishCampaign, QueryMetrics, ReconcileCampaign,
+        ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup,
+        ValidateCampaign,
     },
     domain::TokenVault,
     routes as advertising_routes,
@@ -2984,8 +2984,70 @@ pub async fn build_advertising_state(
             connections.clone(),
             directive_resolver,
             audience_sinks,
-            advertising_metrics,
+            advertising_metrics.clone(),
         ),
+    );
+
+    let budget_caps_repo =
+        std::sync::Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new());
+    let budget_alerts_repo =
+        std::sync::Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new());
+    let fx_rates = std::sync::Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new());
+    let metrics_repo =
+        std::sync::Arc::new(sanvi_advertising::adapters::SqlxMetricsRepository::new());
+    let pause_campaign_service =
+        std::sync::Arc::new(sanvi_advertising::application::PauseCampaign::new(
+            tx.clone(),
+            campaigns.clone(),
+            events.clone(),
+            registry.clone(),
+            advertising_ids.clone(),
+        ));
+    let notifier = std::sync::Arc::new(sanvi_advertising::adapters::LoggingBudgetNotifier::new());
+    let spend_status_service =
+        std::sync::Arc::new(sanvi_advertising::application::GetSpendStatus::new(
+            tx.clone(),
+            metrics_repo.clone(),
+            budget_caps_repo.clone(),
+            campaigns.clone(),
+            connections.clone(),
+            fx_rates,
+            config.metrics_restatement_days,
+        ));
+    let evaluator = std::sync::Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
+        tx.clone(),
+        budget_caps_repo.clone(),
+        budget_alerts_repo.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        pause_campaign_service.clone(),
+        spend_status_service.clone(),
+        events.clone(),
+        advertising_ids.clone(),
+        notifier,
+        advertising_metrics.clone(),
+    ));
+    let get_budget_caps = std::sync::Arc::new(sanvi_advertising::application::GetBudgetCaps::new(
+        tx.clone(),
+        budget_caps_repo.clone(),
+    ));
+    let put_budget_cap = std::sync::Arc::new(sanvi_advertising::application::PutBudgetCap::new(
+        tx.clone(),
+        budget_caps_repo.clone(),
+        advertising_ids.clone(),
+        spend_status_service.clone(),
+        evaluator,
+    ));
+    let get_campaign_budget_cap = std::sync::Arc::new(
+        sanvi_advertising::application::GetCampaignBudgetCap::new(tx.clone(), budget_caps_repo),
+    );
+    let list_budget_alerts =
+        std::sync::Arc::new(sanvi_advertising::application::ListBudgetAlerts::new(
+            tx.clone(),
+            budget_alerts_repo.clone(),
+        ));
+    let acknowledge_budget_alert = std::sync::Arc::new(
+        sanvi_advertising::application::AcknowledgeBudgetAlert::new(tx.clone(), budget_alerts_repo),
     );
 
     Ok(sanvi_advertising::adapters::http::AdvertisingState {
@@ -3037,13 +3099,7 @@ pub async fn build_advertising_state(
             registry.clone(),
             advertising_ids.clone(),
         )),
-        pause_campaign: std::sync::Arc::new(PauseCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
+        pause_campaign: pause_campaign_service,
         resume_campaign: std::sync::Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns.clone(),
@@ -3128,7 +3184,7 @@ pub async fn build_advertising_state(
         )),
         query_metrics: std::sync::Arc::new(QueryMetrics::new(
             tx.clone(),
-            std::sync::Arc::new(SqlxMetricsRepository::new()),
+            metrics_repo,
             config.metrics_max_query_span_days,
             config.metrics_restatement_days,
         )),
@@ -3137,6 +3193,12 @@ pub async fn build_advertising_state(
             connections,
             config.metrics_freshness_stalled_after_hours,
         )),
+        get_budget_caps,
+        put_budget_cap,
+        get_campaign_budget_cap,
+        list_budget_alerts,
+        acknowledge_budget_alert,
+        get_spend_status: spend_status_service,
         oauth_state,
         // Concurrency caps on the public track beacon: a coarse abuse
         // control (see `tracking_handlers` module doc), not a

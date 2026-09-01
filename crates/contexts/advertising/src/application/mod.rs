@@ -1,5 +1,6 @@
 //! Advertising application services.
 
+pub mod budget;
 pub mod campaigns;
 pub mod catalog;
 pub mod connections;
@@ -11,6 +12,12 @@ pub mod reconciliation_sweep;
 pub mod registry;
 pub mod tracking;
 
+pub use budget::{
+    AcknowledgeBudgetAlert, BudgetRolloverSweep, CalculatedSpendDetails, DryRunEvaluationResult,
+    GetBudgetCaps, GetCampaignBudgetCap, GetSpendStatus, ListBudgetAlerts, PutBudgetCap,
+    PutBudgetCapCommand, PutBudgetCapResponse, SpendAnomalyDetector, SpendStatusReport,
+    ThresholdEvaluator,
+};
 pub use campaigns::{
     AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, GetCampaign,
     ListCampaignChanges, ListCampaigns, NewAdFields, NewAdGroupFields, NewCampaignFields,

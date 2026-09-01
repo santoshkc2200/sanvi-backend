@@ -57,7 +57,8 @@ pub enum AdEvent {
         reason: String,
     },
     SpendThresholdReached {
-        campaign_id: CampaignId,
+        campaign_id: Option<CampaignId>,
+        threshold: u32,
     },
     MetricsIngested {
         connection_id: ConnectionId,
@@ -82,7 +83,7 @@ impl AdEvent {
         }
     }
 
-    fn aggregate(&self) -> (&'static str, SnowflakeId) {
+    fn aggregate(&self, tenant_id: TenantId) -> (&'static str, SnowflakeId) {
         match self {
             Self::AccountConnected { connection_id }
             | Self::AccountDisconnected { connection_id }
@@ -93,10 +94,13 @@ impl AdEvent {
             | Self::CampaignUpdated { campaign_id }
             | Self::CampaignPaused { campaign_id }
             | Self::CampaignResumed { campaign_id }
-            | Self::CampaignDrifted { campaign_id, .. }
-            | Self::SpendThresholdReached { campaign_id } => {
+            | Self::CampaignDrifted { campaign_id, .. } => {
                 ("advertising.campaign", campaign_id.as_snowflake())
             }
+            Self::SpendThresholdReached { campaign_id, .. } => match campaign_id {
+                Some(id) => ("advertising.campaign", id.as_snowflake()),
+                None => ("advertising.tenant", tenant_id.as_snowflake()),
+            },
             Self::ConversionRecorded { event_id }
             | Self::ConversionUploaded { event_id }
             | Self::ConversionUploadFailed { event_id, .. } => {
@@ -106,7 +110,7 @@ impl AdEvent {
     }
 
     pub fn envelope(&self, tenant_id: TenantId, event_id: EventId) -> EventEnvelope {
-        let (aggregate, aggregate_id) = self.aggregate();
+        let (aggregate, aggregate_id) = self.aggregate(tenant_id);
         EventEnvelope::new(
             event_id,
             aggregate,
@@ -163,7 +167,10 @@ mod tests {
                 event_id: ConversionId::try_from(1_000_004_i64).unwrap(),
                 reason: "rejected".to_string(),
             },
-            AdEvent::SpendThresholdReached { campaign_id: id },
+            AdEvent::SpendThresholdReached {
+                campaign_id: Some(id),
+                threshold: 80,
+            },
             AdEvent::MetricsIngested {
                 connection_id: ConnectionId::try_from(1_000_003_i64).unwrap(),
             },

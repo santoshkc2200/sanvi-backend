@@ -102,4 +102,16 @@ impl crate::domain::IdGenerator for SystemIdGenerator {
         self.next()
             .map(crate::domain::model::AudienceId::from_snowflake)
     }
+
+    fn next_budget_cap_id(&self) -> Result<crate::domain::model::BudgetCapId, AdvertisingError> {
+        self.next()
+            .map(crate::domain::model::BudgetCapId::from_snowflake)
+    }
+
+    fn next_budget_alert_id(
+        &self,
+    ) -> Result<crate::domain::model::BudgetAlertId, AdvertisingError> {
+        self.next()
+            .map(crate::domain::model::BudgetAlertId::from_snowflake)
+    }
 }

@@ -488,6 +488,193 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
     }
 }
 
+struct WorkerAdvertisingNotifications {
+    localizer: Arc<NotificationLocalizer>,
+}
+
+impl WorkerAdvertisingNotifications {
+    async fn render(
+        &self,
+        tenant_id: TenantId,
+        subject_key: &str,
+        body_key: &str,
+        args: &[(&str, LocalizationArg)],
+    ) {
+        let context = self.localizer.tenant_locale(tenant_id).await;
+        let subject = self.localizer.render(&context, subject_key, args);
+        let body = self.localizer.render(&context, body_key, args);
+        tracing::info!(
+            %tenant_id,
+            locale = %context.locale,
+            subject = %subject,
+            body = %body,
+            "localized budget guardrail notification rendered"
+        );
+    }
+}
+
+#[async_trait::async_trait]
+impl sanvi_advertising::domain::BudgetNotifier for WorkerAdvertisingNotifications {
+    async fn notify_threshold_80(
+        &self,
+        tenant_id: TenantId,
+        scope: &str,
+        current_spend: &sanvi_advertising::domain::Money,
+        cap_amount: &sanvi_advertising::domain::Money,
+        period: sanvi_advertising::domain::BudgetPeriod,
+    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
+        let period_str = match period {
+            sanvi_advertising::domain::BudgetPeriod::Daily => "daily",
+            sanvi_advertising::domain::BudgetPeriod::Monthly => "monthly",
+        };
+        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
+        let formatted_cap = format!("{} {}", cap_amount.amount_minor, cap_amount.currency);
+        self.render(
+            tenant_id,
+            "emails.budget_warning_80.subject",
+            "emails.budget_warning_80.body",
+            &[
+                ("scope", LocalizationArg::from(scope.to_string())),
+                ("spend", LocalizationArg::from(formatted_spend)),
+                ("cap", LocalizationArg::from(formatted_cap)),
+                ("period", LocalizationArg::from(period_str.to_string())),
+            ],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn notify_cap_breached(
+        &self,
+        tenant_id: TenantId,
+        scope: &str,
+        current_spend: &sanvi_advertising::domain::Money,
+        cap_amount: &sanvi_advertising::domain::Money,
+        period: sanvi_advertising::domain::BudgetPeriod,
+        action_taken: &str,
+    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
+        let period_str = match period {
+            sanvi_advertising::domain::BudgetPeriod::Daily => "daily",
+            sanvi_advertising::domain::BudgetPeriod::Monthly => "monthly",
+        };
+        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
+        let formatted_cap = format!("{} {}", cap_amount.amount_minor, cap_amount.currency);
+        self.render(
+            tenant_id,
+            "emails.budget_cap_breached.subject",
+            "emails.budget_cap_breached.body",
+            &[
+                ("scope", LocalizationArg::from(scope.to_string())),
+                ("spend", LocalizationArg::from(formatted_spend)),
+                ("cap", LocalizationArg::from(formatted_cap)),
+                ("period", LocalizationArg::from(period_str.to_string())),
+                ("action", LocalizationArg::from(action_taken.to_string())),
+            ],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn notify_provisional_warning(
+        &self,
+        tenant_id: TenantId,
+        scope: &str,
+        current_spend: &sanvi_advertising::domain::Money,
+        cap_amount: &sanvi_advertising::domain::Money,
+        lower_bound: &sanvi_advertising::domain::Money,
+        period: sanvi_advertising::domain::BudgetPeriod,
+    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
+        let period_str = match period {
+            sanvi_advertising::domain::BudgetPeriod::Daily => "daily",
+            sanvi_advertising::domain::BudgetPeriod::Monthly => "monthly",
+        };
+        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
+        let formatted_cap = format!("{} {}", cap_amount.amount_minor, cap_amount.currency);
+        let formatted_lower = format!("{} {}", lower_bound.amount_minor, lower_bound.currency);
+        self.render(
+            tenant_id,
+            "emails.budget_provisional_warning.subject",
+            "emails.budget_provisional_warning.body",
+            &[
+                ("scope", LocalizationArg::from(scope.to_string())),
+                ("spend", LocalizationArg::from(formatted_spend)),
+                ("cap", LocalizationArg::from(formatted_cap)),
+                ("lower_bound", LocalizationArg::from(formatted_lower)),
+                ("period", LocalizationArg::from(period_str.to_string())),
+            ],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn notify_stale_warning(
+        &self,
+        tenant_id: TenantId,
+        scope: &str,
+        lag_hours: f64,
+    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
+        self.render(
+            tenant_id,
+            "emails.budget_stale_warning.subject",
+            "emails.budget_stale_warning.body",
+            &[
+                ("scope", LocalizationArg::from(scope.to_string())),
+                (
+                    "lag_hours",
+                    LocalizationArg::from(format!("{:.1}", lag_hours)),
+                ),
+            ],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn notify_spend_anomaly(
+        &self,
+        tenant_id: TenantId,
+        scope: &str,
+        current_spend: &sanvi_advertising::domain::Money,
+        historical_mean: &sanvi_advertising::domain::Money,
+        sigma_multiple: f64,
+    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
+        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
+        let formatted_mean = format!(
+            "{} {}",
+            historical_mean.amount_minor, historical_mean.currency
+        );
+        self.render(
+            tenant_id,
+            "emails.budget_spend_anomaly.subject",
+            "emails.budget_spend_anomaly.body",
+            &[
+                ("scope", LocalizationArg::from(scope.to_string())),
+                ("spend", LocalizationArg::from(formatted_spend)),
+                ("mean", LocalizationArg::from(formatted_mean)),
+                (
+                    "sigma",
+                    LocalizationArg::from(format!("{:.1}", sigma_multiple)),
+                ),
+            ],
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn notify_guardrails_rollback(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
+        self.render(
+            tenant_id,
+            "emails.budget_guardrails_rollback.subject",
+            "emails.budget_guardrails_rollback.body",
+            &[],
+        )
+        .await;
+        Ok(())
+    }
+}
+
 /// Outbox dispatcher tuning.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -585,6 +772,10 @@ pub struct SchedulerConfig {
     /// "hourly for today" and the trailing backfill — see
     /// `RunMetricsIngestion::execute`'s doc comment for why.
     pub advertising_metrics_ingestion_interval_secs: u64,
+    /// Budget guardrails evaluation & spend anomaly sweep (TASK-017, 10.8).
+    pub advertising_budget_guardrails_interval_secs: u64,
+    /// Budget rollover sweep (TASK-017, 10.8).
+    pub advertising_budget_rollover_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -621,6 +812,8 @@ impl Default for SchedulerConfig {
             advertising_conversion_retraction_interval_secs: 60,
             advertising_audience_sync_interval_secs: 3600,
             advertising_metrics_ingestion_interval_secs: 3600,
+            advertising_budget_guardrails_interval_secs: 300,
+            advertising_budget_rollover_interval_secs: 3600,
         }
     }
 }
@@ -1573,8 +1766,8 @@ async fn main() -> ExitCode {
     let advertising_reconcile_campaign = Arc::new(ReconcileCampaign::new(
         tx_manager.clone(),
         advertising_campaigns.clone(),
-        advertising_events,
-        advertising_ids,
+        advertising_events.clone(),
+        advertising_ids.clone(),
     ));
     let advertising_reconciliation_sweep = Arc::new(ReconcileDueCampaigns::new(
         tx_manager.clone(),
@@ -1643,7 +1836,7 @@ async fn main() -> ExitCode {
     let advertising_ingest_metrics = Arc::new(
         sanvi_advertising::application::IngestConnectionMetrics::new(
             tx_manager.clone(),
-            advertising_platforms,
+            advertising_platforms.clone(),
             advertising_campaigns.clone(),
             advertising_metrics_repo.clone(),
         ),
@@ -1651,22 +1844,135 @@ async fn main() -> ExitCode {
     let advertising_revenue_join =
         Arc::new(sanvi_advertising::application::JoinCampaignRevenue::new(
             tx_manager.clone(),
-            advertising_campaigns,
+            advertising_campaigns.clone(),
             advertising_connections.clone(),
             advertising_conversion_events,
-            advertising_metrics_repo,
+            advertising_metrics_repo.clone(),
         ));
     let advertising_metrics_ingestion_sweep =
         Arc::new(sanvi_advertising::application::RunMetricsIngestion::new(
             tx_manager.clone(),
-            advertising_connections,
+            advertising_connections.clone(),
             advertising_ingest_metrics,
             advertising_revenue_join,
-            advertising_metrics,
+            advertising_metrics.clone(),
             config.advertising.metrics_ingestion_backfill_days,
         ));
 
+    // TASK-017 (10.8): budget guardrails, spend alerts, threshold evaluator & rollover sweep.
+    let advertising_budget_caps: Arc<dyn sanvi_advertising::domain::BudgetCapRepository> =
+        Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new());
+    let advertising_budget_alerts: Arc<dyn sanvi_advertising::domain::BudgetAlertRepository> =
+        Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new());
+    let advertising_fx_rates: Arc<dyn sanvi_advertising::domain::FxRatePort> =
+        Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new());
+    let advertising_budget_notifier: Arc<dyn sanvi_advertising::domain::BudgetNotifier> =
+        Arc::new(WorkerAdvertisingNotifications {
+            localizer: notification_localizer.clone(),
+        });
+    let advertising_spend_status = Arc::new(sanvi_advertising::application::GetSpendStatus::new(
+        tx_manager.clone(),
+        advertising_metrics_repo.clone(),
+        advertising_budget_caps.clone(),
+        advertising_campaigns.clone(),
+        advertising_connections.clone(),
+        advertising_fx_rates,
+        config.advertising.metrics_restatement_days,
+    ));
+    let advertising_pause_campaign = Arc::new(sanvi_advertising::application::PauseCampaign::new(
+        tx_manager.clone(),
+        advertising_campaigns.clone(),
+        advertising_events.clone(),
+        advertising_platforms.clone(),
+        advertising_ids.clone(),
+    ));
+    let advertising_resume_campaign =
+        Arc::new(sanvi_advertising::application::ResumeCampaign::new(
+            tx_manager.clone(),
+            advertising_campaigns.clone(),
+            advertising_events.clone(),
+            advertising_platforms.clone(),
+            advertising_ids.clone(),
+        ));
+    let advertising_threshold_evaluator =
+        Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
+            tx_manager.clone(),
+            advertising_budget_caps.clone(),
+            advertising_budget_alerts,
+            advertising_campaigns.clone(),
+            advertising_connections.clone(),
+            advertising_pause_campaign,
+            advertising_spend_status,
+            advertising_events,
+            advertising_ids,
+            advertising_budget_notifier.clone(),
+            advertising_metrics.clone(),
+        ));
+    let advertising_spend_anomaly_detector =
+        Arc::new(sanvi_advertising::application::SpendAnomalyDetector::new(
+            tx_manager.clone(),
+            advertising_metrics_repo,
+            advertising_campaigns.clone(),
+            advertising_budget_notifier,
+            config.advertising.metrics_restatement_days,
+        ));
+    let advertising_rollover_sweep =
+        Arc::new(sanvi_advertising::application::BudgetRolloverSweep::new(
+            tx_manager.clone(),
+            advertising_budget_caps,
+            advertising_campaigns,
+            advertising_resume_campaign,
+        ));
+
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
+        Arc::new(FnJob::new(
+            "advertising.budget_guardrails",
+            Duration::from_secs(config.scheduler.advertising_budget_guardrails_interval_secs),
+            {
+                let tx = tx_manager.clone();
+                let evaluator = advertising_threshold_evaluator.clone();
+                let _anomaly_detector = advertising_spend_anomaly_detector.clone();
+                move || {
+                    let tx = tx.clone();
+                    let evaluator = evaluator.clone();
+                    Box::pin(async move {
+                        let mut scope = tx
+                            .begin_unscoped("advertising_budget_guardrails", "system")
+                            .await
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        let _ = evaluator.evaluate_all(&mut scope).await;
+                        scope.commit().await.map_err(|e| anyhow::anyhow!(e))?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "advertising.budget_rollover",
+            Duration::from_secs(config.scheduler.advertising_budget_rollover_interval_secs),
+            {
+                let tx = tx_manager.clone();
+                let rollover = advertising_rollover_sweep.clone();
+                move || {
+                    let tx = tx.clone();
+                    let rollover = rollover.clone();
+                    Box::pin(async move {
+                        let mut scope = tx
+                            .begin_unscoped("advertising_budget_rollover", "system")
+                            .await
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        let _ = rollover
+                            .sweep_all(&mut scope, sanvi_advertising::domain::BudgetPeriod::Daily)
+                            .await;
+                        let _ = rollover
+                            .sweep_all(&mut scope, sanvi_advertising::domain::BudgetPeriod::Monthly)
+                            .await;
+                        scope.commit().await.map_err(|e| anyhow::anyhow!(e))?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
         Arc::new(FnJob::new(
             "advertising.partition_maintenance",
             Duration::from_secs(

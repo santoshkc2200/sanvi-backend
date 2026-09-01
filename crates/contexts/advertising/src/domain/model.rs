@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use sanvi_kernel::{Id, TenantId};
+use sanvi_kernel::{Id, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 
 use super::AdvertisingError;
@@ -30,6 +30,12 @@ pub type AdId = Id<AdTag>;
 
 pub enum AudienceTag {}
 pub type AudienceId = Id<AudienceTag>;
+
+pub enum BudgetCapTag {}
+pub type BudgetCapId = Id<BudgetCapTag>;
+
+pub enum BudgetAlertTag {}
+pub type BudgetAlertId = Id<BudgetAlertTag>;
 
 /// Adapter-owned identifier. Domain code never switches on a platform name.
 #[derive(
@@ -419,4 +425,188 @@ pub struct Audience {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AudienceSyncReceipt {
     pub external_ref: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetPeriod {
+    Daily,
+    Monthly,
+}
+
+impl BudgetPeriod {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Daily => "daily",
+            Self::Monthly => "monthly",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, AdvertisingError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "daily" => Ok(Self::Daily),
+            "monthly" => Ok(Self::Monthly),
+            other => Err(AdvertisingError::InvalidInput(format!(
+                "invalid budget period: {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(tag = "kind", content = "campaign_id", rename_all = "snake_case")]
+pub enum BudgetScope {
+    Tenant,
+    Campaign {
+        #[schema(value_type = String)]
+        campaign_id: CampaignId,
+    },
+}
+
+impl BudgetScope {
+    pub fn as_scope_string(&self) -> String {
+        match self {
+            Self::Tenant => "tenant".to_string(),
+            Self::Campaign { campaign_id } => format!("campaign:{}", campaign_id),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertCondition {
+    SettledBreach,
+    ProvisionalLowerBoundBreach,
+    ProvisionalWarning,
+    StaleDataWarning,
+    SpendAnomaly,
+    Threshold80,
+}
+
+impl AlertCondition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SettledBreach => "settled_breach",
+            Self::ProvisionalLowerBoundBreach => "provisional_lower_bound_breach",
+            Self::ProvisionalWarning => "provisional_warning",
+            Self::StaleDataWarning => "stale_warning",
+            Self::SpendAnomaly => "spend_anomaly",
+            Self::Threshold80 => "threshold_80",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, AdvertisingError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "settled_breach" => Ok(Self::SettledBreach),
+            "provisional_lower_bound_breach" => Ok(Self::ProvisionalLowerBoundBreach),
+            "provisional_warning" => Ok(Self::ProvisionalWarning),
+            "stale_warning" => Ok(Self::StaleDataWarning),
+            "spend_anomaly" => Ok(Self::SpendAnomaly),
+            "threshold_80" => Ok(Self::Threshold80),
+            other => Err(AdvertisingError::InvalidInput(format!(
+                "invalid alert condition: {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DataFreshness {
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub lag_hours: Option<f64>,
+    pub is_settled: bool,
+    pub is_stale: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BudgetCap {
+    #[schema(value_type = String)]
+    pub id: BudgetCapId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
+    #[schema(value_type = Option<String>)]
+    pub campaign_id: Option<CampaignId>,
+    pub period: BudgetPeriod,
+    pub amount: Money,
+    pub effective_currency: String,
+    pub declared_fx_basis: Option<String>,
+    pub fx_rate_date: Option<chrono::NaiveDate>,
+    pub auto_pause: bool,
+    pub auto_resume_on_rollover: bool,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BudgetAlert {
+    #[schema(value_type = String)]
+    pub id: BudgetAlertId,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
+    #[schema(value_type = Option<String>)]
+    pub cap_id: Option<BudgetCapId>,
+    #[schema(value_type = Option<String>)]
+    pub campaign_id: Option<CampaignId>,
+    pub period: BudgetPeriod,
+    pub period_start: chrono::NaiveDate,
+    pub threshold: u32,
+    pub condition: AlertCondition,
+    pub spend: Money,
+    pub cap_amount: Money,
+    pub data_freshness: DataFreshness,
+    pub auto_paused: bool,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    #[schema(value_type = Option<String>)]
+    pub acknowledged_by: Option<UserId>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BudgetActionsConfigured {
+    pub threshold_80: String,
+    pub threshold_100: String,
+    pub auto_pause: bool,
+    pub auto_resume_on_rollover: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SpendStatusItem {
+    pub scope: String,
+    #[schema(value_type = Option<String>)]
+    pub campaign_id: Option<CampaignId>,
+    pub period: BudgetPeriod,
+    pub cap: Option<BudgetCap>,
+    pub spend_to_date: Money,
+    pub settled_spend: Money,
+    pub provisional_spend: Money,
+    pub provisional_lower_bound: Option<Money>,
+    pub projected_spend: Money,
+    pub percentage: Option<f64>,
+    pub data_freshness: DataFreshness,
+    pub actions_configured: BudgetActionsConfigured,
 }

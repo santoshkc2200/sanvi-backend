@@ -75,4 +75,12 @@ pub struct AdvertisingState {
     /// share this one query use case rather than each getting their own.
     pub query_metrics: Arc<crate::application::QueryMetrics>,
     pub get_freshness: Arc<crate::application::GetFreshness>,
+
+    /// Budget guardrails & spend alerts (TASK-017, 10.8).
+    pub get_budget_caps: Arc<crate::application::GetBudgetCaps>,
+    pub put_budget_cap: Arc<crate::application::PutBudgetCap>,
+    pub get_campaign_budget_cap: Arc<crate::application::GetCampaignBudgetCap>,
+    pub list_budget_alerts: Arc<crate::application::ListBudgetAlerts>,
+    pub acknowledge_budget_alert: Arc<crate::application::AcknowledgeBudgetAlert>,
+    pub get_spend_status: Arc<crate::application::GetSpendStatus>,
 }

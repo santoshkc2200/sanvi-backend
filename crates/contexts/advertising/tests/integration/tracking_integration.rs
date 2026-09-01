@@ -1144,7 +1144,7 @@ fn create_test_advertising_state(
             Arc::new(RefreshAudience::new(
                 tx.clone(),
                 campaign_repo.clone(),
-                campaign_repo,
+                campaign_repo.clone(),
                 connections.clone(),
                 directive_resolver,
                 audience_sinks,
@@ -1157,7 +1157,75 @@ fn create_test_advertising_state(
             92,
             7,
         )),
-        get_freshness: Arc::new(GetFreshness::new(tx, connections, 26.0)),
+        get_freshness: Arc::new(GetFreshness::new(tx.clone(), connections.clone(), 26.0)),
+        get_budget_caps: Arc::new(sanvi_advertising::application::GetBudgetCaps::new(
+            tx.clone(),
+            Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new()),
+        )),
+        put_budget_cap: {
+            let caps_repo = Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new());
+            let status_service = Arc::new(sanvi_advertising::application::GetSpendStatus::new(
+                tx.clone(),
+                Arc::new(sanvi_advertising::adapters::SqlxMetricsRepository::new()),
+                caps_repo.clone(),
+                campaign_repo.clone(),
+                connections.clone(),
+                Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new()),
+                7,
+            ));
+            let pause = Arc::new(sanvi_advertising::application::PauseCampaign::new(
+                tx.clone(),
+                campaign_repo.clone(),
+                events.clone(),
+                registry.clone(),
+                Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+            ));
+            let evaluator = Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
+                tx.clone(),
+                caps_repo.clone(),
+                Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new()),
+                campaign_repo.clone(),
+                connections.clone(),
+                pause,
+                status_service.clone(),
+                events.clone(),
+                Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+                Arc::new(sanvi_advertising::adapters::LoggingBudgetNotifier::new()),
+                Arc::new(AdvertisingMetrics::default()),
+            ));
+            Arc::new(sanvi_advertising::application::PutBudgetCap::new(
+                tx.clone(),
+                caps_repo,
+                Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+                status_service,
+                evaluator,
+            ))
+        },
+        get_campaign_budget_cap: Arc::new(
+            sanvi_advertising::application::GetCampaignBudgetCap::new(
+                tx.clone(),
+                Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new()),
+            ),
+        ),
+        list_budget_alerts: Arc::new(sanvi_advertising::application::ListBudgetAlerts::new(
+            tx.clone(),
+            Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new()),
+        )),
+        acknowledge_budget_alert: Arc::new(
+            sanvi_advertising::application::AcknowledgeBudgetAlert::new(
+                tx.clone(),
+                Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new()),
+            ),
+        ),
+        get_spend_status: Arc::new(sanvi_advertising::application::GetSpendStatus::new(
+            tx.clone(),
+            Arc::new(sanvi_advertising::adapters::SqlxMetricsRepository::new()),
+            Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new()),
+            campaign_repo.clone(),
+            connections.clone(),
+            Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new()),
+            7,
+        )),
         oauth_state,
         tracking_ip_limiter: Arc::new(QuotaLimiter::new(100, ip_permits)),
         tracking_domain_limiter: Arc::new(QuotaLimiter::new(100, domain_permits)),

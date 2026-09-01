@@ -2,12 +2,14 @@ use actix_web::{http::Method, web};
 use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
 use super::handlers::{
-    add_ad, add_ad_group, create_campaign, create_connection, create_creative, delete_connection,
-    delete_creative, get_ads_metrics, get_ads_metrics_export, get_ads_metrics_freshness,
-    get_ads_metrics_summary, get_campaign, get_creative, get_creative_previews, list_ad_platforms,
-    list_campaign_changes, list_campaigns, list_connections, list_creatives, oauth_callback,
-    patch_campaign, pause_campaign, publish_campaign, resolve_campaign_drift, resume_campaign,
-    start_oauth, update_ad, update_ad_group, validate_campaign,
+    acknowledge_budget_alert, add_ad, add_ad_group, create_campaign, create_connection,
+    create_creative, delete_connection, delete_creative, get_ads_metrics, get_ads_metrics_export,
+    get_ads_metrics_freshness, get_ads_metrics_summary, get_budget_alerts, get_budget_caps,
+    get_campaign, get_campaign_budget_cap, get_creative, get_creative_previews, get_spend_status,
+    list_ad_platforms, list_campaign_changes, list_campaigns, list_connections, list_creatives,
+    oauth_callback, patch_campaign, pause_campaign, publish_campaign, put_budget_cap,
+    put_campaign_budget_cap, resolve_campaign_drift, resume_campaign, start_oauth, update_ad,
+    update_ad_group, validate_campaign,
 };
 
 /// A catalog is available when at least one platform can be used. Individual
@@ -165,6 +167,41 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(PermissionMap::new(vec![(Method::GET, metrics_read)]))
             .route(web::get().to(get_ads_metrics_freshness)),
     );
+    let budget_manage = require_permission!("advertising.budget.manage", tenant);
+
+    cfg.service(
+        web::resource("/ads/budget-caps")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, read),
+                (Method::PUT, budget_manage),
+            ]))
+            .route(web::get().to(get_budget_caps))
+            .route(web::put().to(put_budget_cap)),
+    );
+    cfg.service(
+        web::resource("/ads/campaigns/{campaign_id}/budget-cap")
+            .app_data(PermissionMap::new(vec![
+                (Method::GET, read),
+                (Method::PUT, budget_manage),
+            ]))
+            .route(web::get().to(get_campaign_budget_cap))
+            .route(web::put().to(put_campaign_budget_cap)),
+    );
+    cfg.service(
+        web::resource("/ads/budget-alerts")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .route(web::get().to(get_budget_alerts)),
+    );
+    cfg.service(
+        web::resource("/ads/budget-alerts/{alert_id}/acknowledge")
+            .app_data(PermissionMap::new(vec![(Method::POST, budget_manage)]))
+            .route(web::post().to(acknowledge_budget_alert)),
+    );
+    cfg.service(
+        web::resource("/ads/spend-status")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .route(web::get().to(get_spend_status)),
+    );
 }
 
 pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
@@ -318,6 +355,48 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         "advertising.read",
         ResourceSpec::Tenant,
     ),
+    (
+        "/api/v1/tenant/ads/budget-caps",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/budget-caps",
+        Method::PUT,
+        "advertising.budget.manage",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+        Method::PUT,
+        "advertising.budget.manage",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/budget-alerts",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge",
+        Method::POST,
+        "advertising.budget.manage",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/ads/spend-status",
+        Method::GET,
+        "advertising.read",
+        ResourceSpec::Tenant,
+    ),
 ];
 
 pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
@@ -443,6 +522,41 @@ pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
     ),
     (
         "/api/v1/tenant/ads/creatives/{creative_id}/previews",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/budget-caps",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/budget-caps",
+        Method::PUT,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+        Method::PUT,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/budget-alerts",
+        Method::GET,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge",
+        Method::POST,
+        ADVERTISING_ENTITLEMENTS,
+    ),
+    (
+        "/api/v1/tenant/ads/spend-status",
         Method::GET,
         ADVERTISING_ENTITLEMENTS,
     ),

@@ -1,20 +1,25 @@
 use sanvi_advertising::adapters::http::handlers::{
-    AccountView, AdvertisingProblemType, CampaignChangesView, CampaignView, CampaignsView,
-    ConnectionFreshnessView, ConnectionHealthView, ConnectionView, ConnectionsView,
-    CreateAdGroupRequest, CreateAdRequest, CreateCampaignRequest, CreateConnectionRequest,
-    CreateCreativeRequest, CreativePreviewView, CreativePreviewsView, CreativeView, CreativesView,
-    MetricPoint, MetricsFreshnessView, MetricsQueryResponse, MetricsSummaryResponse,
-    MetricsSummaryRow, MoneyView, OAuthCallbackQuery, PatchAdGroupRequest, PatchAdRequest,
-    PatchCampaignRequest, PendingConnectionView, RenderedMoneyView, ResolveCampaignDriftRequest,
-    ResolvedCampaignDriftView, StartOAuthRequest, StartOAuthResponse, ValidationResultView,
+    AccountView, AdvertisingProblemType, BudgetAlertsView, BudgetCapsView, CampaignChangesView,
+    CampaignView, CampaignsView, ConnectionFreshnessView, ConnectionHealthView, ConnectionView,
+    ConnectionsView, CreateAdGroupRequest, CreateAdRequest, CreateCampaignRequest,
+    CreateConnectionRequest, CreateCreativeRequest, CreativePreviewView, CreativePreviewsView,
+    CreativeView, CreativesView, MetricPoint, MetricsFreshnessView, MetricsQueryResponse,
+    MetricsSummaryResponse, MetricsSummaryRow, MoneyView, OAuthCallbackQuery, PatchAdGroupRequest,
+    PatchAdRequest, PatchCampaignRequest, PendingConnectionView, PutBudgetCapRequest,
+    RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView, StartOAuthRequest,
+    StartOAuthResponse, ValidationResultView,
 };
 use sanvi_advertising::adapters::http::tracking_handlers::{
     CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest,
 };
+use sanvi_advertising::application::{
+    DryRunEvaluationResult, PutBudgetCapResponse, SpendStatusReport,
+};
 use sanvi_advertising::domain::{
-    Audience, AudienceStatus, ClickIds, ConsentSnapshot, ConversionDiagnostics, ConversionEvent,
-    HashedIdentifier, Money as AdvertisingMoney, TrackingSettings, UploadReceipt, UploadState,
-    ValueSource,
+    AlertCondition, Audience, AudienceStatus, BudgetActionsConfigured, BudgetAlert, BudgetCap,
+    BudgetPeriod, ClickIds, ConsentSnapshot, ConversionDiagnostics, ConversionEvent, DataFreshness,
+    HashedIdentifier, Money as AdvertisingMoney, SpendStatusItem, TrackingSettings, UploadReceipt,
+    UploadState, ValueSource,
 };
 use sanvi_http::{ApiError, ProblemDetail};
 use utoipa::OpenApi;
@@ -210,6 +215,13 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::handlers::get_ads_metrics_summary,
         sanvi_advertising::adapters::http::handlers::get_ads_metrics_export,
         sanvi_advertising::adapters::http::handlers::get_ads_metrics_freshness,
+        sanvi_advertising::adapters::http::handlers::get_budget_caps,
+        sanvi_advertising::adapters::http::handlers::put_budget_cap,
+        sanvi_advertising::adapters::http::handlers::get_campaign_budget_cap,
+        sanvi_advertising::adapters::http::handlers::put_campaign_budget_cap,
+        sanvi_advertising::adapters::http::handlers::get_budget_alerts,
+        sanvi_advertising::adapters::http::handlers::acknowledge_budget_alert,
+        sanvi_advertising::adapters::http::handlers::get_spend_status,
         sanvi_advertising::adapters::http::tracking_handlers::public_track_conversion,
         sanvi_advertising::adapters::http::tracking_handlers::get_tracking_settings,
         sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
@@ -235,7 +247,10 @@ use utoipa::OpenApi;
         UploadReceipt, UploadState, AdvertisingMoney, HashedIdentifier,
         CreateAudienceRequest, Audience, AudienceStatus,
         MetricsQueryResponse, MetricsSummaryResponse, MetricsSummaryRow,
-        MetricsFreshnessView, ConnectionFreshnessView
+        MetricsFreshnessView, ConnectionFreshnessView,
+        BudgetCapsView, BudgetAlertsView, PutBudgetCapRequest, PutBudgetCapResponse,
+        BudgetCap, BudgetAlert, BudgetPeriod, AlertCondition, DataFreshness,
+        SpendStatusItem, SpendStatusReport, BudgetActionsConfigured, DryRunEvaluationResult
     )),
     tags(
         (name = "system", description = "System, health and build information"),

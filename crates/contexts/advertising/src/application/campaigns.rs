@@ -185,6 +185,8 @@ impl CreateCampaign {
                     changed_fields: vec!["*".to_string()],
                     before_state: draft.clone(),
                     after_state: draft,
+                    attribution: None,
+                    metadata: None,
                     created_at: Utc::now(),
                 },
             )
@@ -519,6 +521,8 @@ where
                 changed_fields,
                 before_state: before,
                 after_state: updated.intent.clone(),
+                attribution: None,
+                metadata: None,
                 created_at: Utc::now(),
             },
         )
@@ -1214,6 +1218,8 @@ impl PublishCampaign {
                     changed_fields: vec!["status".to_string(), "external_id".to_string()],
                     before_state: before,
                     after_state: updated.intent.clone(),
+                    attribution: None,
+                    metadata: None,
                     created_at: Utc::now(),
                 },
             )
@@ -1255,6 +1261,29 @@ impl SetCampaignRunState {
         campaign_id: CampaignId,
         mutation_id: Uuid,
         actor_id: UserId,
+        direction: PauseOrResume,
+    ) -> Result<StoredCampaign, AdvertisingError> {
+        self.execute_with_attribution(
+            tenant_id,
+            campaign_id,
+            mutation_id,
+            Some(actor_id),
+            None,
+            None,
+            direction,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_with_attribution(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        mutation_id: Uuid,
+        actor_id: Option<UserId>,
+        attribution: Option<String>,
+        metadata: Option<serde_json::Value>,
         direction: PauseOrResume,
     ) -> Result<StoredCampaign, AdvertisingError> {
         let mut scope = self
@@ -1307,11 +1336,13 @@ impl SetCampaignRunState {
                     campaign_id,
                     revision: updated.revision,
                     mutation_id: Some(mutation_id),
-                    actor_id: Some(actor_id),
+                    actor_id,
+                    attribution,
                     source: ChangeSource::Sanvi,
                     changed_fields: vec!["status".to_string()],
                     before_state: before,
                     after_state: updated.intent.clone(),
+                    metadata,
                     created_at: Utc::now(),
                 },
             )
@@ -1363,6 +1394,27 @@ impl PauseCampaign {
             )
             .await
     }
+
+    pub async fn execute_guardrail(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        mutation_id: Uuid,
+        attribution: &str,
+        metadata: serde_json::Value,
+    ) -> Result<StoredCampaign, AdvertisingError> {
+        self.0
+            .execute_with_attribution(
+                tenant_id,
+                campaign_id,
+                mutation_id,
+                None,
+                Some(attribution.to_string()),
+                Some(metadata),
+                PauseOrResume::Pause,
+            )
+            .await
+    }
 }
 
 pub struct ResumeCampaign(SetCampaignRunState);
@@ -1397,6 +1449,26 @@ impl ResumeCampaign {
                 campaign_id,
                 mutation_id,
                 actor_id,
+                PauseOrResume::Resume,
+            )
+            .await
+    }
+
+    pub async fn execute_guardrail_rollover(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        mutation_id: Uuid,
+        attribution: &str,
+    ) -> Result<StoredCampaign, AdvertisingError> {
+        self.0
+            .execute_with_attribution(
+                tenant_id,
+                campaign_id,
+                mutation_id,
+                None,
+                Some(attribution.to_string()),
+                None,
                 PauseOrResume::Resume,
             )
             .await

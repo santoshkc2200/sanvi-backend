@@ -171,10 +171,12 @@ struct CampaignChangeRow {
     revision: i64,
     mutation_id: Option<uuid::Uuid>,
     actor_id: Option<i64>,
+    attribution: Option<String>,
     source: String,
     changed_fields: serde_json::Value,
     before_state: serde_json::Value,
     after_state: serde_json::Value,
+    metadata: Option<serde_json::Value>,
     created_at: DateTime<Utc>,
 }
 
@@ -205,6 +207,7 @@ impl TryFrom<CampaignChangeRow> for CampaignChange {
                 .map(UserId::try_from)
                 .transpose()
                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
+            attribution: row.attribution,
             source,
             changed_fields: serde_json::from_value(row.changed_fields).map_err(|error| {
                 AdvertisingError::Storage(format!("invalid campaign change fields: {error}"))
@@ -215,6 +218,7 @@ impl TryFrom<CampaignChangeRow> for CampaignChange {
             after_state: serde_json::from_value(row.after_state).map_err(|error| {
                 AdvertisingError::Storage(format!("invalid campaign change after state: {error}"))
             })?,
+            metadata: row.metadata,
             created_at: row.created_at,
         })
     }
@@ -393,9 +397,9 @@ impl CampaignRepository for SqlxCampaignRepository {
     ) -> Result<(), AdvertisingError> {
         sqlx::query(
             "INSERT INTO advertising.campaign_changes
-             (id, tenant_id, campaign_id, revision, mutation_id, actor_id, source, changed_fields,
-              before_state, after_state, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+             (id, tenant_id, campaign_id, revision, mutation_id, actor_id, attribution, source, changed_fields,
+              before_state, after_state, metadata, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
         )
         .bind(change.id.as_i64())
         .bind(change.tenant_id.as_i64())
@@ -403,6 +407,7 @@ impl CampaignRepository for SqlxCampaignRepository {
         .bind(change.revision)
         .bind(change.mutation_id)
         .bind(change.actor_id.map(|v| v.as_i64()))
+        .bind(&change.attribution)
         .bind(change.source.as_str())
         .bind(
             serde_json::to_value(&change.changed_fields)
@@ -416,6 +421,7 @@ impl CampaignRepository for SqlxCampaignRepository {
             serde_json::to_value(&change.after_state)
                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
         )
+        .bind(&change.metadata)
         .bind(change.created_at)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
@@ -431,8 +437,8 @@ impl CampaignRepository for SqlxCampaignRepository {
         mutation_id: uuid::Uuid,
     ) -> Result<Option<CampaignChange>, AdvertisingError> {
         sqlx::query_as::<_, CampaignChangeRow>(
-            "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, source,
-                    changed_fields, before_state, after_state, created_at
+            "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, attribution, source,
+                    changed_fields, before_state, after_state, metadata, created_at
              FROM advertising.campaign_changes
              WHERE tenant_id=$1 AND campaign_id=$2 AND mutation_id=$3",
         )
@@ -454,8 +460,8 @@ impl CampaignRepository for SqlxCampaignRepository {
         limit: i64,
     ) -> Result<Vec<CampaignChange>, AdvertisingError> {
         sqlx::query_as::<_, CampaignChangeRow>(
-            "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, source,
-                    changed_fields, before_state, after_state, created_at
+            "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, attribution, source,
+                    changed_fields, before_state, after_state, metadata, created_at
              FROM advertising.campaign_changes
              WHERE tenant_id=$1 AND campaign_id=$2
              ORDER BY created_at DESC, id DESC

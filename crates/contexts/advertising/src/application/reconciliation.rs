@@ -98,6 +98,8 @@ impl ReconcileCampaign {
                     changed_fields: changed_fields.clone(),
                     before_state: before_remote,
                     after_state: updated.remote_snapshot.clone(),
+                    attribution: None,
+                    metadata: None,
                     created_at: Utc::now(),
                 },
             )
