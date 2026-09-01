@@ -702,22 +702,20 @@ async fn spawn_app(
 }
 
 #[tokio::test]
-async fn the_catalog_route_requires_the_entitlement() {
+async fn the_catalog_route_is_readable_without_the_entitlement() {
     let app = spawn_app(true, false, RuntimeEnvironment::NonProduction, "jp").await; // permission OK, entitlement off
     let req = actix_test::TestRequest::get()
         .uri("/api/v1/tenant/payments/providers")
         .to_request();
     let res = actix_test::call_service(&app, req).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // The catalog is the menu, not the meal: an un-entitled tenant sees which
+    // providers exist so the admin can show the cards with the connect CTA
+    // replaced by an upgrade prompt. Connecting stays entitlement-gated.
+    assert_eq!(res.status(), StatusCode::OK);
     let body: serde_json::Value = actix_test::read_body_json(res).await;
-    // 403 with the feature named — never a bare 404 — so the frontend can
-    // render its upgrade prompt.
-    assert!(
-        body["detail"]
-            .as_str()
-            .unwrap()
-            .contains("payments.stripe_connect")
-    );
+    assert!(!body["providers"].as_array().unwrap().is_empty());
+    // The other half of this boundary — connecting without the entitlement is
+    // still 403 — is `creating_a_connection_requires_the_entitlement`.
 }
 
 #[tokio::test]
@@ -1326,6 +1324,17 @@ async fn creating_a_connection_requires_the_entitlement() {
         .to_request();
     let response = actix_test::call_service(&app, request).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: serde_json::Value = actix_test::read_body_json(response).await;
+    // 403 with the feature named — never a bare 404 — so the frontend can
+    // render its upgrade prompt. This is where the entitlement bites; reading
+    // the catalog (`the_catalog_route_is_readable_without_the_entitlement`)
+    // deliberately does not.
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("payments.stripe_connect")
+    );
 }
 
 // ---------------------------------------------------------------------------
