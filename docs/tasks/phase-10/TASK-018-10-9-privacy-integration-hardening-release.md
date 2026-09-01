@@ -43,13 +43,13 @@ acceptance criteria are verified as a set.
       `conversion_suppressed_total{reason,source}`, `ads_token_refresh_failures`,
       `metrics_ingestion_lag_hours`, `budget_threshold_alerts_total`. Traces span the tracking path end
       to end, including the outbound platform call.
-- [ ] **Alerts** — ingestion lag > 6 h; upload failure ratio > 5 %; token refresh failures; spend
+- [x] **Alerts** — ingestion lag > 6 h; upload failure ratio > 5 %; token refresh failures; spend
       anomaly (> 3σ day over day); DLQ depth; **any upload attempted without a stored consent
       snapshot** — that last one should be impossible, so it pages.
-- [ ] **Runbooks** (`docs/runbooks/`): token revoked or app uninstalled; platform API outage and
+- [x] **Runbooks** (`docs/runbooks/`): token revoked or app uninstalled; platform API outage and
       degraded mode; conversion upload failure surge; spend anomaly; ingestion backlog and restatement
       recovery; audience list retraction; accidental auto-pause; partition maintenance failure.
-- [ ] **Platform version-bump drill** — replay recorded platform fixtures against both adapters to
+- [x] **Platform version-bump drill** — replay recorded platform fixtures against both adapters to
       prove a pinned API version bump is verifiable rather than hopeful. Document the drill; it is the
       procedure for every future bump, and both platforms deprecate on a schedule.
 - [ ] **Retention verification** — confirm TASK-009's retention rules actually fire: aged
