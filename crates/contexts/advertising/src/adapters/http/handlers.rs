@@ -12,12 +12,16 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::AdvertisingState;
-use crate::domain::model::{CampaignId, ConnectionId, CreativeId};
+use crate::domain::model::{
+    BudgetAlert, BudgetAlertId, BudgetCap, BudgetPeriod, CampaignId, ConnectionId, CreativeId,
+    Money,
+};
 use crate::{
     CapabilityMatrix,
     application::{
         AdFields, AdGroupFields, CampaignFields, DriftResolution, NewAdFields, NewAdGroupFields,
-        NewCampaignFields, NewCreativeFields, PlacementPreview, ResolvedCampaignDrift,
+        NewCampaignFields, NewCreativeFields, PlacementPreview, PutBudgetCapCommand,
+        PutBudgetCapResponse, ResolvedCampaignDrift, SpendStatusReport,
     },
     domain::{
         AdGroup, AdvertisingConnection, AdvertisingError, AssetMetadata, BidSettings, Budget,
@@ -265,6 +269,16 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
         },
         AdvertisingError::AudienceNotFound => ApiError::NotFound {
             resource: "audience".to_string(),
+        },
+        AdvertisingError::BudgetCapNotFound => ApiError::NotFound {
+            resource: "budget_cap".to_string(),
+        },
+        AdvertisingError::BudgetAlertNotFound => ApiError::NotFound {
+            resource: "budget_alert".to_string(),
+        },
+        AdvertisingError::CapBelowCurrentSpend => ApiError::Conflict {
+            detail: "new budget cap is below current period spend and requires confirmation"
+                .to_string(),
         },
         // Normally intercepted by `campaign_validation_problem` so the
         // response carries field-addressed violations; the bare mapping
@@ -2410,4 +2424,265 @@ pub async fn get_ads_metrics_freshness(
             .map(ConnectionFreshnessView::from)
             .collect(),
     }))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BudgetCapsView {
+    pub caps: Vec<BudgetCap>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BudgetAlertsView {
+    pub alerts: Vec<BudgetAlert>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct PutBudgetCapRequest {
+    pub period: BudgetPeriod,
+    pub amount: Money,
+    pub declared_fx_basis: Option<String>,
+    pub fx_rate_date: Option<NaiveDate>,
+    pub auto_pause: Option<bool>,
+    pub auto_resume_on_rollover: Option<bool>,
+    pub confirm_below_current_spend: Option<bool>,
+    pub dry_run: Option<bool>,
+}
+
+impl PutBudgetCapRequest {
+    pub fn into_command(self) -> PutBudgetCapCommand {
+        PutBudgetCapCommand {
+            period: self.period,
+            amount: self.amount,
+            declared_fx_basis: self.declared_fx_basis,
+            fx_rate_date: self.fx_rate_date,
+            auto_pause: self.auto_pause.unwrap_or(false),
+            auto_resume_on_rollover: self.auto_resume_on_rollover.unwrap_or(false),
+            confirm_below_current_spend: self.confirm_below_current_spend.unwrap_or(false),
+            dry_run: self.dry_run.unwrap_or(false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct GetCampaignBudgetCapQuery {
+    pub period: Option<BudgetPeriod>,
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct ListBudgetAlertsQuery {
+    #[param(value_type = Option<String>)]
+    pub campaign_id: Option<CampaignId>,
+    pub unacknowledged_only: Option<bool>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct SpendStatusQuery {
+    pub period: Option<BudgetPeriod>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/budget-caps",
+    tag = "advertising",
+    operation_id = "get_budget_caps",
+    responses(
+        (status = 200, description = "All budget caps defined for this tenant", body = BudgetCapsView),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_budget_caps(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let caps = state
+        .get_budget_caps
+        .execute(tenant.0.tenant_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(BudgetCapsView { caps }))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/tenant/ads/budget-caps",
+    tag = "advertising",
+    operation_id = "put_budget_cap",
+    request_body = PutBudgetCapRequest,
+    responses(
+        (status = 200, description = "Budget cap created or updated, or dry-run simulation result", body = PutBudgetCapResponse),
+        (status = 403, description = "Missing advertising.budget.manage permission", body = ProblemDetail),
+        (status = 409, description = "New cap is below current period spend and confirmation is required", body = ProblemDetail)
+    )
+)]
+pub async fn put_budget_cap(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    body: web::Json<PutBudgetCapRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let result = state
+        .put_budget_cap
+        .execute(tenant.0.tenant_id, None, body.into_inner().into_command())
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(result))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+    tag = "advertising",
+    operation_id = "get_campaign_budget_cap",
+    params(
+        ("campaign_id" = String, Path, description = "Target campaign ID"),
+        GetCampaignBudgetCapQuery
+    ),
+    responses(
+        (status = 200, description = "Campaign budget cap", body = BudgetCap),
+        (status = 404, description = "No budget cap found for this campaign and period", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_campaign_budget_cap(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<CampaignId>,
+    query: web::Query<GetCampaignBudgetCapQuery>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let campaign_id = path.into_inner();
+    let period = query.period.unwrap_or(BudgetPeriod::Monthly);
+    let cap = state
+        .get_campaign_budget_cap
+        .execute(tenant.0.tenant_id, campaign_id, period)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(cap))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+    tag = "advertising",
+    operation_id = "put_campaign_budget_cap",
+    params(
+        ("campaign_id" = String, Path, description = "Target campaign ID")
+    ),
+    request_body = PutBudgetCapRequest,
+    responses(
+        (status = 200, description = "Campaign budget cap created/updated or dry run result", body = PutBudgetCapResponse),
+        (status = 403, description = "Missing advertising.budget.manage permission", body = ProblemDetail),
+        (status = 409, description = "New cap is below current period spend and confirmation is required", body = ProblemDetail)
+    )
+)]
+pub async fn put_campaign_budget_cap(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<CampaignId>,
+    _permission: RequiredPermission,
+    body: web::Json<PutBudgetCapRequest>,
+) -> Result<HttpResponse, ApiError> {
+    let campaign_id = path.into_inner();
+    let result = state
+        .put_budget_cap
+        .execute(
+            tenant.0.tenant_id,
+            Some(campaign_id),
+            body.into_inner().into_command(),
+        )
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(result))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/budget-alerts",
+    tag = "advertising",
+    operation_id = "get_budget_alerts",
+    params(
+        ListBudgetAlertsQuery
+    ),
+    responses(
+        (status = 200, description = "Budget alerts history", body = BudgetAlertsView),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_budget_alerts(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    query: web::Query<ListBudgetAlertsQuery>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let alerts = state
+        .list_budget_alerts
+        .execute(
+            tenant.0.tenant_id,
+            query.campaign_id,
+            query.unacknowledged_only.unwrap_or(false),
+            query.limit,
+        )
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(BudgetAlertsView { alerts }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge",
+    tag = "advertising",
+    operation_id = "acknowledge_budget_alert",
+    params(
+        ("alert_id" = String, Path, description = "Target budget alert ID")
+    ),
+    responses(
+        (status = 200, description = "Acknowledged budget alert", body = BudgetAlert),
+        (status = 404, description = "Budget alert not found", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.budget.manage permission", body = ProblemDetail)
+    )
+)]
+pub async fn acknowledge_budget_alert(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    subject: CurrentSubject,
+    path: web::Path<BudgetAlertId>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let alert_id = path.into_inner();
+    let user_id = subject.0.user_id;
+    let alert = state
+        .acknowledge_budget_alert
+        .execute(tenant.0.tenant_id, alert_id, user_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(alert))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/spend-status",
+    tag = "advertising",
+    operation_id = "get_spend_status",
+    params(
+        SpendStatusQuery
+    ),
+    responses(
+        (status = 200, description = "Spend status and run-rate projection across tenant and campaign scopes", body = SpendStatusReport),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_spend_status(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    query: web::Query<SpendStatusQuery>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let report = state
+        .get_spend_status
+        .execute(tenant.0.tenant_id, query.period)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(report))
 }

@@ -31,5 +31,17 @@
   "emails.payments_payout_failed.subject": "Action needed: a payout from your {tenant} account failed",
   "emails.payments_payout_failed.body": "A payout of {amount} to your bank failed. The money is still held at Stripe - sign in to your Stripe Dashboard to fix the payout details.",
   "emails.payments_tax_lapsed.subject": "Action needed: automatic tax may no longer be collecting on your {tenant} store",
-  "emails.payments_tax_lapsed.body": "Automatic tax is enabled but the tax compliance of the connected payment account has lapsed ({detail}). Tax registration and remittance are your responsibility - consult your tax advisor, then update your registrations in Stripe."
+  "emails.payments_tax_lapsed.body": "Automatic tax is enabled but the tax compliance of the connected payment account has lapsed ({detail}). Tax registration and remittance are your responsibility - consult your tax advisor, then update your registrations in Stripe.",
+  "emails.budget_warning_80.subject": "Budget warning for {tenant}: 80% threshold reached",
+  "emails.budget_warning_80.body": "Spend for {scope_name} has reached {spend} (80% of {cap_amount} {period} cap).",
+  "emails.budget_cap_breached.subject": "Budget cap reached for {tenant}",
+  "emails.budget_cap_breached.body": "Spend for {scope_name} has reached {spend}, breaching the {period} cap of {cap_amount}. {action_taken}",
+  "emails.budget_provisional_warning.subject": "Provisional budget warning for {tenant}",
+  "emails.budget_provisional_warning.body": "Provisional spend for {scope_name} is {spend} against a {period} cap of {cap_amount}. The lower bound is {lower_bound}. Campaigns will not be paused on provisional data.",
+  "emails.budget_stale_warning.subject": "Advertising data staleness warning for {tenant}",
+  "emails.budget_stale_warning.body": "Metrics data for {scope_name} is currently stale ({lag_hours} hours lag). Guardrails will not pause campaigns on unconfirmed data.",
+  "emails.budget_spend_anomaly.subject": "Spend anomaly detected for {tenant}",
+  "emails.budget_spend_anomaly.body": "Unusual spend detected for {scope_name}: current spend is {spend} compared to historical average {average_spend} (>{sigma}σ variance). No automatic actions were taken.",
+  "emails.budget_guardrails_rollback.subject": "Notice: advertising budget guardrails feature disabled for {tenant}",
+  "emails.budget_guardrails_rollback.body": "The advertising budget guardrails feature has been temporarily disabled for {tenant}. Existing caps and alert history are preserved, but automated monitoring and pausing are inactive."
 }

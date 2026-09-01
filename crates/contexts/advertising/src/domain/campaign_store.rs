@@ -48,10 +48,14 @@ pub struct CampaignChange {
     pub mutation_id: Option<uuid::Uuid>,
     #[schema(value_type = Option<String>)]
     pub actor_id: Option<UserId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<String>,
     pub source: ChangeSource,
     pub changed_fields: Vec<String>,
     pub before_state: Campaign,
     pub after_state: Campaign,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
 }
 

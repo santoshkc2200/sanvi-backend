@@ -31,5 +31,17 @@
   "emails.payments_payout_failed.subject": "対応が必要です: {tenant} の入金に失敗しました",
   "emails.payments_payout_failed.body": "{amount} の銀行への入金が失敗しました。資金は Stripe 側に保留されています。Stripe ダッシュボードで入金先情報をご確認ください。",
   "emails.payments_tax_lapsed.subject": "対応が必要です: {tenant} の自動税計算が収集できなくなっている可能性があります",
-  "emails.payments_tax_lapsed.body": "自動税計算が有効ですが、接続された決済アカウントの税務コンプライアンスが失効しています（{detail}）。税務登録と納付は事業者ご自身の責任です。税理士にご相談のうえ、Stripe で登録状況を更新してください。"
+  "emails.payments_tax_lapsed.body": "自動税計算が有効ですが、接続された決済アカウントの税務コンプライアンスが失効しています（{detail}）。税務登録と納付は事業者ご自身の責任です。税理士にご相談のうえ、Stripe で登録状況を更新してください。",
+  "emails.budget_warning_80.subject": "{tenant} の広告予算警告: 80%に達しました",
+  "emails.budget_warning_80.body": "{scope_name} の広告支出が {spend} に達しました（{period}上限 {cap_amount} の80%）。",
+  "emails.budget_cap_breached.subject": "{tenant} の広告予算上限に達しました",
+  "emails.budget_cap_breached.body": "{scope_name} の広告支出が {spend} に達し、{period}上限（{cap_amount}）を超過しました。{action_taken}",
+  "emails.budget_provisional_warning.subject": "{tenant} の暫定広告支出警告",
+  "emails.budget_provisional_warning.body": "{scope_name} の暫定広告支出は {spend}（{period}上限: {cap_amount}）です。下限値は {lower_bound} です。確定前の暫定データに基づく自動停止は行われません。",
+  "emails.budget_stale_warning.subject": "{tenant} の広告データ遅延警告",
+  "emails.budget_stale_warning.body": "{scope_name} の広告データ同期が遅延しています（遅延: {lag_hours} 時間）。未確認のデータに基づく自動停止は行われません。",
+  "emails.budget_spend_anomaly.subject": "{tenant} の急激な広告支出が検出されました",
+  "emails.budget_spend_anomaly.body": "{scope_name} で異常な支出が検出されました: 現在の支出は {spend}（過去平均: {average_spend}、{sigma}σ以上の変動）です。自動操作は行われていません。",
+  "emails.budget_guardrails_rollback.subject": "{tenant} の広告予算ガードレール機能停止のお知らせ",
+  "emails.budget_guardrails_rollback.body": "{tenant} の広告予算ガードレール機能が一時的に無効化されました。設定済みの上限とアラート履歴は保持されますが、自動監視および自動停止は停止しています。"
 }

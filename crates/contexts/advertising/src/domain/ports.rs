@@ -9,8 +9,9 @@ use super::{
     HashedIds, PlatformKey, UploadReceipt, ValidationViolation,
 };
 use crate::domain::model::{
-    AdGroupId, AdId, Audience, AudienceId, AudienceSyncReceipt, CampaignChangeId, CampaignId,
-    ConnectionId, ConsentSnapshot, ConversionId, CreativeId,
+    AdGroupId, AdId, Audience, AudienceId, AudienceSyncReceipt, BudgetAlert, BudgetAlertId,
+    BudgetCap, BudgetCapId, BudgetPeriod, CampaignChangeId, CampaignId, ConnectionId,
+    ConsentSnapshot, ConversionId, CreativeId,
 };
 use sanvi_persistence::{PlatformScope, ScopedTx};
 
@@ -44,6 +45,12 @@ pub enum AdvertisingError {
     ConversionNotFound,
     #[error("audience not found")]
     AudienceNotFound,
+    #[error("budget cap not found")]
+    BudgetCapNotFound,
+    #[error("budget alert not found")]
+    BudgetAlertNotFound,
+    #[error("new budget cap is below current period spend and requires confirmation")]
+    CapBelowCurrentSpend,
     #[error("advertising token encryption is not configured")]
     EncryptionUnconfigured,
     #[error("advertising token encryption failure: {0}")]
@@ -58,6 +65,12 @@ impl From<sanvi_kernel::IdGenerationError> for AdvertisingError {
     }
 }
 
+impl From<sanvi_kernel::KernelError> for AdvertisingError {
+    fn from(err: sanvi_kernel::KernelError) -> Self {
+        Self::Storage(err.to_string())
+    }
+}
+
 pub trait IdGenerator: Send + Sync {
     fn next_connection_id(&self) -> Result<ConnectionId, AdvertisingError>;
     fn next_campaign_id(&self) -> Result<CampaignId, AdvertisingError>;
@@ -67,6 +80,8 @@ pub trait IdGenerator: Send + Sync {
     fn next_ad_group_id(&self) -> Result<AdGroupId, AdvertisingError>;
     fn next_ad_id(&self) -> Result<AdId, AdvertisingError>;
     fn next_audience_id(&self) -> Result<AudienceId, AdvertisingError>;
+    fn next_budget_cap_id(&self) -> Result<BudgetCapId, AdvertisingError>;
+    fn next_budget_alert_id(&self) -> Result<BudgetAlertId, AdvertisingError>;
 }
 
 #[async_trait]
@@ -532,4 +547,133 @@ pub trait FxRatePort: Send + Sync {
         quote: &str,
         date: chrono::NaiveDate,
     ) -> Result<Option<FxRate>, AdvertisingError>;
+}
+
+#[async_trait]
+pub trait BudgetCapRepository: Send + Sync {
+    async fn get_tenant_cap(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        period: BudgetPeriod,
+    ) -> Result<Option<BudgetCap>, AdvertisingError>;
+
+    async fn get_campaign_cap(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        period: BudgetPeriod,
+    ) -> Result<Option<BudgetCap>, AdvertisingError>;
+
+    async fn list_by_tenant(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+    ) -> Result<Vec<BudgetCap>, AdvertisingError>;
+
+    async fn list_all_active_caps(
+        &self,
+        scope: &mut PlatformScope<'_>,
+    ) -> Result<Vec<BudgetCap>, AdvertisingError>;
+
+    async fn upsert_cap(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        cap: &BudgetCap,
+    ) -> Result<BudgetCap, AdvertisingError>;
+}
+
+#[async_trait]
+pub trait BudgetAlertRepository: Send + Sync {
+    async fn list_alerts(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        campaign_id: Option<CampaignId>,
+        unacknowledged_only: bool,
+        limit: i64,
+    ) -> Result<Vec<BudgetAlert>, AdvertisingError>;
+
+    async fn find_by_id(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        id: BudgetAlertId,
+    ) -> Result<Option<BudgetAlert>, AdvertisingError>;
+
+    async fn has_alert_fired(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        cap_id: BudgetCapId,
+        period_start: chrono::NaiveDate,
+        threshold: u32,
+    ) -> Result<bool, AdvertisingError>;
+
+    async fn record_alert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        alert: &BudgetAlert,
+    ) -> Result<BudgetAlert, AdvertisingError>;
+
+    async fn acknowledge_alert(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        id: BudgetAlertId,
+        user_id: sanvi_kernel::UserId,
+        acknowledged_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<BudgetAlert>, AdvertisingError>;
+}
+
+#[async_trait]
+pub trait BudgetNotifier: Send + Sync {
+    async fn notify_threshold_80(
+        &self,
+        tenant_id: TenantId,
+        scope_name: &str,
+        spend: &super::Money,
+        cap_amount: &super::Money,
+        period: BudgetPeriod,
+    ) -> Result<(), AdvertisingError>;
+
+    async fn notify_cap_breached(
+        &self,
+        tenant_id: TenantId,
+        scope_name: &str,
+        spend: &super::Money,
+        cap_amount: &super::Money,
+        period: BudgetPeriod,
+        action_taken: &str,
+    ) -> Result<(), AdvertisingError>;
+
+    async fn notify_provisional_warning(
+        &self,
+        tenant_id: TenantId,
+        scope_name: &str,
+        spend: &super::Money,
+        cap_amount: &super::Money,
+        lower_bound: &super::Money,
+        period: BudgetPeriod,
+    ) -> Result<(), AdvertisingError>;
+
+    async fn notify_stale_warning(
+        &self,
+        tenant_id: TenantId,
+        scope_name: &str,
+        lag_hours: f64,
+    ) -> Result<(), AdvertisingError>;
+
+    async fn notify_spend_anomaly(
+        &self,
+        tenant_id: TenantId,
+        scope_name: &str,
+        current_spend: &super::Money,
+        trailing_mean: &super::Money,
+        sigma_multiple: f64,
+    ) -> Result<(), AdvertisingError>;
+
+    async fn notify_guardrails_rollback(&self, tenant_id: TenantId)
+    -> Result<(), AdvertisingError>;
 }

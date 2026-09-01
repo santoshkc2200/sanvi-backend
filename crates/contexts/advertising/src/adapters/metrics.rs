@@ -16,6 +16,8 @@ pub struct AdvertisingMetrics {
     ads_sync_duration_seconds: prometheus::HistogramVec,
     ads_sync_failures_total: prometheus::IntCounterVec,
     metrics_ingestion_lag_hours: prometheus::Gauge,
+    budget_threshold_alerts_total: prometheus::IntCounterVec,
+    budget_auto_pause_total: prometheus::IntCounterVec,
 }
 
 impl AdvertisingMetrics {
@@ -93,6 +95,24 @@ impl AdvertisingMetrics {
         )
         .expect("metrics ingestion lag gauge construction is infallible");
 
+        let budget_threshold_alerts_total = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "budget_threshold_alerts_total",
+                "Total advertising budget threshold alerts by scope and threshold percentage",
+            ),
+            &["scope", "threshold"],
+        )
+        .expect("budget threshold alerts counter construction is infallible");
+
+        let budget_auto_pause_total = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "budget_auto_pause_total",
+                "Total advertising campaigns auto-paused by budget guardrail reason",
+            ),
+            &["reason"],
+        )
+        .expect("budget auto pause counter construction is infallible");
+
         let _ = registry.register(Box::new(conversion_upload_total.clone()));
         let _ = registry.register(Box::new(conversion_suppressed_total.clone()));
         let _ = registry.register(Box::new(conversion_retraction_total.clone()));
@@ -102,6 +122,8 @@ impl AdvertisingMetrics {
         let _ = registry.register(Box::new(ads_sync_duration_seconds.clone()));
         let _ = registry.register(Box::new(ads_sync_failures_total.clone()));
         let _ = registry.register(Box::new(metrics_ingestion_lag_hours.clone()));
+        let _ = registry.register(Box::new(budget_threshold_alerts_total.clone()));
+        let _ = registry.register(Box::new(budget_auto_pause_total.clone()));
 
         Self {
             conversion_upload_total,
@@ -113,6 +135,8 @@ impl AdvertisingMetrics {
             ads_sync_duration_seconds,
             ads_sync_failures_total,
             metrics_ingestion_lag_hours,
+            budget_threshold_alerts_total,
+            budget_auto_pause_total,
         }
     }
 
@@ -150,6 +174,14 @@ impl AdvertisingMetrics {
 
     pub fn metrics_ingestion_lag_hours(&self) -> &prometheus::Gauge {
         &self.metrics_ingestion_lag_hours
+    }
+
+    pub fn budget_threshold_alerts_total(&self) -> &prometheus::IntCounterVec {
+        &self.budget_threshold_alerts_total
+    }
+
+    pub fn budget_auto_pause_total(&self) -> &prometheus::IntCounterVec {
+        &self.budget_auto_pause_total
     }
 
     /// Observe the lag of one successfully uploaded conversion event.

@@ -105,6 +105,127 @@ paths:
           description: Audience not found
       tags:
       - advertising
+  /api/v1/tenant/ads/budget-alerts:
+    get:
+      operationId: get_budget_alerts
+      parameters:
+      - in: path
+        name: campaign_id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      - in: path
+        name: unacknowledged_only
+        required: true
+        schema:
+          type:
+          - boolean
+          - 'null'
+      - in: path
+        name: limit
+        required: true
+        schema:
+          format: int64
+          type:
+          - integer
+          - 'null'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetAlertsView'
+          description: Budget alerts history
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+      tags:
+      - advertising
+  /api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge:
+    post:
+      operationId: acknowledge_budget_alert
+      parameters:
+      - description: Target budget alert ID
+        in: path
+        name: alert_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetAlert'
+          description: Acknowledged budget alert
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.budget.manage permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Budget alert not found
+      tags:
+      - advertising
+  /api/v1/tenant/ads/budget-caps:
+    get:
+      operationId: get_budget_caps
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetCapsView'
+          description: All budget caps defined for this tenant
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+      tags:
+      - advertising
+    put:
+      operationId: put_budget_cap
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutBudgetCapRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PutBudgetCapResponse'
+          description: Budget cap created or updated, or dry-run simulation result
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.budget.manage permission
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: New cap is below current period spend and confirmation is required
+      tags:
+      - advertising
   /api/v1/tenant/ads/campaigns:
     get:
       operationId: list_campaigns
@@ -604,6 +725,88 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
+      tags:
+      - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap:
+    get:
+      operationId: get_campaign_budget_cap
+      parameters:
+      - description: Target campaign ID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      - in: path
+        name: period
+        required: true
+        schema:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BudgetPeriod'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetCap'
+          description: Campaign budget cap
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No budget cap found for this campaign and period
+      tags:
+      - advertising
+    put:
+      operationId: put_campaign_budget_cap
+      parameters:
+      - description: Target campaign ID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutBudgetCapRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PutBudgetCapResponse'
+          description: Campaign budget cap created/updated or dry run result
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.budget.manage permission
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: New cap is below current period spend and confirmation is required
       tags:
       - advertising
   /api/v1/tenant/ads/campaigns/{campaign_id}/changes:
@@ -1577,6 +1780,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission or both advertising platform entitlements
+      tags:
+      - advertising
+  /api/v1/tenant/ads/spend-status:
+    get:
+      operationId: get_spend_status
+      parameters:
+      - in: path
+        name: period
+        required: true
+        schema:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BudgetPeriod'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpendStatusReport'
+          description: Spend status and run-rate projection across tenant and campaign scopes
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
       tags:
       - advertising
   /api/v1/tenant/ads/tracking/settings:
