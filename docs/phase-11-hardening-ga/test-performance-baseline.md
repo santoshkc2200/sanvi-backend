@@ -73,6 +73,17 @@ statically before and after the `tests/integration/` restructure — **868 acros
   including many stale copies of the same binary (7 `sanvi_worker`, 4
   `sanvi_api`, 4 `http_contract`) at 28-104 MB each. Cargo stats this tree on
   every invocation. `just clean-stale` exists and is not being run.
-- `.github/workflows/pr.yml` excludes `sanvi-persistence`, `sanvi-messaging`
-  and `sanvi-tenancy` from the PR test job. Three crates are untested on every
-  pull request.
+- `.github/workflows/pr.yml` runs two test jobs, and between them six crates
+  are tested by neither. The unit job excludes `sanvi-persistence`,
+  `sanvi-messaging` and `sanvi-tenancy` because they need Docker — those three
+  *are* covered, by the integration job at `pr.yml:179`. What that job does not
+  cover is everything absent from its hand-written crate list:
+  `sanvi-access`, `sanvi-advertising`, `sanvi-audit`, `sanvi-identity`,
+  `sanvi-platform-admin` and `sanvi-theming` all ship a `tests/` directory that
+  no CI job runs. A job that runs no tests still passes, so nothing reported it.
+  Fixed in
+  [TASK-031](../tasks/phase-11/TASK-031-11-a-ci-coverage-repair-and-gate-truth.md),
+  which derives the list from the workspace rather than maintaining it by hand.
+
+  *(An earlier revision of this document claimed the three Docker-dependent
+  crates were untested. That was wrong; the integration job covers them.)*

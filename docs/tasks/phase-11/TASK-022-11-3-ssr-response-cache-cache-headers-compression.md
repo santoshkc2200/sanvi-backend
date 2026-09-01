@@ -1,55 +1,131 @@
 # TASK-022: 11.3 SSR response cache, cache headers & compression
 
-**Phase:** 11
-**Status:** todo
+**Phase:** 11 · **Status:** todo · **Size:** M
 **Requirement(s):** FR-1111, NFR-1101
-**Depends on:** TASK-020
-**Created:** 2026-08-21
+**Depends on:** TASK-020, **phase 10 merged**
+**Created:** 2026-08-21 · **Rewritten:** 2026-09-01
+**Flag:** `platform.ssr_cache`
 
-**Slice:** 11.3 — Frontend performance & Core Web Vitals (backend half)
-**Prerelease:** `v1.0.0-rc.4` · **Flag:** `platform.ssr_cache`
+> **For agentic workers:** REQUIRED SUB-SKILL — `superpowers:executing-plans` or
+> `superpowers:subagent-driven-development`. Every step carries a verification command. Do not tick a
+> step whose command has not been run and passed.
 
-## Context
+## Goal
 
-The backend half of the frontend performance slice. Frontend TASK-022 owns bundles, fonts, images, and
-INP; this task owns the three server-side levers that move field LCP and that the frontend cannot pull
-on its own: a cached SSR response, correct cache headers per app, and compression with a priority hint
-for the LCP resource.
+The three server-side levers that move storefront first paint and that the frontend cannot pull on its
+own: a cached SSR response, correct cache headers per app, and compression with a priority hint for
+the largest above-the-fold resource.
 
-It is contract-first despite changing no shapes, because it changes **cache semantics for a whole class
-of responses** — and a caching bug does not look like a bug, it looks like another tenant's storefront.
+## Why this shape
 
-## What to do
+This is contract-first despite changing no response shapes, because it changes **cache semantics for a
+whole class of responses** — and a caching bug does not look like a bug, it looks like another tenant's
+storefront.
 
-- [ ] **Contract** — anonymous storefront SSR caching keyed by `(tenant, locale, theme revision, device
-      class)`, behind `platform.ssr_cache`, with explicit `Vary` and a documented invalidation path on
-      theme publish and content change. **Authenticated responses are never cached, asserted by a test
-      rather than by a code comment.** Documented in the spec alongside the storefront read endpoints.
-- [ ] **SSR response cache** — implement the keyed cache in `crates/platform/{http,cache}`, with
-      single-flight on miss (a cold cache during a traffic spike must not become a thundering herd on
-      the render path) and a hit-ratio metric on TASK-020's storefront dashboard.
-- [ ] **Invalidation** — theme publish and content change invalidate within a documented window, driven
-      by the existing domain events rather than by a TTL that hopes for the best.
-- [ ] **Cache headers per app** — immutable, hashed static assets; sensible HTML lifetimes per app
-      (marketing long with revalidation, storefront short, admin `no-store`); `Vary` correct on every
-      locale- and theme-dependent response.
-- [ ] **Compression and priority** — Brotli where the CDN allows it, early hints or preload headers for
-      the LCP resource of the storefront's top templates, and a check that compression never applies to
-      an already-compressed payload.
+**This is the one piece of the phase that can serve a wrong response.** It ships last within its slice,
+alone, after the header and compression work is already on staging, behind a flag whose off position is
+the correct-but-slower behaviour.
 
-## Acceptance criteria
+## Constraints
 
-- [ ] An authenticated request is never served from or written to the SSR cache, proven by a test.
+- Authenticated responses are never cached, asserted by a test rather than by a code comment.
+- Do not cache anything with a `Set-Cookie` on the response or an `Authorization` on the request. **The
+  test that asserts this is the most valuable test in the task.**
+- Invalidation is driven by domain events, not by a TTL that hopes for the best.
+
+## File ownership map
+
+- `crates/platform/http/**` — cache middleware, `Vary`, compression, early hints
+- `crates/platform/cache/**` — keyed SSR entries, single-flight
+- storefront read handlers and their invalidation subscriptions
+- `configs/**` — per-app cache lifetimes, flag definition
+- `api/storefront.yaml` — documented cache semantics
+
+## Steps
+
+### Step 1: Document the cache semantics in the spec
+
+**Files:** Modify `api/storefront.yaml`
+
+**Do:** anonymous storefront SSR caching keyed by `(tenant, locale, theme revision, device class)`,
+behind `platform.ssr_cache`, with explicit `Vary` and a documented invalidation path on theme publish
+and content change.
+
+Device class is in the key because the storefront serves different markup to mobile. If that ever stops
+being true, remove the dimension rather than leaving one that only multiplies entries.
+
+**Verify:** `just openapi` clean.
+
+### Step 2: Write the negative tests first
+
+**Files:** Create `tests/cache/ssr_cache_negative.rs`
+
+**Do:** assert, before the cache exists, that an authenticated request is never served from or written
+to it; that a response carrying `Set-Cookie` is never stored; and that two tenants cannot share an
+entry.
+
+**Verify:** the tests compile and fail for the right reason (no cache yet), then pass once Step 3
+lands.
+
+### Step 3: Implement the keyed cache with single-flight
+
+**Files:** Modify `crates/platform/{http,cache}/**`
+
+**Do:** the keyed cache with single-flight on miss — a cold cache during a traffic spike must not become
+a thundering herd on the render path — and a hit-ratio metric on TASK-020's alert surface.
+
+**Verify:** 500 concurrent misses on one key produce **exactly one** render, asserted by a render
+counter.
+
+### Step 4: Wire invalidation to domain events
+
+**Files:** Modify storefront read handlers and their subscriptions
+
+**Do:** theme publish and content change invalidate the affected entries inside a documented window.
+
+**Verify:** a test publishes a theme and asserts the affected entries are gone within the window.
+
+### Step 5: Set cache headers per app
+
+**Files:** Modify `configs/**`, `crates/platform/http/**`
+
+**Do:** immutable hashed static assets; HTML lifetimes per app (marketing long with revalidation,
+storefront short, admin `no-store`); `Vary` correct on every locale- and theme-dependent response.
+
+**Verify:** a snapshot test asserts each app's HTML lifetime and `Vary` set.
+
+### Step 6: Add compression and priority hints
+
+**Files:** Modify `crates/platform/http/**`
+
+**Do:** Brotli above a size floor; preload or early-hint the largest above-the-fold resource of the
+storefront's top templates.
+
+**Verify:** compression never applies to an already-compressed payload; the preload appears on each top
+template.
+
+### Step 7: Enable the flag last and measure
+
+**Files:** `configs/**`, `benchmarks/**`
+
+**Do:** turn `platform.ssr_cache` on only after Steps 5 and 6 are on staging, and re-run the harness.
+
+**Verify:** `just perf-compare` shows the improvement, and the cache-key negative tests are green with
+the flag on.
+
+## Definition of done
+
+- [ ] An authenticated request is never served from or written to the cache, proven by a test.
 - [ ] A cache-key test proves two tenants cannot share an entry, and that locale, theme revision, and
       device class each partition the key.
+- [ ] A response carrying `Set-Cookie` is never stored.
 - [ ] A theme publish invalidates the affected entries inside the documented window.
-- [ ] 500 concurrent misses on one key produce exactly one render (single-flight holds).
-- [ ] The SSR cache hit ratio appears on the storefront dashboard with the flag on.
+- [ ] 500 concurrent misses on one key produce exactly one render.
+- [ ] The hit-ratio metric is emitted with the flag on.
 - [ ] Static assets are immutable and hashed; each app's HTML lifetime matches the documented policy;
       `Vary` is correct on every locale- and theme-dependent response.
-- [ ] Brotli applies above the size floor and never to an already-compressed payload.
-- [ ] The LCP resource of each of the storefront's top templates is preloaded or early-hinted, and the
-      improvement is visible in the frontend's `rc.4` benchmark against `rc.1`.
+- [ ] Brotli applies above the floor and never to an already-compressed payload.
+- [ ] `just perf-compare` records the improvement against the previous candidate.
 
 ## Verification
 
@@ -67,30 +143,15 @@ just perf-compare rc.3 rc.4
 ## Out of scope
 
 Everything the browser does: bundles, splitting, prefetch, fonts, images, streaming SSR, deferred
-hydration, third-party scripts, and INP — all frontend TASK-022. CDN configuration beyond what the
-response headers instruct.
+hydration, third-party scripts, INP — all frontend TASK-022.
 
-## Files likely touched
+## Parked
 
-- `crates/platform/http/**` (cache middleware, `Vary`, compression, early hints)
-- `crates/platform/cache/**` (keyed SSR entries, single-flight)
-- storefront read handlers and their invalidation subscriptions (theme publish, content change)
-- `configs/**` (per-app cache lifetimes, flag definition)
-- `api/storefront.yaml` (documented cache semantics)
-
-## Notes / gotchas
-
-- Rollback: `platform.ssr_cache` off returns to uncached SSR — slower, correct, and the safe default.
-  This flag is the one piece of the slice that can serve a **wrong** response, so it ships last and
-  alone, after the header and compression work is already on staging.
-- Device class in the key is there because the storefront serves different markup to mobile; if that
-  ever stops being true, remove it from the key rather than leaving a dimension that only multiplies
-  entries.
-- Do not cache anything with a `Set-Cookie` or an `Authorization` on the request. The test that asserts
-  this is the most valuable test in the task.
+CDN configuration and edge image transforms — see
+[`../../release/needs-humans.md`](../../release/needs-humans.md).
 
 ---
-*On completion: satisfy every acceptance criterion, run the verification commands, then
-record status in the **same commit** in both places — the `**Status:**` line at the top of this
-file and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note.
-The two must never disagree.*
+*On completion: satisfy every line in `## Definition of done`, run the verification commands, then
+record status in the **same commit** in both places — the `**Status:**` line at the top of this file
+and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note. The two
+must never disagree.*

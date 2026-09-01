@@ -1,81 +1,171 @@
-# TASK-024: 11.5 Threat model, blocking scanners, isolation sweep & pen-test remediation
+# TASK-024: 11.5 Threat model, route matrix & isolation sweep
 
-**Phase:** 11
-**Status:** todo
-**Requirement(s):** FR-1116, FR-1117, NFR-1108, NFR-1109, NFR-1110, NFR-1113, NFR-1114
-**Depends on:** TASK-019
-**Created:** 2026-08-21
+**Phase:** 11 · **Status:** todo · **Size:** L
+**Requirement(s):** FR-1116, FR-1117, NFR-1108, NFR-1109, NFR-1113, NFR-1114
+**Depends on:** TASK-031
+**Created:** 2026-08-21 · **Rewritten:** 2026-09-01
+**Flag:** none — findings-driven
 
-**Slice:** 11.5 — Security: threat model, scanning, isolation sweep & pen-test remediation
-**Prerelease:** `v1.0.0-rc.6` · **Flag:** none — findings-driven
+> **For agentic workers:** REQUIRED SUB-SKILL — `superpowers:executing-plans` or
+> `superpowers:subagent-driven-development`. Every step carries a verification command. Do not tick a
+> step whose command has not been run and passed.
 
-## Context
+## Goal
 
-Have someone other than the authors try to break it, and fix what they find. Around that, close the
-gaps an external test is bad at finding: authorization coverage across every route, cross-tenant
-isolation through every ID-bearing parameter, and a supply chain that is reviewed rather than assumed.
+Close the security gaps that can be closed without an external tester: authorization coverage across
+every route, cross-tenant isolation through every ID-bearing parameter and every child partition, abuse
+controls on the surfaces that cost money or reputation, and a specified rather than incidental set of
+security headers.
 
-**This task runs on its own track.** The external test executes against the frozen staging build from
-TASK-019 while TASK-021 through TASK-023 continue; only the booking and the frozen environment are
-shared. The remediation window is scheduled, not hoped for.
+## Why this shape
 
-## What to do
+The original task was built around a booked third-party penetration test, and most of its acceptance
+criteria depended on that report. There is no budget for one; it is recorded as an unmitigated gap in
+[`../../release/needs-humans.md`](../../release/needs-humans.md) rather than pretended away.
 
-- [ ] **Contract** — no new endpoints, two contract-level outcomes. **The route/permission matrix becomes
-      a generated artifact** derived from the OpenAPI documents plus handler metadata: every route, its
-      required permission, its tenant scoping, and its rate-limit class. Reviewed by two people and
-      checked in; a route that appears without a permission fails CI. **Security headers are specified,
-      not incidental** — HSTS, frame-ancestors, referrer policy, permissions policy, and the CSP —
-      asserted per app in a snapshot test.
-- [ ] **Threat-model refresh** — `docs/security/threat-model.md` updated with STRIDE per trust boundary
-      across all thirteen contexts, explicitly covering the surfaces phases 08–10 added: tenant custom
-      domains (and the subdomain-takeover class), the public tracking endpoint, ad-platform OAuth
-      tokens, Stripe Connect keys and webhooks, and the impersonation path from phase 03.
-- [ ] **Penetration test executed** — third-party, against frozen staging with scale data, scoped to
-      include multi-tenant isolation, authentication and session handling, the payment and advertising
-      surfaces, and the public tracking endpoint. All findings triaged within 48 hours of receipt;
-      high/critical fixed before GA; the remainder scheduled with an owner and a date.
-- [ ] **CI scanning, all blocking** — SAST, dependency audit (`cargo audit` / `cargo deny`), container
-      scan, IaC scan, and secret scan. **None advisory** — an advisory scanner is a way of documenting
-      that nobody reads the output. Accepted findings carry an expiry.
-- [ ] **Authorization review** — generate the route matrix above; assert each route's permission, tenant
-      scoping, and rate-limit class in a test that walks the router. Two-person review of the generated
-      matrix is a merge requirement for this task.
-- [ ] **Multi-tenant isolation sweep** — re-run the phase-01 RLS matrix test against the full schema
-      including every table added in phases 08–10 and **every child partition by name**, then a manual
-      **IDOR sweep**: every ID-bearing path, query, header, and body field tried cross-tenant with a
-      valid session for the wrong tenant. Findings become regression tests, not just fixes.
-- [ ] **Abuse controls** — per-tenant and per-IP quotas on the surfaces that cost money or reputation:
-      signup, invitation, password reset, the public tracking endpoint, domain purchase, and outbound
-      notification sends. Bot filtering on tracking; fraud checks on domain purchase; velocity limits on
-      invitations.
-- [ ] **Secrets and key handling review** — every secret's storage, rotation path, and blast radius
-      recorded; envelope-encrypted material (phase-05 DEKs, ad tokens, Connect keys) verified unlogged
-      and unserialised, with the redaction tests from phases 09 and 10 extended to every new type.
-- [ ] **Supply chain** — SBOM generated and published per release, dependencies pinned, provenance
-      attestation on release artifacts, a written review policy for new dependencies, and `cargo vet`
-      style auditing for the crates on the security-critical path (crypto, HTTP parsing, SQL, template
-      rendering).
+**Say the limitation plainly: the isolation sweep here is written and run by the same person who wrote
+the code being tested.** No amount of automated coverage removes that. What the automation does buy is
+that every finding, from wherever it comes, becomes a regression test — so the suite only grows and a
+class of defect cannot return.
 
-## Acceptance criteria
+The scanner set is nearly complete already: `cargo audit`, `cargo deny`, gitleaks, trivy, and a
+CycloneDX SBOM all exist and all block in `pr.yml`. TASK-031 adds SAST. This task's scanner work is
+therefore small: keep them blocking, give accepted findings an expiry, and publish the SBOM with the
+tag rather than only as a CI artifact.
 
-- [ ] Threat model refreshed and reviewed, covering the phases 08–10 surfaces explicitly.
-- [ ] Pen-test report received; **no high or critical finding open**; medium and below scheduled with
-      owners and dates.
-- [ ] All five CI scanners blocking with zero unaccepted findings; every accepted finding has an expiry.
-- [ ] The route/permission matrix is generated, reviewed by two people, and enforced — a route added
-      without a permission, tenant scoping, or rate-limit class fails CI, proven in the PR.
-- [ ] Cross-tenant isolation verified three ways: RLS matrix across all contexts and child partitions,
-      IDOR sweep, and the external test.
-- [ ] A wrong-tenant request for every ID-bearing parameter returns 404 or 403 and never leaks existence
-      through a timing or message difference.
-- [ ] Abuse controls live on every money- or reputation-costing surface, with legitimate traffic
-      unaffected at 3× peak.
-- [ ] Redaction tests pass across every secret-bearing type — debug, display, serde, and tracing capture.
-- [ ] Security header and CSP snapshots pass per app.
-- [ ] SBOM published, dependencies pinned, provenance attested, review policy documented.
-- [ ] **Every finding — internal or external — has a regression test that fails against the vulnerable
-      commit.**
+This task is in the gate half because the route matrix and the RLS sweep enumerate: they cover phase
+10's remaining routes and tables automatically as those land.
+
+## Constraints
+
+- **Security fixes roll forward, not back.** The two changes that can break legitimate traffic are
+  abuse quotas and header tightening; both ship in report-only or shadow mode first, with the observed
+  would-have-blocked rate recorded in the PR before enforcement.
+- Every finding — however small, wherever from — gets a regression test that fails against the
+  vulnerable commit. No exceptions.
+- Child partitions are asserted **by name**. RLS does not automatically apply to a partition created
+  after the policy, and that is the isolation gap most likely to be real.
+
+## File ownership map
+
+- `docs/security/threat-model.md`, `docs/security/secrets-inventory.md`,
+  `docs/security/dependency-policy.md`
+- `scripts/generate-route-matrix.sh` and its committed output `docs/security/route-matrix.md`
+- `crates/platform/http/**` — security headers, abuse quota middleware
+- `tests/security/**` — IDOR sweep, RLS matrix extension, redaction, header snapshots
+- `deny.toml`, `.github/workflows/pr.yml` — scanner configuration and finding expiry
+
+## Steps
+
+### Step 1: Refresh the threat model
+
+**Files:** Modify `docs/security/threat-model.md`
+
+**Do:** STRIDE per trust boundary across all thirteen contexts, explicitly covering the surfaces phases
+08–10 added: tenant custom domains **and the subdomain-takeover class**, the public tracking endpoint,
+ad-platform OAuth tokens, Stripe Connect keys and webhooks, and the impersonation path from phase 03.
+
+**Verify:** every trust boundary in the document names at least one mitigation that resolves to a test
+file path or a CI gate.
+
+### Step 2: Generate the route/permission matrix and let the gate fail
+
+**Files:** Create `scripts/generate-route-matrix.sh`, `docs/security/route-matrix.md`; Modify
+`justfile`
+
+**Do:** derive the matrix from the OpenAPI documents plus handler metadata: every route, its required
+permission, its tenant scoping, and its rate-limit class. Commit the output. A route appearing without
+a permission, a tenant scoping, or a rate-limit class fails CI.
+
+Because there is no second reviewer, the review substitute is mechanical: **the committed matrix's diff
+must be explicitly acknowledged in the PR description**, so an added route with a weakened permission
+cannot slip through as an invisible regeneration.
+
+**Verify:** `just route-matrix` → fails on the current tree if any route is unmapped; passes once
+mapped. Add a throwaway unmapped route and confirm it fails.
+
+### Step 3: Extend the RLS matrix to the full schema, partitions by name
+
+**Files:** Modify `tests/security/rls_matrix.rs`
+
+**Do:** re-run the phase-01 matrix against every table added in phases 08–10, and against **every child
+partition enumerated by name** rather than by parent.
+
+**Verify:** `just rls-matrix` passes; drop the policy from one child partition in a scratch database
+and confirm the test fails naming that partition.
+
+### Step 4: Run the IDOR sweep and convert every finding to a test
+
+**Files:** Create `tests/security/idor_sweep.rs`
+
+**Do:** for every ID-bearing path segment, query parameter, header, and body field, issue the request
+with a valid session for the **wrong** tenant. Assert 404 or 403, and assert existence does not leak
+through a message or a timing difference.
+
+**Verify:** `just test-idor` passes across the enumerated surface, and the enumeration is derived from
+the route matrix rather than hand-listed, so phase 10's routes are covered as they land.
+
+### Step 5: Specify the security headers
+
+**Files:** Modify `crates/platform/http/**`; Create `tests/security/headers_snapshot.rs`
+
+**Do:** HSTS, frame-ancestors, referrer policy, permissions policy, and CSP, asserted per app in a
+snapshot test rather than left to whatever the framework defaults to.
+
+**Verify:** the snapshot test fails when a header is removed and passes on the specified set.
+
+### Step 6: Add abuse controls in shadow mode
+
+**Files:** Modify `crates/platform/http/**`
+
+**Do:** per-tenant and per-IP quotas on the surfaces that cost money or reputation — signup,
+invitation, password reset, the public tracking endpoint, domain purchase, outbound notification
+sends. Bot filtering on tracking; velocity limits on invitations.
+
+Ship counting live and enforcement off. Thresholds cannot be tuned without traffic, so the tuning is
+deliberately left as a configuration change later rather than a code change (recorded in
+`needs-humans.md`).
+
+**Verify:** a load test at 3× the harness peak records the would-have-blocked rate; the rate is
+committed in the PR. Enforcement flips on only for the tracking endpoint, where a flood test proves the
+stricter bucket holds.
+
+### Step 7: Inventory secrets and extend the redaction tests
+
+**Files:** Create `docs/security/secrets-inventory.md`; Modify `tests/security/redaction.rs`
+
+**Do:** every secret's storage, rotation path, and blast radius. Extend the phase 09 and 10 redaction
+tests to every secret-bearing type: debug, display, serde, and tracing capture. Envelope-encrypted
+material (phase-05 DEKs, ad tokens, Connect keys) verified unlogged and unserialised.
+
+**Verify:** the redaction test enumerates secret-bearing types from the codebase rather than from a
+hand-written list, and fails when a new one is added without redaction.
+
+### Step 8: Finish the scanner set and publish the SBOM
+
+**Files:** Modify `.github/workflows/pr.yml`, `deny.toml`, `docs/security/dependency-policy.md`
+
+**Do:** keep all scanners blocking (TASK-031 added SAST). Give every accepted finding an expiry date
+in `deny.toml` and fail the build on an expired acceptance. Publish the SBOM with the release tag, not
+only as a CI artifact. Write the dependency review policy.
+
+**Verify:** an acceptance with a past expiry fails `just audit`.
+
+## Definition of done
+
+- [ ] The threat model covers the phases 08–10 surfaces, each mitigation resolving to a test or a gate.
+- [ ] `just route-matrix` is green and fails on an unmapped route; the matrix is committed and its diff
+      is acknowledged in the PR.
+- [ ] `just rls-matrix` covers every table and every child partition by name, and fails on a partition
+      with a dropped policy.
+- [ ] `just test-idor` enumerates from the route matrix and passes; every wrong-tenant request returns
+      404 or 403 with no existence leak.
+- [ ] Security header snapshots pass per app and fail on a removed header.
+- [ ] Abuse controls count on every named surface; the tracking endpoint enforces and holds under a
+      flood; the would-have-blocked rate is committed.
+- [ ] Redaction tests enumerate secret-bearing types automatically and fail on a new unredacted type.
+- [ ] All scanners block; an expired finding acceptance fails the build; the SBOM publishes with the tag.
+- [ ] **Every finding from this task has a regression test that fails against the vulnerable commit.**
 
 ## Verification
 
@@ -94,33 +184,18 @@ just sbom
 
 ## Out of scope
 
-Credential rotation drills (TASK-025 — this task produces the secrets inventory that scopes them).
-Per-plan rate limits and quotas (TASK-026 — this task's abuse controls protect specific surfaces; those
-are commercial limits). Frontend auth-surface review, CSP tightening, and bundle secret scanning
-(frontend TASK-024).
+Credential rotation drills (TASK-025 — this task produces the inventory that scopes them). Per-plan
+rate limits and quotas, which are commercial limits rather than security controls (TASK-026). Frontend
+CSP tightening and bundle secret scanning (frontend TASK-024).
 
-## Files likely touched
+## Parked
 
-- `docs/security/threat-model.md`, `docs/security/secrets-inventory.md`, `docs/security/dependency-policy.md`
-- `scripts/generate-route-matrix.*` and its committed output
-- `crates/platform/http/**` (security headers, abuse quotas middleware)
-- `tests/security/**` (IDOR sweep, RLS matrix extension, redaction, header snapshots)
-- `deny.toml`, CI workflow definitions (five blocking scanners, SBOM, provenance)
-- remediation commits across whichever contexts the pen test names
-
-## Notes / gotchas
-
-- **Security fixes do not roll back; they roll forward.** The two changes that can break legitimate
-  traffic are abuse quotas and CSP tightening, and both ship the same way: report-only or shadow mode
-  first, a week of observed traffic on staging, then enforcement, with the threshold and the observed
-  false-positive rate recorded in the PR.
-- Child partitions are the isolation gap most likely to be real. RLS does not automatically apply to a
-  partition created after the policy; assert it **by name**, per partition, not by parent.
-- Book the test in TASK-019, not here. By the time this task starts, the engagement should already have
-  a date, a scope, and a named build.
+The third-party penetration test and its remediation window, two-person review of the route matrix,
+and IaC scanning — see [`../../release/needs-humans.md`](../../release/needs-humans.md). The pen test
+is the largest single unmitigated gap in this phase and is named as such in the GA checklist.
 
 ---
-*On completion: satisfy every acceptance criterion, run the verification commands, then
-record status in the **same commit** in both places — the `**Status:**` line at the top of this
-file and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note.
-The two must never disagree.*
+*On completion: satisfy every line in `## Definition of done`, run the verification commands, then
+record status in the **same commit** in both places — the `**Status:**` line at the top of this file
+and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note. The two
+must never disagree.*
