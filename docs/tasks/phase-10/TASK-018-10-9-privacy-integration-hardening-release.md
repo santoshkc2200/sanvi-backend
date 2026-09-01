@@ -1,7 +1,7 @@
 # TASK-018: 10.9 Privacy integration, hardening & release
 
 **Phase:** 10
-**Status:** todo
+**Status:** in-progress
 **Requirement(s):** FR-1014, NFR-1001, NFR-1004, NFR-1011
 **Depends on:** TASK-013, TASK-015, TASK-017
 **Created:** 2026-08-20
@@ -22,7 +22,7 @@ acceptance criteria are verified as a set.
 - [ ] **Contract** — no new tenant endpoints. Add `GET /api/v1/platform/ads/health` (platform-admin),
       plus the phase-05 `PersonalDataProvider` implementation for this context — an in-process port,
       not an HTTP surface, consumed by the existing privacy export and erasure flows.
-- [ ] **`PersonalDataProvider`** — export and erase advertising-held personal data: conversion
+- [x] **`PersonalDataProvider`** — export and erase advertising-held personal data: conversion
       identifiers (hashes), click ids, consent snapshots, and audience membership. Two decisions made
       explicit rather than implicit:
       - a hashed identifier **is** personal data and is exported and erased accordingly;
@@ -30,10 +30,10 @@ acceptance criteria are verified as a set.
         because it is the proof that a directive was honoured. Erasing the proof of compliance to
         satisfy an erasure request is the wrong trade, and the override is registered in the data map
         so the privacy centre reports it accurately.
-- [ ] **Erasure propagation** — an erasure request triggers TASK-015's platform deletion/suppression
+- [x] **Erasure propagation** — an erasure request triggers TASK-015's platform deletion/suppression
       requests and removal from every audience list on the next refresh, with outcomes recorded per
       platform.
-- [ ] **Sub-processor registry** — register Google and Meta in the phase-05 registry with their
+- [x] **Sub-processor registry** — register Google and Meta in the phase-05 registry with their
       **role** (service provider/contractor vs third party — the field that decides whether an upload
       is a "sale" or "share" under US law), the contract terms relied on, and transfer disclosures for
       APPI cross-border provision and EU/UK transfers to US platforms. The registry is what TASK-014's

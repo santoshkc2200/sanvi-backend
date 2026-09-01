@@ -1646,7 +1646,9 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
             privacy_tx.clone(),
         )),
-        std::sync::Arc::new(sanvi_advertising::adapters::AdvertisingPrivacyProvider::new()),
+        std::sync::Arc::new(
+            sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
+        ),
     ];
 
     let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(
