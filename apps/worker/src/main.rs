@@ -488,6 +488,17 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
     }
 }
 
+/// Renders budget guardrail notifications to the log.
+///
+/// **This does not deliver anything.** There is no notifications bounded context
+/// and no message transport in this repository, so the rendered subject/body are
+/// emitted as a structured `tracing` event and go nowhere else; tenant
+/// notification preferences are not consulted. `LoggingBudgetNotifier` on the API
+/// side behaves the same way, as does the privacy notifier above.
+///
+/// Wiring real delivery means introducing a transport, which is out of scope for
+/// TASK-017. Until then, treat budget alerts as observable in logs and via
+/// `GET /ads/budget-alerts` only — not as something a tenant is told about.
 struct WorkerAdvertisingNotifications {
     localizer: Arc<NotificationLocalizer>,
 }
@@ -1886,14 +1897,8 @@ async fn main() -> ExitCode {
         advertising_platforms.clone(),
         advertising_ids.clone(),
     ));
-    let advertising_resume_campaign =
-        Arc::new(sanvi_advertising::application::ResumeCampaign::new(
-            tx_manager.clone(),
-            advertising_campaigns.clone(),
-            advertising_events.clone(),
-            advertising_platforms.clone(),
-            advertising_ids.clone(),
-        ));
+    // No `ResumeCampaign` here: budget guardrails never auto-resume (FR-1013),
+    // so the rollover sweep has nothing to resume with.
     let advertising_threshold_evaluator =
         Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
             tx_manager.clone(),
@@ -1920,8 +1925,6 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_advertising::application::BudgetRolloverSweep::new(
             tx_manager.clone(),
             advertising_budget_caps,
-            advertising_campaigns,
-            advertising_resume_campaign,
         ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
@@ -1929,19 +1932,42 @@ async fn main() -> ExitCode {
             "advertising.budget_guardrails",
             Duration::from_secs(config.scheduler.advertising_budget_guardrails_interval_secs),
             {
-                let tx = tx_manager.clone();
                 let evaluator = advertising_threshold_evaluator.clone();
-                let _anomaly_detector = advertising_spend_anomaly_detector.clone();
+                let anomaly_detector = advertising_spend_anomaly_detector.clone();
                 move || {
-                    let tx = tx.clone();
                     let evaluator = evaluator.clone();
+                    let anomaly_detector = anomaly_detector.clone();
                     Box::pin(async move {
-                        let mut scope = tx
-                            .begin_unscoped("advertising_budget_guardrails", "system")
+                        // Read the caps in a short transaction that commits before
+                        // evaluation starts: each cap opens its own tenant-scoped
+                        // transaction, so holding one here would keep a platform
+                        // transaction open across every nested acquisition.
+                        let caps = evaluator
+                            .list_active_caps()
                             .await
                             .map_err(|e| anyhow::anyhow!(e))?;
-                        let _ = evaluator.evaluate_all(&mut scope).await;
-                        scope.commit().await.map_err(|e| anyhow::anyhow!(e))?;
+
+                        if let Err(e) = evaluator.evaluate_caps(&caps).await {
+                            tracing::error!(error = %e, "Budget guardrail sweep failed");
+                        }
+
+                        // Spend anomaly detection runs for every tenant that has an
+                        // active cap, reusing the cap listing rather than re-querying.
+                        let mut tenants: Vec<_> = caps.iter().map(|c| c.tenant_id).collect();
+                        tenants.sort_unstable();
+                        tenants.dedup();
+                        for tenant_id in tenants {
+                            if let Err(e) = anomaly_detector
+                                .detect_anomalies_for_tenant(tenant_id)
+                                .await
+                            {
+                                tracing::warn!(
+                                    %tenant_id,
+                                    error = %e,
+                                    "Spend anomaly detection failed for tenant; continuing"
+                                );
+                            }
+                        }
                         Ok(())
                     })
                 }
@@ -1951,23 +1977,25 @@ async fn main() -> ExitCode {
             "advertising.budget_rollover",
             Duration::from_secs(config.scheduler.advertising_budget_rollover_interval_secs),
             {
-                let tx = tx_manager.clone();
                 let rollover = advertising_rollover_sweep.clone();
                 move || {
-                    let tx = tx.clone();
                     let rollover = rollover.clone();
                     Box::pin(async move {
-                        let mut scope = tx
-                            .begin_unscoped("advertising_budget_rollover", "system")
-                            .await
-                            .map_err(|e| anyhow::anyhow!(e))?;
-                        let _ = rollover
-                            .sweep_all(&mut scope, sanvi_advertising::domain::BudgetPeriod::Daily)
-                            .await;
-                        let _ = rollover
-                            .sweep_all(&mut scope, sanvi_advertising::domain::BudgetPeriod::Monthly)
-                            .await;
-                        scope.commit().await.map_err(|e| anyhow::anyhow!(e))?;
+                        // Each sweep is a no-op unless the period actually rolled
+                        // over since the last tick; the job interval is far shorter
+                        // than either period.
+                        for period in [
+                            sanvi_advertising::domain::BudgetPeriod::Daily,
+                            sanvi_advertising::domain::BudgetPeriod::Monthly,
+                        ] {
+                            if let Err(e) = rollover.sweep_all(period).await {
+                                tracing::error!(
+                                    period = period.as_str(),
+                                    error = %e,
+                                    "Budget rollover sweep failed"
+                                );
+                            }
+                        }
                         Ok(())
                     })
                 }

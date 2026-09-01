@@ -18,6 +18,7 @@ pub struct AdvertisingMetrics {
     metrics_ingestion_lag_hours: prometheus::Gauge,
     budget_threshold_alerts_total: prometheus::IntCounterVec,
     budget_auto_pause_total: prometheus::IntCounterVec,
+    budget_cap_eval_failures_total: prometheus::IntCounterVec,
 }
 
 impl AdvertisingMetrics {
@@ -113,6 +114,15 @@ impl AdvertisingMetrics {
         )
         .expect("budget auto pause counter construction is infallible");
 
+        let budget_cap_eval_failures_total = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "budget_cap_eval_failures_total",
+                "Total budget cap evaluation failures by cap scope and error kind",
+            ),
+            &["scope", "error_kind"],
+        )
+        .expect("budget cap eval failures counter construction is infallible");
+
         let _ = registry.register(Box::new(conversion_upload_total.clone()));
         let _ = registry.register(Box::new(conversion_suppressed_total.clone()));
         let _ = registry.register(Box::new(conversion_retraction_total.clone()));
@@ -124,6 +134,7 @@ impl AdvertisingMetrics {
         let _ = registry.register(Box::new(metrics_ingestion_lag_hours.clone()));
         let _ = registry.register(Box::new(budget_threshold_alerts_total.clone()));
         let _ = registry.register(Box::new(budget_auto_pause_total.clone()));
+        let _ = registry.register(Box::new(budget_cap_eval_failures_total.clone()));
 
         Self {
             conversion_upload_total,
@@ -137,6 +148,7 @@ impl AdvertisingMetrics {
             metrics_ingestion_lag_hours,
             budget_threshold_alerts_total,
             budget_auto_pause_total,
+            budget_cap_eval_failures_total,
         }
     }
 
@@ -182,6 +194,10 @@ impl AdvertisingMetrics {
 
     pub fn budget_auto_pause_total(&self) -> &prometheus::IntCounterVec {
         &self.budget_auto_pause_total
+    }
+
+    pub fn budget_cap_eval_failures_total(&self) -> &prometheus::IntCounterVec {
+        &self.budget_cap_eval_failures_total
     }
 
     /// Observe the lag of one successfully uploaded conversion event.

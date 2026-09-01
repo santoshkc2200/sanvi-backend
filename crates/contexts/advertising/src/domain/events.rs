@@ -58,6 +58,7 @@ pub enum AdEvent {
     },
     SpendThresholdReached {
         campaign_id: Option<CampaignId>,
+        #[serde(default)]
         threshold: u32,
     },
     MetricsIngested {

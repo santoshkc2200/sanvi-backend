@@ -76,11 +76,24 @@ impl AcknowledgeBudgetAlert {
             .await
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
-        let updated = self
+        // The UPDATE returns None when the alert does not exist OR was already
+        // acknowledged (IS NULL guard in the repo). Distinguish the two cases:
+        // - alert exists but already acknowledged → return it as a benign no-op
+        // - alert not found at all → propagate BudgetAlertNotFound
+        let updated = match self
             .alerts
             .acknowledge_alert(&mut scope, tenant_id, alert_id, user_id, now)
             .await?
-            .ok_or(AdvertisingError::BudgetAlertNotFound)?;
+        {
+            Some(alert) => alert,
+            None => {
+                // Check whether the alert exists (already acknowledged)
+                self.alerts
+                    .find_by_id(&mut scope, tenant_id, alert_id)
+                    .await?
+                    .ok_or(AdvertisingError::BudgetAlertNotFound)?
+            }
+        };
 
         scope
             .commit()

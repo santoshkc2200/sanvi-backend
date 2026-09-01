@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use sanvi_kernel::{Id, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 
@@ -454,6 +454,20 @@ impl BudgetPeriod {
         }
     }
 
+    /// First day of the budget period that `today` falls into.
+    ///
+    /// Two periods are the same period exactly when this returns the same date,
+    /// which is what threshold-alert dedupe and the rollover boundary check both
+    /// key on.
+    pub fn period_start(self, today: NaiveDate) -> NaiveDate {
+        match self {
+            Self::Daily => today,
+            Self::Monthly => {
+                NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today)
+            }
+        }
+    }
+
     pub fn parse(raw: &str) -> Result<Self, AdvertisingError> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "daily" => Ok(Self::Daily),
@@ -609,4 +623,8 @@ pub struct SpendStatusItem {
     pub percentage: Option<f64>,
     pub data_freshness: DataFreshness,
     pub actions_configured: BudgetActionsConfigured,
+    /// Currencies for which spend data could not be converted to the cap currency
+    /// because an FX rate was unavailable. When non-empty, spend totals are incomplete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unconvertible_spend_currencies: Vec<String>,
 }

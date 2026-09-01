@@ -11,7 +11,7 @@ use sanvi_advertising::adapters::{
 use sanvi_advertising::application::{
     AcknowledgeBudgetAlert, BudgetRolloverSweep, GetBudgetCaps, GetCampaignBudgetCap,
     GetSpendStatus, ListBudgetAlerts, PauseCampaign, PutBudgetCap, PutBudgetCapCommand,
-    ResumeCampaign, ThresholdEvaluator,
+    ThresholdEvaluator,
 };
 use sanvi_advertising::domain::model::{
     AlertCondition, BudgetPeriod, CampaignId, CampaignStatus, DataFreshness, Money,
@@ -214,14 +214,6 @@ impl TestHarness {
             ids.clone(),
         ));
 
-        let resume_campaign = Arc::new(ResumeCampaign::new(
-            tx.clone(),
-            campaigns_repo.clone(),
-            events.clone(),
-            platforms.clone(),
-            ids.clone(),
-        ));
-
         let evaluator = Arc::new(ThresholdEvaluator::new(
             tx.clone(),
             caps_repo.clone(),
@@ -248,12 +240,7 @@ impl TestHarness {
         let get_camp_cap = Arc::new(GetCampaignBudgetCap::new(tx.clone(), caps_repo.clone()));
         let list_alerts = Arc::new(ListBudgetAlerts::new(tx.clone(), alerts_repo.clone()));
         let ack_alert = Arc::new(AcknowledgeBudgetAlert::new(tx.clone(), alerts_repo.clone()));
-        let rollover_sweep = Arc::new(BudgetRolloverSweep::new(
-            tx.clone(),
-            caps_repo.clone(),
-            campaigns_repo.clone(),
-            resume_campaign.clone(),
-        ));
+        let rollover_sweep = Arc::new(BudgetRolloverSweep::new(tx.clone(), caps_repo.clone()));
 
         (
             Self {
@@ -564,7 +551,9 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
         .unwrap();
     assert_eq!(alerts_after.len(), 1);
 
-    // 2. Spend is 130,000 JPY (provisional lower bound = 104,000 >= 100,000 cap) -> triggers ProvisionalLowerBoundBreach and AUTO-PAUSE
+    // 2. Spend is 130,000 JPY against a 100,000 cap on a freshly synced connection.
+    // For a Daily cap those rows are settled (the restatement window covers the whole
+    // period, so freshness is the gate), so this is a SettledBreach and AUTO-PAUSE.
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     harness
         .metrics_repo
@@ -598,10 +587,7 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
         .iter()
         .find(|a| a.threshold == 100)
         .expect("100% alert");
-    assert_eq!(
-        alert_100.condition,
-        AlertCondition::ProvisionalLowerBoundBreach
-    );
+    assert_eq!(alert_100.condition, AlertCondition::SettledBreach);
     assert!(alert_100.auto_paused);
 
     // Verify campaign is now Paused with change log attribution
@@ -717,6 +703,219 @@ async fn test_stale_data_guard_no_pause_on_stale_connections() {
     assert_eq!(camp.intent.status, CampaignStatus::Active);
 }
 
+/// Regression test for the 100% dedupe key.
+///
+/// A `StaleDataWarning` alert fired early in the period must not suppress the
+/// auto-pause that a later, settled breach of the same cap requires. Before the
+/// fix, `has_alert_fired(cap, period_start, 100)` returned true on the second
+/// evaluation and the pause branch was never reached, so the campaign spent
+/// unbounded for the rest of the period.
+#[tokio::test]
+async fn test_stale_alert_does_not_suppress_later_settled_pause() {
+    let (harness, tenant_id) = TestHarness::new().await;
+    let (conn_id, camp_id) =
+        seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
+    let today = Utc::now().date_naive();
+
+    // First evaluation runs against a stale connection and over-cap spend.
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let mut conn = harness
+        .connections_repo
+        .find_by_id(&mut scope, tenant_id, conn_id)
+        .await
+        .unwrap()
+        .unwrap();
+    conn.record_refresh_success(None, Utc::now() - Duration::hours(10));
+    conn.record_metrics_sync(Utc::now() - Duration::hours(10));
+    harness
+        .connections_repo
+        .upsert(&mut scope, &conn)
+        .await
+        .unwrap();
+
+    harness
+        .metrics_repo
+        .upsert_daily(
+            &mut scope,
+            &[MetricsDailyRow {
+                tenant_id,
+                connection_id: conn_id,
+                platform: PlatformKey::parse("google_ads").unwrap(),
+                campaign_id: camp_id,
+                date: today,
+                impressions: 1000,
+                clicks: 100,
+                spend: Money::new(150_000, "JPY").unwrap(),
+                conversions: 5.0,
+                conversion_value: Money::new(100_000, "JPY").unwrap(),
+            }],
+        )
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let cmd = PutBudgetCapCommand {
+        period: BudgetPeriod::Daily,
+        amount: Money::new(100_000, "JPY").unwrap(),
+        declared_fx_basis: None,
+        fx_rate_date: None,
+        auto_pause: true,
+        auto_resume_on_rollover: false,
+        confirm_below_current_spend: true,
+        dry_run: false,
+    };
+    harness
+        .put_cap
+        .execute(tenant_id, Some(camp_id), cmd)
+        .await
+        .unwrap();
+
+    harness.evaluator.evaluate_tenant(tenant_id).await.unwrap();
+
+    // Precondition: the stale guard fired and did not pause.
+    let alerts = harness
+        .list_alerts
+        .execute(tenant_id, Some(camp_id), false, None)
+        .await
+        .unwrap();
+    let stale_alert = alerts
+        .iter()
+        .find(|a| a.threshold == 100)
+        .expect("100% stale alert");
+    assert_eq!(stale_alert.condition, AlertCondition::StaleDataWarning);
+    assert!(!stale_alert.auto_paused);
+
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let camp = harness
+        .campaigns_repo
+        .find(&mut scope, tenant_id, camp_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        camp.intent.status,
+        CampaignStatus::Active,
+        "stale data must not pause"
+    );
+
+    // Data settles: the same connection syncs successfully, nothing else changes.
+    let mut conn = harness
+        .connections_repo
+        .find_by_id(&mut scope, tenant_id, conn_id)
+        .await
+        .unwrap()
+        .unwrap();
+    conn.record_refresh_success(None, Utc::now());
+    conn.record_metrics_sync(Utc::now());
+    harness
+        .connections_repo
+        .upsert(&mut scope, &conn)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    harness.evaluator.evaluate_tenant(tenant_id).await.unwrap();
+
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let camp_after = harness
+        .campaigns_repo
+        .find(&mut scope, tenant_id, camp_id)
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(
+        camp_after.intent.status,
+        CampaignStatus::Paused,
+        "a prior StaleDataWarning must not suppress the settled-breach auto-pause"
+    );
+}
+
+/// Regression test for daily-cap settled classification.
+///
+/// Every metrics row for a daily cap is dated today, so classifying `date == today`
+/// as provisional made `settled` permanently zero: the settled-breach branch was
+/// unreachable and a daily cap could only pause via the provisional lower bound,
+/// i.e. at 125% of the cap. Spend here is exactly 100% of the cap.
+#[tokio::test]
+async fn test_daily_cap_pauses_at_one_hundred_percent() {
+    let (harness, tenant_id) = TestHarness::new().await;
+    let (conn_id, camp_id) =
+        seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
+    let today = Utc::now().date_naive();
+
+    // Fresh connection (seeded as synced now) and spend exactly at the cap.
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    harness
+        .metrics_repo
+        .upsert_daily(
+            &mut scope,
+            &[MetricsDailyRow {
+                tenant_id,
+                connection_id: conn_id,
+                platform: PlatformKey::parse("google_ads").unwrap(),
+                campaign_id: camp_id,
+                date: today,
+                impressions: 1000,
+                clicks: 100,
+                spend: Money::new(100_000, "JPY").unwrap(),
+                conversions: 5.0,
+                conversion_value: Money::new(100_000, "JPY").unwrap(),
+            }],
+        )
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let cmd = PutBudgetCapCommand {
+        period: BudgetPeriod::Daily,
+        amount: Money::new(100_000, "JPY").unwrap(),
+        declared_fx_basis: None,
+        fx_rate_date: None,
+        auto_pause: true,
+        auto_resume_on_rollover: false,
+        confirm_below_current_spend: true,
+        dry_run: false,
+    };
+    harness
+        .put_cap
+        .execute(tenant_id, Some(camp_id), cmd)
+        .await
+        .unwrap();
+
+    harness.evaluator.evaluate_tenant(tenant_id).await.unwrap();
+
+    let alerts = harness
+        .list_alerts
+        .execute(tenant_id, Some(camp_id), false, None)
+        .await
+        .unwrap();
+    let alert = alerts
+        .iter()
+        .find(|a| a.threshold == 100)
+        .expect("100% alert");
+    assert_eq!(
+        alert.condition,
+        AlertCondition::SettledBreach,
+        "today's non-restating rows must count as settled for a daily cap"
+    );
+    assert!(alert.auto_paused, "settled breach at 100% must auto-pause");
+
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let camp = harness
+        .campaigns_repo
+        .find(&mut scope, tenant_id, camp_id)
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(
+        camp.intent.status,
+        CampaignStatus::Paused,
+        "daily cap must pause at 100%, not 125%"
+    );
+}
+
 #[tokio::test]
 async fn test_spend_status_and_run_rate_projection() {
     let (harness, tenant_id) = TestHarness::new().await;
@@ -782,12 +981,16 @@ async fn test_spend_status_and_run_rate_projection() {
 }
 
 #[tokio::test]
-async fn test_rollover_sweep_opt_in_resume_semantics() {
+/// Finding 3 / FR-1013: guardrails never auto-resume a paused campaign on rollover.
+///
+/// This is the mandatory test required by the REVIEW-FINDINGS.md working rules:
+/// "manually paused campaign is NOT resumed by rollover".
+async fn test_rollover_sweep_never_auto_resumes() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (_conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
 
-    // Manually pause campaign as if auto-paused by guardrails
+    // Manually pause campaign (simulating a guardrail-caused pause)
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let mut camp = harness
         .campaigns_repo
@@ -804,7 +1007,7 @@ async fn test_rollover_sweep_opt_in_resume_semantics() {
         .unwrap();
     scope.commit().await.unwrap();
 
-    // 1. With auto_resume_on_rollover = false -> sweep does NOT resume
+    // Case 1: cap with auto_resume_on_rollover = false → sweep returns 0
     let cmd_no_resume = PutBudgetCapCommand {
         period: BudgetPeriod::Daily,
         amount: Money::new(100_000, "JPY").unwrap(),
@@ -821,12 +1024,15 @@ async fn test_rollover_sweep_opt_in_resume_semantics() {
         .await
         .unwrap();
 
-    let resumed_count = harness
+    let boundary_recorded = harness
         .rollover_sweep
         .sweep_tenant(tenant_id, BudgetPeriod::Daily)
         .await
         .unwrap();
-    assert_eq!(resumed_count, 0);
+    assert!(
+        boundary_recorded,
+        "first sweep of a period records the boundary"
+    );
 
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let camp = harness
@@ -835,10 +1041,14 @@ async fn test_rollover_sweep_opt_in_resume_semantics() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(camp.intent.status, CampaignStatus::Paused);
+    assert_eq!(
+        camp.intent.status,
+        CampaignStatus::Paused,
+        "campaign must remain paused after rollover sweep"
+    );
     scope.commit().await.unwrap();
 
-    // 2. With auto_resume_on_rollover = true -> sweep DOES resume
+    // Case 2: cap with auto_resume_on_rollover = true → sweep STILL returns 0 (FR-1013)
     let cmd_with_resume = PutBudgetCapCommand {
         period: BudgetPeriod::Daily,
         amount: Money::new(100_000, "JPY").unwrap(),
@@ -855,34 +1065,31 @@ async fn test_rollover_sweep_opt_in_resume_semantics() {
         .await
         .unwrap();
 
-    let resumed_count2 = harness
+    // FR-1013: "never auto-resumes" — the auto_resume_on_rollover flag is a no-op.
+    // This second sweep lands inside the period already recorded above, so it is
+    // also the boundary-guard regression test: a tick that crosses no boundary
+    // must do nothing.
+    let boundary_recorded_again = harness
         .rollover_sweep
         .sweep_tenant(tenant_id, BudgetPeriod::Daily)
         .await
         .unwrap();
-    assert_eq!(resumed_count2, 1);
+    assert!(
+        !boundary_recorded_again,
+        "a second sweep within the same period must be a no-op"
+    );
 
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
-    let resumed_camp = harness
+    let camp_still_paused = harness
         .campaigns_repo
         .find(&mut scope, tenant_id, camp_id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(resumed_camp.intent.status, CampaignStatus::Active);
-
-    let changes = harness
-        .campaigns_repo
-        .list_changes(&mut scope, tenant_id, camp_id, 10)
-        .await
-        .unwrap();
-    let rollover_change = changes
-        .iter()
-        .find(|c| c.after_state.status == CampaignStatus::Active)
-        .expect("rollover change log");
     assert_eq!(
-        rollover_change.attribution.as_deref(),
-        Some("system:budget_guardrail_rollover")
+        camp_still_paused.intent.status,
+        CampaignStatus::Paused,
+        "campaign must still be paused after rollover sweep regardless of auto_resume_on_rollover"
     );
 }
 

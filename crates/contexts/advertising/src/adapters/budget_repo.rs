@@ -435,7 +435,7 @@ impl BudgetAlertRepository for SqlxBudgetAlertRepository {
         let row = sqlx::query_as::<_, BudgetAlertRow>(
             "UPDATE advertising.budget_alerts
              SET acknowledged_at = $3, acknowledged_by = $4
-             WHERE tenant_id = $1 AND id = $2
+             WHERE tenant_id = $1 AND id = $2 AND acknowledged_at IS NULL
              RETURNING id, tenant_id, cap_id, campaign_id, period, period_start, threshold, condition,
                spend_minor, cap_minor, currency, data_freshness, auto_paused,
                acknowledged_at, acknowledged_by, created_at",
