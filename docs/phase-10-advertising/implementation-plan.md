@@ -1,7 +1,8 @@
 # Phase 10 — Advertising & Campaign Management (backend)
 
-**Version:** 0.11.0 · **Status:** in progress — slices 10.0–10.6 shipped against the fake adapter;
-see § 2 for the one open gap common to 10.2–10.6 (live platform credentials)
+**Version:** 0.11.0 · **Status:** in progress — slices 10.0–10.8 shipped against the fake adapter,
+10.9 in progress on `feat/task-018-privacy-subprocessor` (not yet merged to `main`);
+see § 2 for the one open gap common to 10.2–10.7 (live platform credentials)
 **Depends on:** 01, 02, 03 (entitlements), 05 (directives, envelope crypto), 06, 08 (tenant domains),
 09 (revenue) · **Unlocks:** tenants running and measuring paid acquisition inside Sanvi
 
@@ -20,15 +21,19 @@ The platform abstraction must make the third and fourth ad network **an adapter,
 
 ## 2. Progress
 
-Verified 2026-08-30 against the working tree and `docs/tasks/backlog.md` (the authoritative
-per-task status — this table summarizes it; the two are kept in sync but check the backlog row
-directly if they ever drift). 10.7's row below was verified directly this session (full
-`sanvi-advertising` test suite via `cargo nextest run -p sanvi-advertising`, workspace clippy/fmt,
+Re-synced 2026-09-02 against `docs/tasks/backlog.md` (the authoritative per-task status — this
+table summarizes it; the two are kept in sync but check the backlog row directly if they ever
+drift) and `git log`/`git branch` directly, since this table had drifted from both: 10.8 was still
+shown `todo` after `TASK-017` had already merged to `main` (`70b7d5e`), and 10.9 wasn't shown at all
+while `TASK-018` was two commits into `feat/task-018-privacy-subprocessor`. 10.7's row was verified
+directly in the session that shipped it (full `sanvi-advertising` test suite via
+`cargo nextest run -p sanvi-advertising`, workspace clippy/fmt,
 `just layering`/`ads-invariants`/`connect-invariants`/`id-policy`/`openapi`/`i18n`, and the full
 workspace `scripts/test.sh --quiet` — 919/919 — all clean on an uncommitted working tree). 10.6's
-row was verified in the prior session (build, full `sanvi-advertising` test suite, clippy, fmt, and
-`check-openapi.sh`, all clean on `main` at `508db37`). 10.4/10.5's entries are carried over from
-their own `TASK-01{3,4}` status lines, not independently re-verified this session.
+row was verified in an earlier session (build, full `sanvi-advertising` test suite, clippy, fmt, and
+`check-openapi.sh`, all clean on `main` at `508db37`). 10.4/10.5/10.8's entries are carried over from
+their own `TASK-01{3,4,7}` status lines, not independently re-verified this session; 10.9's entry is
+carried over verbatim from the `TASK-018` backlog row (in-progress, not yet merged).
 
 | Slice | Task | Status | Shipped | Open |
 |---|---|---|---|---|
@@ -40,15 +45,17 @@ their own `TASK-01{3,4}` status lines, not independently re-verified this sessio
 | 10.5 conversion capture & directive gate | TASK-014 | 🟡 partial | directive-gated capture, `PaymentLookupPort`-derived conversion id, immutable order/name dedupe, click-id capture with Referer redaction | Docker-backed integration/CI verification of the latest review-hardening revision; mounting `/public/track` on the tenant's own phase-08 domain (deferred, needs frontend/infra coordination) |
 | 10.6 upload, dedupe & diagnostics | TASK-015 | 🟡 partial | upload sweep with per-platform state, withdrawal re-check (`suppressed_late`), DLQ after 5 attempts; `RetractWithdrawnConversions` (post-upload retraction, explicit `Unpropagated{reason}` when a platform can't remove a member); `SyncAudiences` + `/ads/audiences` CRUD/refresh (dual-consent `sale_or_share` **and** `targeted_advertising`, opted-out subjects actively removed from existing lists); diagnostics projection + manual retry; full `AdvertisingMetrics` coverage across all four sweeps | **real Google/Meta `ConversionSinkPort`/`AudienceSyncPort` implementations** — blocked on live credentials, same as 10.2/10.3/10.4 |
 | 10.7 metrics, rollups & ROAS | TASK-016 | 🟡 partial | idempotent `metrics_daily` upsert (replace-not-append, proven by test at row and rollup grain); campaign-day revenue join — a connection's sole active campaign attributes deterministically, an ambiguous or zero-candidate day parks in the new `metrics_unattributed_revenue_daily` table (surfaced only at platform/tenant grain, never split into a campaign row), a currency-mismatched conversion is skipped rather than mixed into one ratio; ROAS query layer (`GET /ads/metrics`, `/summary`, `/export`, `/freshness`) with `roas_platform`/`roas_sanvi` always both present and `null` (never `∞`) on zero spend, a `restating` flag, and a hard max-span rejection; `FakeAdPlatform.fetch_metrics` upgraded to a deterministic multi-day series carrying `conversion_value`; cross-tenant `RunMetricsIngestion` sweep in `apps/worker` (one schedule covers hourly-today and the trailing backfill); `ads_sync_duration_seconds`/`ads_sync_failures_total`/`metrics_ingestion_lag_hours` added to `AdvertisingMetrics` | **real Google/Meta reporting adapters** — blocked on live credentials, same as 10.2–10.6; a live FX rate source (`FxRatePort` exists, `rendered_spend` stays `None` — nothing calls a real provider yet); per-event click-id campaign attribution (needs the live adapter); the 500-campaign × 90-day load target and platform-parity verification (need a test account). Not yet committed |
-| 10.8 budget guardrails & alerts | TASK-017 | ⬜ todo | — | blocked on 10.7's provisional numbers becoming restatement-aware (they already are) — otherwise unblocked |
-| 10.9 privacy, hardening & release | TASK-018 | ⬜ todo | — | blocked on 10.4, 10.6, 10.8 |
+| 10.8 budget guardrails & alerts | TASK-017 | ✅ done, merged to `main` (`70b7d5e`) | budget caps & alerts schema (migration `20260831000000`), contracts in `api/advertising.yaml`, deduplicated 80%/100% threshold evaluator with provisional-data lower-bound guard, auto-pause with `system:budget_guardrail` attribution, rollover sweep with opt-in resume, spend status with run-rate projection, spend anomaly detector, dry-run simulation, localized alerts (en, ja), integration tests | — |
+| 10.9 privacy, hardening & release | TASK-018 | 🟡 in progress, on `feat/task-018-privacy-subprocessor` (not merged) | `PersonalDataProvider` (export/erase conversion identifiers, click ids, consent snapshots retained under statutory override, audience membership); erasure propagation feeding TASK-015's existing retraction/audience-refresh sweeps with no new call site; Google/Meta registered in `privacy.subprocessors` (migration `20260902000000`, role + DPA + APPI/EU transfer terms) that TASK-014's gate reads; alerts + eight runbooks + the platform version-bump drill, all verified against `FakeAdPlatform` | `GET /api/v1/platform/ads/health` endpoint; observability completion (`ads_token_refresh_failures` has no emitting scheduler — no code anywhere calls the token-revocation-detection path; `SpendAnomalyDetector` never writes an `advertising.budget_alerts` row); retention verification (aged-partition drop + privacy-centre reporting); release (flags on, changelog, tag `v0.11.0` — also blocked on `sanvi-frontend` TASK-018 reaching `done`) |
 
 **Critical path note.** Every remaining gap in 10.2 through 10.7 is the same external blocker: no
 live Google/Meta platform credentials (10.7 adds one more instance of it — reporting adapters — plus
 a live FX data source, itself never blocking anything else). The fake adapter carries the
-abstraction until they land, exactly as the cross-track plan intends — 10.7 (this session) is proof
-the pattern scales to ingestion/rollups, not just campaign CRUD. 10.8 is next with no external
-blocker of its own: it only needs 10.7's restatement-aware spend number, which is already in place.
+abstraction until they land, exactly as the cross-track plan intends. 10.8 shipped with no external
+blocker of its own, on 10.7's already-in-place restatement-aware spend number. 10.9's remaining work
+(observability completion, retention verification, release) has no live-credential blocker either —
+it's in-flight implementation plus the cross-repo wait on `sanvi-frontend` TASK-018 for the
+`v0.11.0` tag.
 
 ## 3. Scope
 
