@@ -128,7 +128,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 proptest = "1"
 # Pinned to what testcontainers-modules 0.15 (latest) depends on; bumping past
 # 0.27 conflicts on the transitive `bollard-stubs` version until modules 0.16 ships.
-testcontainers = "0.27"
+# `reusable-containers` lets every test *process* attach to one named server
+# instead of starting its own; see `testsupport::postgres::pg_port`.
+testcontainers = { version = "0.27", features = ["reusable-containers"] }
 testcontainers-modules = { version = "0.15", features = ["postgres", "redis"] }
 
 [profile.dev]

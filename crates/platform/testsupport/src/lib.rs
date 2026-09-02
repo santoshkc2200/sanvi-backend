@@ -15,6 +15,7 @@
 //! has no per-test equivalent of `CREATE DATABASE`, so its shared server is
 //! divided by key name instead — see [`test_stream`].
 
+mod containers;
 mod postgres;
 mod redis;
 
