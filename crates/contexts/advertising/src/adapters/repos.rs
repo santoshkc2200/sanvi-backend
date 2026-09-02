@@ -1145,6 +1145,7 @@ impl AudienceRepository for SqlxCampaignRepository {
     async fn list_due_for_refresh(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
+        now: chrono::DateTime<chrono::Utc>,
         stale_after_secs: i64,
         limit: i64,
     ) -> Result<Vec<Audience>, AdvertisingError> {
@@ -1153,10 +1154,11 @@ impl AudienceRepository for SqlxCampaignRepository {
                     included_identifiers, last_synced_at, created_at, updated_at
              FROM advertising.audiences
              WHERE last_synced_at IS NULL
-                OR last_synced_at <= now() - ($1 || ' seconds')::interval
+                OR last_synced_at <= $1::timestamptz - ($2 || ' seconds')::interval
              ORDER BY last_synced_at ASC NULLS FIRST, id ASC
-             LIMIT $2",
+             LIMIT $3",
         )
+        .bind(now)
         .bind(stale_after_secs)
         .bind(limit)
         .fetch_all(&mut **scope.tx_mut().as_inner())

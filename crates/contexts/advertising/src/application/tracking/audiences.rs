@@ -466,7 +466,7 @@ impl SyncAudiences {
                 .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
             let batch = self
                 .audience_repo
-                .list_due_for_refresh(&mut scope, stale_after_secs, limit)
+                .list_due_for_refresh(&mut scope, Utc::now(), stale_after_secs, limit)
                 .await?;
             scope
                 .commit()

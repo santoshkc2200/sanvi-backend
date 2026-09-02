@@ -553,9 +553,16 @@ pub trait AudienceRepository: Send + Sync {
     /// synced, or last synced more than `stale_after_secs` ago. Mirror
     /// `ConversionEventRepository::list_uploaded`'s cross-tenant `PlatformScope`
     /// pattern exactly.
+    ///
+    /// `now` comes from the caller because `last_synced_at` is written from the
+    /// application's clock. Comparing it against the database's own clock
+    /// instead mixes two time sources, and any skew between them — a
+    /// containerised Postgres running behind the host is the common case —
+    /// makes a row that was just synced look not-yet-due, or the reverse.
     async fn list_due_for_refresh(
         &self,
         scope: &mut PlatformScope<'_>,
+        now: chrono::DateTime<chrono::Utc>,
         stale_after_secs: i64,
         limit: i64,
     ) -> Result<Vec<Audience>, AdvertisingError>;
