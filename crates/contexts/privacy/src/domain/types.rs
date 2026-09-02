@@ -540,6 +540,10 @@ pub enum DataClass {
     AdvertisingMetric,
     /// Who changed which campaign field, and when.
     AdvertisingCampaignChange,
+    /// A tenant's advertising spend cap and its schedule.
+    AdvertisingBudgetCap,
+    /// A breach of one of those caps, and what was done about it.
+    AdvertisingBudgetAlert,
 }
 
 impl DataClass {
@@ -561,6 +565,8 @@ impl DataClass {
             "advertising_conversion_event" => Ok(Self::AdvertisingConversionEvent),
             "advertising_metric" => Ok(Self::AdvertisingMetric),
             "advertising_campaign_change" => Ok(Self::AdvertisingCampaignChange),
+            "advertising_budget_cap" => Ok(Self::AdvertisingBudgetCap),
+            "advertising_budget_alert" => Ok(Self::AdvertisingBudgetAlert),
             other => Err(PrivacyError::InvalidDataClass(other.to_string())),
         }
     }
@@ -583,6 +589,8 @@ impl DataClass {
             Self::AdvertisingConversionEvent => "advertising_conversion_event",
             Self::AdvertisingMetric => "advertising_metric",
             Self::AdvertisingCampaignChange => "advertising_campaign_change",
+            Self::AdvertisingBudgetCap => "advertising_budget_cap",
+            Self::AdvertisingBudgetAlert => "advertising_budget_alert",
         }
     }
 }
@@ -972,6 +980,68 @@ impl SignalSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `data_class` seeded into `privacy.retention_rules` must be a
+    /// class this enum knows.
+    ///
+    /// A migration that adds a rule without adding the matching variant
+    /// compiles fine and passes every unit test, then fails at runtime the
+    /// first time anything reads the rules — which is how
+    /// `advertising_budget_alert` reached `main` and broke retention sweeps
+    /// and the public notice. Reading the migrations directly catches that at
+    /// the point the rule is introduced, with no database.
+    #[test]
+    fn every_seeded_retention_rule_class_is_known() {
+        let migrations =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../migrations");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&migrations).expect("migrations directory must exist") {
+            let path = entry.expect("readable migration entry").path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            // `.down.sql` deletes rules rather than seeding them.
+            if !name.ends_with(".sql") || name.ends_with(".down.sql") {
+                continue;
+            }
+            let sql = std::fs::read_to_string(&path).expect("readable migration");
+            for raw in seeded_retention_classes(&sql) {
+                assert!(
+                    DataClass::parse(&raw).is_ok(),
+                    "{name} seeds retention rule for unknown data class {raw:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "found no seeded retention rules — the scan stopped matching"
+        );
+    }
+
+    /// Pull the quoted `data_class` values out of every
+    /// `INSERT INTO privacy.retention_rules ... VALUES` statement.
+    fn seeded_retention_classes(sql: &str) -> Vec<String> {
+        let mut classes = Vec::new();
+        for statement in sql.split("INSERT INTO privacy.retention_rules").skip(1) {
+            let Some(values) = statement.split_once("VALUES") else {
+                continue;
+            };
+            let body = values.1.split(';').next().unwrap_or_default();
+            // Each row opens with `('<data_class>', ...`.
+            for row in body.split('(').skip(1) {
+                let trimmed = row.trim_start();
+                if let Some(rest) = trimmed.strip_prefix('\'') {
+                    if let Some((class, _)) = rest.split_once('\'') {
+                        classes.push(class.to_string());
+                    }
+                }
+            }
+        }
+        classes
+    }
 
     #[test]
     fn purpose_roundtrips() {
