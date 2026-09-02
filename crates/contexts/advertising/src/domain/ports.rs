@@ -241,6 +241,45 @@ pub struct UploadedConversion {
     pub event_id: String,
 }
 
+/// A platform access token minted from a stored refresh token.
+#[derive(Clone)]
+pub struct GrantedAccessToken {
+    pub access_token: String,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl std::fmt::Debug for GrantedAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrantedAccessToken")
+            .field("access_token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// The platform's refresh-token grant. Separate from `AdPlatformPort` because
+/// it is called with a decrypted credential the rest of the port never sees.
+#[async_trait]
+pub trait RefreshTokenGrant: Send + Sync {
+    async fn exchange_refresh_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<GrantedAccessToken, AdvertisingError>;
+}
+
+/// Resolves a live platform access token for an already-authorized connection.
+///
+/// `ConnectionHandle.id` is a `ConnectionId`, not a credential — an adapter
+/// cannot turn one into a bearer token on its own, because the refresh token
+/// lives in the tenant-scoped `TokenVault` and reaching it needs a transaction
+/// scope no `AdPlatformPort` method carries. Implementations own that lookup
+/// (and the refresh-token grant that follows it) so adapters stay transport-only.
+#[async_trait]
+pub trait ConnectionAccessTokenProvider: Send + Sync {
+    async fn access_token(&self, connection: &ConnectionHandle)
+    -> Result<String, AdvertisingError>;
+}
+
 /// Boundary for every network integration. No method reads ambient tenant state.
 #[async_trait]
 pub trait AdPlatformPort: Send + Sync {
@@ -529,9 +568,16 @@ pub trait AudienceRepository: Send + Sync {
     /// synced, or last synced more than `stale_after_secs` ago. Mirror
     /// `ConversionEventRepository::list_uploaded`'s cross-tenant `PlatformScope`
     /// pattern exactly.
+    ///
+    /// `now` comes from the caller because `last_synced_at` is written from the
+    /// application's clock. Comparing it against the database's own clock
+    /// instead mixes two time sources, and any skew between them — a
+    /// containerised Postgres running behind the host is the common case —
+    /// makes a row that was just synced look not-yet-due, or the reverse.
     async fn list_due_for_refresh(
         &self,
         scope: &mut PlatformScope<'_>,
+        now: chrono::DateTime<chrono::Utc>,
         stale_after_secs: i64,
         limit: i64,
     ) -> Result<Vec<Audience>, AdvertisingError>;

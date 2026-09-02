@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use sanvi_kernel::TenantId;
+
 use crate::domain::{
     Ad, AdGroup, AdPlatformPort, AdvertisingError, AuthorizationRequest, BidSettings, Budget,
     BudgetType, Campaign, CampaignStatus, ConnectionHandle, ConsentSnapshot, Creative,
@@ -19,6 +21,8 @@ pub async fn assert_ad_platform_contract(
 ) -> Result<(), AdvertisingError> {
     let connection = ConnectionHandle {
         id: "contract-connection".to_string(),
+        tenant_id: TenantId::try_from(1_i64)
+            .map_err(|_| AdvertisingError::InvalidInput("contract tenant id".to_string()))?,
     };
     let authorization = adapter
         .begin_authorization(

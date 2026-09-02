@@ -110,6 +110,7 @@ impl ResolveCampaignDrift {
                     .update_campaign(
                         &ConnectionHandle {
                             id: stored.connection_id.to_string(),
+                            tenant_id,
                         },
                         state.intent.clone(),
                         mutation_id,

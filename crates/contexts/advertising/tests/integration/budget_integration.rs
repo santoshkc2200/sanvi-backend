@@ -127,6 +127,7 @@ async fn seed_connection_and_campaign(
             .create_campaign(
                 &sanvi_advertising::domain::ConnectionHandle {
                     id: format!("acct-{conn_id}"),
+                    tenant_id,
                 },
                 campaign_intent,
                 uuid::Uuid::new_v4(),

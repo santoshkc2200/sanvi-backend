@@ -725,6 +725,10 @@ impl AudienceSyncPort for FakeAudienceSync {
 
 #[cfg(test)]
 mod tests {
+    fn handle_tenant() -> sanvi_kernel::TenantId {
+        sanvi_kernel::TenantId::try_from(1_i64).unwrap()
+    }
+
     use super::*;
     use crate::domain::{
         Ad, AdGroup, BidSettings, Budget, ConversionId, Creative, CreativeText, DriftState,
@@ -903,6 +907,7 @@ mod tests {
         let sink = FakeConversionSink::new(FakeAdPlatform::fixtures()[0].clone());
         let connection = ConnectionHandle {
             id: "conn-1".to_string(),
+            tenant_id: handle_tenant(),
         };
         let event = sample_conversion_event("evt-upload-1");
 
@@ -933,6 +938,7 @@ mod tests {
             ));
         let connection = ConnectionHandle {
             id: "conn-1".to_string(),
+            tenant_id: handle_tenant(),
         };
         let event = sample_conversion_event("evt-err-1");
 
@@ -999,6 +1005,7 @@ mod tests {
         let sink = FakeConversionSink::new(FakeAdPlatform::fixtures()[0].clone());
         let connection = ConnectionHandle {
             id: "conn-google".to_string(),
+            tenant_id: handle_tenant(),
         };
 
         let google_ads = PlatformKey::parse("google_ads").unwrap();
@@ -1037,6 +1044,7 @@ mod tests {
             ));
         let connection = ConnectionHandle {
             id: "conn-1".to_string(),
+            tenant_id: handle_tenant(),
         };
         let event = sample_conversion_event("evt-retract-err");
 

@@ -1,5 +1,6 @@
 //! Advertising application services.
 
+pub mod access_tokens;
 pub mod budget;
 pub mod campaigns;
 pub mod catalog;
@@ -14,6 +15,7 @@ pub mod registry;
 pub mod token_refresh;
 pub mod tracking;
 
+pub use access_tokens::VaultAccessTokenProvider;
 pub use budget::{
     AcknowledgeBudgetAlert, BudgetRolloverSweep, CalculatedSpendDetails, DryRunEvaluationResult,
     GetBudgetCaps, GetCampaignBudgetCap, GetSpendStatus, ListBudgetAlerts, PutBudgetCap,

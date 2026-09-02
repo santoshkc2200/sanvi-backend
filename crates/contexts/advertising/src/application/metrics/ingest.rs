@@ -55,6 +55,7 @@ impl IngestConnectionMetrics {
         let adapter = self.platforms.adapter(connection.platform())?;
         let handle = ConnectionHandle {
             id: connection.id().to_string(),
+            tenant_id: connection.tenant_id(),
         };
         let query = MetricQuery {
             from: from.to_string(),
