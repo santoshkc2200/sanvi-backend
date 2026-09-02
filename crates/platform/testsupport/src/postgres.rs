@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sanvi_persistence::{DatabaseConfig, Migrator, PgPool, build_pool};
 use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Connection, PgConnection, postgres::PgConnectOptions};
-use testcontainers::{ImageExt, ReuseDirective, runners::AsyncRunner};
+use testcontainers::{ImageExt, ReuseDirective};
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::OnceCell;
 
@@ -88,7 +88,7 @@ async fn pg_port() -> u16 {
                     .parse()
                     .expect("SANVI_TEST_PG_PORT must be a port number");
             }
-            let node = start_shared_postgres().await;
+            let node = crate::containers::start_shared("postgres", shared_postgres_request).await;
             let port = await_ready_postgres(&node).await;
             // The container must outlive every test in this process. Dropping
             // it here would remove the server the other tests are still using,
@@ -99,30 +99,6 @@ async fn pg_port() -> u16 {
             port
         })
         .await
-}
-
-/// Start the shared server, or attach to the one another process started.
-///
-/// `ReuseDirective::Always` de-duplicates by name but does not serialize the
-/// creation itself: `nextest` starts many processes at once, they all look for
-/// `sanvi_test_pg`, all miss, and all try to create it. One wins and the rest
-/// get `409 Conflict`. Losing that race is not an error — the container the
-/// winner created is exactly what the loser wanted — so a conflict is retried,
-/// and the retry's reuse lookup finds it.
-async fn start_shared_postgres() -> testcontainers::ContainerAsync<Postgres> {
-    const CONFLICT_RETRIES: u32 = 40;
-    const CONFLICT_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
-
-    for attempt in 0..=CONFLICT_RETRIES {
-        match shared_postgres_request().start().await {
-            Ok(node) => return node,
-            Err(error) if attempt < CONFLICT_RETRIES && is_name_conflict(&error) => {
-                tokio::time::sleep(CONFLICT_BACKOFF).await;
-            }
-            Err(error) => panic!("failed to start postgres: {error}"),
-        }
-    }
-    unreachable!("the loop either returns a container or panics")
 }
 
 /// Wait until the shared server actually answers, and return its port.
@@ -155,14 +131,6 @@ async fn await_ready_postgres(node: &testcontainers::ContainerAsync<Postgres>) -
         tokio::time::sleep(READY_BACKOFF).await;
     }
     panic!("shared postgres never became ready within {READY_TIMEOUT:?}: {last_error}");
-}
-
-/// A 409 from Docker means another process created the container between our
-/// reuse lookup and our create. Matched on the message because `bollard`'s
-/// error carries the status only as part of the server response.
-fn is_name_conflict(error: &testcontainers::TestcontainersError) -> bool {
-    let rendered = error.to_string();
-    rendered.contains("already in use") || rendered.contains("Conflict")
 }
 
 fn shared_postgres_request() -> testcontainers::ContainerRequest<Postgres> {
