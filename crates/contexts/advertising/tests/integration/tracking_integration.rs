@@ -1226,6 +1226,14 @@ fn create_test_advertising_state(
             Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new()),
             7,
         )),
+        get_platform_ads_health: Arc::new(
+            sanvi_advertising::application::GetPlatformAdsHealth::new(
+                tx.clone(),
+                connections.clone(),
+                registry.clone(),
+                6.0,
+            ),
+        ),
         oauth_state,
         tracking_ip_limiter: Arc::new(QuotaLimiter::new(100, ip_permits)),
         tracking_domain_limiter: Arc::new(QuotaLimiter::new(100, domain_permits)),

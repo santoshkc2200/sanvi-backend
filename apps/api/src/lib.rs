@@ -3180,7 +3180,7 @@ pub async fn build_advertising_state(
         get_creative_previews: std::sync::Arc::new(GetCreativePreviews::new(
             tx.clone(),
             creatives,
-            registry,
+            registry.clone(),
         )),
         query_metrics: std::sync::Arc::new(QueryMetrics::new(
             tx.clone(),
@@ -3189,10 +3189,18 @@ pub async fn build_advertising_state(
             config.metrics_restatement_days,
         )),
         get_freshness: std::sync::Arc::new(GetFreshness::new(
-            tx,
-            connections,
+            tx.clone(),
+            connections.clone(),
             config.metrics_freshness_stalled_after_hours,
         )),
+        get_platform_ads_health: std::sync::Arc::new(
+            sanvi_advertising::application::GetPlatformAdsHealth::new(
+                tx,
+                connections,
+                registry,
+                config.metrics_freshness_stalled_after_hours,
+            ),
+        ),
         get_budget_caps,
         put_budget_cap,
         get_campaign_budget_cap,
@@ -3493,7 +3501,8 @@ pub fn build_app(
     let app = match advertising {
         Some(state) => app
             .app_data(web::Data::new(state))
-            .configure(advertising_routes::tracking_public_routes),
+            .configure(advertising_routes::tracking_public_routes)
+            .configure(advertising_routes::advertising_platform_routes),
         None => app,
     };
 

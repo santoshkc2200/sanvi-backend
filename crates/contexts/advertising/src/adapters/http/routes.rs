@@ -5,11 +5,12 @@ use super::handlers::{
     acknowledge_budget_alert, add_ad, add_ad_group, create_campaign, create_connection,
     create_creative, delete_connection, delete_creative, get_ads_metrics, get_ads_metrics_export,
     get_ads_metrics_freshness, get_ads_metrics_summary, get_budget_alerts, get_budget_caps,
-    get_campaign, get_campaign_budget_cap, get_creative, get_creative_previews, get_spend_status,
-    list_ad_platforms, list_campaign_changes, list_campaigns, list_connections, list_creatives,
-    oauth_callback, patch_campaign, pause_campaign, publish_campaign, put_budget_cap,
-    put_campaign_budget_cap, resolve_campaign_drift, resume_campaign, start_oauth, update_ad,
-    update_ad_group, validate_campaign,
+    get_campaign, get_campaign_budget_cap, get_creative, get_creative_previews,
+    get_platform_ads_health, get_spend_status, list_ad_platforms, list_campaign_changes,
+    list_campaigns, list_connections, list_creatives, oauth_callback, patch_campaign,
+    pause_campaign, publish_campaign, put_budget_cap, put_campaign_budget_cap,
+    resolve_campaign_drift, resume_campaign, start_oauth, update_ad, update_ad_group,
+    validate_campaign,
 };
 
 /// A catalog is available when at least one platform can be used. Individual
@@ -204,7 +205,22 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     );
 }
 
+pub fn advertising_platform_routes(cfg: &mut web::ServiceConfig) {
+    let read = require_permission!("platform.tenant.read", platform);
+    cfg.service(
+        web::resource("/ads/health")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .route(web::get().to(get_platform_ads_health)),
+    );
+}
+
 pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
+    (
+        "/api/v1/platform/ads/health",
+        Method::GET,
+        "platform.tenant.read",
+        ResourceSpec::Platform,
+    ),
     (
         "/api/v1/tenant/ads/platforms",
         Method::GET,

@@ -83,4 +83,6 @@ pub struct AdvertisingState {
     pub list_budget_alerts: Arc<crate::application::ListBudgetAlerts>,
     pub acknowledge_budget_alert: Arc<crate::application::AcknowledgeBudgetAlert>,
     pub get_spend_status: Arc<crate::application::GetSpendStatus>,
+    /// Platform-admin health overview (TASK-018, 10.9).
+    pub get_platform_ads_health: Arc<crate::application::GetPlatformAdsHealth>,
 }

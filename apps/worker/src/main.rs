@@ -772,6 +772,8 @@ pub struct SchedulerConfig {
     /// "hourly for today" and the trailing backfill — see
     /// `RunMetricsIngestion::execute`'s doc comment for why.
     pub advertising_metrics_ingestion_interval_secs: u64,
+    /// Scheduled OAuth token-refresh sweep (TASK-018, 10.9).
+    pub advertising_token_refresh_interval_secs: u64,
     /// Budget guardrails evaluation & spend anomaly sweep (TASK-017, 10.8).
     pub advertising_budget_guardrails_interval_secs: u64,
     /// Budget rollover sweep (TASK-017, 10.8).
@@ -812,6 +814,7 @@ impl Default for SchedulerConfig {
             advertising_conversion_retraction_interval_secs: 60,
             advertising_audience_sync_interval_secs: 3600,
             advertising_metrics_ingestion_interval_secs: 3600,
+            advertising_token_refresh_interval_secs: 3600,
             advertising_budget_guardrails_interval_secs: 300,
             advertising_budget_rollover_interval_secs: 3600,
         }
@@ -1860,6 +1863,14 @@ async fn main() -> ExitCode {
             advertising_metrics.clone(),
             config.advertising.metrics_ingestion_backfill_days,
         ));
+    let advertising_token_refresh_sweep =
+        Arc::new(sanvi_advertising::application::RunTokenRefresh::new(
+            tx_manager.clone(),
+            advertising_connections.clone(),
+            advertising_platforms.clone(),
+            advertising_metrics.clone(),
+            3600,
+        ));
 
     // TASK-017 (10.8): budget guardrails, spend alerts, threshold evaluator & rollover sweep.
     let advertising_budget_caps: Arc<dyn sanvi_advertising::domain::BudgetCapRepository> =
@@ -1900,21 +1911,24 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
             tx_manager.clone(),
             advertising_budget_caps.clone(),
-            advertising_budget_alerts,
+            advertising_budget_alerts.clone(),
             advertising_campaigns.clone(),
             advertising_connections.clone(),
             advertising_pause_campaign,
             advertising_spend_status,
-            advertising_events,
-            advertising_ids,
+            advertising_events.clone(),
+            advertising_ids.clone(),
             advertising_budget_notifier.clone(),
             advertising_metrics.clone(),
         ));
     let advertising_spend_anomaly_detector =
         Arc::new(sanvi_advertising::application::SpendAnomalyDetector::new(
             tx_manager.clone(),
+            advertising_budget_alerts,
             advertising_metrics_repo,
             advertising_campaigns.clone(),
+            advertising_events,
+            advertising_ids,
             advertising_budget_notifier,
             config.advertising.metrics_restatement_days,
         ));
@@ -1933,16 +1947,18 @@ async fn main() -> ExitCode {
             {
                 let tx = tx_manager.clone();
                 let evaluator = advertising_threshold_evaluator.clone();
-                let _anomaly_detector = advertising_spend_anomaly_detector.clone();
+                let anomaly_detector = advertising_spend_anomaly_detector.clone();
                 move || {
                     let tx = tx.clone();
                     let evaluator = evaluator.clone();
+                    let anomaly_detector = anomaly_detector.clone();
                     Box::pin(async move {
                         let mut scope = tx
                             .begin_unscoped("advertising_budget_guardrails", "system")
                             .await
                             .map_err(|e| anyhow::anyhow!(e))?;
                         let _ = evaluator.evaluate_all(&mut scope).await;
+                        let _ = anomaly_detector.detect_anomalies_all(&mut scope).await;
                         scope.commit().await.map_err(|e| anyhow::anyhow!(e))?;
                         Ok(())
                     })
@@ -2041,6 +2057,32 @@ async fn main() -> ExitCode {
                                 rows_ingested = report.rows_ingested,
                                 errors = report.errors,
                                 "advertising metrics ingestion sweep pass"
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "advertising.token_refresh",
+            Duration::from_secs(config.scheduler.advertising_token_refresh_interval_secs),
+            {
+                let sweep = advertising_token_refresh_sweep.clone();
+                move || {
+                    let sweep = sweep.clone();
+                    Box::pin(async move {
+                        let report = sweep
+                            .execute(200)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.checked > 0 || report.errors > 0 {
+                            tracing::info!(
+                                checked = report.checked,
+                                refreshed = report.refreshed,
+                                failed = report.failed,
+                                errors = report.errors,
+                                "advertising token refresh sweep pass"
                             );
                         }
                         Ok(())

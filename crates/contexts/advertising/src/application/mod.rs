@@ -7,9 +7,11 @@ pub mod connections;
 pub mod creatives;
 pub mod drift_resolution;
 pub mod metrics;
+pub mod platform_health;
 pub mod reconciliation;
 pub mod reconciliation_sweep;
 pub mod registry;
+pub mod token_refresh;
 pub mod tracking;
 
 pub use budget::{
@@ -37,9 +39,14 @@ pub use metrics::{
     GetFreshness, IngestConnectionMetrics, JoinCampaignRevenue, MetricsIngestionSweepReport,
     QueryMetrics, RunMetricsIngestion,
 };
+pub use platform_health::{
+    AdsFreshnessSummaryView, ConnectionAttentionView, GetPlatformAdsHealth,
+    PlatformAdsHealthReport, PlatformConnectionCountView,
+};
 pub use reconciliation::ReconcileCampaign;
 pub use reconciliation_sweep::{ReconcileDueCampaigns, ReconciliationSweepReport};
 pub use registry::PlatformRegistry;
+pub use token_refresh::{RunTokenRefresh, TokenRefreshSweepReport};
 pub use tracking::{
     AudienceSyncReport, CreateAudience, GetConversionDiagnostics, ListAudiences, ListConversions,
     RefreshAudience, RetractWithdrawnConversions, RetractionSweepReport, RetryConversion,

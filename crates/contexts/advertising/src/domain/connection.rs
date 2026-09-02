@@ -403,7 +403,7 @@ impl AdvertisingConnection {
     pub(crate) fn token_expires_at(&self) -> Option<DateTime<Utc>> {
         self.token_expires_at
     }
-    pub(crate) fn last_synced_at(&self) -> Option<DateTime<Utc>> {
+    pub fn last_synced_at(&self) -> Option<DateTime<Utc>> {
         self.last_synced_at
     }
     pub(crate) fn last_metrics_ingested_at(&self) -> Option<DateTime<Utc>> {

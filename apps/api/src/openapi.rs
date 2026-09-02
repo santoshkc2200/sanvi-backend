@@ -13,7 +13,8 @@ use sanvi_advertising::adapters::http::tracking_handlers::{
     CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest,
 };
 use sanvi_advertising::application::{
-    DryRunEvaluationResult, PutBudgetCapResponse, SpendStatusReport,
+    AdsFreshnessSummaryView, ConnectionAttentionView, DryRunEvaluationResult,
+    PlatformAdsHealthReport, PlatformConnectionCountView, PutBudgetCapResponse, SpendStatusReport,
 };
 use sanvi_advertising::domain::{
     AlertCondition, Audience, AudienceStatus, BudgetActionsConfigured, BudgetAlert, BudgetCap,
@@ -222,6 +223,7 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::handlers::get_budget_alerts,
         sanvi_advertising::adapters::http::handlers::acknowledge_budget_alert,
         sanvi_advertising::adapters::http::handlers::get_spend_status,
+        sanvi_advertising::adapters::http::handlers::get_platform_ads_health,
         sanvi_advertising::adapters::http::tracking_handlers::public_track_conversion,
         sanvi_advertising::adapters::http::tracking_handlers::get_tracking_settings,
         sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
@@ -250,7 +252,8 @@ use utoipa::OpenApi;
         MetricsFreshnessView, ConnectionFreshnessView,
         BudgetCapsView, BudgetAlertsView, PutBudgetCapRequest, PutBudgetCapResponse,
         BudgetCap, BudgetAlert, BudgetPeriod, AlertCondition, DataFreshness,
-        SpendStatusItem, SpendStatusReport, BudgetActionsConfigured, DryRunEvaluationResult
+        SpendStatusItem, SpendStatusReport, BudgetActionsConfigured, DryRunEvaluationResult,
+        PlatformAdsHealthReport, PlatformConnectionCountView, ConnectionAttentionView, AdsFreshnessSummaryView
     )),
     tags(
         (name = "system", description = "System, health and build information"),

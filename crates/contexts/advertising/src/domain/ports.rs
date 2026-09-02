@@ -133,6 +133,21 @@ pub trait AdvertisingConnectionRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         limit: i64,
     ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
+
+    /// Cross-tenant, all connections across tenants for platform health reporting.
+    async fn list_all_for_platform_scope(
+        &self,
+        scope: &mut PlatformScope<'_>,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
+
+    /// Cross-tenant, due for OAuth token refresh: active connections whose
+    /// token is expiring or whose `last_synced_at` is stale.
+    async fn list_due_for_token_refresh(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stale_after_secs: i64,
+        limit: i64,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

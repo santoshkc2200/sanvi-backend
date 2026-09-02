@@ -18,11 +18,11 @@ use sanvi_advertising::{
     application::{
         AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign,
         CreateConnection, CreateCreative, DeleteCreative, GetCampaign, GetCreative,
-        GetCreativePreviews, IngestConnectionMetrics, JoinCampaignRevenue, ListCampaignChanges,
-        ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields, NewCampaignFields,
-        NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign, QueryMetrics,
-        ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, UpdateAd, UpdateAdGroup,
-        ValidateCampaign,
+        GetCreativePreviews, GetPlatformAdsHealth, IngestConnectionMetrics, JoinCampaignRevenue,
+        ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields,
+        NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign,
+        QueryMetrics, ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, RunTokenRefresh,
+        UpdateAd, UpdateAdGroup, ValidateCampaign,
     },
     domain::{
         AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
@@ -3878,4 +3878,165 @@ async fn revenue_join_attributes_single_campaign_and_parks_ambiguous_revenue_at_
     .await
     .unwrap();
     assert_eq!(unattributed_bucket, 9_000);
+}
+
+#[tokio::test]
+async fn test_platform_ads_health_reports_aggregations_and_freshness() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_1 = seed_tenant(&pool, "platform-health-1").await;
+    let tenant_2 = seed_tenant(&pool, "platform-health-2").await;
+    let platforms = Arc::new(FakeAdPlatform::registered_catalog());
+    let connections_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let platform = FakeAdPlatform::fixtures()[0].key.clone();
+    let now = Utc::now();
+
+    // Tenant 1: active connection with granted scopes
+    let mut conn1 = AdvertisingConnection::new(
+        sanvi_advertising::domain::model::ConnectionId::try_from(1_111_001_i64).unwrap(),
+        tenant_1,
+        platform.clone(),
+        "ext-act-1",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-1"),
+        Some(test_actor()),
+        now,
+    )
+    .unwrap();
+    conn1.apply_credentials(
+        Some("Account 1".to_string()),
+        vec!["ads.read".to_string(), "ads.manage".to_string()],
+        None,
+    );
+    conn1.record_metrics_sync(now - Duration::hours(1));
+
+    // Tenant 2: disconnected connection with missing scopes
+    let mut conn2 = AdvertisingConnection::new(
+        sanvi_advertising::domain::model::ConnectionId::try_from(1_111_002_i64).unwrap(),
+        tenant_2,
+        platform.clone(),
+        "ext-act-2",
+        "USD",
+        "America/New_York",
+        SecretRef::new("vault-ref-2"),
+        Some(test_actor()),
+        now,
+    )
+    .unwrap();
+    conn2.apply_credentials(
+        Some("Account 2".to_string()),
+        vec!["ads.read".to_string()],
+        None,
+    );
+    conn2.record_permanent_refresh_failure(
+        SyncError::new(
+            "revoked",
+            Some("token revoked".to_string()),
+            serde_json::Map::new(),
+        )
+        .unwrap(),
+    );
+
+    let mut scope1 = manager.begin_for(tenant_1.as_i64()).await.unwrap();
+    connections_repo.upsert(&mut scope1, &conn1).await.unwrap();
+    scope1.commit().await.unwrap();
+
+    let mut scope2 = manager.begin_for(tenant_2.as_i64()).await.unwrap();
+    connections_repo.upsert(&mut scope2, &conn2).await.unwrap();
+    scope2.commit().await.unwrap();
+
+    let health_service = GetPlatformAdsHealth::new(
+        manager.clone(),
+        connections_repo.clone(),
+        platforms.clone(),
+        6.0,
+    );
+
+    let report = health_service.execute().await.unwrap();
+
+    // Verify platform status counts
+    let count = report
+        .platform_counts
+        .iter()
+        .find(|c| c.platform == platform.as_str())
+        .expect("platform count present");
+    assert_eq!(count.active, 1);
+    assert_eq!(count.disconnected, 1);
+    assert_eq!(count.total, 2);
+
+    // Verify connections needing attention (conn2 is disconnected and missing scopes)
+    assert!(
+        report
+            .connections_needing_attention
+            .iter()
+            .any(|a| a.connection_id == conn2.id() && a.reconnect_required)
+    );
+
+    // Verify freshness summary
+    assert_eq!(report.freshness_summary.total_connections, 2);
+    assert!(report.freshness_summary.worst_lag_hours.is_some());
+}
+
+#[tokio::test]
+async fn test_scheduled_token_refresh_sweep_success_and_revocation() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "token-refresh-tenant").await;
+    let platforms = Arc::new(FakeAdPlatform::registered_catalog());
+    let connections_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let metrics = Arc::new(sanvi_advertising::adapters::AdvertisingMetrics::default());
+
+    let platform = FakeAdPlatform::fixtures()[0].key.clone();
+    let now = Utc::now();
+
+    // Active connection whose last_synced_at is 2 hours ago (> 1 hour stale threshold)
+    let mut conn = AdvertisingConnection::new(
+        sanvi_advertising::domain::model::ConnectionId::try_from(1_222_001_i64).unwrap(),
+        tenant_id,
+        platform.clone(),
+        "ext-act-refresh",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-refresh"),
+        Some(test_actor()),
+        now - Duration::hours(2),
+    )
+    .unwrap();
+    conn.apply_credentials(
+        Some("Account Refresh".to_string()),
+        vec!["ads.read".to_string(), "ads.manage".to_string()],
+        None,
+    );
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    connections_repo.upsert(&mut scope, &conn).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let sweep = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        platforms.clone(),
+        metrics.clone(),
+        3600,
+    );
+
+    // Successful sweep pass
+    let report = sweep.execute(10).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.refreshed, 1);
+    assert_eq!(report.failed, 0);
+
+    // Verify last_synced_at updated
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let updated = connections_repo
+        .find_by_id(&mut scope, tenant_id, conn.id())
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert!(updated.last_synced_at().unwrap() >= now - Duration::seconds(10));
 }

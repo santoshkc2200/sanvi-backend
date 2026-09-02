@@ -20,8 +20,8 @@ use crate::{
     CapabilityMatrix,
     application::{
         AdFields, AdGroupFields, CampaignFields, DriftResolution, NewAdFields, NewAdGroupFields,
-        NewCampaignFields, NewCreativeFields, PlacementPreview, PutBudgetCapCommand,
-        PutBudgetCapResponse, ResolvedCampaignDrift, SpendStatusReport,
+        NewCampaignFields, NewCreativeFields, PlacementPreview, PlatformAdsHealthReport,
+        PutBudgetCapCommand, PutBudgetCapResponse, ResolvedCampaignDrift, SpendStatusReport,
     },
     domain::{
         AdGroup, AdvertisingConnection, AdvertisingError, AssetMetadata, BidSettings, Budget,
@@ -2682,6 +2682,28 @@ pub async fn get_spend_status(
     let report = state
         .get_spend_status
         .execute(tenant.0.tenant_id, query.period)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(report))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/platform/ads/health",
+    tag = "advertising",
+    operation_id = "get_platform_ads_health",
+    responses(
+        (status = 200, description = "Cross-tenant advertising connection health and freshness overview", body = PlatformAdsHealthReport),
+        (status = 403, description = "Missing platform.tenant.read permission", body = ProblemDetail)
+    )
+)]
+pub async fn get_platform_ads_health(
+    state: web::Data<AdvertisingState>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let report = state
+        .get_platform_ads_health
+        .execute()
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(report))

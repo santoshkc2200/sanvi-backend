@@ -711,6 +711,53 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         .map_err(storage)?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
+
+    async fn list_all_for_platform_scope(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, ConnectionRow>(
+            "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
+               timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
+               last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+               dependent_jobs_paused_at, pending_accounts
+             FROM advertising.connections
+             ORDER BY tenant_id ASC, id ASC",
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn list_due_for_token_refresh(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        stale_after_secs: i64,
+        limit: i64,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, ConnectionRow>(
+            "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
+               timezone, status, scopes, token_ref, connected_by, connected_at, token_expires_at,
+               last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
+               dependent_jobs_paused_at, pending_accounts
+             FROM advertising.connections
+             WHERE status = 'active'
+               AND (
+                 (token_expires_at IS NOT NULL AND token_expires_at <= now() + interval '1 hour')
+                 OR last_synced_at IS NULL
+                 OR last_synced_at <= now() - ($1 || ' seconds')::interval
+               )
+             ORDER BY last_synced_at ASC NULLS FIRST, id ASC
+             LIMIT $2",
+        )
+        .bind(stale_after_secs)
+        .bind(limit)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
 }
 
 use std::collections::BTreeMap;
