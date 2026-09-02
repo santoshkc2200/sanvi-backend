@@ -774,6 +774,10 @@ pub struct SchedulerConfig {
     pub advertising_metrics_ingestion_interval_secs: u64,
     /// Scheduled OAuth token-refresh sweep (TASK-018, 10.9).
     pub advertising_token_refresh_interval_secs: u64,
+    /// How long a connection may go unverified before that sweep picks it up.
+    /// Distinct from the sweep's own cadence: the pass runs often, each
+    /// connection is checked rarely.
+    pub advertising_token_refresh_stale_after_secs: u64,
     /// Budget guardrails evaluation & spend anomaly sweep (TASK-017, 10.8).
     pub advertising_budget_guardrails_interval_secs: u64,
     /// Budget rollover sweep (TASK-017, 10.8).
@@ -815,6 +819,7 @@ impl Default for SchedulerConfig {
             advertising_audience_sync_interval_secs: 3600,
             advertising_metrics_ingestion_interval_secs: 3600,
             advertising_token_refresh_interval_secs: 3600,
+            advertising_token_refresh_stale_after_secs: 21_600,
             advertising_budget_guardrails_interval_secs: 300,
             advertising_budget_rollover_interval_secs: 3600,
         }
@@ -1863,13 +1868,61 @@ async fn main() -> ExitCode {
             advertising_metrics.clone(),
             config.advertising.metrics_ingestion_backfill_days,
         ));
+    // A refresh mints through the tenant's vault, so the sweep needs one token
+    // provider per platform whose OAuth client is actually configured. A
+    // platform without one (the fakes, or an unconfigured adapter) is skipped
+    // rather than reported as a failing credential.
+    let mut advertising_token_providers: std::collections::HashMap<
+        PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::new();
+    match config.advertising.token_kek_bytes() {
+        Ok(token_kek) => {
+            let token_vault = Arc::new(sanvi_advertising::domain::TokenVault::new(
+                Arc::new(sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto::new(
+                    token_kek,
+                    config.advertising.token_kek_id.clone(),
+                )),
+                Arc::new(sanvi_advertising::adapters::SqlxConnectionTokenRepository::new()),
+            ));
+            if config.advertising.google_ads_client_id.is_empty() {
+                tracing::info!(
+                    "advertising token refresh: google oauth client not configured, skipping"
+                );
+            } else {
+                match sanvi_advertising::adapters::GoogleRefreshTokenGrant::new(&config.advertising)
+                {
+                    Ok(grant) => {
+                        advertising_token_providers.insert(
+                            PlatformKey::parse("google_ads").expect("static platform key"),
+                            Arc::new(
+                                sanvi_advertising::application::VaultAccessTokenProvider::new(
+                                    tx_manager.clone(),
+                                    token_vault.clone(),
+                                    Arc::new(grant),
+                                ),
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "advertising token refresh: google grant unavailable");
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            // Without the KEK nothing can decrypt a stored refresh token; the
+            // sweep still runs and reports every connection as skipped.
+            tracing::warn!(%error, "advertising token refresh: token vault unavailable");
+        }
+    }
     let advertising_token_refresh_sweep =
         Arc::new(sanvi_advertising::application::RunTokenRefresh::new(
             tx_manager.clone(),
             advertising_connections.clone(),
-            advertising_platforms.clone(),
+            advertising_token_providers,
             advertising_metrics.clone(),
-            3600,
+            config.scheduler.advertising_token_refresh_stale_after_secs as i64,
         ));
 
     // TASK-017 (10.8): budget guardrails, spend alerts, threshold evaluator & rollover sweep.
@@ -1927,6 +1980,7 @@ async fn main() -> ExitCode {
             advertising_budget_alerts,
             advertising_metrics_repo,
             advertising_campaigns.clone(),
+            advertising_connections.clone(),
             advertising_events,
             advertising_ids,
             advertising_budget_notifier,

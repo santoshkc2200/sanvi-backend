@@ -3987,7 +3987,6 @@ async fn test_scheduled_token_refresh_sweep_success_and_revocation() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "token-refresh-tenant").await;
-    let platforms = Arc::new(FakeAdPlatform::registered_catalog());
     let connections_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
     let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let metrics = Arc::new(sanvi_advertising::adapters::AdvertisingMetrics::default());
@@ -4018,21 +4017,41 @@ async fn test_scheduled_token_refresh_sweep_success_and_revocation() {
     connections_repo.upsert(&mut scope, &conn).await.unwrap();
     scope.commit().await.unwrap();
 
+    // A provider that mints, then one that reports the credential is gone.
+    struct StubProvider(Result<String, sanvi_advertising::domain::AdvertisingError>);
+    #[async_trait::async_trait]
+    impl sanvi_advertising::domain::ConnectionAccessTokenProvider for StubProvider {
+        async fn access_token(
+            &self,
+            _connection: &sanvi_advertising::domain::ConnectionHandle,
+        ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
+            self.0.clone()
+        }
+    }
+
+    let providers_ok: std::collections::HashMap<
+        sanvi_advertising::PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::from([(
+        platform.clone(),
+        Arc::new(StubProvider(Ok("ya29.minted".to_string())))
+            as Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    )]);
+
     let sweep = RunTokenRefresh::new(
         manager.clone(),
         connections_repo.clone(),
-        platforms.clone(),
+        providers_ok,
         metrics.clone(),
         3600,
     );
 
-    // Successful sweep pass
     let report = sweep.execute(10).await.unwrap();
     assert_eq!(report.checked, 1);
     assert_eq!(report.refreshed, 1);
     assert_eq!(report.failed, 0);
+    assert_eq!(report.skipped, 0);
 
-    // Verify last_synced_at updated
     let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     let updated = connections_repo
         .find_by_id(&mut scope, tenant_id, conn.id())
@@ -4041,6 +4060,94 @@ async fn test_scheduled_token_refresh_sweep_success_and_revocation() {
         .unwrap();
     scope.commit().await.unwrap();
     assert!(updated.last_synced_at().unwrap() >= now - Duration::seconds(10));
+
+    // A platform with no configured provider is skipped, never counted as a
+    // failing credential.
+    let bare = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        std::collections::HashMap::new(),
+        metrics.clone(),
+        0,
+    );
+    let report = bare.execute(10).await.unwrap();
+    assert_eq!(report.skipped, report.checked);
+    assert_eq!(report.failed, 0);
+
+    // A missing stored credential is the one failure that disconnects, pauses
+    // dependent jobs, and marks the tenant notified.
+    let providers_missing: std::collections::HashMap<
+        sanvi_advertising::PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::from([(
+        platform.clone(),
+        Arc::new(StubProvider(Err(
+            sanvi_advertising::domain::AdvertisingError::ConnectionTokenMissing,
+        ))) as Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    )]);
+    let revoking = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        providers_missing,
+        metrics.clone(),
+        0,
+    );
+    let report = revoking.execute(10).await.unwrap();
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.refreshed, 0);
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let after = connections_repo
+        .find_by_id(&mut scope, tenant_id, conn.id())
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(
+        after.status(),
+        sanvi_advertising::domain::ConnectionStatus::Disconnected
+    );
+
+    // An outage must NOT disconnect: the grant cannot tell invalid_grant from
+    // a 503 yet, so only the unambiguous signal above may pause a tenant.
+    let mut recovered = after;
+    recovered.record_refresh_success(None, Utc::now());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    connections_repo
+        .update(&mut scope, &recovered)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let providers_outage: std::collections::HashMap<
+        sanvi_advertising::PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::from([(
+        platform.clone(),
+        Arc::new(StubProvider(Err(
+            sanvi_advertising::domain::AdvertisingError::PlatformUnavailable("503".to_string()),
+        ))) as Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    )]);
+    let outage = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        providers_outage,
+        metrics.clone(),
+        0,
+    );
+    assert_eq!(outage.execute(10).await.unwrap().failed, 1);
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let still_active = connections_repo
+        .find_by_id(&mut scope, tenant_id, conn.id())
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(
+        still_active.status(),
+        sanvi_advertising::domain::ConnectionStatus::Active
+    );
 }
 
 /// The vault-backed provider is the seam a real adapter uses on every call:

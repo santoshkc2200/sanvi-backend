@@ -1025,6 +1025,7 @@ async fn test_spend_anomaly_detector_persists_budget_alert_row_and_events() {
         alerts.clone(),
         metrics_repo.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         ids.clone(),
         notifier.clone(),

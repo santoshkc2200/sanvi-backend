@@ -13,6 +13,11 @@ use crate::domain::{
     AdvertisingConnectionRepository, AdvertisingError, ConnectionStatus, model::ConnectionId,
 };
 
+/// A platform-admin overview reads every tenant's connections in one request,
+/// so it is bounded like any other cross-tenant read rather than growing with
+/// the tenant table.
+const CONNECTION_SCAN_LIMIT: i64 = 5_000;
+
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct PlatformAdsHealthReport {
     pub platform_counts: Vec<PlatformConnectionCountView>,
@@ -81,7 +86,7 @@ impl GetPlatformAdsHealth {
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
         let connections = self
             .connections
-            .list_all_for_platform_scope(&mut scope)
+            .list_all_for_platform_scope(&mut scope, CONNECTION_SCAN_LIMIT)
             .await?;
         scope
             .commit()

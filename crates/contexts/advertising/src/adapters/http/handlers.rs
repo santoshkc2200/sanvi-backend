@@ -289,6 +289,9 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
                 violations.len()
             ),
         },
+        AdvertisingError::ConnectionTokenMissing => ApiError::Conflict {
+            detail: "advertising connection has no stored credential; reconnect it".to_string(),
+        },
         AdvertisingError::EncryptionUnconfigured => {
             tracing::error!("advertising token encryption is not configured");
             ApiError::ServiceUnavailable {

@@ -33,6 +33,10 @@ pub enum AdvertisingError {
     ConnectionNotActive,
     #[error("advertising connection not found")]
     ConnectionNotFound,
+    /// The connection exists but its stored refresh token does not. The tenant
+    /// must reconnect; no retry can recover a credential that is not there.
+    #[error("advertising connection has no stored credential")]
+    ConnectionTokenMissing,
     #[error("campaign is not yet published")]
     CampaignNotPublished,
     #[error("ad group not found")]
@@ -134,10 +138,14 @@ pub trait AdvertisingConnectionRepository: Send + Sync {
         limit: i64,
     ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
 
-    /// Cross-tenant, all connections across tenants for platform health reporting.
+    /// Cross-tenant, every connection across tenants, for platform health
+    /// reporting and for enumerating the tenants a cross-tenant sweep must
+    /// visit. Bounded like every other cross-tenant read here: the caller says
+    /// how many rows it is willing to hold.
     async fn list_all_for_platform_scope(
         &self,
         scope: &mut PlatformScope<'_>,
+        limit: i64,
     ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
 
     /// Cross-tenant, due for OAuth token refresh: active connections whose

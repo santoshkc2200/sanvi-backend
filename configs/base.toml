@@ -361,6 +361,8 @@ advertising_audience_sync_interval_secs = 3600
 advertising_metrics_ingestion_interval_secs = 3600
 # 10.9: scheduled OAuth token refresh sweep.
 advertising_token_refresh_interval_secs = 3600
+# A connection unverified for this long is picked up by the sweep above.
+advertising_token_refresh_stale_after_secs = 21600
 
 [payments]
 # Phase 09: tenant payment providers (Stripe Connect, direct charges —

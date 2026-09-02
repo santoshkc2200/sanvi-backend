@@ -715,6 +715,7 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
     async fn list_all_for_platform_scope(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
+        limit: i64,
     ) -> Result<Vec<AdvertisingConnection>, AdvertisingError> {
         let rows = sqlx::query_as::<_, ConnectionRow>(
             "SELECT id, tenant_id, platform, external_account_id, account_name, currency,
@@ -722,8 +723,10 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
                last_synced_at, last_metrics_ingested_at, last_error, disconnected_notified_at,
                dependent_jobs_paused_at, pending_accounts
              FROM advertising.connections
-             ORDER BY tenant_id ASC, id ASC",
+             ORDER BY tenant_id ASC, id ASC
+             LIMIT $1",
         )
+        .bind(limit)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;

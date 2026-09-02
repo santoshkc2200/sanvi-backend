@@ -7,6 +7,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::AdvertisingError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionStatus {
@@ -119,11 +121,62 @@ pub fn refresh_failure_transition(
     }
 }
 
+/// Decide what one failed token refresh means for the connection.
+///
+/// Only an unambiguously dead credential may disconnect a tenant: a transport
+/// failure, a platform outage and a rate-limited grant all look alike at this
+/// boundary, and treating them as revocation would pause a working tenant's
+/// jobs on a blip. `GoogleRefreshTokenGrant` currently maps every non-success
+/// grant response — `invalid_grant` included — to `PlatformUnavailable`, so
+/// revocation-by-response-code cannot be told apart here yet; distinguishing it
+/// belongs in the adapter, against a live developer token, and is TASK-011
+/// follow-up work. Until then the missing-credential case is the one signal
+/// that cannot be anything else.
+pub fn classify_refresh_failure(error: &AdvertisingError) -> RefreshFailureKind {
+    match error {
+        AdvertisingError::ConnectionTokenMissing => RefreshFailureKind::Revoked,
+        _ => RefreshFailureKind::Retryable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
 
     use super::*;
+
+    #[test]
+    fn a_missing_stored_credential_is_the_one_failure_that_disconnects() {
+        assert_eq!(
+            classify_refresh_failure(&AdvertisingError::ConnectionTokenMissing),
+            RefreshFailureKind::Revoked
+        );
+        assert!(
+            refresh_failure_transition(
+                classify_refresh_failure(&AdvertisingError::ConnectionTokenMissing),
+                false,
+            )
+            .status
+                == ConnectionStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn a_platform_outage_never_disconnects_a_working_connection() {
+        // The grant maps invalid_grant and a 503 to the same variant, so this
+        // arm must stay retryable until the adapter can tell them apart.
+        for error in [
+            AdvertisingError::PlatformUnavailable("503".to_string()),
+            AdvertisingError::Storage("connection reset".to_string()),
+            AdvertisingError::EncryptionUnconfigured,
+        ] {
+            assert_eq!(
+                classify_refresh_failure(&error),
+                RefreshFailureKind::Retryable,
+                "{error} must not disconnect a tenant"
+            );
+        }
+    }
 
     #[test]
     fn missing_granted_scope_requires_reconsent_and_names_the_scope() {

@@ -482,11 +482,21 @@ impl ThresholdEvaluator {
     }
 }
 
+/// How far above a flat trailing window today's spend must land before it
+/// counts as an anomaly. Sigma is undefined when every trailing day is
+/// identical, so this stands in for the 3σ test there.
+const FLAT_WINDOW_SPIKE_MULTIPLE: f64 = 2.0;
+
+/// Bound on the cross-tenant connection scan the anomaly sweep enumerates
+/// tenants from, matching the platform-health read.
+const TENANT_ENUMERATION_LIMIT: i64 = 5_000;
+
 pub struct SpendAnomalyDetector {
     tx: TxManager,
     alerts: Arc<dyn BudgetAlertRepository>,
     metrics_repo: Arc<dyn MetricsRepository>,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     events: Arc<dyn EventPublisher>,
     ids: Arc<dyn IdGenerator>,
     notifier: Arc<dyn BudgetNotifier>,
@@ -494,11 +504,13 @@ pub struct SpendAnomalyDetector {
 }
 
 impl SpendAnomalyDetector {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tx: TxManager,
         alerts: Arc<dyn BudgetAlertRepository>,
         metrics_repo: Arc<dyn MetricsRepository>,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         events: Arc<dyn EventPublisher>,
         ids: Arc<dyn IdGenerator>,
         notifier: Arc<dyn BudgetNotifier>,
@@ -509,6 +521,7 @@ impl SpendAnomalyDetector {
             alerts,
             metrics_repo,
             campaigns,
+            connections,
             events,
             ids,
             notifier,
@@ -516,20 +529,29 @@ impl SpendAnomalyDetector {
         }
     }
 
+    /// Every tenant with an advertising connection, not just those whose
+    /// campaigns happen to be due for *reconciliation* — the two schedules are
+    /// unrelated, and enumerating from the reconciliation due-list would make
+    /// anomaly detection silently skip whichever tenants that list omits.
     pub async fn detect_anomalies_all(
         &self,
         scope: &mut PlatformScope<'_>,
     ) -> Result<(), AdvertisingError> {
-        let campaigns = self
-            .campaigns
-            .list_published_due_for_reconciliation(scope, 200)
+        let connections = self
+            .connections
+            .list_all_for_platform_scope(scope, TENANT_ENUMERATION_LIMIT)
             .await?;
-        let mut tenants: std::collections::BTreeSet<TenantId> = std::collections::BTreeSet::new();
-        for camp in campaigns {
-            tenants.insert(camp.tenant_id);
-        }
+        let tenants: std::collections::BTreeSet<TenantId> =
+            connections.iter().map(|conn| conn.tenant_id()).collect();
         for tenant_id in tenants {
-            let _ = self.detect_anomalies_for_tenant(tenant_id).await;
+            // One tenant's failure must not end the sweep for the rest.
+            if let Err(error) = self.detect_anomalies_for_tenant(tenant_id).await {
+                tracing::warn!(
+                    %tenant_id,
+                    %error,
+                    "spend anomaly detection failed for tenant"
+                );
+            }
         }
         Ok(())
     }
@@ -595,15 +617,26 @@ impl SpendAnomalyDetector {
                         .sum::<f64>()
                         / n;
                     let std_dev = variance.sqrt();
-                    let sigma_multiple = if std_dev > 0.0 {
-                        (today_spend as f64 - mean) / std_dev
-                    } else if (today_spend as f64) > mean {
+                    // A perfectly flat trailing window has no sigma to breach,
+                    // and dividing by a zero standard deviation would call any
+                    // movement at all infinitely anomalous — a campaign that
+                    // spent 1000 every day for five days is not in trouble
+                    // because it spent 1001 today. Fall back to a relative
+                    // test there: only a genuine multiple of the established
+                    // level is worth waking someone for.
+                    let flat_window = std_dev <= 0.0;
+                    let sigma_multiple = if flat_window {
                         f64::INFINITY
                     } else {
-                        0.0
+                        (today_spend as f64 - mean) / std_dev
+                    };
+                    let anomalous = if flat_window {
+                        mean > 0.0 && today_spend as f64 >= mean * FLAT_WINDOW_SPIKE_MULTIPLE
+                    } else {
+                        sigma_multiple > 3.0
                     };
 
-                    if sigma_multiple > 3.0 {
+                    if anomalous {
                         let currency = &today_spend_row.currency;
                         let current_money = Money::new(today_spend, currency)?;
                         let mean_money = Money::new(mean.round() as i64, currency)?;
