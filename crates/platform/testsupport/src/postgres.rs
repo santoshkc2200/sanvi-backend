@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sanvi_persistence::{DatabaseConfig, Migrator, PgPool, build_pool};
 use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Connection, PgConnection, postgres::PgConnectOptions};
-use testcontainers::{ImageExt, runners::AsyncRunner};
+use testcontainers::{ImageExt, ReuseDirective, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::OnceCell;
 
@@ -63,12 +63,23 @@ fn config(port: u16, name: &str, user: &str, password: &str) -> DatabaseConfig {
     }
 }
 
+/// Name every test process converges on, so a bare `cargo nextest run` ends up
+/// with one server rather than one per process. `nextest` runs each test in its
+/// own process, so an anonymous container here meant ~one Postgres per
+/// DB-touching test — enough of them, concurrently, to starve the daemon and
+/// drop connections mid-migration.
+const SHARED_CONTAINER_NAME: &str = "sanvi_test_pg";
+
 /// Port of the Postgres every test in this process talks to.
 ///
 /// `SANVI_TEST_PG_PORT` points at a server started outside the test run
 /// (`scripts/test-db.sh up`) and shared by every test *process* — the fast
-/// path, and the only one that leaves no container behind. Without it a
-/// container is started for this process alone.
+/// path, and the one that leaves nothing for this crate to manage.
+///
+/// Without it, processes converge on [`SHARED_CONTAINER_NAME`] through
+/// testcontainers' reuse directive: the first to arrive starts it, the rest
+/// attach to it. Reuse implies keep, so the container outlives the run by
+/// design — `scripts/test-db.sh prune` is still how it is reclaimed.
 async fn pg_port() -> u16 {
     *PG_PORT
         .get_or_init(|| async {
@@ -77,7 +88,89 @@ async fn pg_port() -> u16 {
                     .parse()
                     .expect("SANVI_TEST_PG_PORT must be a port number");
             }
-            let node = Postgres::default()
+            let node = start_shared_postgres().await;
+            let port = await_ready_postgres(&node).await;
+            // The container must outlive every test in this process. Dropping
+            // it here would remove the server the other tests are still using,
+            // and a `static` would never run `Drop` anyway — so the handle is
+            // released deliberately rather than by accident. With reuse, this
+            // leaks one named container per machine, not one per process.
+            std::mem::forget(node);
+            port
+        })
+        .await
+}
+
+/// Start the shared server, or attach to the one another process started.
+///
+/// `ReuseDirective::Always` de-duplicates by name but does not serialize the
+/// creation itself: `nextest` starts many processes at once, they all look for
+/// `sanvi_test_pg`, all miss, and all try to create it. One wins and the rest
+/// get `409 Conflict`. Losing that race is not an error — the container the
+/// winner created is exactly what the loser wanted — so a conflict is retried,
+/// and the retry's reuse lookup finds it.
+async fn start_shared_postgres() -> testcontainers::ContainerAsync<Postgres> {
+    const CONFLICT_RETRIES: u32 = 40;
+    const CONFLICT_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
+
+    for attempt in 0..=CONFLICT_RETRIES {
+        match shared_postgres_request().start().await {
+            Ok(node) => return node,
+            Err(error) if attempt < CONFLICT_RETRIES && is_name_conflict(&error) => {
+                tokio::time::sleep(CONFLICT_BACKOFF).await;
+            }
+            Err(error) => panic!("failed to start postgres: {error}"),
+        }
+    }
+    unreachable!("the loop either returns a container or panics")
+}
+
+/// Wait until the shared server actually answers, and return its port.
+///
+/// Only the process that *created* the container ran testcontainers' readiness
+/// wait. Every process that attached to it instead skipped that wait entirely,
+/// so it must establish readiness itself — and readiness here means one thing,
+/// "a connection succeeds", not a sequence of separate conditions. Polling the
+/// connection subsumes the earlier stages (the port not yet published, the
+/// server listening but still starting up) rather than racing each one.
+async fn await_ready_postgres(node: &testcontainers::ContainerAsync<Postgres>) -> u16 {
+    const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+    const READY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
+
+    let deadline = std::time::Instant::now() + READY_TIMEOUT;
+    let mut last_error = String::new();
+    while std::time::Instant::now() < deadline {
+        match node.get_host_port_ipv4(5432).await {
+            Ok(port) => match admin_conn(port).await {
+                Ok(conn) => {
+                    // Hand back a server that has proven it accepts work, not
+                    // merely one whose port is mapped.
+                    drop(conn);
+                    return port;
+                }
+                Err(error) => last_error = error.to_string(),
+            },
+            Err(error) => last_error = error.to_string(),
+        }
+        tokio::time::sleep(READY_BACKOFF).await;
+    }
+    panic!("shared postgres never became ready within {READY_TIMEOUT:?}: {last_error}");
+}
+
+/// A 409 from Docker means another process created the container between our
+/// reuse lookup and our create. Matched on the message because `bollard`'s
+/// error carries the status only as part of the server response.
+fn is_name_conflict(error: &testcontainers::TestcontainersError) -> bool {
+    let rendered = error.to_string();
+    rendered.contains("already in use") || rendered.contains("Conflict")
+}
+
+fn shared_postgres_request() -> testcontainers::ContainerRequest<Postgres> {
+    Postgres::default()
+                // One server for the whole run: every process converges on this
+                // name instead of starting an anonymous container of its own.
+                .with_container_name(SHARED_CONTAINER_NAME)
+                .with_reuse(ReuseDirective::Always)
                 // Pinned to the same image `scripts/test-db.sh` starts. The
                 // module default is `postgres:11-alpine`, which predates the
                 // `STRATEGY` option `create_database` relies on, so leaving it
@@ -99,17 +192,6 @@ async fn pg_port() -> u16 {
                     "-c",
                     "shared_buffers=256MB",
                 ])
-                .start()
-                .await
-                .expect("failed to start postgres");
-            let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
-            // The container must outlive every test in this process, and
-            // nothing drops a `static`. `scripts/test-db.sh prune` reaps the
-            // strays; the `SANVI_TEST_PG_PORT` path avoids them entirely.
-            std::mem::forget(node);
-            port
-        })
-        .await
 }
 
 /// A superuser connection to the `postgres` database, for issuing
