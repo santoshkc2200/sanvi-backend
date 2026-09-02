@@ -103,7 +103,9 @@ impl GetSpendStatus {
                 .and_then(|c| c.declared_fx_basis.as_deref());
             let fx_date = tenant_cap.as_ref().and_then(|c| c.fx_rate_date);
 
-            let tenant_spend = self
+            // Finding 8: degrade per item — a single campaign's bad row must not abort
+            // the whole report. Log and skip the item if calculation fails.
+            let tenant_spend = match self
                 .calculate_spend_details(
                     tenant_id,
                     None,
@@ -112,7 +114,19 @@ impl GetSpendStatus {
                     declared_fx,
                     fx_date,
                 )
-                .await?;
+                .await
+            {
+                Ok(details) => details,
+                Err(e) => {
+                    tracing::warn!(
+                        %tenant_id,
+                        period = period.as_str(),
+                        error = %e,
+                        "Tenant-level spend calculation failed; skipping item in status report"
+                    );
+                    continue;
+                }
+            };
 
             let percentage = tenant_cap.as_ref().map(|c| {
                 if c.amount.amount_minor > 0 {
@@ -149,6 +163,7 @@ impl GetSpendStatus {
                 percentage,
                 data_freshness: freshness.clone(),
                 actions_configured,
+                unconvertible_spend_currencies: tenant_spend.unconvertible_currencies,
             });
 
             // 2. Campaign-level items
@@ -174,7 +189,8 @@ impl GetSpendStatus {
                     .and_then(|c| c.declared_fx_basis.as_deref());
                 let camp_fx_date = camp_cap.as_ref().and_then(|c| c.fx_rate_date);
 
-                let camp_spend = self
+                // Finding 8: degrade per campaign item
+                let camp_spend = match self
                     .calculate_spend_details(
                         tenant_id,
                         Some(campaign.id),
@@ -183,7 +199,20 @@ impl GetSpendStatus {
                         camp_declared_fx,
                         camp_fx_date,
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(details) => details,
+                    Err(e) => {
+                        tracing::warn!(
+                            %tenant_id,
+                            campaign_id = %campaign.id,
+                            period = period.as_str(),
+                            error = %e,
+                            "Campaign-level spend calculation failed; skipping item in status report"
+                        );
+                        continue;
+                    }
+                };
 
                 let camp_percentage = camp_cap.as_ref().map(|c| {
                     if c.amount.amount_minor > 0 {
@@ -221,6 +250,7 @@ impl GetSpendStatus {
                     percentage: camp_percentage,
                     data_freshness: freshness.clone(),
                     actions_configured: camp_actions,
+                    unconvertible_spend_currencies: camp_spend.unconvertible_currencies,
                 });
             }
         }
@@ -297,6 +327,18 @@ impl GetSpendStatus {
             .query_range(&mut scope, &query, today, self.restatement_days)
             .await?;
 
+        // A Daily period lies entirely inside the restatement window, so
+        // `row.restating` is true for every row it can ever contain and cannot
+        // serve as the settled/provisional gate. Connection freshness is the
+        // signal that has meaning at that resolution.
+        let daily_data_is_fresh = match period {
+            BudgetPeriod::Daily => {
+                let connections = self.connections.list(&mut scope, tenant_id).await?;
+                !derive_freshness(&connections).is_stale
+            }
+            BudgetPeriod::Monthly => false,
+        };
+
         scope
             .commit()
             .await
@@ -304,18 +346,29 @@ impl GetSpendStatus {
 
         let mut settled_minor: i64 = 0;
         let mut provisional_minor: i64 = 0;
+        let mut unconvertible_currencies: Vec<String> = Vec::new();
 
         for row in rows {
             let row_amount_minor = if row.currency == target_currency {
                 row.spend_minor
             } else {
                 // Cross-currency conversion
-                let declared_basis = declared_fx_basis.ok_or_else(|| {
-                    AdvertisingError::InvalidInput(format!(
-                        "cross-currency spend ({}) to cap currency ({}) requires declared FX basis",
-                        row.currency, target_currency
-                    ))
-                })?;
+                if declared_fx_basis.is_none() {
+                    // No FX basis declared: cannot convert this row. Degrade gracefully —
+                    // exclude it and record the currency so the caller can surface the gap.
+                    tracing::warn!(
+                        %tenant_id,
+                        campaign_id = ?campaign_id,
+                        from_currency = %row.currency,
+                        to_currency = %target_currency,
+                        "FX conversion skipped: cross-currency spend has no declared FX basis; \
+                         row excluded from spend totals"
+                    );
+                    if !unconvertible_currencies.contains(&row.currency) {
+                        unconvertible_currencies.push(row.currency.clone());
+                    }
+                    continue;
+                }
 
                 let rate_date = fx_rate_date.unwrap_or(row.date);
                 let rate_opt = self
@@ -323,24 +376,37 @@ impl GetSpendStatus {
                     .rate(&row.currency, target_currency, rate_date)
                     .await?;
 
-                let rate = match rate_opt {
-                    Some(fx) => fx.rate,
+                match rate_opt {
+                    Some(fx) => (row.spend_minor as f64 * fx.rate).round() as i64,
                     None => {
-                        // If rate not found but basis declared, refuse or use 1.0 if mocked
-                        return Err(AdvertisingError::InvalidInput(format!(
-                            "FX rate not available for pair {}/{} on date {} with basis {}",
-                            row.currency, target_currency, rate_date, declared_basis
-                        )));
+                        // Rate unavailable: degrade this row, log the gap, exclude from totals.
+                        tracing::warn!(
+                            %tenant_id,
+                            campaign_id = ?campaign_id,
+                            from_currency = %row.currency,
+                            to_currency = %target_currency,
+                            date = %rate_date,
+                            "FX conversion skipped: rate unavailable for pair; \
+                             row excluded from spend totals"
+                        );
+                        if !unconvertible_currencies.contains(&row.currency) {
+                            unconvertible_currencies.push(row.currency.clone());
+                        }
+                        continue;
                     }
-                };
-
-                (row.spend_minor as f64 * rate).round() as i64
+                }
             };
 
-            if row.restating || row.date == today {
-                provisional_minor += row_amount_minor;
-            } else {
+            // Daily: settled when the feed is fresh (see `daily_data_is_fresh`).
+            // Monthly: settled once the row is outside the restatement window.
+            let is_settled = match period {
+                BudgetPeriod::Daily => daily_data_is_fresh,
+                BudgetPeriod::Monthly => !row.restating,
+            };
+            if is_settled {
                 settled_minor += row_amount_minor;
+            } else {
+                provisional_minor += row_amount_minor;
             }
         }
 
@@ -361,6 +427,7 @@ impl GetSpendStatus {
             provisional_lower_bound: Money::new(lower_bound_minor, target_currency)?,
             total: Money::new(total_minor, target_currency)?,
             projected: Money::new(projected_minor, target_currency)?,
+            unconvertible_currencies,
         })
     }
 }
@@ -371,25 +438,51 @@ pub struct CalculatedSpendDetails {
     pub provisional_lower_bound: Money,
     pub total: Money,
     pub projected: Money,
+    /// Currencies for which no FX rate was available; spend in these currencies
+    /// is excluded from the totals above.
+    pub unconvertible_currencies: Vec<String>,
 }
 
+/// Derive the data-freshness summary from a slice of advertising connections.
+///
+/// Matching the evaluator's staleness check:
+/// - A connection whose `last_synced_at` is `None` (never synced) is treated
+///   as stale, so `GET /ads/spend-status` and the evaluator agree.
+/// - With zero connections: data is neither settled nor stale (`lag_hours: None`);
+///   both `is_settled` and `is_stale` are false, which is the correct "no data"
+///   state rather than the misleading "fresh but empty" state.
 fn derive_freshness(connections: &[crate::domain::AdvertisingConnection]) -> DataFreshness {
+    if connections.is_empty() {
+        return DataFreshness {
+            last_synced_at: None,
+            lag_hours: None,
+            is_settled: false,
+            is_stale: false,
+        };
+    }
+
     let mut latest_sync = None;
     let mut worst_lag: Option<f64> = None;
     let mut any_stalled = false;
 
     let now = Utc::now();
     for conn in connections {
-        if let Some(synced) = conn.last_synced_at() {
-            if latest_sync.is_none() || Some(synced) > latest_sync {
-                latest_sync = Some(synced);
-            }
-            let lag = (now - synced).num_minutes() as f64 / 60.0;
-            if worst_lag.is_none() || Some(lag) > worst_lag {
-                worst_lag = Some(lag);
-            }
-            if lag > 24.0 {
+        match conn.last_synced_at() {
+            None => {
+                // Never synced → unconditionally stale, matching evaluator.rs
                 any_stalled = true;
+            }
+            Some(synced) => {
+                if latest_sync.is_none() || Some(synced) > latest_sync {
+                    latest_sync = Some(synced);
+                }
+                let lag = (now - synced).num_minutes() as f64 / 60.0;
+                if worst_lag.is_none() || Some(lag) > worst_lag {
+                    worst_lag = Some(lag);
+                }
+                if lag > 6.0 {
+                    any_stalled = true;
+                }
             }
         }
     }
@@ -397,8 +490,8 @@ fn derive_freshness(connections: &[crate::domain::AdvertisingConnection]) -> Dat
     DataFreshness {
         last_synced_at: latest_sync,
         lag_hours: worst_lag,
-        is_settled: worst_lag.map(|l| l < 6.0).unwrap_or(false),
-        is_stale: any_stalled || worst_lag.map(|l| l > 6.0).unwrap_or(false),
+        is_settled: worst_lag.map(|l| l < 6.0).unwrap_or(false) && !any_stalled,
+        is_stale: any_stalled,
     }
 }
 

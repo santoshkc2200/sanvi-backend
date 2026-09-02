@@ -3,14 +3,14 @@
 
 use std::sync::Arc;
 
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::Utc;
 use sanvi_kernel::TenantId;
-use sanvi_persistence::{PlatformScope, TxManager};
+use sanvi_persistence::TxManager;
 use uuid::Uuid;
 
 use crate::adapters::AdvertisingMetrics;
 use crate::domain::model::{
-    AlertCondition, BudgetAlert, BudgetCap, BudgetPeriod, CampaignStatus, DataFreshness, Money,
+    AlertCondition, BudgetAlert, BudgetCap, CampaignStatus, DataFreshness, Money,
 };
 use crate::domain::{
     AdEvent, AdvertisingConnectionRepository, AdvertisingError, BudgetAlertRepository,
@@ -62,13 +62,48 @@ impl ThresholdEvaluator {
         }
     }
 
-    pub async fn evaluate_all(
-        &self,
-        scope: &mut PlatformScope<'_>,
-    ) -> Result<(), AdvertisingError> {
-        let caps = self.caps.list_all_active_caps(scope).await?;
+    /// Read every active cap, in a short transaction that is committed before
+    /// returning.
+    ///
+    /// Evaluation deliberately does *not* run under this transaction:
+    /// `evaluate_single_cap` acquires its own tenant-scoped connection per cap,
+    /// so holding one across the whole sweep would keep a platform transaction
+    /// open over hundreds of nested acquisitions and can exhaust the pool.
+    pub async fn list_active_caps(&self) -> Result<Vec<BudgetCap>, AdvertisingError> {
+        let mut scope = self
+            .tx
+            .begin_unscoped("advertising_budget_guardrails", "system")
+            .await
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let caps = self.caps.list_all_active_caps(&mut scope).await?;
+        scope
+            .commit()
+            .await
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        Ok(caps)
+    }
+
+    /// Evaluate the given caps. Each cap runs in its own transaction; a failing
+    /// cap is logged and counted, and the sweep continues.
+    pub async fn evaluate_caps(&self, caps: &[BudgetCap]) -> Result<(), AdvertisingError> {
         for cap in caps {
-            let _ = self.evaluate_single_cap(cap.tenant_id, &cap).await;
+            if let Err(e) = self.evaluate_single_cap(cap.tenant_id, cap).await {
+                let scope_label = cap
+                    .campaign_id
+                    .map(|cid| format!("campaign:{cid}"))
+                    .unwrap_or_else(|| "tenant".to_string());
+                tracing::warn!(
+                    tenant_id = %cap.tenant_id,
+                    cap_id = %cap.id,
+                    scope = %scope_label,
+                    error = %e,
+                    "Budget cap evaluation failed; skipping cap and continuing sweep"
+                );
+                self.metrics
+                    .budget_cap_eval_failures_total()
+                    .with_label_values(&[&scope_label, e.error_kind()])
+                    .inc();
+            }
         }
         Ok(())
     }
@@ -86,7 +121,23 @@ impl ThresholdEvaluator {
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
         for cap in caps {
-            let _ = self.evaluate_single_cap(tenant_id, &cap).await;
+            if let Err(e) = self.evaluate_single_cap(tenant_id, &cap).await {
+                let scope_label = cap
+                    .campaign_id
+                    .map(|cid| format!("campaign:{cid}"))
+                    .unwrap_or_else(|| "tenant".to_string());
+                tracing::warn!(
+                    %tenant_id,
+                    cap_id = %cap.id,
+                    scope = %scope_label,
+                    error = %e,
+                    "Budget cap evaluation failed; skipping cap and continuing sweep"
+                );
+                self.metrics
+                    .budget_cap_eval_failures_total()
+                    .with_label_values(&[&scope_label, e.error_kind()])
+                    .inc();
+            }
         }
         Ok(())
     }
@@ -98,12 +149,7 @@ impl ThresholdEvaluator {
     ) -> Result<(), AdvertisingError> {
         let now = Utc::now();
         let today = now.date_naive();
-        let period_start = match cap.period {
-            BudgetPeriod::Daily => today,
-            BudgetPeriod::Monthly => {
-                NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today)
-            }
-        };
+        let period_start = cap.period.period_start(today);
 
         let mut scope = self
             .tx
@@ -142,7 +188,7 @@ impl ThresholdEvaluator {
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
         // Calculate spend details
-        let spend_details = match self
+        let spend_details = self
             .status_query
             .calculate_spend_details(
                 tenant_id,
@@ -152,19 +198,21 @@ impl ThresholdEvaluator {
                 cap.declared_fx_basis.as_deref(),
                 cap.fx_rate_date,
             )
-            .await
-        {
-            Ok(details) => details,
-            Err(AdvertisingError::InvalidInput(msg))
-                if msg.contains("requires declared FX basis") =>
-            {
-                tracing::warn!(%tenant_id, cap_id = %cap.id, "Refusing budget evaluation: cross-currency cap requires declared FX basis");
-                return Err(AdvertisingError::InvalidInput(msg));
-            }
-            Err(e) => return Err(e),
-        };
+            .await?;
 
-        let total_spend = spend_details.total;
+        let total_spend = spend_details.total.clone();
+        let has_unconvertible = !spend_details.unconvertible_currencies.is_empty();
+        if has_unconvertible {
+            tracing::warn!(
+                %tenant_id,
+                cap_id = %cap.id,
+                unconvertible = ?spend_details.unconvertible_currencies,
+                "Budget cap evaluation skipped: spend data in unconvertible currencies; \
+                 treating as stale data — cap will not be enforced until FX coverage is complete"
+            );
+            // Treat like stale data: return Ok so the sweep continues to other caps.
+            return Ok(());
+        }
         let cap_minor = cap.amount.amount_minor;
         let scope_str = match cap.campaign_id {
             Some(cid) => format!("campaign:{cid}"),
@@ -261,71 +309,102 @@ impl ThresholdEvaluator {
                 .has_alert_fired(&mut scope, tenant_id, cap.id, period_start, 100)
                 .await?;
 
-            if !already_fired {
-                let mut auto_paused = false;
-                let (condition, action_taken_desc) = if is_stale {
-                    (
-                        AlertCondition::StaleDataWarning,
-                        "Guardrails will not pause on unconfirmed data.",
-                    )
-                } else if spend_details.settled.amount_minor >= cap_minor {
-                    if cap.auto_pause {
-                        self.execute_auto_pause(
+            // Finding 1: ALWAYS evaluate whether a pause should be triggered, even if an alert
+            // was previously recorded (e.g. StaleDataWarning). A prior StaleDataWarning must NOT
+            // block a SettledBreach auto-pause when data becomes settled and the cap is exceeded.
+            // Only suppress duplicate *notifications and alert records*; never suppress the *pause*.
+            let mut auto_paused = false;
+            let (condition, action_taken_desc) = if is_stale {
+                (
+                    AlertCondition::StaleDataWarning,
+                    "Guardrails will not pause on unconfirmed data.",
+                )
+            } else if spend_details.settled.amount_minor >= cap_minor {
+                if cap.auto_pause {
+                    let (paused_count, pause_failures) = self
+                        .execute_auto_pause(
                             tenant_id,
                             cap,
                             &total_spend,
                             &freshness,
                             "settled_breach",
                         )
-                        .await?;
-                        auto_paused = true;
-                        self.metrics
-                            .budget_auto_pause_total()
-                            .with_label_values(&["settled_breach"])
-                            .inc();
-                        (
-                            AlertCondition::SettledBreach,
-                            "Campaign(s) auto-paused by budget guardrail.",
-                        )
-                    } else {
-                        (
-                            AlertCondition::SettledBreach,
-                            "No automatic pause configured.",
-                        )
+                        .await;
+                    if !pause_failures.is_empty() {
+                        tracing::error!(
+                            %tenant_id,
+                            cap_id = %cap.id,
+                            failure_count = pause_failures.len(),
+                            "Budget guardrail: some auto-pauses failed for settled_breach"
+                        );
                     }
-                } else if spend_details.provisional_lower_bound.amount_minor >= cap_minor {
-                    if cap.auto_pause {
-                        self.execute_auto_pause(
+                    auto_paused = paused_count > 0;
+                    self.metrics
+                        .budget_auto_pause_total()
+                        .with_label_values(&["settled_breach"])
+                        .inc_by(paused_count as u64);
+                    (
+                        AlertCondition::SettledBreach,
+                        if paused_count > 0 {
+                            "Campaign(s) auto-paused by budget guardrail."
+                        } else {
+                            "Auto-pause attempted but all pauses failed."
+                        },
+                    )
+                } else {
+                    (
+                        AlertCondition::SettledBreach,
+                        "No automatic pause configured.",
+                    )
+                }
+            } else if spend_details.provisional_lower_bound.amount_minor >= cap_minor {
+                if cap.auto_pause {
+                    let (paused_count, pause_failures) = self
+                        .execute_auto_pause(
                             tenant_id,
                             cap,
                             &total_spend,
                             &freshness,
                             "provisional_lower_bound_breach",
                         )
-                        .await?;
-                        auto_paused = true;
-                        self.metrics
-                            .budget_auto_pause_total()
-                            .with_label_values(&["provisional_lower_bound_breach"])
-                            .inc();
-                        (
-                            AlertCondition::ProvisionalLowerBoundBreach,
-                            "Campaign(s) auto-paused on confirmed provisional lower bound breach.",
-                        )
-                    } else {
-                        (
-                            AlertCondition::ProvisionalLowerBoundBreach,
-                            "No automatic pause configured.",
-                        )
+                        .await;
+                    if !pause_failures.is_empty() {
+                        tracing::error!(
+                            %tenant_id,
+                            cap_id = %cap.id,
+                            failure_count = pause_failures.len(),
+                            "Budget guardrail: some auto-pauses failed for provisional_lower_bound_breach"
+                        );
                     }
-                } else {
-                    // Provisional total >= cap, but lower bound < cap
+                    auto_paused = paused_count > 0;
+                    self.metrics
+                        .budget_auto_pause_total()
+                        .with_label_values(&["provisional_lower_bound_breach"])
+                        .inc_by(paused_count as u64);
                     (
-                        AlertCondition::ProvisionalWarning,
-                        "Provisional spend is above cap but lower bound is below. Guardrails will not pause on provisional data.",
+                        AlertCondition::ProvisionalLowerBoundBreach,
+                        if paused_count > 0 {
+                            "Campaign(s) auto-paused on confirmed provisional lower bound breach."
+                        } else {
+                            "Auto-pause attempted but all pauses failed."
+                        },
                     )
-                };
+                } else {
+                    (
+                        AlertCondition::ProvisionalLowerBoundBreach,
+                        "No automatic pause configured.",
+                    )
+                }
+            } else {
+                // Provisional total >= cap, but lower bound < cap
+                (
+                    AlertCondition::ProvisionalWarning,
+                    "Provisional spend is above cap but lower bound is below. Guardrails will not pause on provisional data.",
+                )
+            };
 
+            if !already_fired {
+                // First time this cap/period/threshold has fired: record alert + event.
                 let alert_id = self.ids.next_budget_alert_id()?;
                 let alert = BudgetAlert {
                     id: alert_id,
@@ -407,6 +486,8 @@ impl ThresholdEvaluator {
                     _ => {}
                 }
             } else {
+                // Duplicate: alert already on record. Commit the read transaction but skip the
+                // alert record and notification. The auto-pause was still executed above if warranted.
                 scope
                     .commit()
                     .await
@@ -417,6 +498,11 @@ impl ThresholdEvaluator {
         Ok(())
     }
 
+    /// Execute auto-pause for all campaigns in scope.
+    ///
+    /// Returns `(paused_count, failures)` where `paused_count` is the number of
+    /// campaigns that were successfully paused and `failures` holds any per-campaign
+    /// errors. The caller must **not** set `auto_paused = true` when `paused_count == 0`.
     async fn execute_auto_pause(
         &self,
         tenant_id: TenantId,
@@ -424,7 +510,7 @@ impl ThresholdEvaluator {
         triggering_spend: &Money,
         freshness: &DataFreshness,
         condition: &str,
-    ) -> Result<(), AdvertisingError> {
+    ) -> (usize, Vec<AdvertisingError>) {
         let metadata = serde_json::json!({
             "triggering_spend_minor": triggering_spend.amount_minor,
             "currency": triggering_spend.currency,
@@ -434,10 +520,13 @@ impl ThresholdEvaluator {
             "paused_by": "system:budget_guardrail",
         });
 
+        let mut paused_count = 0usize;
+        let mut failures: Vec<AdvertisingError> = Vec::new();
+
         match cap.campaign_id {
             Some(campaign_id) => {
                 let mutation_id = Uuid::new_v4();
-                let _ = self
+                match self
                     .pause_campaign
                     .execute_guardrail(
                         tenant_id,
@@ -446,25 +535,50 @@ impl ThresholdEvaluator {
                         "system:budget_guardrail",
                         metadata,
                     )
-                    .await;
+                    .await
+                {
+                    Ok(_) => paused_count += 1,
+                    Err(e) => {
+                        tracing::error!(
+                            %tenant_id,
+                            %campaign_id,
+                            error = %e,
+                            "Budget guardrail: auto-pause failed for campaign"
+                        );
+                        failures.push(e);
+                    }
+                }
             }
             None => {
                 // Pause all active campaigns for the tenant
-                let mut scope = self
-                    .tx
-                    .begin_for(tenant_id.as_i64())
-                    .await
-                    .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
-                let campaigns = self.campaigns.list_by_tenant(&mut scope, tenant_id).await?;
-                scope
-                    .commit()
-                    .await
-                    .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+                let campaigns = {
+                    let scope_result = self.tx.begin_for(tenant_id.as_i64()).await;
+                    match scope_result {
+                        Err(e) => {
+                            failures.push(AdvertisingError::Storage(e.to_string()));
+                            return (paused_count, failures);
+                        }
+                        Ok(mut scope) => {
+                            let c = self.campaigns.list_by_tenant(&mut scope, tenant_id).await;
+                            if let Err(e) = scope.commit().await {
+                                failures.push(AdvertisingError::Storage(e.to_string()));
+                                return (paused_count, failures);
+                            }
+                            match c {
+                                Ok(campaigns) => campaigns,
+                                Err(e) => {
+                                    failures.push(e);
+                                    return (paused_count, failures);
+                                }
+                            }
+                        }
+                    }
+                };
 
                 for camp in campaigns {
                     if camp.intent.status == CampaignStatus::Active && camp.external_id.is_some() {
                         let mutation_id = Uuid::new_v4();
-                        let _ = self
+                        match self
                             .pause_campaign
                             .execute_guardrail(
                                 tenant_id,
@@ -473,12 +587,24 @@ impl ThresholdEvaluator {
                                 "system:budget_guardrail",
                                 metadata.clone(),
                             )
-                            .await;
+                            .await
+                        {
+                            Ok(_) => paused_count += 1,
+                            Err(e) => {
+                                tracing::error!(
+                                    %tenant_id,
+                                    campaign_id = %camp.id,
+                                    error = %e,
+                                    "Budget guardrail: auto-pause failed for campaign"
+                                );
+                                failures.push(e);
+                            }
+                        }
                     }
                 }
             }
         }
-        Ok(())
+        (paused_count, failures)
     }
 }
 

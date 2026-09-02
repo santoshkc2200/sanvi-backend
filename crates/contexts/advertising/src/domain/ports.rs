@@ -71,6 +71,34 @@ impl From<sanvi_kernel::KernelError> for AdvertisingError {
     }
 }
 
+impl AdvertisingError {
+    /// Short, stable label identifying the error kind; suitable for Prometheus metric labels.
+    pub fn error_kind(&self) -> &'static str {
+        match self {
+            Self::InvalidInput(_) => "invalid_input",
+            Self::PlatformUnavailable(_) => "platform_unavailable",
+            Self::Storage(_) => "storage",
+            Self::StaleRevision => "stale_revision",
+            Self::CampaignNotFound => "campaign_not_found",
+            Self::Validation(_) => "validation",
+            Self::ConnectionNotActive => "connection_not_active",
+            Self::ConnectionNotFound => "connection_not_found",
+            Self::CampaignNotPublished => "campaign_not_published",
+            Self::AdGroupNotFound => "ad_group_not_found",
+            Self::AdNotFound => "ad_not_found",
+            Self::CreativeNotFound => "creative_not_found",
+            Self::ConversionNotFound => "conversion_not_found",
+            Self::AudienceNotFound => "audience_not_found",
+            Self::BudgetCapNotFound => "budget_cap_not_found",
+            Self::BudgetAlertNotFound => "budget_alert_not_found",
+            Self::CapBelowCurrentSpend => "cap_below_current_spend",
+            Self::EncryptionUnconfigured => "encryption_unconfigured",
+            Self::EncryptionFailure(_) => "encryption_failure",
+            Self::IdGeneration(_) => "id_generation",
+        }
+    }
+}
+
 pub trait IdGenerator: Send + Sync {
     fn next_connection_id(&self) -> Result<ConnectionId, AdvertisingError>;
     fn next_campaign_id(&self) -> Result<CampaignId, AdvertisingError>;
