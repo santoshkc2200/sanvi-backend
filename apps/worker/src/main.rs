@@ -1752,10 +1752,37 @@ async fn main() -> ExitCode {
         config.audit.verify_batch_size,
     ));
 
-    // TASK-012 (10.3): the nightly reconciliation sweep. The fake adapter is
-    // the only registered platform until the real Google Ads adapter lands;
-    // this still proves the sweep's own contract (fetch → apply through
-    // ReconcileCampaign → never write back) end to end.
+    // TASK-012 (10.3): the nightly reconciliation sweep. When `real_platform_adapters`
+    // is false (default), the fake adapter is used for every platform; when
+    // true, real Google Ads / Meta adapters are registered where configured,
+    // falling back to the fake adapter per platform if credentials are missing
+    // or invalid.
+    let mut advertising_token_providers: std::collections::HashMap<
+        PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::new();
+    match config.advertising.token_kek_bytes() {
+        Ok(token_kek) => {
+            let token_vault = Arc::new(sanvi_advertising::domain::TokenVault::new(
+                Arc::new(sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto::new(
+                    token_kek,
+                    config.advertising.token_kek_id.clone(),
+                )),
+                Arc::new(sanvi_advertising::adapters::SqlxConnectionTokenRepository::new()),
+            ));
+            advertising_token_providers = sanvi_advertising::adapters::build_access_token_providers(
+                &config.advertising,
+                tx_manager.clone(),
+                token_vault,
+            );
+        }
+        Err(error) => {
+            // Without the KEK nothing can decrypt a stored refresh token; the
+            // sweep still runs and reports every connection as skipped.
+            tracing::warn!(%error, "advertising token refresh: token vault unavailable");
+        }
+    }
+
     let advertising_campaigns: Arc<dyn AdvertisingCampaignRepository> =
         Arc::new(SqlxCampaignRepository::new());
     let advertising_events: Arc<dyn AdvertisingEvents> =
@@ -1764,7 +1791,10 @@ async fn main() -> ExitCode {
         sanvi_advertising::adapters::SystemIdGenerator::new(ids.clone()),
     );
     let advertising_platforms = Arc::new(sanvi_advertising::adapters::rate_limited_registry(
-        &FakeAdPlatform::registered_catalog(),
+        &sanvi_advertising::adapters::build_platform_registry(
+            &config.advertising,
+            &advertising_token_providers,
+        ),
         |platform| match platform.as_str() {
             "meta" => (10, 2),
             _ => (
@@ -1869,77 +1899,6 @@ async fn main() -> ExitCode {
             advertising_metrics.clone(),
             config.advertising.metrics_ingestion_backfill_days,
         ));
-    // A refresh mints through the tenant's vault, so the sweep needs one token
-    // provider per platform whose OAuth client is actually configured. A
-    // platform without one (the fakes, or an unconfigured adapter) is skipped
-    // rather than reported as a failing credential.
-    let mut advertising_token_providers: std::collections::HashMap<
-        PlatformKey,
-        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
-    > = std::collections::HashMap::new();
-    match config.advertising.token_kek_bytes() {
-        Ok(token_kek) => {
-            let token_vault = Arc::new(sanvi_advertising::domain::TokenVault::new(
-                Arc::new(sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto::new(
-                    token_kek,
-                    config.advertising.token_kek_id.clone(),
-                )),
-                Arc::new(sanvi_advertising::adapters::SqlxConnectionTokenRepository::new()),
-            ));
-            if config.advertising.google_ads_client_id.is_empty() {
-                tracing::info!(
-                    "advertising token refresh: google oauth client not configured, skipping"
-                );
-            } else {
-                match sanvi_advertising::adapters::GoogleRefreshTokenGrant::new(&config.advertising)
-                {
-                    Ok(grant) => {
-                        advertising_token_providers.insert(
-                            PlatformKey::parse("google_ads").expect("static platform key"),
-                            Arc::new(
-                                sanvi_advertising::application::VaultAccessTokenProvider::new(
-                                    tx_manager.clone(),
-                                    token_vault.clone(),
-                                    Arc::new(grant),
-                                ),
-                            ),
-                        );
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "advertising token refresh: google grant unavailable");
-                    }
-                }
-            }
-            if config.advertising.meta_client_id.is_empty() {
-                tracing::info!(
-                    "advertising token refresh: meta oauth client not configured, skipping"
-                );
-            } else {
-                match sanvi_advertising::adapters::MetaRefreshTokenGrant::new(&config.advertising) {
-                    Ok(grant) => {
-                        advertising_token_providers.insert(
-                            PlatformKey::parse("meta").expect("static platform key"),
-                            Arc::new(
-                                sanvi_advertising::application::VaultAccessTokenProvider::new(
-                                    tx_manager.clone(),
-                                    token_vault.clone(),
-                                    Arc::new(grant),
-                                ),
-                            ),
-                        );
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "advertising token refresh: meta grant unavailable");
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            // Without the KEK nothing can decrypt a stored refresh token; the
-            // sweep still runs and reports every connection as skipped.
-            tracing::warn!(%error, "advertising token refresh: token vault unavailable");
-        }
-    }
     let advertising_token_refresh_sweep =
         Arc::new(sanvi_advertising::application::RunTokenRefresh::new(
             tx_manager.clone(),

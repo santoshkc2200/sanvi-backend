@@ -27,6 +27,13 @@ pub struct AdvertisingConfig {
     pub token_kek_id: String,
     pub google_ads_api_version: String,
     pub meta_api_version: String,
+    /// When `false` (default), every platform uses the fake in-process adapter
+    /// (current, safe default — no credentials configured yet). When `true`,
+    /// the composition root tries to build the real `GoogleAdsAdapter`/`MetaAdsAdapter`
+    /// per platform, falling back to the fake for any single platform whose
+    /// credentials are still missing or invalid rather than failing the whole process.
+    #[serde(default)]
+    pub real_platform_adapters: bool,
     /// Platform-wide cap on in-flight adapter calls (the shared
     /// developer-token quota). See `adapters::rate_limit`.
     #[serde(default = "default_quota_platform_wide_permits")]
@@ -98,6 +105,7 @@ impl std::fmt::Debug for AdvertisingConfig {
             .field("token_kek_id", &self.token_kek_id)
             .field("google_ads_api_version", &self.google_ads_api_version)
             .field("meta_api_version", &self.meta_api_version)
+            .field("real_platform_adapters", &self.real_platform_adapters)
             .field(
                 "quota_platform_wide_permits",
                 &self.quota_platform_wide_permits,
@@ -137,6 +145,7 @@ impl Default for AdvertisingConfig {
             token_kek_id: default_token_kek_id(),
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
+            real_platform_adapters: false,
             quota_platform_wide_permits: default_quota_platform_wide_permits(),
             quota_per_connection_permits: default_quota_per_connection_permits(),
             metrics_max_query_span_days: default_metrics_max_query_span_days(),
@@ -272,6 +281,13 @@ mod tests {
 
         assert_eq!(config.token_kek, "");
         assert_eq!(config.token_kek_id, "kek-1");
+        assert!(!config.real_platform_adapters);
+    }
+
+    #[test]
+    fn real_platform_adapters_defaults_to_false() {
+        let config = AdvertisingConfig::default();
+        assert!(!config.real_platform_adapters);
     }
 
     #[test]
