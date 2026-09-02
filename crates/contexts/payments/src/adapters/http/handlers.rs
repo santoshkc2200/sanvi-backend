@@ -364,8 +364,8 @@ pub struct ConnectionSessionView {
     pub client_secret: String,
     #[schema(value_type = String)]
     pub expires_at: DateTime<Utc>,
-    /// The embedded components enabled on this session (09.2:
-    /// `account_onboarding` only).
+    /// The embedded components enabled on this session:
+    /// `account_onboarding`, `notification_banner`, and `account_management`.
     pub components: Vec<String>,
 }
 
@@ -554,7 +554,11 @@ pub async fn create_payment_connection_session(
             provider: connection.provider.as_str().to_string(),
             client_secret: session.client_secret,
             expires_at: session.expires_at,
-            components: vec!["account_onboarding".to_string()],
+            components: vec![
+                "account_onboarding".to_string(),
+                "notification_banner".to_string(),
+                "account_management".to_string(),
+            ],
         }))
 }
 

@@ -630,10 +630,10 @@ impl PaymentProviderPort for StripeConnectProvider {
         })
     }
 
-    /// `POST /v1/account_sessions` with the `account_onboarding`
-    /// component (embedded onboarding — we never collect PII ourselves).
-    /// The `notification_banner`, `account_management`, `payments` and
-    /// `payouts` components join in TASK-004/TASK-007.
+    /// `POST /v1/account_sessions` with the `account_onboarding`,
+    /// `notification_banner`, and `account_management` components (embedded
+    /// onboarding and account management — we never collect PII ourselves).
+    /// The `payments` and `payouts` components join in TASK-004/TASK-007.
     async fn create_account_session(
         &self,
         external_account_id: &str,
@@ -647,6 +647,14 @@ impl PaymentProviderPort for StripeConnectProvider {
             ("account", external_account_id.to_string()),
             (
                 "components[account_onboarding][enabled]",
+                "true".to_string(),
+            ),
+            (
+                "components[notification_banner][enabled]",
+                "true".to_string(),
+            ),
+            (
+                "components[account_management][enabled]",
                 "true".to_string(),
             ),
         ];
@@ -1454,7 +1462,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_session_requests_the_onboarding_component() {
+    async fn account_session_requests_the_enabled_components() {
         let mock = MockStripe::start(vec![(
             200,
             serde_json::json!({
@@ -1462,7 +1470,11 @@ mod tests {
                 "account": "acct_test_123",
                 "client_secret": "secret_value_never_logged",
                 "expires_at": 1_900_000_000_i64,
-                "components": { "account_onboarding": { "enabled": true } }
+                "components": {
+                    "account_onboarding": { "enabled": true },
+                    "notification_banner": { "enabled": true },
+                    "account_management": { "enabled": true }
+                }
             }),
         )])
         .await;
@@ -1489,8 +1501,19 @@ mod tests {
             "components[account_onboarding][enabled]".to_string(),
             "true".to_string()
         )));
-        // No other component rides the 09.2 session.
-        assert_eq!(form.len(), 2, "only account_onboarding is enabled in 09.2");
+        assert!(form.contains(&(
+            "components[notification_banner][enabled]".to_string(),
+            "true".to_string()
+        )));
+        assert!(form.contains(&(
+            "components[account_management][enabled]".to_string(),
+            "true".to_string()
+        )));
+        assert_eq!(
+            form.len(),
+            4,
+            "account_onboarding, notification_banner, and account_management components enabled"
+        );
     }
 
     #[tokio::test]
