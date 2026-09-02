@@ -1,6 +1,8 @@
 //! Route registration for the payments context: tenant-scope resources
 //! mount inside the shared `/api/v1/tenant` scope, behind the phase-09
-//! feature flag and the `payments.stripe_connect` entitlement.
+//! feature flag and the `payments.stripe_connect` entitlement — except the
+//! provider catalog, which is readable with `payments.read` alone so an
+//! un-entitled tenant can see what it would be buying.
 
 use actix_web::http::Method;
 use actix_web::web;
@@ -30,9 +32,15 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     let refund = require_permission!("payments.refund", tenant);
 
     cfg.service(
+        // The catalog is the one payments route NOT behind the entitlement: it
+        // is the menu, not the meal. A tenant without `payments.stripe_connect`
+        // must be able to see which providers exist to know what upgrading buys
+        // them — the admin renders the cards with the connect CTA replaced by an
+        // upgrade prompt. Connecting stays gated below, which is where money
+        // actually starts moving. `payments.read` still applies, so this widens
+        // the audience to un-entitled tenants, never to unauthorised ones.
         web::resource("/payments/providers")
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
-            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
             .route(web::get().to(list_payment_providers)),
     )
     .service(
