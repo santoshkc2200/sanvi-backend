@@ -11,7 +11,7 @@ use sanvi_advertising::adapters::{
 use sanvi_advertising::application::{
     AcknowledgeBudgetAlert, BudgetRolloverSweep, GetBudgetCaps, GetCampaignBudgetCap,
     GetSpendStatus, ListBudgetAlerts, PauseCampaign, PutBudgetCap, PutBudgetCapCommand,
-    ThresholdEvaluator,
+    SpendAnomalyDetector, ThresholdEvaluator,
 };
 use sanvi_advertising::domain::model::{
     AlertCondition, BudgetPeriod, CampaignId, CampaignStatus, DataFreshness, Money,
@@ -128,6 +128,7 @@ async fn seed_connection_and_campaign(
                 &sanvi_advertising::domain::ConnectionHandle {
                     id: format!("acct-{conn_id}"),
                     tenant_id,
+                    external_account_id: format!("acct-{conn_id}"),
                 },
                 campaign_intent,
                 uuid::Uuid::new_v4(),
@@ -210,6 +211,7 @@ impl TestHarness {
         let pause_campaign = Arc::new(PauseCampaign::new(
             tx.clone(),
             campaigns_repo.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             platforms.clone(),
             ids.clone(),
@@ -1196,4 +1198,147 @@ async fn test_budget_guardrails_migration_down_and_up() {
     .await
     .unwrap();
     assert!(caps_exists_again);
+}
+
+#[tokio::test]
+async fn test_spend_anomaly_detector_persists_budget_alert_row_and_events() {
+    let db = sanvi_testsupport::test_db().await;
+    let migrator_pool = db.migrator_pool().await;
+    sqlx::query(
+        "SELECT advertising.ensure_monthly_partitions((CURRENT_DATE - INTERVAL '1 month')::date)",
+    )
+    .execute(&migrator_pool)
+    .await
+    .unwrap();
+    sqlx::query("SELECT advertising.ensure_monthly_partitions(CURRENT_DATE)")
+        .execute(&migrator_pool)
+        .await
+        .unwrap();
+
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "anomaly-tenant").await;
+    let platforms = FakeAdPlatform::registered_catalog();
+    let (conn_id, campaign_id) =
+        seed_connection_and_campaign(&pool, &platforms, tenant_id, "JPY").await;
+
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let metrics_repo = Arc::new(SqlxMetricsRepository::new());
+    let campaigns = Arc::new(SqlxCampaignRepository::new());
+    let alerts = Arc::new(SqlxBudgetAlertRepository::new());
+    let events = Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
+    let ids = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
+    let notifier = Arc::new(LoggingBudgetNotifier::new());
+
+    let detector = SpendAnomalyDetector::new(
+        tx.clone(),
+        alerts.clone(),
+        metrics_repo.clone(),
+        campaigns.clone(),
+        events.clone(),
+        ids.clone(),
+        notifier.clone(),
+        7,
+    );
+
+    let now = Utc::now();
+    let today = now.date_naive();
+    let platform = FakeAdPlatform::fixtures()[0].key.clone();
+
+    // Seed historical spend rows: 5 days with spend 1000 JPY
+    let mut daily_rows = Vec::new();
+    for day_offset in 1..=5 {
+        let date = today - chrono::Duration::days(day_offset);
+        daily_rows.push(MetricsDailyRow {
+            tenant_id,
+            connection_id: conn_id,
+            campaign_id,
+            platform: platform.clone(),
+            date,
+            impressions: 100,
+            clicks: 10,
+            spend: Money::new(1000, "JPY").unwrap(),
+            conversions: 1.0,
+            conversion_value: Money::new(5000, "JPY").unwrap(),
+        });
+    }
+    // Seed today with 10,000 JPY (huge variance > 3sigma vs mean of 1000 with std_dev ~0)
+    daily_rows.push(MetricsDailyRow {
+        tenant_id,
+        connection_id: conn_id,
+        campaign_id,
+        platform: platform.clone(),
+        date: today,
+        impressions: 1000,
+        clicks: 100,
+        spend: Money::new(10_000, "JPY").unwrap(),
+        conversions: 10.0,
+        conversion_value: Money::new(50_000, "JPY").unwrap(),
+    });
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    metrics_repo
+        .upsert_daily(&mut scope, &daily_rows)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    // Run anomaly detection
+    detector
+        .detect_anomalies_for_tenant(tenant_id)
+        .await
+        .unwrap();
+
+    // Verify alert row is persisted
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let alert_rows = alerts
+        .list_alerts(&mut scope, tenant_id, Some(campaign_id), false, 10)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    assert_eq!(
+        alert_rows.len(),
+        1,
+        "expected exactly one anomaly alert persisted"
+    );
+    let alert = &alert_rows[0];
+    assert_eq!(alert.condition, AlertCondition::SpendAnomaly);
+    assert_eq!(alert.spend.amount_minor, 10_000);
+    assert_eq!(alert.cap_amount.amount_minor, 0);
+    assert_eq!(alert.threshold, 100);
+    assert_eq!(alert.period_start, today);
+    assert_eq!(alert.campaign_id, Some(campaign_id));
+    assert_eq!(alert.cap_id, None);
+
+    // Verify outbox event was published
+    let event_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM platform.outbox WHERE aggregate_id = $1 AND event_type = 'advertising.spend_threshold_reached'",
+    )
+    .bind(campaign_id.as_i64())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        event_count >= 1,
+        "expected spend threshold reached event in outbox"
+    );
+
+    // Run anomaly detection again on same day - deduplication should prevent second row
+    detector
+        .detect_anomalies_for_tenant(tenant_id)
+        .await
+        .unwrap();
+
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let alert_rows_after = alerts
+        .list_alerts(&mut scope, tenant_id, Some(campaign_id), false, 10)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    assert_eq!(
+        alert_rows_after.len(),
+        1,
+        "deduplication must prevent duplicate alerts on same day"
+    );
 }

@@ -17,11 +17,11 @@ use uuid::Uuid;
 use crate::{
     application::PlatformRegistry,
     domain::{
-        Ad, AdEvent, AdGroup, AdvertisingConnectionRepository, AdvertisingError, BidSettings,
-        Budget, Campaign, CampaignChange, CampaignReconciliationState, CampaignRepository,
-        ChangeSource, ConnectionHandle, ConnectionStatus, Creative, CreativeRepository, DriftState,
-        EventPublisher, Objective, Schedule, StoredCampaign, Targeting, ValidationViolation,
-        validate_campaign,
+        Ad, AdEvent, AdGroup, AdvertisingConnection, AdvertisingConnectionRepository,
+        AdvertisingError, BidSettings, Budget, Campaign, CampaignChange,
+        CampaignReconciliationState, CampaignRepository, ChangeSource, ConnectionHandle,
+        ConnectionStatus, Creative, CreativeRepository, DriftState, EventPublisher, Objective,
+        Schedule, StoredCampaign, Targeting, ValidationViolation, validate_campaign,
     },
 };
 
@@ -82,11 +82,32 @@ async fn load_active_connection(
     Ok(connection)
 }
 
-fn connection_handle(tenant_id: TenantId, connection_id: ConnectionId) -> ConnectionHandle {
+/// Build the adapter-facing handle from the connection aggregate. The
+/// platform's own account id lives only on the aggregate, so a handle cannot
+/// be conjured from a `ConnectionId` alone — every caller loads the connection
+/// the campaign belongs to first.
+fn connection_handle(connection: &AdvertisingConnection) -> ConnectionHandle {
     ConnectionHandle {
-        id: connection_id.to_string(),
-        tenant_id,
+        id: connection.id().to_string(),
+        tenant_id: connection.tenant_id(),
+        external_account_id: connection.external_account_id().to_string(),
     }
+}
+
+/// Load a campaign's connection for handle construction. Unlike
+/// [`load_active_connection`] this does not require the connection to be
+/// active: a mutation path has its own liveness rules, and tightening them
+/// here would change behaviour that is not this lookup's business.
+async fn load_connection_for_handle(
+    scope: &mut sanvi_persistence::ScopedTx<'_>,
+    connections: &dyn AdvertisingConnectionRepository,
+    tenant_id: TenantId,
+    connection_id: ConnectionId,
+) -> Result<AdvertisingConnection, AdvertisingError> {
+    connections
+        .find_by_id(scope, tenant_id, connection_id)
+        .await?
+        .ok_or(AdvertisingError::ConnectionNotFound)
 }
 
 /// Create a campaign draft. Nothing is sent to the platform: `external_id`
@@ -431,6 +452,7 @@ async fn creative_dry_run_violations(
 async fn apply_mutation<F>(
     tx: &TxManager,
     campaigns: &dyn CampaignRepository,
+    connections: &dyn AdvertisingConnectionRepository,
     events: &dyn EventPublisher,
     platforms: &PlatformRegistry,
     ids: &dyn crate::domain::IdGenerator,
@@ -482,7 +504,15 @@ where
         candidate.id = external_id.clone();
         let remote = adapter
             .update_campaign(
-                &connection_handle(tenant_id, stored.connection_id),
+                &connection_handle(
+                    &load_connection_for_handle(
+                        &mut scope,
+                        connections,
+                        tenant_id,
+                        stored.connection_id,
+                    )
+                    .await?,
+                ),
                 candidate.clone(),
                 mutation_id,
             )
@@ -547,6 +577,7 @@ where
 pub struct PatchCampaign {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
@@ -557,6 +588,7 @@ impl PatchCampaign {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
@@ -565,6 +597,7 @@ impl PatchCampaign {
         Self {
             tx,
             campaigns,
+            connections,
             creatives,
             events,
             platforms,
@@ -586,6 +619,7 @@ impl PatchCampaign {
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
+            self.connections.as_ref(),
             self.events.as_ref(),
             &self.platforms,
             self.ids.as_ref(),
@@ -669,6 +703,7 @@ pub struct AdGroupFields {
 pub struct AddAdGroup {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
     ids: Arc<dyn crate::domain::IdGenerator>,
@@ -678,6 +713,7 @@ impl AddAdGroup {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
         ids: Arc<dyn crate::domain::IdGenerator>,
@@ -685,6 +721,7 @@ impl AddAdGroup {
         Self {
             tx,
             campaigns,
+            connections,
             events,
             platforms,
             ids,
@@ -705,6 +742,7 @@ impl AddAdGroup {
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
+            self.connections.as_ref(),
             self.events.as_ref(),
             &self.platforms,
             self.ids.as_ref(),
@@ -735,6 +773,7 @@ impl AddAdGroup {
 pub struct UpdateAdGroup {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
     ids: Arc<dyn crate::domain::IdGenerator>,
@@ -744,6 +783,7 @@ impl UpdateAdGroup {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
         ids: Arc<dyn crate::domain::IdGenerator>,
@@ -751,6 +791,7 @@ impl UpdateAdGroup {
         Self {
             tx,
             campaigns,
+            connections,
             events,
             platforms,
             ids,
@@ -771,6 +812,7 @@ impl UpdateAdGroup {
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
+            self.connections.as_ref(),
             self.events.as_ref(),
             &self.platforms,
             self.ids.as_ref(),
@@ -913,6 +955,7 @@ async fn verify_ad_creative_exists(
 pub struct AddAd {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
@@ -923,6 +966,7 @@ impl AddAd {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
@@ -931,6 +975,7 @@ impl AddAd {
         Self {
             tx,
             campaigns,
+            connections,
             creatives,
             events,
             platforms,
@@ -954,6 +999,7 @@ impl AddAd {
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
+            self.connections.as_ref(),
             self.events.as_ref(),
             &self.platforms,
             self.ids.as_ref(),
@@ -1002,6 +1048,7 @@ impl AddAd {
 pub struct UpdateAd {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
@@ -1012,6 +1059,7 @@ impl UpdateAd {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
@@ -1020,6 +1068,7 @@ impl UpdateAd {
         Self {
             tx,
             campaigns,
+            connections,
             creatives,
             events,
             platforms,
@@ -1043,6 +1092,7 @@ impl UpdateAd {
         apply_mutation(
             &self.tx,
             self.campaigns.as_ref(),
+            self.connections.as_ref(),
             self.events.as_ref(),
             &self.platforms,
             self.ids.as_ref(),
@@ -1116,6 +1166,7 @@ impl UpdateAd {
 pub struct PublishCampaign {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     creatives: Arc<dyn CreativeRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
@@ -1126,6 +1177,7 @@ impl PublishCampaign {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         creatives: Arc<dyn CreativeRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
@@ -1134,6 +1186,7 @@ impl PublishCampaign {
         Self {
             tx,
             campaigns,
+            connections,
             creatives,
             events,
             platforms,
@@ -1184,7 +1237,15 @@ impl PublishCampaign {
         published.status = crate::domain::CampaignStatus::Active;
         let remote = adapter
             .create_campaign(
-                &connection_handle(tenant_id, stored.connection_id),
+                &connection_handle(
+                    &load_connection_for_handle(
+                        &mut scope,
+                        self.connections.as_ref(),
+                        tenant_id,
+                        stored.connection_id,
+                    )
+                    .await?,
+                ),
                 published,
                 mutation_id,
             )
@@ -1250,6 +1311,7 @@ enum PauseOrResume {
 struct SetCampaignRunState {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
     ids: Arc<dyn crate::domain::IdGenerator>,
@@ -1303,7 +1365,15 @@ impl SetCampaignRunState {
             .ok_or(AdvertisingError::CampaignNotPublished)?;
         let adapter = self.platforms.adapter(&stored.platform)?;
         let before = stored.intent.clone();
-        let handle = connection_handle(tenant_id, stored.connection_id);
+        let handle = connection_handle(
+            &load_connection_for_handle(
+                &mut scope,
+                self.connections.as_ref(),
+                tenant_id,
+                stored.connection_id,
+            )
+            .await?,
+        );
         let (remote, event) = match direction {
             PauseOrResume::Pause => (
                 adapter.pause_campaign(&handle, &external_id).await?,
@@ -1365,6 +1435,7 @@ impl PauseCampaign {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
         ids: Arc<dyn crate::domain::IdGenerator>,
@@ -1372,6 +1443,7 @@ impl PauseCampaign {
         Self(SetCampaignRunState {
             tx,
             campaigns,
+            connections,
             events,
             platforms,
             ids,
@@ -1424,6 +1496,7 @@ impl ResumeCampaign {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
         ids: Arc<dyn crate::domain::IdGenerator>,
@@ -1431,6 +1504,7 @@ impl ResumeCampaign {
         Self(SetCampaignRunState {
             tx,
             campaigns,
+            connections,
             events,
             platforms,
             ids,

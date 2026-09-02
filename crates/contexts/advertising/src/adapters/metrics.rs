@@ -15,6 +15,7 @@ pub struct AdvertisingMetrics {
     audience_sync_total: prometheus::IntCounterVec,
     ads_sync_duration_seconds: prometheus::HistogramVec,
     ads_sync_failures_total: prometheus::IntCounterVec,
+    ads_token_refresh_failures: prometheus::IntCounterVec,
     metrics_ingestion_lag_hours: prometheus::Gauge,
     budget_threshold_alerts_total: prometheus::IntCounterVec,
     budget_auto_pause_total: prometheus::IntCounterVec,
@@ -90,6 +91,15 @@ impl AdvertisingMetrics {
         )
         .expect("ads sync failures counter construction is infallible");
 
+        let ads_token_refresh_failures = prometheus::IntCounterVec::new(
+            prometheus::Opts::new(
+                "ads_token_refresh_failures",
+                "Total advertising OAuth token refresh failures by platform and reason",
+            ),
+            &["platform", "reason"],
+        )
+        .expect("ads token refresh failures counter construction is infallible");
+
         let metrics_ingestion_lag_hours = prometheus::Gauge::new(
             "metrics_ingestion_lag_hours",
             "Worst observed lag, in hours, among connections checked on the most recent ingestion sweep pass",
@@ -131,6 +141,7 @@ impl AdvertisingMetrics {
         let _ = registry.register(Box::new(audience_sync_total.clone()));
         let _ = registry.register(Box::new(ads_sync_duration_seconds.clone()));
         let _ = registry.register(Box::new(ads_sync_failures_total.clone()));
+        let _ = registry.register(Box::new(ads_token_refresh_failures.clone()));
         let _ = registry.register(Box::new(metrics_ingestion_lag_hours.clone()));
         let _ = registry.register(Box::new(budget_threshold_alerts_total.clone()));
         let _ = registry.register(Box::new(budget_auto_pause_total.clone()));
@@ -145,6 +156,7 @@ impl AdvertisingMetrics {
             audience_sync_total,
             ads_sync_duration_seconds,
             ads_sync_failures_total,
+            ads_token_refresh_failures,
             metrics_ingestion_lag_hours,
             budget_threshold_alerts_total,
             budget_auto_pause_total,
@@ -182,6 +194,10 @@ impl AdvertisingMetrics {
 
     pub fn ads_sync_failures_total(&self) -> &prometheus::IntCounterVec {
         &self.ads_sync_failures_total
+    }
+
+    pub fn ads_token_refresh_failures(&self) -> &prometheus::IntCounterVec {
+        &self.ads_token_refresh_failures
     }
 
     pub fn metrics_ingestion_lag_hours(&self) -> &prometheus::Gauge {

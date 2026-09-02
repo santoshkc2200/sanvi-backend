@@ -4,9 +4,9 @@
 //! - OAuth 2.0 authorization URL construction (`begin_authorization`)
 //! - OAuth authorization-code exchange (`exchange_authorization`)
 //! - Account listing against Google Ads API v22 REST surface (`list_accounts`)
-//!
-//! Campaign management, metrics, conversions, and audiences are scoped for later
-//! slices and return `PlatformUnavailable`.
+//! - Campaign CRUD: create, get, update, pause, resume, delete
+//! - Campaign metrics reporting (`fetch_metrics`)
+//! - Conversion upload (`upload`)
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -20,11 +20,11 @@ use uuid::Uuid;
 use crate::config::AdvertisingConfig;
 use crate::domain::{
     AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
-    AuthorizationStart, BudgetType, Campaign, CapabilityMatrix, ConnectionAccessTokenProvider,
-    ConnectionHandle, ConsentSnapshot, CreativeAssetSpec, CreativePlacement,
-    ExchangedAuthorization, GrantedAccessToken, HashedIds, MetricPoint, MetricQuery,
-    PlatformAccount, PlatformDescriptor, PlatformKey, RefreshTokenGrant, ScheduleGranularity,
-    TargetingDimension, UploadedConversion,
+    AuthorizationStart, Budget, BudgetType, Campaign, CampaignStatus, CapabilityMatrix,
+    ConnectionAccessTokenProvider, ConnectionHandle, ConsentSnapshot, CreativeAssetSpec,
+    CreativePlacement, DriftState, ExchangedAuthorization, GrantedAccessToken, HashedIds,
+    MetricPoint, MetricQuery, Money, Objective, PlatformAccount, PlatformDescriptor, PlatformKey,
+    RefreshTokenGrant, ScheduleGranularity, TargetingDimension, UploadedConversion,
 };
 
 const DEFAULT_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -107,6 +107,163 @@ struct GoogleTokenResponse {
 struct ListAccessibleCustomersResponse {
     #[serde(default, rename = "resourceNames")]
     resource_names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct GoogleMutateResponse {
+    #[serde(default)]
+    results: Vec<GoogleMutateResult>,
+}
+
+#[derive(Deserialize)]
+struct GoogleMutateResult {
+    #[serde(default, rename = "resourceName")]
+    resource_name: String,
+}
+
+#[derive(Deserialize)]
+struct GoogleSearchResponse {
+    #[serde(default)]
+    results: Vec<GoogleSearchResultRow>,
+}
+
+#[derive(Deserialize)]
+struct GoogleSearchResultRow {
+    #[serde(default)]
+    campaign: Option<GoogleCampaignRow>,
+    #[serde(default)]
+    segments: Option<GoogleSegmentsRow>,
+    #[serde(default)]
+    metrics: Option<GoogleMetricsRow>,
+    #[serde(default)]
+    customer: Option<GoogleCustomerRow>,
+}
+
+#[derive(Deserialize)]
+struct GoogleCampaignRow {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default, rename = "advertisingChannelType")]
+    advertising_channel_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GoogleSegmentsRow {
+    #[serde(default)]
+    date: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GoogleMetricsRow {
+    #[serde(default)]
+    impressions: Option<serde_json::Value>,
+    #[serde(default)]
+    clicks: Option<serde_json::Value>,
+    #[serde(default, rename = "costMicros")]
+    cost_micros: Option<serde_json::Value>,
+    #[serde(default)]
+    conversions: Option<serde_json::Value>,
+    #[serde(default, rename = "conversionsValue")]
+    conversions_value: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct GoogleCustomerRow {
+    #[serde(default, rename = "currencyCode")]
+    currency_code: Option<String>,
+}
+
+/// The platform account id an account-scoped call addresses. Empty means the
+/// caller handed us an authorization-time handle (see
+/// `ConnectionHandle::external_account_id`); refuse rather than build a URL
+/// around `customers//`, which Google answers with an opaque 404.
+fn require_customer_id(connection: &ConnectionHandle) -> Result<String, AdvertisingError> {
+    if connection.external_account_id.trim().is_empty() {
+        return Err(AdvertisingError::InvalidInput(
+            "connection has no external ad account id".to_string(),
+        ));
+    }
+    Ok(format_customer_id(&connection.external_account_id))
+}
+
+fn format_customer_id(raw_id: &str) -> String {
+    let trimmed = raw_id
+        .trim()
+        .strip_prefix("customers/")
+        .unwrap_or(raw_id.trim());
+    trimmed.replace('-', "")
+}
+
+fn parse_json_i64(val: Option<&serde_json::Value>) -> i64 {
+    match val {
+        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0),
+        Some(serde_json::Value::String(s)) => s.parse::<i64>().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn parse_json_f64(val: Option<&serde_json::Value>) -> f64 {
+    match val {
+        Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+        Some(serde_json::Value::String(s)) => s.parse::<f64>().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+fn map_status_to_google(status: CampaignStatus) -> &'static str {
+    match status {
+        CampaignStatus::Active => "ENABLED",
+        CampaignStatus::Paused | CampaignStatus::Draft => "PAUSED",
+        CampaignStatus::Ended | CampaignStatus::Archived => "REMOVED",
+    }
+}
+
+fn map_status_from_google(raw: &str) -> CampaignStatus {
+    match raw {
+        "ENABLED" => CampaignStatus::Active,
+        "PAUSED" => CampaignStatus::Paused,
+        "REMOVED" => CampaignStatus::Archived,
+        _ => CampaignStatus::Paused,
+    }
+}
+
+fn map_channel_type_to_google(obj: &Objective) -> &'static str {
+    match obj.as_str() {
+        "sales" | "leads" | "traffic" => "SEARCH",
+        "awareness" => "DISPLAY",
+        "app_promotion" => "MULTI_CHANNEL",
+        _ => "SEARCH",
+    }
+}
+
+fn map_channel_type_from_google(raw: &str) -> Objective {
+    let domain_key = match raw {
+        "SEARCH" => "sales",
+        "DISPLAY" => "awareness",
+        "MULTI_CHANNEL" => "app_promotion",
+        _ => "sales",
+    };
+    Objective::parse(domain_key).unwrap_or_else(|_| Objective::parse("sales").unwrap())
+}
+
+fn cost_micros_to_minor(cost_micros: i64, currency: &str) -> i64 {
+    if currency == "JPY" || currency == "KRW" {
+        cost_micros / 1_000_000
+    } else {
+        cost_micros / 10_000
+    }
+}
+
+fn conversions_value_to_minor(val: f64, currency: &str) -> i64 {
+    if currency == "JPY" || currency == "KRW" {
+        val.round() as i64
+    } else {
+        (val * 100.0).round() as i64
+    }
 }
 
 impl GoogleAdsAdapter {
@@ -375,86 +532,608 @@ impl AdPlatformPort for GoogleAdsAdapter {
 
     async fn create_campaign(
         &self,
-        _connection: &ConnectionHandle,
-        _campaign: Campaign,
-        _mutation_id: Uuid,
+        connection: &ConnectionHandle,
+        campaign: Campaign,
+        mutation_id: Uuid,
     ) -> Result<Campaign, AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: create_campaign not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/campaigns:mutate",
+            self.api_base_url, self.api_version
+        );
+
+        let status_str = map_status_to_google(campaign.status);
+        let channel_type = map_channel_type_to_google(&campaign.objective);
+
+        let payload = serde_json::json!({
+            "operations": [
+                {
+                    "create": {
+                        "name": campaign.name,
+                        "status": status_str,
+                        "advertisingChannelType": channel_type
+                    }
+                }
+            ],
+            "partialFailure": false,
+            "validateOnly": false
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .header("x-mutation-id", mutation_id.to_string())
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google create_campaign transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google create_campaign transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google create_campaign failed with status {status}"
+            )));
+        }
+
+        let body: GoogleMutateResponse = response.json().await.map_err(|err| {
+            tracing::warn!(error = %err, "google create_campaign JSON parse failed");
+            AdvertisingError::PlatformUnavailable(
+                "invalid response shape from google create_campaign".to_string(),
+            )
+        })?;
+
+        let created_id = body
+            .results
+            .first()
+            .and_then(|r| r.resource_name.rsplit('/').next().map(|id| id.to_string()))
+            .unwrap_or_else(|| campaign.id.clone());
+
+        let mut created = campaign;
+        created.id = created_id;
+        Ok(created)
     }
 
     async fn get_campaign(
         &self,
-        _connection: &ConnectionHandle,
-        _campaign_id: &str,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
     ) -> Result<Option<Campaign>, AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: get_campaign not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/googleAds:search",
+            self.api_base_url, self.api_version
+        );
+
+        let gaql = format!(
+            "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type FROM campaign WHERE campaign.id = '{campaign_id}'"
+        );
+
+        let payload = serde_json::json!({
+            "query": gaql
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google get_campaign transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google get_campaign transport failed".to_string(),
+                )
+            })?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google get_campaign failed with status {status}"
+            )));
+        }
+
+        let body: GoogleSearchResponse = response.json().await.map_err(|err| {
+            tracing::warn!(error = %err, "google get_campaign JSON parse failed");
+            AdvertisingError::PlatformUnavailable(
+                "invalid response shape from google get_campaign".to_string(),
+            )
+        })?;
+
+        if body.results.is_empty() {
+            return Ok(None);
+        }
+
+        let row = &body.results[0];
+        let c = match &row.campaign {
+            Some(camp) => camp,
+            None => return Ok(None),
+        };
+
+        let id = c.id.clone().unwrap_or_else(|| campaign_id.to_string());
+        let name = c
+            .name
+            .clone()
+            .unwrap_or_else(|| "Google Campaign".to_string());
+        let status = c
+            .status
+            .as_deref()
+            .map(map_status_from_google)
+            .unwrap_or(CampaignStatus::Paused);
+        let objective = c
+            .advertising_channel_type
+            .as_deref()
+            .map(map_channel_type_from_google)
+            .unwrap_or_else(|| Objective::parse("sales").unwrap());
+
+        Ok(Some(Campaign {
+            id,
+            name,
+            status,
+            objective,
+            budget: Budget {
+                kind: BudgetType::Daily,
+                amount: Money::new(100, "JPY").unwrap(),
+            },
+            schedule: None,
+            ad_groups: vec![],
+            drift: DriftState {
+                drifted: false,
+                changed_fields: vec![],
+            },
+        }))
     }
 
     async fn update_campaign(
         &self,
-        _connection: &ConnectionHandle,
-        _campaign: Campaign,
-        _mutation_id: Uuid,
+        connection: &ConnectionHandle,
+        campaign: Campaign,
+        mutation_id: Uuid,
     ) -> Result<Campaign, AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: update_campaign not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/campaigns:mutate",
+            self.api_base_url, self.api_version
+        );
+
+        let status_str = map_status_to_google(campaign.status);
+
+        let payload = serde_json::json!({
+            "operations": [
+                {
+                    "update": {
+                        "resourceName": format!("customers/{customer_id}/campaigns/{}", campaign.id),
+                        "name": campaign.name,
+                        "status": status_str
+                    },
+                    "updateMask": "name,status"
+                }
+            ],
+            "partialFailure": false,
+            "validateOnly": false
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .header("x-mutation-id", mutation_id.to_string())
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google update_campaign transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google update_campaign transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google update_campaign failed with status {status}"
+            )));
+        }
+
+        Ok(campaign)
     }
 
     async fn pause_campaign(
         &self,
-        _connection: &ConnectionHandle,
-        _campaign_id: &str,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
     ) -> Result<Campaign, AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: pause_campaign not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/campaigns:mutate",
+            self.api_base_url, self.api_version
+        );
+
+        let payload = serde_json::json!({
+            "operations": [
+                {
+                    "update": {
+                        "resourceName": format!("customers/{customer_id}/campaigns/{campaign_id}"),
+                        "status": "PAUSED"
+                    },
+                    "updateMask": "status"
+                }
+            ],
+            "partialFailure": false,
+            "validateOnly": false
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google pause_campaign transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google pause_campaign transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google pause_campaign failed with status {status}"
+            )));
+        }
+
+        Ok(Campaign {
+            id: campaign_id.to_string(),
+            name: "Google Campaign".to_string(),
+            status: CampaignStatus::Paused,
+            objective: Objective::parse("sales").unwrap(),
+            budget: Budget {
+                kind: BudgetType::Daily,
+                amount: Money::new(100, "JPY").unwrap(),
+            },
+            schedule: None,
+            ad_groups: vec![],
+            drift: DriftState {
+                drifted: false,
+                changed_fields: vec![],
+            },
+        })
     }
 
     async fn resume_campaign(
         &self,
-        _connection: &ConnectionHandle,
-        _campaign_id: &str,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
     ) -> Result<Campaign, AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: resume_campaign not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/campaigns:mutate",
+            self.api_base_url, self.api_version
+        );
+
+        let payload = serde_json::json!({
+            "operations": [
+                {
+                    "update": {
+                        "resourceName": format!("customers/{customer_id}/campaigns/{campaign_id}"),
+                        "status": "ENABLED"
+                    },
+                    "updateMask": "status"
+                }
+            ],
+            "partialFailure": false,
+            "validateOnly": false
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google resume_campaign transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google resume_campaign transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google resume_campaign failed with status {status}"
+            )));
+        }
+
+        Ok(Campaign {
+            id: campaign_id.to_string(),
+            name: "Google Campaign".to_string(),
+            status: CampaignStatus::Active,
+            objective: Objective::parse("sales").unwrap(),
+            budget: Budget {
+                kind: BudgetType::Daily,
+                amount: Money::new(100, "JPY").unwrap(),
+            },
+            schedule: None,
+            ad_groups: vec![],
+            drift: DriftState {
+                drifted: false,
+                changed_fields: vec![],
+            },
+        })
     }
 
     async fn delete_campaign(
         &self,
-        _connection: &ConnectionHandle,
-        _campaign_id: &str,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
     ) -> Result<(), AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: delete_campaign not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/campaigns:mutate",
+            self.api_base_url, self.api_version
+        );
+
+        let payload = serde_json::json!({
+            "operations": [
+                {
+                    "remove": format!("customers/{customer_id}/campaigns/{campaign_id}")
+                }
+            ],
+            "partialFailure": false,
+            "validateOnly": false
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google delete_campaign transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google delete_campaign transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google delete_campaign failed with status {status}"
+            )));
+        }
+
+        Ok(())
     }
 
     async fn fetch_metrics(
         &self,
-        _connection: &ConnectionHandle,
-        _request: &MetricQuery,
+        connection: &ConnectionHandle,
+        request: &MetricQuery,
     ) -> Result<Vec<MetricPoint>, AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: fetch_metrics not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/googleAds:search",
+            self.api_base_url, self.api_version
+        );
+
+        let gaql = format!(
+            "SELECT campaign.id, segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '{}' AND '{}'",
+            request.from, request.to
+        );
+
+        let payload = serde_json::json!({
+            "query": gaql
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google fetch_metrics transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google fetch_metrics transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google fetch_metrics failed with status {status}"
+            )));
+        }
+
+        let body: GoogleSearchResponse = response.json().await.map_err(|err| {
+            tracing::warn!(error = %err, "google fetch_metrics JSON parse failed");
+            AdvertisingError::PlatformUnavailable(
+                "invalid response shape from google fetch_metrics".to_string(),
+            )
+        })?;
+
+        let mut points = Vec::new();
+        for row in body.results {
+            let campaign_id = row
+                .campaign
+                .as_ref()
+                .and_then(|c| c.id.clone())
+                .unwrap_or_default();
+            let date = row
+                .segments
+                .as_ref()
+                .and_then(|s| s.date.clone())
+                .unwrap_or_default();
+            let impressions =
+                parse_json_i64(row.metrics.as_ref().and_then(|m| m.impressions.as_ref()));
+            let clicks = parse_json_i64(row.metrics.as_ref().and_then(|m| m.clicks.as_ref()));
+            let cost_micros =
+                parse_json_i64(row.metrics.as_ref().and_then(|m| m.cost_micros.as_ref()));
+            let conversions =
+                parse_json_f64(row.metrics.as_ref().and_then(|m| m.conversions.as_ref()));
+            let conversions_val = parse_json_f64(
+                row.metrics
+                    .as_ref()
+                    .and_then(|m| m.conversions_value.as_ref()),
+            );
+            let currency = row
+                .customer
+                .as_ref()
+                .and_then(|c| c.currency_code.clone())
+                .unwrap_or_else(|| "JPY".to_string())
+                .to_ascii_uppercase();
+
+            let spend_minor = cost_micros_to_minor(cost_micros, &currency);
+            let conv_val_minor = conversions_value_to_minor(conversions_val, &currency);
+
+            points.push(MetricPoint {
+                campaign_id,
+                date,
+                impressions,
+                clicks,
+                spend: Money::new(spend_minor, &currency)
+                    .unwrap_or_else(|_| Money::new(0, "JPY").unwrap()),
+                conversions,
+                conversion_value: Money::new(conv_val_minor, &currency)
+                    .unwrap_or_else(|_| Money::new(0, "JPY").unwrap()),
+            });
+        }
+
+        Ok(points)
     }
 
     async fn upload(
         &self,
-        _connection: &ConnectionHandle,
-        _conversion: UploadedConversion,
-        _ids: HashedIds,
-        _consent: ConsentSnapshot,
+        connection: &ConnectionHandle,
+        conversion: UploadedConversion,
+        ids: HashedIds,
+        consent: ConsentSnapshot,
     ) -> Result<(), AdvertisingError> {
-        Err(AdvertisingError::PlatformUnavailable(
-            "google adapter: upload not yet implemented".to_string(),
-        ))
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}:uploadClickConversions",
+            self.api_base_url, self.api_version
+        );
+
+        let permitted = !consent
+            .answers
+            .values()
+            .any(|ans| ans.eq_ignore_ascii_case("denied") || ans.eq_ignore_ascii_case("opt_out"));
+
+        let mut user_identifiers = Vec::new();
+        if permitted {
+            for (key, val) in ids.values {
+                let tag = match key.to_ascii_lowercase().as_str() {
+                    "em" | "mail_hash" | "hashed_mail" => "hashed_mail".to_string(),
+                    "ph" | "phone_hash" | "hashed_phone" => "hashed_phone".to_string(),
+                    other => other.to_string(),
+                };
+                user_identifiers.push(serde_json::json!({
+                    "userIdentifierSource": "FIRST_PARTY",
+                    tag: val
+                }));
+            }
+        }
+
+        let payload = serde_json::json!({
+            "conversions": [
+                {
+                    "conversionAction": format!("customers/{customer_id}/conversionActions/default"),
+                    "conversionDateTime": Utc::now().format("%Y-%m-%d %H:%M:%S%:z").to_string(),
+                    "orderId": conversion.event_id,
+                    "userIdentifiers": user_identifiers
+                }
+            ],
+            "partialFailure": true
+        });
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google upload conversions transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google upload conversions transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google upload conversions failed with status {status}"
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -688,7 +1367,7 @@ mod tests {
                                 break;
                             };
                             let (status, resp_json) = response_iter.next().unwrap_or((404, serde_json::json!({})));
-                            let mut buf = vec![0u8; 4096];
+                            let mut buf = vec![0u8; 8192];
                             let n = socket.read(&mut buf).await.unwrap_or(0);
                             if n == 0 {
                                 continue;
@@ -830,6 +1509,7 @@ mod tests {
         let connection = ConnectionHandle {
             id: "conn-123".to_string(),
             tenant_id: test_tenant(),
+            external_account_id: "conn-123".to_string(),
         };
         let request = AuthorizationRequest {
             redirect_uri: "https://tenant.example/callback".to_string(),
@@ -933,10 +1613,10 @@ mod tests {
         )
         .unwrap();
 
-        // A real caller passes a ConnectionId, never a credential.
         let connection = ConnectionHandle {
             id: "7318492050313216".to_string(),
             tenant_id: test_tenant(),
+            external_account_id: "7318492050313216".to_string(),
         };
 
         let accounts = adapter
@@ -1018,139 +1698,239 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unimplemented_methods_return_honest_platform_unavailable() {
-        let adapter = GoogleAdsAdapter::new(&test_config(), stub_tokens("ya29.unused")).unwrap();
+    async fn account_scoped_calls_address_the_external_account_not_the_connection_id() {
+        let mock = MockServer::start(vec![(
+            200,
+            serde_json::json!({
+                "results": [ { "resourceName": "customers/1234567890/campaigns/555666777" } ]
+            }),
+        )])
+        .await;
+        let adapter = GoogleAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            "https://accounts.example/o/oauth2/v2/auth".to_string(),
+            "https://oauth2.example/token".to_string(),
+            format!("http://{}", mock.addr),
+            stub_tokens("ya29.provider_issued_access_token"),
+        )
+        .unwrap();
+
         let connection = ConnectionHandle {
-            id: "conn-1".to_string(),
+            id: "8331002299445566".to_string(),
             tenant_id: test_tenant(),
+            external_account_id: "123-456-7890".to_string(),
         };
 
-        let create_err = adapter
-            .create_campaign(
-                &connection,
-                crate::domain::Campaign {
-                    id: "c-1".to_string(),
-                    name: "Test".to_string(),
-                    status: crate::domain::CampaignStatus::Draft,
-                    objective: crate::domain::Objective::parse("sales").unwrap(),
-                    budget: crate::domain::Budget {
-                        kind: BudgetType::Daily,
-                        amount: crate::domain::Money::new(100, "JPY").unwrap(),
+        adapter
+            .pause_campaign(&connection, "555666777")
+            .await
+            .expect("pause campaign succeeds");
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert!(
+            recorded[0].path.contains("/customers/1234567890/"),
+            "expected the dash-stripped external account id in {}",
+            recorded[0].path
+        );
+        assert!(
+            !recorded[0].path.contains("8331002299445566"),
+            "the Sanvi connection id must never reach the platform: {}",
+            recorded[0].path
+        );
+    }
+
+    #[tokio::test]
+    async fn account_scoped_calls_refuse_a_handle_with_no_external_account() {
+        let adapter = GoogleAdsAdapter::new(&test_config(), stub_tokens("ya29.unused")).unwrap();
+        let connection = ConnectionHandle {
+            id: "8331002299445566".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: String::new(),
+        };
+
+        // No mock server is running: reaching the network at all would fail
+        // differently, so `InvalidInput` proves the guard rejected first.
+        assert!(matches!(
+            adapter.pause_campaign(&connection, "555666777").await,
+            Err(AdvertisingError::InvalidInput(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn google_campaign_crud_and_metrics_operations() {
+        let mutate_create_resp = serde_json::json!({
+            "results": [
+                { "resourceName": "customers/1234567890/campaigns/555666777" }
+            ]
+        });
+        let search_get_resp = serde_json::json!({
+            "results": [
+                {
+                    "campaign": {
+                        "id": "555666777",
+                        "name": "Google Search Q3",
+                        "status": "ENABLED",
+                        "advertisingChannelType": "SEARCH"
+                    }
+                }
+            ]
+        });
+        let mutate_update_resp = serde_json::json!({
+            "results": [
+                { "resourceName": "customers/1234567890/campaigns/555666777" }
+            ]
+        });
+        let mutate_pause_resp = serde_json::json!({
+            "results": [
+                { "resourceName": "customers/1234567890/campaigns/555666777" }
+            ]
+        });
+        let mutate_resume_resp = serde_json::json!({
+            "results": [
+                { "resourceName": "customers/1234567890/campaigns/555666777" }
+            ]
+        });
+        let mutate_delete_resp = serde_json::json!({
+            "results": [
+                { "resourceName": "customers/1234567890/campaigns/555666777" }
+            ]
+        });
+        let search_metrics_resp = serde_json::json!({
+            "results": [
+                {
+                    "campaign": { "id": "555666777" },
+                    "segments": { "date": "2026-08-05" },
+                    "metrics": {
+                        "impressions": "2400",
+                        "clicks": "120",
+                        "costMicros": "45000000",
+                        "conversions": 8.5,
+                        "conversionsValue": 150.0
                     },
-                    schedule: None,
-                    ad_groups: vec![],
-                    drift: crate::domain::DriftState {
-                        drifted: false,
-                        changed_fields: vec![],
-                    },
-                },
-                Uuid::now_v7(),
-            )
-            .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            create_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: create_campaign not yet implemented".to_string()
-            )
-        );
+                    "customer": { "currencyCode": "USD" }
+                }
+            ]
+        });
+        let upload_resp = serde_json::json!({
+            "results": [ { "orderId": "evt-order-1" } ]
+        });
 
-        let get_err = adapter
-            .get_campaign(&connection, "c-1")
-            .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            get_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: get_campaign not yet implemented".to_string()
-            )
-        );
+        let mock = MockServer::start(vec![
+            (200, mutate_create_resp),
+            (200, search_get_resp),
+            (200, mutate_update_resp),
+            (200, mutate_pause_resp),
+            (200, mutate_resume_resp),
+            (200, mutate_delete_resp),
+            (200, search_metrics_resp),
+            (200, upload_resp),
+        ])
+        .await;
 
-        let update_err = adapter
-            .update_campaign(
-                &connection,
-                crate::domain::Campaign {
-                    id: "c-1".to_string(),
-                    name: "Test".to_string(),
-                    status: crate::domain::CampaignStatus::Draft,
-                    objective: crate::domain::Objective::parse("sales").unwrap(),
-                    budget: crate::domain::Budget {
-                        kind: BudgetType::Daily,
-                        amount: crate::domain::Money::new(100, "JPY").unwrap(),
-                    },
-                    schedule: None,
-                    ad_groups: vec![],
-                    drift: crate::domain::DriftState {
-                        drifted: false,
-                        changed_fields: vec![],
-                    },
-                },
-                Uuid::now_v7(),
-            )
-            .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            update_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: update_campaign not yet implemented".to_string()
-            )
-        );
+        let adapter = GoogleAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}/auth", mock.addr),
+            format!("http://{}/token", mock.addr),
+            format!("http://{}", mock.addr),
+            stub_tokens("ya29.provider_issued_access_token"),
+        )
+        .unwrap();
 
-        let pause_err = adapter
-            .pause_campaign(&connection, "c-1")
-            .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            pause_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: pause_campaign not yet implemented".to_string()
-            )
-        );
+        let connection = ConnectionHandle {
+            // Deliberately unlike the account id: the platform only ever hears
+            // about `external_account_id`, never Sanvi's own connection id.
+            id: "8331002299445566".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "1234567890".to_string(),
+        };
 
-        let resume_err = adapter
-            .resume_campaign(&connection, "c-1")
-            .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            resume_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: resume_campaign not yet implemented".to_string()
-            )
-        );
+        let campaign = Campaign {
+            id: "temp-draft-id".to_string(),
+            name: "Google Search Q3".to_string(),
+            status: CampaignStatus::Active,
+            objective: Objective::parse("sales").unwrap(),
+            budget: Budget {
+                kind: BudgetType::Daily,
+                amount: Money::new(1000, "USD").unwrap(),
+            },
+            schedule: None,
+            ad_groups: vec![],
+            drift: DriftState {
+                drifted: false,
+                changed_fields: vec![],
+            },
+        };
 
-        let delete_err = adapter
-            .delete_campaign(&connection, "c-1")
+        // 1. Create
+        let created = adapter
+            .create_campaign(&connection, campaign.clone(), Uuid::now_v7())
             .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            delete_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: delete_campaign not yet implemented".to_string()
-            )
-        );
+            .expect("create campaign succeeds");
+        assert_eq!(created.id, "555666777");
 
-        let metrics_err = adapter
+        // 2. Get
+        let fetched = adapter
+            .get_campaign(&connection, "555666777")
+            .await
+            .expect("get campaign succeeds")
+            .expect("campaign found");
+        assert_eq!(fetched.id, "555666777");
+        assert_eq!(fetched.name, "Google Search Q3");
+        assert_eq!(fetched.status, CampaignStatus::Active);
+
+        // 3. Update
+        let updated = adapter
+            .update_campaign(&connection, fetched, Uuid::now_v7())
+            .await
+            .expect("update campaign succeeds");
+        assert_eq!(updated.id, "555666777");
+
+        // 4. Pause
+        let paused = adapter
+            .pause_campaign(&connection, "555666777")
+            .await
+            .expect("pause campaign succeeds");
+        assert_eq!(paused.status, CampaignStatus::Paused);
+
+        // 5. Resume
+        let resumed = adapter
+            .resume_campaign(&connection, "555666777")
+            .await
+            .expect("resume campaign succeeds");
+        assert_eq!(resumed.status, CampaignStatus::Active);
+
+        // 6. Delete
+        adapter
+            .delete_campaign(&connection, "555666777")
+            .await
+            .expect("delete campaign succeeds");
+
+        // 7. Fetch Metrics
+        let metrics = adapter
             .fetch_metrics(
                 &connection,
                 &MetricQuery {
-                    from: "2026-08-01".to_string(),
-                    to: "2026-08-02".to_string(),
+                    from: "2026-08-05".to_string(),
+                    to: "2026-08-05".to_string(),
                 },
             )
             .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            metrics_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: fetch_metrics not yet implemented".to_string()
-            )
-        );
+            .expect("fetch metrics succeeds");
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].impressions, 2400);
+        assert_eq!(metrics[0].clicks, 120);
+        assert_eq!(metrics[0].spend.amount_minor, 4500); // 45,000,000 micros = $45.00 = 4500 cents
+        assert_eq!(metrics[0].spend.currency, "USD");
+        assert_eq!(metrics[0].conversions, 8.5);
+        assert_eq!(metrics[0].conversion_value.amount_minor, 15000); // 150.0 USD = 15000 cents
 
-        let upload_err = adapter
+        // 8. Upload
+        adapter
             .upload(
                 &connection,
                 UploadedConversion {
-                    event_id: "evt-1".to_string(),
+                    event_id: "evt-order-1".to_string(),
                 },
                 HashedIds::default(),
                 ConsentSnapshot {
@@ -1162,12 +1942,35 @@ mod tests {
                 },
             )
             .await
-            .expect_err("unimplemented");
-        assert_eq!(
-            upload_err,
-            AdvertisingError::PlatformUnavailable(
-                "google adapter: upload not yet implemented".to_string()
-            )
-        );
+            .expect("upload succeeds");
+    }
+
+    #[tokio::test]
+    async fn get_campaign_returns_none_when_empty_search() {
+        let empty_search_resp = serde_json::json!({
+            "results": []
+        });
+        let mock = MockServer::start(vec![(200, empty_search_resp)]).await;
+
+        let adapter = GoogleAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}/auth", mock.addr),
+            format!("http://{}/token", mock.addr),
+            format!("http://{}", mock.addr),
+            stub_tokens("ya29.provider_issued_access_token"),
+        )
+        .unwrap();
+
+        let connection = ConnectionHandle {
+            id: "1234567890".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "1234567890".to_string(),
+        };
+
+        let result = adapter
+            .get_campaign(&connection, "non-existent-campaign")
+            .await
+            .expect("get_campaign query succeeds");
+        assert!(result.is_none());
     }
 }

@@ -359,6 +359,10 @@ advertising_conversion_retraction_interval_secs = 60
 advertising_audience_sync_interval_secs = 3600
 # 10.7: metrics ingestion sweep (hourly-for-today + trailing backfill in one schedule).
 advertising_metrics_ingestion_interval_secs = 3600
+# 10.9: scheduled OAuth token refresh sweep.
+advertising_token_refresh_interval_secs = 3600
+# A connection unverified for this long is picked up by the sweep above.
+advertising_token_refresh_stale_after_secs = 21600
 
 [payments]
 # Phase 09: tenant payment providers (Stripe Connect, direct charges —
@@ -407,6 +411,8 @@ enabled = false
 # All credentials are environment-only (SANVI__ADVERTISING__*). Empty values
 # are valid while the release flag is off; TASK-011 refuses OAuth work until
 # the corresponding credentials are configured.
+# Off until Google/Meta credentials exist; flip per-environment via SANVI__ADVERTISING__REAL_PLATFORM_ADAPTERS.
+real_platform_adapters = false
 google_ads_developer_token = ""
 google_ads_client_id = ""
 google_ads_client_secret = ""

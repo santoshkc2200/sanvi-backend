@@ -1010,6 +1010,7 @@ fn create_test_advertising_state(
         resolve_campaign_drift: Arc::new(ResolveCampaignDrift::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             registry.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1033,6 +1034,7 @@ fn create_test_advertising_state(
         patch_campaign: Arc::new(PatchCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -1041,6 +1043,7 @@ fn create_test_advertising_state(
         publish_campaign: Arc::new(PublishCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -1049,6 +1052,7 @@ fn create_test_advertising_state(
         pause_campaign: Arc::new(PauseCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             registry.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1056,6 +1060,7 @@ fn create_test_advertising_state(
         resume_campaign: Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             registry.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1064,6 +1069,7 @@ fn create_test_advertising_state(
         add_ad_group: Arc::new(AddAdGroup::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             registry.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1071,6 +1077,7 @@ fn create_test_advertising_state(
         update_ad_group: Arc::new(UpdateAdGroup::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             registry.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1078,6 +1085,7 @@ fn create_test_advertising_state(
         add_ad: Arc::new(AddAd::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -1086,6 +1094,7 @@ fn create_test_advertising_state(
         update_ad: Arc::new(UpdateAd::new(
             tx.clone(),
             campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -1176,6 +1185,7 @@ fn create_test_advertising_state(
             let pause = Arc::new(sanvi_advertising::application::PauseCampaign::new(
                 tx.clone(),
                 campaign_repo.clone(),
+                Arc::new(SqlxAdvertisingConnectionRepository::new()),
                 events.clone(),
                 registry.clone(),
                 Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1226,6 +1236,14 @@ fn create_test_advertising_state(
             Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new()),
             7,
         )),
+        get_platform_ads_health: Arc::new(
+            sanvi_advertising::application::GetPlatformAdsHealth::new(
+                tx.clone(),
+                connections.clone(),
+                registry.clone(),
+                6.0,
+            ),
+        ),
         oauth_state,
         tracking_ip_limiter: Arc::new(QuotaLimiter::new(100, ip_permits)),
         tracking_domain_limiter: Arc::new(QuotaLimiter::new(100, domain_permits)),

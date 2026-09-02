@@ -129,9 +129,7 @@ impl TokenVault {
             .tokens
             .find(scope, tenant_id, connection_id)
             .await?
-            .ok_or_else(|| {
-                AdvertisingError::Storage("advertising connection token missing".to_string())
-            })?;
+            .ok_or(AdvertisingError::ConnectionTokenMissing)?;
         let plaintext = self
             .crypto
             .decrypt_for_tenant(scope, tenant_id, &ciphertext)

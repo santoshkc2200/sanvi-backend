@@ -202,6 +202,7 @@ fn error_code(error: &AdvertisingError) -> &'static str {
         AdvertisingError::Validation(_) => "validation",
         AdvertisingError::ConnectionNotActive => "connection_not_active",
         AdvertisingError::ConnectionNotFound => "connection_not_found",
+        AdvertisingError::ConnectionTokenMissing => "connection_token_missing",
         AdvertisingError::CampaignNotPublished => "campaign_not_published",
         AdvertisingError::AdGroupNotFound => "ad_group_not_found",
         AdvertisingError::AdNotFound => "ad_not_found",

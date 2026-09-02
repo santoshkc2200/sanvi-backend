@@ -7,6 +7,24 @@ info:
   version: 0.10.0
 openapi: 3.1.0
 paths:
+  /api/v1/platform/ads/health:
+    get:
+      operationId: get_platform_ads_health
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAdsHealthReport'
+          description: Cross-tenant advertising connection health and freshness overview
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing platform.tenant.read permission
+      tags:
+      - advertising
   /api/v1/public/track:
     post:
       operationId: public_track_conversion

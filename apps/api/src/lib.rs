@@ -42,9 +42,8 @@ use sanvi_access::{
 use sanvi_advertising::{
     AdvertisingConfig, OAuthStateManager,
     adapters::{
-        FakeAdPlatform, SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
-        SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxOAuthStateStore,
-        SqlxTenantEnvelopeCrypto,
+        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
+        SqlxCreativeRepository, SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
     },
     application::{
         AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
@@ -2830,8 +2829,11 @@ pub fn build_payments_state(
     }
 }
 
-/// Phase 10's registry-derived capability catalog. The in-process adapter is
-/// deliberately the only registered implementation until real adapters land.
+/// Phase 10's registry-derived capability catalog. When `real_platform_adapters`
+/// is false (default), the in-process adapter is used for every platform; when
+/// true, real Google Ads / Meta adapters are registered where configured,
+/// falling back to the fake adapter per platform if credentials are missing
+/// or invalid.
 ///
 /// `directive_resolver` and `subprocessors` come from the privacy context
 /// (phase 05): the directive gate (TASK-014) is the phase's core
@@ -2847,16 +2849,6 @@ pub async fn build_advertising_state(
     config.validate_oauth_enabled()?;
     config.validate_tracking_enabled()?;
     let token_kek = config.token_kek_bytes()?;
-    let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
-        &FakeAdPlatform::registered_catalog(),
-        |platform| match platform.as_str() {
-            "meta" => (10, 2),
-            _ => (
-                config.quota_platform_wide_permits,
-                config.quota_per_connection_permits,
-            ),
-        },
-    ));
     let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
     let oauth_state =
@@ -2867,6 +2859,21 @@ pub async fn build_advertising_state(
             config.token_kek_id.clone(),
         )),
         std::sync::Arc::new(SqlxConnectionTokenRepository::new()),
+    ));
+    let token_providers = sanvi_advertising::adapters::build_access_token_providers(
+        config,
+        tx.clone(),
+        token_vault.clone(),
+    );
+    let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
+        &sanvi_advertising::adapters::build_platform_registry(config, &token_providers),
+        |platform| match platform.as_str() {
+            "meta" => (10, 2),
+            _ => (
+                config.quota_platform_wide_permits,
+                config.quota_per_connection_permits,
+            ),
+        },
     ));
     let campaigns: std::sync::Arc<dyn sanvi_advertising::domain::CampaignRepository> =
         std::sync::Arc::new(SqlxCampaignRepository::new());
@@ -2999,6 +3006,7 @@ pub async fn build_advertising_state(
         std::sync::Arc::new(sanvi_advertising::application::PauseCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3063,6 +3071,7 @@ pub async fn build_advertising_state(
         resolve_campaign_drift: std::sync::Arc::new(ResolveCampaignDrift::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3086,6 +3095,7 @@ pub async fn build_advertising_state(
         patch_campaign: std::sync::Arc::new(PatchCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -3094,6 +3104,7 @@ pub async fn build_advertising_state(
         publish_campaign: std::sync::Arc::new(PublishCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -3103,6 +3114,7 @@ pub async fn build_advertising_state(
         resume_campaign: std::sync::Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3114,6 +3126,7 @@ pub async fn build_advertising_state(
         add_ad_group: std::sync::Arc::new(AddAdGroup::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3121,6 +3134,7 @@ pub async fn build_advertising_state(
         update_ad_group: std::sync::Arc::new(UpdateAdGroup::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3128,6 +3142,7 @@ pub async fn build_advertising_state(
         add_ad: std::sync::Arc::new(AddAd::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -3136,6 +3151,7 @@ pub async fn build_advertising_state(
         update_ad: std::sync::Arc::new(UpdateAd::new(
             tx.clone(),
             campaigns,
+            connections.clone(),
             creatives.clone(),
             events,
             registry.clone(),
@@ -3180,7 +3196,7 @@ pub async fn build_advertising_state(
         get_creative_previews: std::sync::Arc::new(GetCreativePreviews::new(
             tx.clone(),
             creatives,
-            registry,
+            registry.clone(),
         )),
         query_metrics: std::sync::Arc::new(QueryMetrics::new(
             tx.clone(),
@@ -3189,10 +3205,18 @@ pub async fn build_advertising_state(
             config.metrics_restatement_days,
         )),
         get_freshness: std::sync::Arc::new(GetFreshness::new(
-            tx,
-            connections,
+            tx.clone(),
+            connections.clone(),
             config.metrics_freshness_stalled_after_hours,
         )),
+        get_platform_ads_health: std::sync::Arc::new(
+            sanvi_advertising::application::GetPlatformAdsHealth::new(
+                tx,
+                connections,
+                registry,
+                config.metrics_freshness_stalled_after_hours,
+            ),
+        ),
         get_budget_caps,
         put_budget_cap,
         get_campaign_budget_cap,
@@ -3493,7 +3517,8 @@ pub fn build_app(
     let app = match advertising {
         Some(state) => app
             .app_data(web::Data::new(state))
-            .configure(advertising_routes::tracking_public_routes),
+            .configure(advertising_routes::tracking_public_routes)
+            .configure(advertising_routes::advertising_platform_routes),
         None => app,
     };
 

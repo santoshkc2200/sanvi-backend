@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::adapters::AdvertisingMetrics;
 use crate::domain::model::{
-    AlertCondition, BudgetAlert, BudgetCap, CampaignStatus, DataFreshness, Money,
+    AlertCondition, BudgetAlert, BudgetCap, BudgetPeriod, CampaignStatus, DataFreshness, Money,
 };
 use crate::domain::{
     AdEvent, AdvertisingConnectionRepository, AdvertisingError, BudgetAlertRepository,
@@ -608,26 +608,41 @@ impl ThresholdEvaluator {
     }
 }
 
+/// How far above a flat trailing window today's spend must land before it
+/// counts as an anomaly. Sigma is undefined when every trailing day is
+/// identical, so this stands in for the 3σ test there.
+const FLAT_WINDOW_SPIKE_MULTIPLE: f64 = 2.0;
+
 pub struct SpendAnomalyDetector {
     tx: TxManager,
+    alerts: Arc<dyn BudgetAlertRepository>,
     metrics_repo: Arc<dyn MetricsRepository>,
     campaigns: Arc<dyn CampaignRepository>,
+    events: Arc<dyn EventPublisher>,
+    ids: Arc<dyn IdGenerator>,
     notifier: Arc<dyn BudgetNotifier>,
     restatement_days: i64,
 }
 
 impl SpendAnomalyDetector {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tx: TxManager,
+        alerts: Arc<dyn BudgetAlertRepository>,
         metrics_repo: Arc<dyn MetricsRepository>,
         campaigns: Arc<dyn CampaignRepository>,
+        events: Arc<dyn EventPublisher>,
+        ids: Arc<dyn IdGenerator>,
         notifier: Arc<dyn BudgetNotifier>,
         restatement_days: i64,
     ) -> Self {
         Self {
             tx,
+            alerts,
             metrics_repo,
             campaigns,
+            events,
+            ids,
             notifier,
             restatement_days,
         }
@@ -694,23 +709,95 @@ impl SpendAnomalyDetector {
                         .sum::<f64>()
                         / n;
                     let std_dev = variance.sqrt();
+                    // A perfectly flat trailing window has no sigma to breach,
+                    // and dividing by a zero standard deviation would call any
+                    // movement at all infinitely anomalous — a campaign that
+                    // spent 1000 every day for five days is not in trouble
+                    // because it spent 1001 today. Fall back to a relative
+                    // test there: only a genuine multiple of the established
+                    // level is worth waking someone for.
+                    let flat_window = std_dev <= 0.0;
+                    let sigma_multiple = if flat_window {
+                        f64::INFINITY
+                    } else {
+                        (today_spend as f64 - mean) / std_dev
+                    };
+                    let anomalous = if flat_window {
+                        mean > 0.0 && today_spend as f64 >= mean * FLAT_WINDOW_SPIKE_MULTIPLE
+                    } else {
+                        sigma_multiple > 3.0
+                    };
 
-                    if std_dev > 0.0 {
-                        let sigma_multiple = (today_spend as f64 - mean) / std_dev;
-                        if sigma_multiple > 3.0 {
-                            let currency = &today_spend_row.currency;
-                            let current_money = Money::new(today_spend, currency)?;
-                            let mean_money = Money::new(mean.round() as i64, currency)?;
-                            let scope_name = format!("campaign {}", camp.id);
+                    if anomalous {
+                        let currency = &today_spend_row.currency;
+                        let current_money = Money::new(today_spend, currency)?;
+                        let mean_money = Money::new(mean.round() as i64, currency)?;
+                        let scope_name = format!("campaign {}", camp.id);
 
-                            tracing::warn!(
-                                %tenant_id,
-                                campaign_id = %camp.id,
-                                today_spend,
-                                mean,
-                                sigma_multiple,
-                                "Spend anomaly (>3sigma) detected for campaign"
-                            );
+                        tracing::warn!(
+                            %tenant_id,
+                            campaign_id = %camp.id,
+                            today_spend,
+                            mean,
+                            sigma_multiple,
+                            "Spend anomaly (>3sigma) detected for campaign"
+                        );
+
+                        let mut alert_scope = self
+                            .tx
+                            .begin_for(tenant_id.as_i64())
+                            .await
+                            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+                        let existing_alerts = self
+                            .alerts
+                            .list_alerts(&mut alert_scope, tenant_id, Some(camp.id), false, 50)
+                            .await?;
+
+                        let already_fired = existing_alerts.iter().any(|a| {
+                            a.period_start == today && a.condition == AlertCondition::SpendAnomaly
+                        });
+
+                        if !already_fired {
+                            let alert_id = self.ids.next_budget_alert_id()?;
+                            let alert = BudgetAlert {
+                                id: alert_id,
+                                tenant_id,
+                                cap_id: None,
+                                campaign_id: Some(camp.id),
+                                period: BudgetPeriod::Daily,
+                                period_start: today,
+                                threshold: 100,
+                                condition: AlertCondition::SpendAnomaly,
+                                spend: current_money.clone(),
+                                cap_amount: Money::new(0, currency)?,
+                                data_freshness: DataFreshness {
+                                    last_synced_at: None,
+                                    lag_hours: None,
+                                    is_settled: false,
+                                    is_stale: false,
+                                },
+                                auto_paused: false,
+                                acknowledged_at: None,
+                                acknowledged_by: None,
+                                created_at: now,
+                            };
+
+                            self.alerts.record_alert(&mut alert_scope, &alert).await?;
+                            self.events
+                                .publish_scoped(
+                                    &mut alert_scope,
+                                    tenant_id,
+                                    &[AdEvent::SpendThresholdReached {
+                                        campaign_id: Some(camp.id),
+                                        threshold: 100,
+                                    }],
+                                )
+                                .await?;
+                            alert_scope
+                                .commit()
+                                .await
+                                .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
                             let _ = self
                                 .notifier
@@ -722,6 +809,11 @@ impl SpendAnomalyDetector {
                                     sigma_multiple,
                                 )
                                 .await;
+                        } else {
+                            alert_scope
+                                .commit()
+                                .await
+                                .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
                         }
                     }
                 }

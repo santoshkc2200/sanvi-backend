@@ -32,6 +32,9 @@ fn transient_handle(
     Ok(ConnectionHandle {
         id: ids.next_connection_id()?.to_string(),
         tenant_id,
+        // No account has been selected yet — that is the whole point of the
+        // authorization round trip this handle serves.
+        external_account_id: String::new(),
     })
 }
 

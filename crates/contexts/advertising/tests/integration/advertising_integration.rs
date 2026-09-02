@@ -18,11 +18,11 @@ use sanvi_advertising::{
     application::{
         AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign,
         CreateConnection, CreateCreative, DeleteCreative, GetCampaign, GetCreative,
-        GetCreativePreviews, IngestConnectionMetrics, JoinCampaignRevenue, ListCampaignChanges,
-        ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields, NewCampaignFields,
-        NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign, QueryMetrics,
-        ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, UpdateAd, UpdateAdGroup,
-        ValidateCampaign,
+        GetCreativePreviews, GetPlatformAdsHealth, IngestConnectionMetrics, JoinCampaignRevenue,
+        ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields,
+        NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign,
+        QueryMetrics, ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, RunTokenRefresh,
+        UpdateAd, UpdateAdGroup, ValidateCampaign,
     },
     domain::{
         AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
@@ -723,6 +723,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -731,6 +732,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -739,6 +741,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let pause = PauseCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -746,6 +749,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let resume = ResumeCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry,
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -934,6 +938,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
@@ -945,7 +950,13 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
         events,
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     ));
-    let sweep = ReconcileDueCampaigns::new(manager, campaigns, registry.clone(), reconcile);
+    let sweep = ReconcileDueCampaigns::new(
+        manager,
+        campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
+        registry.clone(),
+        reconcile,
+    );
 
     let draft = create
         .execute(
@@ -978,6 +989,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     let handle = sanvi_advertising::ConnectionHandle {
         id: connection_id.to_string(),
         tenant_id,
+        external_account_id: connection_id.to_string(),
     };
     adapter.pause_campaign(&handle, &external_id).await.unwrap();
 
@@ -1048,6 +1060,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1055,6 +1068,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let update_ad_group = UpdateAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1062,6 +1076,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -1252,6 +1267,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
@@ -1260,6 +1276,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1273,6 +1290,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let sweep = ReconcileDueCampaigns::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         registry.clone(),
         reconcile,
     );
@@ -1334,6 +1352,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let conn_handle = sanvi_advertising::domain::ConnectionHandle {
         id: format!("act_{connection_id}"),
         tenant_id,
+        external_account_id: format!("act_{connection_id}"),
     };
     let mut remote = adapter
         .get_campaign(&conn_handle, published.external_id.as_deref().unwrap())
@@ -1623,6 +1642,7 @@ async fn add_ad_rejects_missing_creative_id() {
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1630,6 +1650,7 @@ async fn add_ad_rejects_missing_creative_id() {
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives,
         events,
         registry,
@@ -1786,6 +1807,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1793,6 +1815,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -2015,6 +2038,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -2022,6 +2046,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -2186,6 +2211,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -2193,6 +2219,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -2201,6 +2228,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let update_ad = UpdateAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -2425,6 +2453,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry.clone(),
@@ -2800,6 +2829,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry.clone(),
@@ -3054,6 +3084,7 @@ async fn deleting_referenced_creative_fails_publish() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -3062,6 +3093,7 @@ async fn deleting_referenced_creative_fails_publish() {
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -3071,6 +3103,7 @@ async fn deleting_referenced_creative_fails_publish() {
     let update_ad = UpdateAd::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -3292,6 +3325,7 @@ async fn create_connection_and_published_campaign(
     let publish = PublishCampaign::new(
         manager,
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         events,
         registry,
@@ -3804,6 +3838,7 @@ async fn revenue_join_attributes_single_campaign_and_parks_ambiguous_revenue_at_
     let publish = PublishCampaign::new(
         manager_b.clone(),
         campaigns_b.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
         platforms_b.clone(),
@@ -3880,6 +3915,274 @@ async fn revenue_join_attributes_single_campaign_and_parks_ambiguous_revenue_at_
     .await
     .unwrap();
     assert_eq!(unattributed_bucket, 9_000);
+}
+
+#[tokio::test]
+async fn test_platform_ads_health_reports_aggregations_and_freshness() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_1 = seed_tenant(&pool, "platform-health-1").await;
+    let tenant_2 = seed_tenant(&pool, "platform-health-2").await;
+    let platforms = Arc::new(FakeAdPlatform::registered_catalog());
+    let connections_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let platform = FakeAdPlatform::fixtures()[0].key.clone();
+    let now = Utc::now();
+
+    // Tenant 1: active connection with granted scopes
+    let mut conn1 = AdvertisingConnection::new(
+        sanvi_advertising::domain::model::ConnectionId::try_from(1_111_001_i64).unwrap(),
+        tenant_1,
+        platform.clone(),
+        "ext-act-1",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-1"),
+        Some(test_actor()),
+        now,
+    )
+    .unwrap();
+    conn1.apply_credentials(
+        Some("Account 1".to_string()),
+        vec!["ads.read".to_string(), "ads.manage".to_string()],
+        None,
+    );
+    conn1.record_metrics_sync(now - Duration::hours(1));
+
+    // Tenant 2: disconnected connection with missing scopes
+    let mut conn2 = AdvertisingConnection::new(
+        sanvi_advertising::domain::model::ConnectionId::try_from(1_111_002_i64).unwrap(),
+        tenant_2,
+        platform.clone(),
+        "ext-act-2",
+        "USD",
+        "America/New_York",
+        SecretRef::new("vault-ref-2"),
+        Some(test_actor()),
+        now,
+    )
+    .unwrap();
+    conn2.apply_credentials(
+        Some("Account 2".to_string()),
+        vec!["ads.read".to_string()],
+        None,
+    );
+    conn2.record_permanent_refresh_failure(
+        SyncError::new(
+            "revoked",
+            Some("token revoked".to_string()),
+            serde_json::Map::new(),
+        )
+        .unwrap(),
+    );
+
+    let mut scope1 = manager.begin_for(tenant_1.as_i64()).await.unwrap();
+    connections_repo.upsert(&mut scope1, &conn1).await.unwrap();
+    scope1.commit().await.unwrap();
+
+    let mut scope2 = manager.begin_for(tenant_2.as_i64()).await.unwrap();
+    connections_repo.upsert(&mut scope2, &conn2).await.unwrap();
+    scope2.commit().await.unwrap();
+
+    let health_service = GetPlatformAdsHealth::new(
+        manager.clone(),
+        connections_repo.clone(),
+        platforms.clone(),
+        6.0,
+    );
+
+    let report = health_service.execute().await.unwrap();
+
+    // Verify platform status counts
+    let count = report
+        .platform_counts
+        .iter()
+        .find(|c| c.platform == platform.as_str())
+        .expect("platform count present");
+    assert_eq!(count.active, 1);
+    assert_eq!(count.disconnected, 1);
+    assert_eq!(count.total, 2);
+
+    // Verify connections needing attention (conn2 is disconnected and missing scopes)
+    assert!(
+        report
+            .connections_needing_attention
+            .iter()
+            .any(|a| a.connection_id == conn2.id() && a.reconnect_required)
+    );
+
+    // Verify freshness summary
+    assert_eq!(report.freshness_summary.total_connections, 2);
+    assert!(report.freshness_summary.worst_lag_hours.is_some());
+}
+
+#[tokio::test]
+async fn test_scheduled_token_refresh_sweep_success_and_revocation() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "token-refresh-tenant").await;
+    let connections_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let metrics = Arc::new(sanvi_advertising::adapters::AdvertisingMetrics::default());
+
+    let platform = FakeAdPlatform::fixtures()[0].key.clone();
+    let now = Utc::now();
+
+    // Active connection whose last_synced_at is 2 hours ago (> 1 hour stale threshold)
+    let mut conn = AdvertisingConnection::new(
+        sanvi_advertising::domain::model::ConnectionId::try_from(1_222_001_i64).unwrap(),
+        tenant_id,
+        platform.clone(),
+        "ext-act-refresh",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-refresh"),
+        Some(test_actor()),
+        now - Duration::hours(2),
+    )
+    .unwrap();
+    conn.apply_credentials(
+        Some("Account Refresh".to_string()),
+        vec!["ads.read".to_string(), "ads.manage".to_string()],
+        None,
+    );
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    connections_repo.upsert(&mut scope, &conn).await.unwrap();
+    scope.commit().await.unwrap();
+
+    // A provider that mints, then one that reports the credential is gone.
+    struct StubProvider(Result<String, sanvi_advertising::domain::AdvertisingError>);
+    #[async_trait::async_trait]
+    impl sanvi_advertising::domain::ConnectionAccessTokenProvider for StubProvider {
+        async fn access_token(
+            &self,
+            _connection: &sanvi_advertising::domain::ConnectionHandle,
+        ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
+            self.0.clone()
+        }
+    }
+
+    let providers_ok: std::collections::HashMap<
+        sanvi_advertising::PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::from([(
+        platform.clone(),
+        Arc::new(StubProvider(Ok("ya29.minted".to_string())))
+            as Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    )]);
+
+    let sweep = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        providers_ok,
+        metrics.clone(),
+        3600,
+    );
+
+    let report = sweep.execute(10).await.unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.refreshed, 1);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.skipped, 0);
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let updated = connections_repo
+        .find_by_id(&mut scope, tenant_id, conn.id())
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert!(updated.last_synced_at().unwrap() >= now - Duration::seconds(10));
+
+    // A platform with no configured provider is skipped, never counted as a
+    // failing credential.
+    let bare = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        std::collections::HashMap::new(),
+        metrics.clone(),
+        0,
+    );
+    let report = bare.execute(10).await.unwrap();
+    assert_eq!(report.skipped, report.checked);
+    assert_eq!(report.failed, 0);
+
+    // A missing stored credential is the one failure that disconnects, pauses
+    // dependent jobs, and marks the tenant notified.
+    let providers_missing: std::collections::HashMap<
+        sanvi_advertising::PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::from([(
+        platform.clone(),
+        Arc::new(StubProvider(Err(
+            sanvi_advertising::domain::AdvertisingError::ConnectionTokenMissing,
+        ))) as Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    )]);
+    let revoking = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        providers_missing,
+        metrics.clone(),
+        0,
+    );
+    let report = revoking.execute(10).await.unwrap();
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.refreshed, 0);
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let after = connections_repo
+        .find_by_id(&mut scope, tenant_id, conn.id())
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(
+        after.status(),
+        sanvi_advertising::domain::ConnectionStatus::Disconnected
+    );
+
+    // An outage must NOT disconnect: the grant cannot tell invalid_grant from
+    // a 503 yet, so only the unambiguous signal above may pause a tenant.
+    let mut recovered = after;
+    recovered.record_refresh_success(None, Utc::now());
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    connections_repo
+        .update(&mut scope, &recovered)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let providers_outage: std::collections::HashMap<
+        sanvi_advertising::PlatformKey,
+        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    > = std::collections::HashMap::from([(
+        platform.clone(),
+        Arc::new(StubProvider(Err(
+            sanvi_advertising::domain::AdvertisingError::PlatformUnavailable("503".to_string()),
+        ))) as Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
+    )]);
+    let outage = RunTokenRefresh::new(
+        manager.clone(),
+        connections_repo.clone(),
+        providers_outage,
+        metrics.clone(),
+        0,
+    );
+    assert_eq!(outage.execute(10).await.unwrap().failed, 1);
+
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let still_active = connections_repo
+        .find_by_id(&mut scope, tenant_id, conn.id())
+        .await
+        .unwrap()
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(
+        still_active.status(),
+        sanvi_advertising::domain::ConnectionStatus::Active
+    );
 }
 
 /// The vault-backed provider is the seam a real adapter uses on every call:
@@ -3964,6 +4267,7 @@ async fn vault_access_token_provider_mints_and_caches_a_token_per_connection() {
     let handle = ConnectionHandle {
         id: connection_id.to_string(),
         tenant_id,
+        external_account_id: connection_id.to_string(),
     };
 
     let first = provider.access_token(&handle).await.unwrap();
@@ -3985,6 +4289,7 @@ async fn vault_access_token_provider_mints_and_caches_a_token_per_connection() {
         id: ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap())
             .to_string(),
         tenant_id,
+        external_account_id: String::new(),
     };
     assert!(provider.access_token(&unknown).await.is_err());
 }

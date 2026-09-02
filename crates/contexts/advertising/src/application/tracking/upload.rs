@@ -230,6 +230,7 @@ impl UploadPendingConversions {
                     let handle = ConnectionHandle {
                         id: conn.id().to_string(),
                         tenant_id: conn.tenant_id(),
+                        external_account_id: conn.external_account_id().to_string(),
                     };
                     sink.upload(&handle, &event).await
                 } else {

@@ -33,6 +33,10 @@ pub enum AdvertisingError {
     ConnectionNotActive,
     #[error("advertising connection not found")]
     ConnectionNotFound,
+    /// The connection exists but its stored refresh token does not. The tenant
+    /// must reconnect; no retry can recover a credential that is not there.
+    #[error("advertising connection has no stored credential")]
+    ConnectionTokenMissing,
     #[error("campaign is not yet published")]
     CampaignNotPublished,
     #[error("ad group not found")]
@@ -95,6 +99,7 @@ impl AdvertisingError {
             Self::EncryptionUnconfigured => "encryption_unconfigured",
             Self::EncryptionFailure(_) => "encryption_failure",
             Self::IdGeneration(_) => "id_generation",
+            Self::ConnectionTokenMissing => "connection_token_missing",
         }
     }
 }
@@ -159,6 +164,25 @@ pub trait AdvertisingConnectionRepository: Send + Sync {
     async fn list_due_for_metrics_ingestion(
         &self,
         scope: &mut PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
+
+    /// Cross-tenant, every connection across tenants, for platform health
+    /// reporting and for enumerating the tenants a cross-tenant sweep must
+    /// visit. Bounded like every other cross-tenant read here: the caller says
+    /// how many rows it is willing to hold.
+    async fn list_all_for_platform_scope(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: i64,
+    ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
+
+    /// Cross-tenant, due for OAuth token refresh: active connections whose
+    /// token is expiring or whose `last_synced_at` is stale.
+    async fn list_due_for_token_refresh(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        stale_after_secs: i64,
         limit: i64,
     ) -> Result<Vec<AdvertisingConnection>, AdvertisingError>;
 }

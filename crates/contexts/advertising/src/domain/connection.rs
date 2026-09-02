@@ -388,7 +388,7 @@ impl AdvertisingConnection {
     pub(crate) fn timezone(&self) -> &str {
         &self.timezone
     }
-    pub(crate) fn status(&self) -> ConnectionStatus {
+    pub fn status(&self) -> ConnectionStatus {
         self.status
     }
     pub(crate) fn token_ref(&self) -> &SecretRef {
@@ -403,7 +403,7 @@ impl AdvertisingConnection {
     pub(crate) fn token_expires_at(&self) -> Option<DateTime<Utc>> {
         self.token_expires_at
     }
-    pub(crate) fn last_synced_at(&self) -> Option<DateTime<Utc>> {
+    pub fn last_synced_at(&self) -> Option<DateTime<Utc>> {
         self.last_synced_at
     }
     pub(crate) fn last_metrics_ingested_at(&self) -> Option<DateTime<Utc>> {

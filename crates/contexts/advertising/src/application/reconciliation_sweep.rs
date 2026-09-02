@@ -13,7 +13,10 @@ use serde::Serialize;
 
 use crate::{
     application::{PlatformRegistry, ReconcileCampaign},
-    domain::{AdvertisingError, CampaignRepository, ConnectionHandle, ReconciliationResult},
+    domain::{
+        AdvertisingConnectionRepository, AdvertisingError, CampaignRepository, ConnectionHandle,
+        ReconciliationResult,
+    },
 };
 
 const ACTOR: &str = "advertising-reconciler";
@@ -34,6 +37,7 @@ pub struct ReconciliationSweepReport {
 pub struct ReconcileDueCampaigns {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     platforms: Arc<PlatformRegistry>,
     reconcile: Arc<ReconcileCampaign>,
 }
@@ -42,15 +46,43 @@ impl ReconcileDueCampaigns {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         platforms: Arc<PlatformRegistry>,
         reconcile: Arc<ReconcileCampaign>,
     ) -> Self {
         Self {
             tx,
             campaigns,
+            connections,
             platforms,
             reconcile,
         }
+    }
+
+    async fn load_handle(
+        &self,
+        tenant_id: sanvi_kernel::TenantId,
+        connection_id: crate::domain::ConnectionId,
+    ) -> Result<ConnectionHandle, AdvertisingError> {
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        let connection = self
+            .connections
+            .find_by_id(&mut scope, tenant_id, connection_id)
+            .await?
+            .ok_or(AdvertisingError::ConnectionNotFound)?;
+        scope
+            .rollback()
+            .await
+            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        Ok(ConnectionHandle {
+            id: connection.id().to_string(),
+            tenant_id: connection.tenant_id(),
+            external_account_id: connection.external_account_id().to_string(),
+        })
     }
 
     /// Pull up to `limit` published campaigns, oldest-checked-first, and
@@ -95,9 +127,24 @@ impl ReconcileDueCampaigns {
                     continue;
                 }
             };
-            let handle = ConnectionHandle {
-                id: stored.connection_id.to_string(),
-                tenant_id: stored.tenant_id,
+            // The campaign row carries only the `ConnectionId`; the platform's
+            // own account id lives on the connection aggregate, so this sweep
+            // loads it per campaign in the campaign's own tenant scope rather
+            // than addressing the adapter with an id no platform recognises.
+            let handle = match self
+                .load_handle(stored.tenant_id, stored.connection_id)
+                .await
+            {
+                Ok(handle) => handle,
+                Err(error) => {
+                    tracing::warn!(
+                        campaign_id = %stored.id,
+                        %error,
+                        "advertising reconciliation skipped: connection unavailable"
+                    );
+                    report.errors += 1;
+                    continue;
+                }
             };
             match adapter.get_campaign(&handle, external_id).await {
                 Ok(Some(remote)) => {
