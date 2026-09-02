@@ -1033,10 +1033,10 @@ mod tests {
             // Each row opens with `('<data_class>', ...`.
             for row in body.split('(').skip(1) {
                 let trimmed = row.trim_start();
-                if let Some(rest) = trimmed.strip_prefix('\'') {
-                    if let Some((class, _)) = rest.split_once('\'') {
-                        classes.push(class.to_string());
-                    }
+                if let Some(rest) = trimmed.strip_prefix('\'')
+                    && let Some((class, _)) = rest.split_once('\'')
+                {
+                    classes.push(class.to_string());
                 }
             }
         }
