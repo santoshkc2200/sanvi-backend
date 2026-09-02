@@ -145,6 +145,7 @@ impl RetractWithdrawnConversions {
                 let retract_result = if let Some(conn) = active_conn {
                     let handle = ConnectionHandle {
                         id: conn.id().to_string(),
+                        tenant_id: conn.tenant_id(),
                     };
                     sink.retract(&handle, &event).await
                 } else {

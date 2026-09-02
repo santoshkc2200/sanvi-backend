@@ -97,6 +97,7 @@ impl ReconcileDueCampaigns {
             };
             let handle = ConnectionHandle {
                 id: stored.connection_id.to_string(),
+                tenant_id: stored.tenant_id,
             };
             match adapter.get_campaign(&handle, external_id).await {
                 Ok(Some(remote)) => {

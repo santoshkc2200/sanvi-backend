@@ -977,6 +977,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     let adapter = registry.adapter(&platform_key).unwrap();
     let handle = sanvi_advertising::ConnectionHandle {
         id: connection_id.to_string(),
+        tenant_id,
     };
     adapter.pause_campaign(&handle, &external_id).await.unwrap();
 
@@ -1332,6 +1333,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let adapter = registry.adapter(&meta_key).unwrap();
     let conn_handle = sanvi_advertising::domain::ConnectionHandle {
         id: format!("act_{connection_id}"),
+        tenant_id,
     };
     let mut remote = adapter
         .get_campaign(&conn_handle, published.external_id.as_deref().unwrap())
@@ -3878,4 +3880,111 @@ async fn revenue_join_attributes_single_campaign_and_parks_ambiguous_revenue_at_
     .await
     .unwrap();
     assert_eq!(unattributed_bucket, 9_000);
+}
+
+/// The vault-backed provider is the seam a real adapter uses on every call:
+/// tenant from the handle, refresh token from the vault, access token from the
+/// platform's grant — and never the connection id as a credential.
+#[tokio::test]
+async fn vault_access_token_provider_mints_and_caches_a_token_per_connection() {
+    use sanvi_advertising::adapters::{SqlxConnectionTokenRepository, SqlxTenantEnvelopeCrypto};
+    use sanvi_advertising::application::VaultAccessTokenProvider;
+    use sanvi_advertising::domain::{
+        ConnectionAccessTokenProvider, ConnectionHandle, GrantedAccessToken, RefreshTokenGrant,
+        TokenVault,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingGrant {
+        calls: AtomicUsize,
+        seen_refresh_tokens: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl RefreshTokenGrant for CountingGrant {
+        async fn exchange_refresh_token(
+            &self,
+            refresh_token: &str,
+        ) -> Result<GrantedAccessToken, sanvi_advertising::domain::AdvertisingError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen_refresh_tokens
+                .lock()
+                .unwrap()
+                .push(refresh_token.to_string());
+            Ok(GrantedAccessToken {
+                access_token: format!("ya29.minted_from_{refresh_token}"),
+                expires_at: Some(Utc::now() + Duration::seconds(3600)),
+            })
+        }
+    }
+
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "advertising-access-tokens").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let vault = Arc::new(TokenVault::new(
+        Arc::new(SqlxTenantEnvelopeCrypto::new(
+            [7u8; 32],
+            "test-kek".to_string(),
+        )),
+        Arc::new(SqlxConnectionTokenRepository::new()),
+    ));
+
+    let connection_id =
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO advertising.connections
+         (id, tenant_id, platform, external_account_id, currency, timezone, status, token_ref)
+         VALUES ($1, $2, 'google_ads', $3, 'JPY', 'Asia/Tokyo', 'active', 'secret-ref')",
+    )
+    .bind(connection_id.as_i64())
+    .bind(tenant_id.as_i64())
+    .bind(format!("acct-{connection_id}"))
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    vault
+        .store_refresh_token(
+            &mut scope,
+            tenant_id,
+            connection_id,
+            "1//04_stored_refresh_token",
+        )
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let grant = Arc::new(CountingGrant {
+        calls: AtomicUsize::new(0),
+        seen_refresh_tokens: std::sync::Mutex::new(Vec::new()),
+    });
+    let provider = VaultAccessTokenProvider::new(tx.clone(), vault.clone(), grant.clone());
+    let handle = ConnectionHandle {
+        id: connection_id.to_string(),
+        tenant_id,
+    };
+
+    let first = provider.access_token(&handle).await.unwrap();
+    assert_eq!(first, "ya29.minted_from_1//04_stored_refresh_token");
+    // The decrypted refresh token reached the grant, and only the grant.
+    assert_eq!(
+        grant.seen_refresh_tokens.lock().unwrap().as_slice(),
+        ["1//04_stored_refresh_token"]
+    );
+
+    // A second call inside the token's lifetime is served from cache: no
+    // second vault read, no second grant.
+    let second = provider.access_token(&handle).await.unwrap();
+    assert_eq!(second, first);
+    assert_eq!(grant.calls.load(Ordering::SeqCst), 1);
+
+    // An id with no stored token fails instead of returning something usable.
+    let unknown = ConnectionHandle {
+        id: ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap())
+            .to_string(),
+        tenant_id,
+    };
+    assert!(provider.access_token(&unknown).await.is_err());
 }

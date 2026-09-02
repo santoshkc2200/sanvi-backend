@@ -82,9 +82,10 @@ async fn load_active_connection(
     Ok(connection)
 }
 
-fn connection_handle(connection_id: ConnectionId) -> ConnectionHandle {
+fn connection_handle(tenant_id: TenantId, connection_id: ConnectionId) -> ConnectionHandle {
     ConnectionHandle {
         id: connection_id.to_string(),
+        tenant_id,
     }
 }
 
@@ -481,7 +482,7 @@ where
         candidate.id = external_id.clone();
         let remote = adapter
             .update_campaign(
-                &connection_handle(stored.connection_id),
+                &connection_handle(tenant_id, stored.connection_id),
                 candidate.clone(),
                 mutation_id,
             )
@@ -1183,7 +1184,7 @@ impl PublishCampaign {
         published.status = crate::domain::CampaignStatus::Active;
         let remote = adapter
             .create_campaign(
-                &connection_handle(stored.connection_id),
+                &connection_handle(tenant_id, stored.connection_id),
                 published,
                 mutation_id,
             )
@@ -1302,7 +1303,7 @@ impl SetCampaignRunState {
             .ok_or(AdvertisingError::CampaignNotPublished)?;
         let adapter = self.platforms.adapter(&stored.platform)?;
         let before = stored.intent.clone();
-        let handle = connection_handle(stored.connection_id);
+        let handle = connection_handle(tenant_id, stored.connection_id);
         let (remote, event) = match direction {
             PauseOrResume::Pause => (
                 adapter.pause_campaign(&handle, &external_id).await?,
