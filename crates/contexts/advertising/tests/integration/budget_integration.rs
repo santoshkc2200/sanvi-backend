@@ -128,6 +128,7 @@ async fn seed_connection_and_campaign(
                 &sanvi_advertising::domain::ConnectionHandle {
                     id: format!("acct-{conn_id}"),
                     tenant_id,
+                    external_account_id: format!("acct-{conn_id}"),
                 },
                 campaign_intent,
                 uuid::Uuid::new_v4(),
@@ -210,6 +211,7 @@ impl TestHarness {
         let pause_campaign = Arc::new(PauseCampaign::new(
             tx.clone(),
             campaigns_repo.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             platforms.clone(),
             ids.clone(),
@@ -218,6 +220,7 @@ impl TestHarness {
         let resume_campaign = Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns_repo.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
             events.clone(),
             platforms.clone(),
             ids.clone(),

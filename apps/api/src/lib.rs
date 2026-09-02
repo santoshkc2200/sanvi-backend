@@ -2999,6 +2999,7 @@ pub async fn build_advertising_state(
         std::sync::Arc::new(sanvi_advertising::application::PauseCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3063,6 +3064,7 @@ pub async fn build_advertising_state(
         resolve_campaign_drift: std::sync::Arc::new(ResolveCampaignDrift::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3086,6 +3088,7 @@ pub async fn build_advertising_state(
         patch_campaign: std::sync::Arc::new(PatchCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -3094,6 +3097,7 @@ pub async fn build_advertising_state(
         publish_campaign: std::sync::Arc::new(PublishCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -3103,6 +3107,7 @@ pub async fn build_advertising_state(
         resume_campaign: std::sync::Arc::new(ResumeCampaign::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3114,6 +3119,7 @@ pub async fn build_advertising_state(
         add_ad_group: std::sync::Arc::new(AddAdGroup::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3121,6 +3127,7 @@ pub async fn build_advertising_state(
         update_ad_group: std::sync::Arc::new(UpdateAdGroup::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             events.clone(),
             registry.clone(),
             advertising_ids.clone(),
@@ -3128,6 +3135,7 @@ pub async fn build_advertising_state(
         add_ad: std::sync::Arc::new(AddAd::new(
             tx.clone(),
             campaigns.clone(),
+            connections.clone(),
             creatives.clone(),
             events.clone(),
             registry.clone(),
@@ -3136,6 +3144,7 @@ pub async fn build_advertising_state(
         update_ad: std::sync::Arc::new(UpdateAd::new(
             tx.clone(),
             campaigns,
+            connections.clone(),
             creatives.clone(),
             events,
             registry.clone(),

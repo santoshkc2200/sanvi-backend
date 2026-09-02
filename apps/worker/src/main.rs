@@ -1779,14 +1779,15 @@ async fn main() -> ExitCode {
         advertising_events.clone(),
         advertising_ids.clone(),
     ));
+    let advertising_connections: Arc<dyn AdvertisingConnectionRepository> =
+        Arc::new(SqlxAdvertisingConnectionRepository::new());
     let advertising_reconciliation_sweep = Arc::new(ReconcileDueCampaigns::new(
         tx_manager.clone(),
         advertising_campaigns.clone(),
+        advertising_connections.clone(),
         advertising_platforms.clone(),
         advertising_reconcile_campaign,
     ));
-    let advertising_connections: Arc<dyn AdvertisingConnectionRepository> =
-        Arc::new(SqlxAdvertisingConnectionRepository::new());
     let mut advertising_conversion_sinks: std::collections::BTreeMap<
         PlatformKey,
         Arc<dyn ConversionSinkPort>,
@@ -1909,6 +1910,29 @@ async fn main() -> ExitCode {
                     }
                 }
             }
+            if config.advertising.meta_client_id.is_empty() {
+                tracing::info!(
+                    "advertising token refresh: meta oauth client not configured, skipping"
+                );
+            } else {
+                match sanvi_advertising::adapters::MetaRefreshTokenGrant::new(&config.advertising) {
+                    Ok(grant) => {
+                        advertising_token_providers.insert(
+                            PlatformKey::parse("meta").expect("static platform key"),
+                            Arc::new(
+                                sanvi_advertising::application::VaultAccessTokenProvider::new(
+                                    tx_manager.clone(),
+                                    token_vault.clone(),
+                                    Arc::new(grant),
+                                ),
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "advertising token refresh: meta grant unavailable");
+                    }
+                }
+            }
         }
         Err(error) => {
             // Without the KEK nothing can decrypt a stored refresh token; the
@@ -1948,6 +1972,7 @@ async fn main() -> ExitCode {
     let advertising_pause_campaign = Arc::new(sanvi_advertising::application::PauseCampaign::new(
         tx_manager.clone(),
         advertising_campaigns.clone(),
+        advertising_connections.clone(),
         advertising_events.clone(),
         advertising_platforms.clone(),
         advertising_ids.clone(),
@@ -1956,6 +1981,7 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_advertising::application::ResumeCampaign::new(
             tx_manager.clone(),
             advertising_campaigns.clone(),
+            advertising_connections.clone(),
             advertising_events.clone(),
             advertising_platforms.clone(),
             advertising_ids.clone(),

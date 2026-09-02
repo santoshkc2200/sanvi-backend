@@ -723,6 +723,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -731,6 +732,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -739,6 +741,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let pause = PauseCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -746,6 +749,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     let resume = ResumeCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry,
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -934,6 +938,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
@@ -945,7 +950,13 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
         events,
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
     ));
-    let sweep = ReconcileDueCampaigns::new(manager, campaigns, registry.clone(), reconcile);
+    let sweep = ReconcileDueCampaigns::new(
+        manager,
+        campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
+        registry.clone(),
+        reconcile,
+    );
 
     let draft = create
         .execute(
@@ -978,6 +989,7 @@ async fn reconciliation_sweep_detects_native_platform_pause_as_drift_without_res
     let handle = sanvi_advertising::ConnectionHandle {
         id: connection_id.to_string(),
         tenant_id,
+        external_account_id: connection_id.to_string(),
     };
     adapter.pause_campaign(&handle, &external_id).await.unwrap();
 
@@ -1048,6 +1060,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1055,6 +1068,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let update_ad_group = UpdateAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1062,6 +1076,7 @@ async fn ad_group_and_ad_sub_resources_append_and_update_within_the_campaign_tre
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -1252,6 +1267,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         events.clone(),
         registry.clone(),
@@ -1260,6 +1276,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1273,6 +1290,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let sweep = ReconcileDueCampaigns::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         registry.clone(),
         reconcile,
     );
@@ -1334,6 +1352,7 @@ async fn reconciliation_sweep_detects_natively_paused_meta_ad_set_as_drift() {
     let conn_handle = sanvi_advertising::domain::ConnectionHandle {
         id: format!("act_{connection_id}"),
         tenant_id,
+        external_account_id: format!("act_{connection_id}"),
     };
     let mut remote = adapter
         .get_campaign(&conn_handle, published.external_id.as_deref().unwrap())
@@ -1623,6 +1642,7 @@ async fn add_ad_rejects_missing_creative_id() {
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1630,6 +1650,7 @@ async fn add_ad_rejects_missing_creative_id() {
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives,
         events,
         registry,
@@ -1786,6 +1807,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -1793,6 +1815,7 @@ async fn add_ad_rejects_creative_placement_mismatch_or_unsupported() {
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -2015,6 +2038,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -2022,6 +2046,7 @@ async fn add_ad_rejects_creative_platform_mismatch_even_when_placement_name_over
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -2186,6 +2211,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let add_ad_group = AddAdGroup::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         events.clone(),
         registry.clone(),
         Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
@@ -2193,6 +2219,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let add_ad = AddAd::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -2201,6 +2228,7 @@ async fn add_ad_and_update_ad_persist_stored_creative_content_authoritatively() 
     let update_ad = UpdateAd::new(
         manager.clone(),
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry,
@@ -2425,6 +2453,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry.clone(),
@@ -2800,6 +2829,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events,
         registry.clone(),
@@ -3054,6 +3084,7 @@ async fn deleting_referenced_creative_fails_publish() {
     let patch = PatchCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -3062,6 +3093,7 @@ async fn deleting_referenced_creative_fails_publish() {
     let publish = PublishCampaign::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -3071,6 +3103,7 @@ async fn deleting_referenced_creative_fails_publish() {
     let update_ad = UpdateAd::new(
         manager.clone(),
         campaigns.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         creatives.clone(),
         events.clone(),
         registry.clone(),
@@ -3292,6 +3325,7 @@ async fn create_connection_and_published_campaign(
     let publish = PublishCampaign::new(
         manager,
         campaigns,
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         events,
         registry,
@@ -3804,6 +3838,7 @@ async fn revenue_join_attributes_single_campaign_and_parks_ambiguous_revenue_at_
     let publish = PublishCampaign::new(
         manager_b.clone(),
         campaigns_b.clone(),
+        Arc::new(SqlxAdvertisingConnectionRepository::new()),
         Arc::new(SqlxCreativeRepository::new()),
         Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
         platforms_b.clone(),
@@ -4232,6 +4267,7 @@ async fn vault_access_token_provider_mints_and_caches_a_token_per_connection() {
     let handle = ConnectionHandle {
         id: connection_id.to_string(),
         tenant_id,
+        external_account_id: connection_id.to_string(),
     };
 
     let first = provider.access_token(&handle).await.unwrap();
@@ -4253,6 +4289,7 @@ async fn vault_access_token_provider_mints_and_caches_a_token_per_connection() {
         id: ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap())
             .to_string(),
         tenant_id,
+        external_account_id: String::new(),
     };
     assert!(provider.access_token(&unknown).await.is_err());
 }

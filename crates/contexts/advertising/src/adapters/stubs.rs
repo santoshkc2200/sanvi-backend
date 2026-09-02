@@ -908,6 +908,7 @@ mod tests {
         let connection = ConnectionHandle {
             id: "conn-1".to_string(),
             tenant_id: handle_tenant(),
+            external_account_id: "conn-1".to_string(),
         };
         let event = sample_conversion_event("evt-upload-1");
 
@@ -939,6 +940,7 @@ mod tests {
         let connection = ConnectionHandle {
             id: "conn-1".to_string(),
             tenant_id: handle_tenant(),
+            external_account_id: "conn-1".to_string(),
         };
         let event = sample_conversion_event("evt-err-1");
 
@@ -1006,6 +1008,7 @@ mod tests {
         let connection = ConnectionHandle {
             id: "conn-google".to_string(),
             tenant_id: handle_tenant(),
+            external_account_id: "conn-google".to_string(),
         };
 
         let google_ads = PlatformKey::parse("google_ads").unwrap();
@@ -1045,6 +1048,7 @@ mod tests {
         let connection = ConnectionHandle {
             id: "conn-1".to_string(),
             tenant_id: handle_tenant(),
+            external_account_id: "conn-1".to_string(),
         };
         let event = sample_conversion_event("evt-retract-err");
 

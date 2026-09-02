@@ -159,6 +159,7 @@ pub async fn sync_single_audience(
         Some(conn) => ConnectionHandle {
             id: conn.id().to_string(),
             tenant_id: conn.tenant_id(),
+            external_account_id: conn.external_account_id().to_string(),
         },
         None => {
             if fail_on_missing_connection {

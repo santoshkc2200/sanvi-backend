@@ -105,6 +105,7 @@ impl RunTokenRefresh {
             let handle = ConnectionHandle {
                 id: connection.id().to_string(),
                 tenant_id,
+                external_account_id: connection.external_account_id().to_string(),
             };
 
             let now = Utc::now();

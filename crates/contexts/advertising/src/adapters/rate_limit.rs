@@ -445,6 +445,7 @@ mod tests {
                 let connection = ConnectionHandle {
                     id: "connection-a".to_string(),
                     tenant_id: handle_tenant(),
+                    external_account_id: "connection-a".to_string(),
                 };
                 limited
                     .create_campaign(
@@ -487,6 +488,7 @@ mod tests {
                 let connection = ConnectionHandle {
                     id: "connection-a".to_string(),
                     tenant_id: handle_tenant(),
+                    external_account_id: "connection-a".to_string(),
                 };
                 limited
                     .create_campaign(
@@ -505,6 +507,7 @@ mod tests {
         let connection_b = ConnectionHandle {
             id: "connection-b".to_string(),
             tenant_id: handle_tenant(),
+            external_account_id: "connection-b".to_string(),
         };
         limited
             .create_campaign(&connection_b, draft_campaign("b0"), Uuid::now_v7())
@@ -625,6 +628,7 @@ mod tests {
                 let connection = ConnectionHandle {
                     id: "connection-meta-1".to_string(),
                     tenant_id: handle_tenant(),
+                    external_account_id: "connection-meta-1".to_string(),
                 };
                 meta_adapter
                     .create_campaign(
@@ -649,6 +653,7 @@ mod tests {
                 let connection = ConnectionHandle {
                     id: "connection-google-1".to_string(),
                     tenant_id: handle_tenant(),
+                    external_account_id: "connection-google-1".to_string(),
                 };
                 google_adapter
                     .create_campaign(

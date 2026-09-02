@@ -249,6 +249,20 @@ pub struct ConnectionHandle {
     /// connection id alone, which means an RLS bypass on a live request path.
     #[schema(value_type = i64)]
     pub tenant_id: TenantId,
+    /// The *platform's* own account identifier for this connection, in whatever
+    /// shape that platform's adapter expects. It travels with the handle for the
+    /// same reason `tenant_id` does: every account-scoped adapter call addresses
+    /// this id, and `id` above is the Sanvi `ConnectionId`, which no platform has
+    /// ever heard of. Resolving it inside an adapter would mean a tenant-scoped
+    /// read no `AdPlatformPort` method carries a scope for.
+    ///
+    /// Empty **only** on the transient handle the authorization endpoints use
+    /// before any account has been selected (see
+    /// `application::connections::transient_handle`). An adapter method that
+    /// addresses an account must reject an empty value rather than build a URL
+    /// around it.
+    #[serde(default)]
+    pub external_account_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

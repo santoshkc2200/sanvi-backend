@@ -17,8 +17,9 @@ use uuid::Uuid;
 use crate::{
     application::PlatformRegistry,
     domain::{
-        AdEvent, AdvertisingError, Campaign, CampaignChange, CampaignReconciliationState,
-        CampaignRepository, ChangeSource, ConnectionHandle, EventPublisher, StoredCampaign,
+        AdEvent, AdvertisingConnectionRepository, AdvertisingError, Campaign, CampaignChange,
+        CampaignReconciliationState, CampaignRepository, ChangeSource, ConnectionHandle,
+        EventPublisher, StoredCampaign,
     },
 };
 
@@ -39,6 +40,7 @@ pub struct ResolvedCampaignDrift {
 pub struct ResolveCampaignDrift {
     tx: TxManager,
     campaigns: Arc<dyn CampaignRepository>,
+    connections: Arc<dyn AdvertisingConnectionRepository>,
     events: Arc<dyn EventPublisher>,
     platforms: Arc<PlatformRegistry>,
     ids: Arc<dyn crate::domain::IdGenerator>,
@@ -48,6 +50,7 @@ impl ResolveCampaignDrift {
     pub fn new(
         tx: TxManager,
         campaigns: Arc<dyn CampaignRepository>,
+        connections: Arc<dyn AdvertisingConnectionRepository>,
         events: Arc<dyn EventPublisher>,
         platforms: Arc<PlatformRegistry>,
         ids: Arc<dyn crate::domain::IdGenerator>,
@@ -55,6 +58,7 @@ impl ResolveCampaignDrift {
         Self {
             tx,
             campaigns,
+            connections,
             events,
             platforms,
             ids,
@@ -108,9 +112,17 @@ impl ResolveCampaignDrift {
                 let adapter = self.platforms.adapter(&stored.platform)?;
                 let remote = adapter
                     .update_campaign(
-                        &ConnectionHandle {
-                            id: stored.connection_id.to_string(),
-                            tenant_id,
+                        &{
+                            let connection = self
+                                .connections
+                                .find_by_id(&mut scope, tenant_id, stored.connection_id)
+                                .await?
+                                .ok_or(AdvertisingError::ConnectionNotFound)?;
+                            ConnectionHandle {
+                                id: connection.id().to_string(),
+                                tenant_id: connection.tenant_id(),
+                                external_account_id: connection.external_account_id().to_string(),
+                            }
                         },
                         state.intent.clone(),
                         mutation_id,

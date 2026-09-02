@@ -10,12 +10,20 @@ Sanvi pins external ad platform API versions in `configs/base.toml`:
 - `advertising.meta_api_version = "v24.0"`
 
 > [!NOTE]
-> **Adapter credential status**: Live Google Ads and Meta API adapters are currently
-> blocked on upstream developer-token approvals and app review (see `docs/tasks/backlog.md`
-> TASK-011/012/013/015 rows). The primary fixture mechanism used for API version drills
-> is `FakeAdPlatform` (`crates/contexts/advertising/src/adapters/stubs.rs`) and the
-> canonical capability fixture dataset in `crates/contexts/advertising/fixtures/capability-matrices.json`.
-> Once live credentials are wired, live sandbox recorded corpora will supplement these fixtures.
+> **Adapter status**: Real Google Ads (`GoogleAdsAdapter`) and Meta Marketing API
+> (`MetaAdsAdapter`) REST adapters now exist under
+> `crates/contexts/advertising/src/adapters/`, with mock-server unit coverage of every
+> request path, header, and response mapping. They are **not reachable at runtime yet**:
+> both `rate_limited_registry` call sites (`apps/api/src/lib.rs`, `apps/worker/src/main.rs`)
+> still register `FakeAdPlatform::registered_catalog()` only, and neither adapter can
+> resolve a tenant's external ad-account id — `ConnectionHandle` carries the Sanvi
+> `ConnectionId`, not `AdvertisingConnection::external_account_id`. Live-credential
+> verification therefore remains outstanding.
+>
+> The mock fixture `FakeAdPlatform` (`crates/contexts/advertising/src/adapters/stubs.rs`)
+> and the canonical capability fixture dataset in
+> `crates/contexts/advertising/fixtures/capability-matrices.json` remain the mechanism
+> for deterministic capability replay during drills.
 
 ## The drill
 
