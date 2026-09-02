@@ -36,9 +36,9 @@ pub use oauth_state::{
 };
 pub use ports::{
     AdPlatformPort, AdvertisingConnectionRepository, AdvertisingError, AuthorizationExchange,
-    AuthorizationRequest, AuthorizationStart, CreativeRepository, ExchangedAuthorization,
-    IdGenerator, MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor, StoredCreative,
-    UploadedConversion,
+    AuthorizationRequest, AuthorizationStart, ConnectionAccessTokenProvider, CreativeRepository,
+    ExchangedAuthorization, GrantedAccessToken, IdGenerator, MetricPoint, MetricQuery,
+    PlatformAccount, PlatformDescriptor, RefreshTokenGrant, StoredCreative, UploadedConversion,
 };
 pub use reconciliation::{CampaignReconciliationState, ReconciliationResult};
 pub use secrets::SecretRef;

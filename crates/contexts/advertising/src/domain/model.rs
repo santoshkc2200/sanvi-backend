@@ -243,6 +243,12 @@ pub struct Campaign {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConnectionHandle {
     pub id: String,
+    /// The owning tenant travels with the handle so a shared adapter can reach
+    /// tenant-scoped state (the OAuth token vault) without a cross-tenant read.
+    /// Without it a shared `AdPlatformPort` would have to resolve the tenant by
+    /// connection id alone, which means an RLS bypass on a live request path.
+    #[schema(value_type = i64)]
+    pub tenant_id: TenantId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

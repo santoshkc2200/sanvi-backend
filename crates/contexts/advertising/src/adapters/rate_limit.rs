@@ -286,6 +286,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    fn handle_tenant() -> sanvi_kernel::TenantId {
+        sanvi_kernel::TenantId::try_from(1_i64).unwrap()
+    }
+
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -440,6 +444,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let connection = ConnectionHandle {
                     id: "connection-a".to_string(),
+                    tenant_id: handle_tenant(),
                 };
                 limited
                     .create_campaign(
@@ -481,6 +486,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let connection = ConnectionHandle {
                     id: "connection-a".to_string(),
+                    tenant_id: handle_tenant(),
                 };
                 limited
                     .create_campaign(
@@ -498,6 +504,7 @@ mod tests {
         let start = tokio::time::Instant::now();
         let connection_b = ConnectionHandle {
             id: "connection-b".to_string(),
+            tenant_id: handle_tenant(),
         };
         limited
             .create_campaign(&connection_b, draft_campaign("b0"), Uuid::now_v7())
@@ -617,6 +624,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let connection = ConnectionHandle {
                     id: "connection-meta-1".to_string(),
+                    tenant_id: handle_tenant(),
                 };
                 meta_adapter
                     .create_campaign(
@@ -640,6 +648,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let connection = ConnectionHandle {
                     id: "connection-google-1".to_string(),
+                    tenant_id: handle_tenant(),
                 };
                 google_adapter
                     .create_campaign(

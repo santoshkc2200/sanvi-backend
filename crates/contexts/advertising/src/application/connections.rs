@@ -26,10 +26,12 @@ const OAUTH_STATE_TTL_MINUTES: i64 = 10;
 /// connection yet — a fresh id is a harmless placeholder no adapter is
 /// expected to interpret as anything durable.
 fn transient_handle(
+    tenant_id: TenantId,
     ids: &dyn crate::domain::IdGenerator,
 ) -> Result<ConnectionHandle, crate::domain::AdvertisingError> {
     Ok(ConnectionHandle {
         id: ids.next_connection_id()?.to_string(),
+        tenant_id,
     })
 }
 
@@ -78,7 +80,7 @@ impl StartAuthorization {
             .await?;
         let start = adapter
             .begin_authorization(
-                &transient_handle(self.ids.as_ref())?,
+                &transient_handle(tenant_id, self.ids.as_ref())?,
                 &AuthorizationRequest {
                     redirect_uri,
                     state: state.clone(),

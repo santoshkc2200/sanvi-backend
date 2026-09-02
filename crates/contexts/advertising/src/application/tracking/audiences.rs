@@ -158,6 +158,7 @@ pub async fn sync_single_audience(
     let handle = match active_conn {
         Some(conn) => ConnectionHandle {
             id: conn.id().to_string(),
+            tenant_id: conn.tenant_id(),
         },
         None => {
             if fail_on_missing_connection {

@@ -1,0 +1,21 @@
+{
+  "_comment": "Shapes transcribed from the published Google Ads v22 reference and are UNVERIFIED against the live API, pending developer-token approval.",
+  "error": {
+    "code": 401,
+    "message": "Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential.",
+    "status": "UNAUTHENTICATED",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.ads.googleads.v22.errors.GoogleAdsFailure",
+        "errors": [
+          {
+            "errorCode": {
+              "authenticationError": "NOT_ADS_USER"
+            },
+            "message": "User in the cookie is not a valid Ads user."
+          }
+        ]
+      }
+    ]
+  }
+}
