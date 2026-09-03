@@ -927,6 +927,11 @@ pub struct CheckoutConfigView {
     /// price in this currency; anything else is refused at creation.
     #[schema(example = "JPY")]
     pub currency: Option<String>,
+    /// Whether a checkout started now would have automatic tax applied,
+    /// read from the tenant's stored tax settings by the same rule the
+    /// session creation applies. The storefront renders its tax note from
+    /// this; it never assumes tax is on.
+    pub tax_enabled: bool,
 }
 
 /// `GET /api/v1/tenant/checkout/config` — the storefront's pre-flight.
@@ -938,7 +943,7 @@ pub struct CheckoutConfigView {
     tag = "payments",
     operation_id = "get_tenant_checkout_config",
     responses(
-        (status = 200, description = "Whether the tenant's connected account can accept payments, why not, and its settlement currency", body = CheckoutConfigView),
+        (status = 200, description = "Whether the tenant's connected account can accept payments, why not, its settlement currency, and whether automatic tax applies", body = CheckoutConfigView),
         (status = 403, description = "Missing payments.checkout permission or the entitlement", body = ProblemDetail),
         (status = 503, description = "The payments.checkout flag is off (payments/provider-unavailable)", body = ProblemDetail)
     )
@@ -965,6 +970,7 @@ pub async fn get_tenant_checkout_config(
             can_accept_payments: readiness.can_accept_payments,
             cannot_accept_reason: readiness.cannot_accept_reason,
             currency: readiness.currency,
+            tax_enabled: readiness.tax_enabled,
         }))
 }
 

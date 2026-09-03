@@ -5213,4 +5213,31 @@ async fn the_checkout_config_answers_readiness_before_a_buyer_clicks_pay() {
         serde_json::json!(connection.default_currency),
         "the currency the buy path pre-flights against"
     );
+    assert_eq!(
+        view["tax_enabled"], false,
+        "an active connection with no tax settings collects no tax"
+    );
+
+    // Enabling automatic tax flips the flag the storefront's tax note is
+    // drawn from, so the buyer is told what the session will actually do.
+    provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(2),
+        ..FakeScript::default()
+    });
+    enable_tax(&pool, &provider, ready).await.unwrap();
+    let app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        ready,
+    )
+    .await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/checkout/config")
+            .to_request(),
+    )
+    .await;
+    let view: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(view["tax_enabled"], true);
 }
