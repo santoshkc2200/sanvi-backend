@@ -122,6 +122,11 @@ pub struct CheckoutReadiness {
     /// The connected account's settlement currency; `None` when there is
     /// no usable connection to read one from.
     pub currency: Option<String>,
+    /// Whether a session created now would carry automatic tax — the same
+    /// stored settings `open_session` consults, so the storefront's tax
+    /// note states what will actually happen rather than a guess. False
+    /// whenever there is no usable connection: no session, no tax.
+    pub tax_enabled: bool,
 }
 
 pub struct CreateCheckout {
@@ -333,17 +338,24 @@ impl CreateCheckout {
     /// only find out by being clicked and eating the refusal.
     pub async fn readiness(&self, tenant_id: TenantId) -> Result<CheckoutReadiness, PaymentsError> {
         match self.active_connection(tenant_id).await {
-            Ok(connection) => Ok(CheckoutReadiness {
-                can_accept_payments: true,
-                cannot_accept_reason: None,
-                currency: connection.default_currency.clone(),
-            }),
+            Ok(connection) => {
+                let tax = self
+                    .load_tax_liability(tenant_id, &connection.external_account_id)
+                    .await?;
+                Ok(CheckoutReadiness {
+                    can_accept_payments: true,
+                    cannot_accept_reason: None,
+                    currency: connection.default_currency.clone(),
+                    tax_enabled: tax.is_some(),
+                })
+            }
             // The refusal key is the whole point of the call: it is what
             // the storefront renders next to a disabled button.
             Err(PaymentsError::ConnectionNotActive(reason)) => Ok(CheckoutReadiness {
                 can_accept_payments: false,
                 cannot_accept_reason: Some(reason),
                 currency: None,
+                tax_enabled: false,
             }),
             Err(err) => Err(err),
         }

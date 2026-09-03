@@ -89,7 +89,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CheckoutConfigView'
-          description: Whether the tenant's connected account can accept payments, why not, and its settlement currency
+          description: Whether the tenant's connected account can accept payments, why not, its settlement currency, and whether automatic tax applies
         '403':
           content:
             application/json:
@@ -161,6 +161,12 @@ paths:
       - description: Filter by payment status
         in: query
         name: status
+        required: false
+        schema:
+          type: string
+      - description: Filter by payout status
+        in: query
+        name: payout_status
         required: false
         schema:
           type: string
@@ -531,6 +537,12 @@ paths:
       - description: Filter by payment status
         in: query
         name: status
+        required: false
+        schema:
+          type: string
+      - description: Filter by payout status
+        in: query
+        name: payout_status
         required: false
         schema:
           type: string

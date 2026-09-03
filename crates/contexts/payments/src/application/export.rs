@@ -61,6 +61,7 @@ pub struct ExportCommand {
     pub actor: UserId,
     pub ip: Option<IpAddr>,
     pub status: Option<String>,
+    pub payout_status: Option<String>,
     pub currency: Option<String>,
     pub customer: Option<String>,
     pub date_from: Option<chrono::DateTime<Utc>>,
@@ -193,6 +194,7 @@ impl ExportPayments {
                         "streamed": true,
                         "filters": {
                             "status": command.status,
+                            "payout_status": command.payout_status,
                             "currency": command.currency,
                             "customer": command.customer,
                         }
@@ -320,6 +322,19 @@ fn export_filter(command: &ExportCommand) -> Result<PaymentFilter, PaymentsError
             }
         }
     }
+    if let Some(raw) = command.payout_status.clone() {
+        let trimmed = raw.trim().to_ascii_lowercase();
+        if !trimmed.is_empty() {
+            match crate::domain::PayoutStatus::parse(&trimmed) {
+                Some(status) => filter.payout_status = Some(status),
+                None => {
+                    return Err(PaymentsError::InvalidConnection(format!(
+                        "unknown payout status {trimmed:?}"
+                    )));
+                }
+            }
+        }
+    }
     if let Some(raw) = command.currency.clone() {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
@@ -413,5 +428,28 @@ mod tests {
         let row = payment_row(&payment, 0, String::new(), String::new());
         assert_eq!(row[9], created.to_rfc3339());
         assert_eq!(row[8], "");
+    }
+
+    #[test]
+    fn export_filter_parses_payout_status() {
+        let mut cmd = ExportCommand {
+            tenant_id: TenantId::try_from(1).unwrap(),
+            actor: UserId::try_from(1).unwrap(),
+            ip: None,
+            status: None,
+            payout_status: Some("  PAID  ".to_string()),
+            currency: None,
+            customer: None,
+            date_from: None,
+            date_to: None,
+        };
+        let filter = export_filter(&cmd).unwrap();
+        assert_eq!(
+            filter.payout_status,
+            Some(crate::domain::PayoutStatus::Paid)
+        );
+
+        cmd.payout_status = Some("unknown_status".to_string());
+        assert!(export_filter(&cmd).is_err());
     }
 }

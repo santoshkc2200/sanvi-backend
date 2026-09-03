@@ -4044,6 +4044,172 @@ async fn the_payments_list_serves_every_filter_and_walks_pages_without_loss_or_d
     assert!(view["items"].as_array().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn the_payments_list_and_export_filter_by_payout_status() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "payout-status-filters").await;
+    let fixture = webhook_fixture(&pool).await;
+
+    // Seed 4 payments: pending, paid, failed, and NULL payout status.
+    seed_paid_payment(
+        &pool,
+        &fixture,
+        tenant_id,
+        "order-po-pending",
+        "pi_po_pending",
+    )
+    .await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-po-paid", "pi_po_paid").await;
+    seed_paid_payment(
+        &pool,
+        &fixture,
+        tenant_id,
+        "order-po-failed",
+        "pi_po_failed",
+    )
+    .await;
+    seed_paid_payment(&pool, &fixture, tenant_id, "order-po-none", "pi_po_none").await;
+
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    sqlx::query(
+        "UPDATE payments.payments SET payout_status = 'pending' WHERE external_payment_id = 'pi_po_pending' AND tenant_id = $1",
+    )
+    .bind(tenant_id.as_i64())
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE payments.payments SET payout_status = 'paid' WHERE external_payment_id = 'pi_po_paid' AND tenant_id = $1",
+    )
+    .bind(tenant_id.as_i64())
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE payments.payments SET payout_status = 'failed' WHERE external_payment_id = 'pi_po_failed' AND tenant_id = $1",
+    )
+    .bind(tenant_id.as_i64())
+    .execute(&mut **scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    scope.commit().await.unwrap();
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+
+    // 1. Filtering by each of pending/paid/failed returns only matching payments.
+    for (status, expected_pi) in [
+        ("pending", "pi_po_pending"),
+        ("paid", "pi_po_paid"),
+        ("failed", "pi_po_failed"),
+    ] {
+        let res = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::get()
+                .uri(&format!("/api/v1/tenant/payments?payout_status={status}"))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let view: serde_json::Value = actix_test::read_body_json(res).await;
+        let items = view["items"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "filtering by {status} should match exactly 1 row"
+        );
+        assert_eq!(items[0]["external_payment_id"], expected_pi);
+        assert_eq!(items[0]["payout_status"], status);
+    }
+
+    // 2. A row with a NULL payout status is excluded when the filter is set,
+    // but present when no filter is set.
+    let res = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/payments")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let view: serde_json::Value = actix_test::read_body_json(res).await;
+    assert_eq!(
+        view["items"].as_array().unwrap().len(),
+        4,
+        "all rows returned when unfiltered"
+    );
+
+    // 3. Unknown payout status is rejected rather than ignored.
+    for bad_status in ["unknown", "paidd", "invalid"] {
+        let res = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::get()
+                .uri(&format!(
+                    "/api/v1/tenant/payments?payout_status={bad_status}"
+                ))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "bad payout status {bad_status} must be rejected with 400"
+        );
+    }
+
+    // 4. CSV export honours the payout_status filter and rejects unknown values.
+    for (status, expected_pi) in [
+        ("pending", "pi_po_pending"),
+        ("paid", "pi_po_paid"),
+        ("failed", "pi_po_failed"),
+    ] {
+        let res = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::get()
+                .uri(&format!(
+                    "/api/v1/tenant/payments/export?payout_status={status}"
+                ))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = actix_test::read_body(res).await;
+        let csv_text = std::str::from_utf8(&body).unwrap();
+        let rows: Vec<&str> = csv_text
+            .lines()
+            .skip(1)
+            .filter(|line| !line.is_empty())
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "CSV export with payout_status={status} must return 1 data row"
+        );
+        assert!(
+            rows[0].contains(expected_pi),
+            "CSV row must contain {expected_pi}: {}",
+            rows[0]
+        );
+        assert!(
+            !csv_text.contains("pi_po_none"),
+            "NULL payout status row must not appear when payout_status={status}"
+        );
+    }
+
+    let res = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/payments/export?payout_status=invalid_status")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
 // ---------------------------------------------------------------------------
 // 09.6: payouts, tax liability and the application fee.
 // ---------------------------------------------------------------------------
@@ -5047,4 +5213,31 @@ async fn the_checkout_config_answers_readiness_before_a_buyer_clicks_pay() {
         serde_json::json!(connection.default_currency),
         "the currency the buy path pre-flights against"
     );
+    assert_eq!(
+        view["tax_enabled"], false,
+        "an active connection with no tax settings collects no tax"
+    );
+
+    // Enabling automatic tax flips the flag the storefront's tax note is
+    // drawn from, so the buyer is told what the session will actually do.
+    provider.script(FakeScript {
+        tax_status: Some("active".to_string()),
+        tax_registrations: Some(2),
+        ..FakeScript::default()
+    });
+    enable_tax(&pool, &provider, ready).await.unwrap();
+    let app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        ready,
+    )
+    .await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/checkout/config")
+            .to_request(),
+    )
+    .await;
+    let view: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(view["tax_enabled"], true);
 }

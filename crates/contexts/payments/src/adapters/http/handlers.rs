@@ -927,6 +927,11 @@ pub struct CheckoutConfigView {
     /// price in this currency; anything else is refused at creation.
     #[schema(example = "JPY")]
     pub currency: Option<String>,
+    /// Whether a checkout started now would have automatic tax applied,
+    /// read from the tenant's stored tax settings by the same rule the
+    /// session creation applies. The storefront renders its tax note from
+    /// this; it never assumes tax is on.
+    pub tax_enabled: bool,
 }
 
 /// `GET /api/v1/tenant/checkout/config` — the storefront's pre-flight.
@@ -938,7 +943,7 @@ pub struct CheckoutConfigView {
     tag = "payments",
     operation_id = "get_tenant_checkout_config",
     responses(
-        (status = 200, description = "Whether the tenant's connected account can accept payments, why not, and its settlement currency", body = CheckoutConfigView),
+        (status = 200, description = "Whether the tenant's connected account can accept payments, why not, its settlement currency, and whether automatic tax applies", body = CheckoutConfigView),
         (status = 403, description = "Missing payments.checkout permission or the entitlement", body = ProblemDetail),
         (status = 503, description = "The payments.checkout flag is off (payments/provider-unavailable)", body = ProblemDetail)
     )
@@ -965,6 +970,7 @@ pub async fn get_tenant_checkout_config(
             can_accept_payments: readiness.can_accept_payments,
             cannot_accept_reason: readiness.cannot_accept_reason,
             currency: readiness.currency,
+            tax_enabled: readiness.tax_enabled,
         }))
 }
 
@@ -1315,6 +1321,7 @@ pub struct DisputeListView {
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PaymentListQuery {
     pub status: Option<String>,
+    pub payout_status: Option<String>,
     pub currency: Option<String>,
     pub customer: Option<String>,
     #[serde(default)]
@@ -1371,6 +1378,7 @@ pub struct RefundAmount {
     operation_id = "list_tenant_payments",
     params(
         ("status" = Option<String>, Query, description = "Filter by payment status"),
+        ("payout_status" = Option<String>, Query, description = "Filter by payout status"),
         ("currency" = Option<String>, Query, description = "Filter by currency (ISO-4217)"),
         ("customer" = Option<String>, Query, description = "Filter by customer reference substring"),
         ("date_from" = Option<String>, Query, description = "Filter by created_at >= (RFC3339)"),
@@ -1394,6 +1402,7 @@ pub async fn list_payments(
     let command = crate::application::ListPaymentsCommand {
         tenant_id: tenant.0.tenant_id,
         status: query.status.clone(),
+        payout_status: query.payout_status.clone(),
         currency: query.currency.clone(),
         customer: query.customer.clone(),
         date_from: query.date_from,
@@ -1653,6 +1662,7 @@ pub async fn list_disputes(
     operation_id = "export_tenant_payments",
     params(
         ("status" = Option<String>, Query, description = "Filter by payment status"),
+        ("payout_status" = Option<String>, Query, description = "Filter by payout status"),
         ("currency" = Option<String>, Query, description = "Filter by currency"),
         ("customer" = Option<String>, Query, description = "Filter by customer reference substring"),
         ("date_from" = Option<String>, Query, description = "Filter by created_at >= (RFC3339)"),
@@ -1677,6 +1687,7 @@ pub async fn export_payments(
         actor: subject.0.user_id,
         ip: client_ip(&req),
         status: query.status.clone(),
+        payout_status: query.payout_status.clone(),
         currency: query.currency.clone(),
         customer: query.customer.clone(),
         date_from: query.date_from,
