@@ -712,6 +712,9 @@ pub enum PaymentSort {
 pub struct PaymentFilter {
     /// Exact status match (`succeeded`, `failed`, …) — absent = any.
     pub status: Option<super::payment::PaymentStatus>,
+    /// Exact payout status match (`pending`, `paid`, `failed`) — absent
+    /// = any. `None` payout status on a row never matches a set filter.
+    pub payout_status: Option<PayoutStatus>,
     /// Exact currency match (ISO-4217) — absent = any.
     pub currency: Option<Currency>,
     /// Customer reference substring — the tenant's own order/customer

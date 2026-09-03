@@ -1315,6 +1315,7 @@ pub struct DisputeListView {
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PaymentListQuery {
     pub status: Option<String>,
+    pub payout_status: Option<String>,
     pub currency: Option<String>,
     pub customer: Option<String>,
     #[serde(default)]
@@ -1371,6 +1372,7 @@ pub struct RefundAmount {
     operation_id = "list_tenant_payments",
     params(
         ("status" = Option<String>, Query, description = "Filter by payment status"),
+        ("payout_status" = Option<String>, Query, description = "Filter by payout status"),
         ("currency" = Option<String>, Query, description = "Filter by currency (ISO-4217)"),
         ("customer" = Option<String>, Query, description = "Filter by customer reference substring"),
         ("date_from" = Option<String>, Query, description = "Filter by created_at >= (RFC3339)"),
@@ -1394,6 +1396,7 @@ pub async fn list_payments(
     let command = crate::application::ListPaymentsCommand {
         tenant_id: tenant.0.tenant_id,
         status: query.status.clone(),
+        payout_status: query.payout_status.clone(),
         currency: query.currency.clone(),
         customer: query.customer.clone(),
         date_from: query.date_from,
@@ -1653,6 +1656,7 @@ pub async fn list_disputes(
     operation_id = "export_tenant_payments",
     params(
         ("status" = Option<String>, Query, description = "Filter by payment status"),
+        ("payout_status" = Option<String>, Query, description = "Filter by payout status"),
         ("currency" = Option<String>, Query, description = "Filter by currency"),
         ("customer" = Option<String>, Query, description = "Filter by customer reference substring"),
         ("date_from" = Option<String>, Query, description = "Filter by created_at >= (RFC3339)"),
@@ -1677,6 +1681,7 @@ pub async fn export_payments(
         actor: subject.0.user_id,
         ip: client_ip(&req),
         status: query.status.clone(),
+        payout_status: query.payout_status.clone(),
         currency: query.currency.clone(),
         customer: query.customer.clone(),
         date_from: query.date_from,

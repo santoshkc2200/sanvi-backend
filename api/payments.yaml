@@ -164,6 +164,12 @@ paths:
         required: false
         schema:
           type: string
+      - description: Filter by payout status
+        in: query
+        name: payout_status
+        required: false
+        schema:
+          type: string
       - description: Filter by currency (ISO-4217)
         in: query
         name: currency
@@ -531,6 +537,12 @@ paths:
       - description: Filter by payment status
         in: query
         name: status
+        required: false
+        schema:
+          type: string
+      - description: Filter by payout status
+        in: query
+        name: payout_status
         required: false
         schema:
           type: string

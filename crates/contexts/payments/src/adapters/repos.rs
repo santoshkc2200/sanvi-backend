@@ -1232,6 +1232,10 @@ impl PaymentRepository for SqlxPaymentRepository {
             builder.push(" AND p.status = ");
             builder.push_bind(status.as_str());
         }
+        if let Some(payout_status) = &filter.payout_status {
+            builder.push(" AND p.payout_status = ");
+            builder.push_bind(payout_status.as_str());
+        }
         if let Some(currency) = &filter.currency {
             builder.push(" AND p.currency = ");
             builder.push_bind(currency.as_str());
@@ -1302,6 +1306,10 @@ impl PaymentRepository for SqlxPaymentRepository {
         if let Some(status) = &filter.status {
             builder.push(" AND p.status = ");
             builder.push_bind(status.as_str());
+        }
+        if let Some(payout_status) = &filter.payout_status {
+            builder.push(" AND p.payout_status = ");
+            builder.push_bind(payout_status.as_str());
         }
         if let Some(currency) = &filter.currency {
             builder.push(" AND p.currency = ");

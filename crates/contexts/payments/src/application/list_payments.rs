@@ -23,6 +23,7 @@ use crate::domain::timeline::{PaymentTimeline, TimelineEntry};
 pub struct ListPaymentsCommand {
     pub tenant_id: TenantId,
     pub status: Option<String>,
+    pub payout_status: Option<String>,
     pub currency: Option<String>,
     pub customer: Option<String>,
     pub date_from: Option<DateTime<Utc>>,
@@ -74,6 +75,19 @@ impl ListPayments {
                     None => {
                         return Err(PaymentsError::InvalidConnection(format!(
                             "unknown payment status {raw:?}"
+                        )));
+                    }
+                }
+            }
+        }
+        if let Some(raw) = command.payout_status {
+            let raw = raw.trim().to_ascii_lowercase();
+            if !raw.is_empty() {
+                match crate::domain::PayoutStatus::parse(&raw) {
+                    Some(status) => filter.payout_status = Some(status),
+                    None => {
+                        return Err(PaymentsError::InvalidConnection(format!(
+                            "unknown payout status {raw:?}"
                         )));
                     }
                 }
