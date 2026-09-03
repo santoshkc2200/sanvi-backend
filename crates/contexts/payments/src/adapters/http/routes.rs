@@ -12,8 +12,8 @@ use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 use super::handlers::{
     create_payment_connection, create_payment_connection_session, create_tenant_checkout,
     delete_payment_connection, export_payments, get_payment, get_payment_connection,
-    get_tax_settings, get_tenant_checkout, list_disputes, list_payment_providers, list_payments,
-    list_payouts, put_tax_settings, refund_payment,
+    get_tax_settings, get_tenant_checkout, get_tenant_checkout_config, list_disputes,
+    list_payment_providers, list_payments, list_payouts, put_tax_settings, refund_payment,
 };
 
 /// The entitlement every payments route is gated on (403, not 404 — the
@@ -122,6 +122,14 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(PermissionMap::new(vec![(Method::POST, checkout)]))
             .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
             .route(web::post().to(create_tenant_checkout)),
+    )
+    // Before `/checkout/{id}`: actix matches in registration order, and
+    // the `{id}` pattern would otherwise swallow `config`.
+    .service(
+        web::resource("/checkout/config")
+            .app_data(PermissionMap::new(vec![(Method::GET, checkout)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(get_tenant_checkout_config)),
     )
     .service(
         web::resource("/checkout/{id}")
