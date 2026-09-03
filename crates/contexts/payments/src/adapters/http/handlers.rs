@@ -737,6 +737,12 @@ pub struct CheckoutView {
     /// Server-issued exactly once per order when paid; identical on every
     /// refresh of the confirmation page, so phase 10's conversion
     /// pipeline cannot double-count.
+    /// The provider's decline/failure code for the newest failed attempt
+    /// (`card_declined`, `insufficient_funds`, …), so the storefront can
+    /// tell a buyer *why*. The provider's own message is deliberately not
+    /// exposed: the storefront renders its own localized copy.
+    #[schema(example = "card_declined")]
+    pub failure_code: Option<String>,
     #[schema(value_type = Option<String>)]
     pub conversion_event_id: Option<PaymentId>,
     #[schema(value_type = String)]
@@ -850,6 +856,10 @@ fn checkout_view(
             )
         }),
         expires_at: checkout.expires_at,
+        failure_code: (status == "failed")
+            .then(|| latest.and_then(|payment| payment.failure.as_ref()))
+            .flatten()
+            .map(|failure| failure.code.clone()),
         conversion_event_id,
         created_at: checkout.created_at,
     }
@@ -897,6 +907,65 @@ fn checkout_disabled() -> actix_web::Error {
         HttpResponse::build(status).json(problem),
     )
     .into()
+}
+
+/// What the storefront needs before it can render a Pay button:
+/// readiness and the settlement currency. Derived from the tenant's live
+/// connection by the same gate the checkout itself applies.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CheckoutConfigView {
+    /// Server-computed from the v2 `card_payments` capability, exactly as
+    /// `POST /tenant/checkout` computes it. The storefront renders this;
+    /// it never recomputes readiness of its own.
+    pub can_accept_payments: bool,
+    /// The i18n key for *why* not (`payments.blocker.*`), so the
+    /// storefront can show a reason next to a disabled button instead of
+    /// waiting for a 409. `null` when payments are accepted.
+    #[schema(example = "payments.blocker.card_payments_inactive")]
+    pub cannot_accept_reason: Option<String>,
+    /// The connected account's settlement currency. The storefront must
+    /// price in this currency; anything else is refused at creation.
+    #[schema(example = "JPY")]
+    pub currency: Option<String>,
+}
+
+/// `GET /api/v1/tenant/checkout/config` — the storefront's pre-flight.
+/// Same permission and entitlement as the buy path it guards, because it
+/// answers the same question the buy path would refuse on.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/checkout/config",
+    tag = "payments",
+    operation_id = "get_tenant_checkout_config",
+    responses(
+        (status = 200, description = "Whether the tenant's connected account can accept payments, why not, and its settlement currency", body = CheckoutConfigView),
+        (status = 403, description = "Missing payments.checkout permission or the entitlement", body = ProblemDetail),
+        (status = 503, description = "The payments.checkout flag is off (payments/provider-unavailable)", body = ProblemDetail)
+    )
+)]
+pub async fn get_tenant_checkout_config(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    if !state.config.checkout_enabled {
+        return Err(checkout_disabled());
+    }
+
+    let readiness = state
+        .create_checkout
+        .readiness(tenant.0.tenant_id)
+        .await
+        .map_err(payments_problem)?;
+
+    Ok(HttpResponse::Ok()
+        .insert_header(("cache-control", "no-store"))
+        .json(CheckoutConfigView {
+            can_accept_payments: readiness.can_accept_payments,
+            cannot_accept_reason: readiness.cannot_accept_reason,
+            currency: readiness.currency,
+        }))
 }
 
 /// `POST /api/v1/tenant/checkout` — start a purchase on the tenant's own

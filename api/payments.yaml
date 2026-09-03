@@ -80,6 +80,34 @@ paths:
         the confirmation page trusts only `GET /tenant/checkout/{id}`.
       tags:
       - payments
+  /api/v1/tenant/checkout/config:
+    get:
+      operationId: get_tenant_checkout_config
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutConfigView'
+          description: Whether the tenant's connected account can accept payments, why not, and its settlement currency
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.checkout permission or the entitlement
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: The payments.checkout flag is off (payments/provider-unavailable)
+      summary: |-
+        `GET /api/v1/tenant/checkout/config` — the storefront's pre-flight.
+        Same permission and entitlement as the buy path it guards, because it
+        answers the same question the buy path would refuse on.
+      tags:
+      - payments
   /api/v1/tenant/checkout/{id}:
     get:
       operationId: get_tenant_checkout

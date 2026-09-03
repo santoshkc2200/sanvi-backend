@@ -4872,3 +4872,179 @@ async fn a_payment_completing_after_disconnect_is_still_recorded() {
     let events: i64 = fixture.outbox_events("payments.payment_succeeded").await;
     assert_eq!(events, 1);
 }
+
+#[tokio::test]
+async fn the_success_url_carries_the_checkout_id_back_to_the_confirmation_page() {
+    // Review finding: the buyer returned to a page whose only clue to
+    // which checkout it was confirming lived in tab-scoped session
+    // storage — so a return into a different tab, or with storage
+    // unavailable, showed "not found" over a payment that succeeded.
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "success-url-id").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_id, &provider).await;
+
+    let state = checkout_fixture(&pool, provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+
+    let created = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", Uuid::now_v7().to_string()))
+            .set_json(checkout_body("order-success-url", 2000, "JPY"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body: serde_json::Value = actix_test::read_body_json(created).await;
+    let checkout_id = body["id"].as_str().expect("checkout id").to_string();
+
+    let observed = provider
+        .last_checkout_observation()
+        .expect("the provider saw a session")
+        .success_url;
+    assert_eq!(
+        observed,
+        format!("https://shop.test/thanks?checkout_id={checkout_id}"),
+        "the id the confirmation page needs rides on the redirect"
+    );
+    assert!(
+        observed.starts_with("https://shop.test/"),
+        "the authority the allow-list vetted is untouched"
+    );
+}
+
+#[tokio::test]
+async fn a_declined_card_surfaces_its_code_so_the_storefront_can_say_why() {
+    // Review finding: the storefront mapped decline codes to specific
+    // copy, but nothing ever gave it one — every decline rendered the
+    // generic "something went wrong".
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "decline-code").await;
+    let fixture = webhook_fixture(&pool).await;
+    let connection = activate_connection(&pool, tenant_id, &fixture.provider).await;
+    let account = connection.external_account_id.clone();
+
+    let (checkout_id, _session_id) =
+        create_checkout_via_use_case(&pool, &fixture.provider, tenant_id, "order-declined").await;
+
+    assert!(
+        fixture
+            .deliver(&payment_intent_event(
+                "evt_declined_view",
+                "payment_intent.payment_failed",
+                &account,
+                checkout_id,
+                tenant_id,
+                "pi_declined_view",
+                Some("insufficient_funds"),
+                epoch(7),
+            ))
+            .await
+            .unwrap()
+    );
+    let report = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(report.processed, 1, "{report:?}");
+
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let app = checkout_app(state, tenant_id).await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri(&format!("/api/v1/tenant/checkout/{checkout_id}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let view: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(view["status"], "failed");
+    assert_eq!(
+        view["failure_code"], "insufficient_funds",
+        "the code the buyer's message is built from"
+    );
+    assert!(
+        view.get("failure_message").is_none(),
+        "the provider's own wording never reaches a buyer"
+    );
+}
+
+#[tokio::test]
+async fn the_checkout_config_answers_readiness_before_a_buyer_clicks_pay() {
+    // Review finding: the Pay button was always enabled, so a tenant that
+    // cannot be paid was discovered only by clicking and eating a 409.
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let provider = FakeProvider::new();
+
+    // No connection at all: onboarding never started.
+    let untouched = seed_tenant(&pool, "config-none").await;
+    let app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        untouched,
+    )
+    .await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/checkout/config")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let view: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(view["can_accept_payments"], false);
+    assert_eq!(
+        view["cannot_accept_reason"], "payments.blocker.onboarding_not_started",
+        "an i18n key, never a rendered sentence"
+    );
+    assert_eq!(view["currency"], serde_json::Value::Null);
+
+    // Onboarding started but the capability is not active yet.
+    let pending = seed_tenant(&pool, "config-pending").await;
+    pending_connection(&pool, pending, &provider).await;
+    let app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        pending,
+    )
+    .await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/checkout/config")
+            .to_request(),
+    )
+    .await;
+    let view: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(view["can_accept_payments"], false);
+    assert_eq!(
+        view["cannot_accept_reason"],
+        "payments.blocker.onboarding_not_started"
+    );
+
+    // Active: the storefront may price, in the account's own currency.
+    let ready = seed_tenant(&pool, "config-ready").await;
+    let connection = activate_connection(&pool, ready, &provider).await;
+    let app = checkout_app(
+        checkout_fixture(&pool, provider.clone(), 1000, false),
+        ready,
+    )
+    .await;
+    let response = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::get()
+            .uri("/api/v1/tenant/checkout/config")
+            .to_request(),
+    )
+    .await;
+    let view: serde_json::Value = actix_test::read_body_json(response).await;
+    assert_eq!(view["can_accept_payments"], true);
+    assert_eq!(view["cannot_accept_reason"], serde_json::Value::Null);
+    assert_eq!(
+        view["currency"],
+        serde_json::json!(connection.default_currency),
+        "the currency the buy path pre-flights against"
+    );
+}

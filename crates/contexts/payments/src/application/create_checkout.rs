@@ -111,6 +111,19 @@ pub struct CheckoutOutcome {
     pub replayed: bool,
 }
 
+/// What the storefront needs before it renders a Pay button: whether the
+/// tenant's connected account can take money right now, why not when it
+/// cannot, and the currency it settles in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutReadiness {
+    pub can_accept_payments: bool,
+    /// An i18n key (`payments.blocker.*`), never a rendered sentence.
+    pub cannot_accept_reason: Option<String>,
+    /// The connected account's settlement currency; `None` when there is
+    /// no usable connection to read one from.
+    pub currency: Option<String>,
+}
+
 pub struct CreateCheckout {
     tx_manager: TxManager,
     registry: Arc<super::registry::ProviderRegistry>,
@@ -314,6 +327,28 @@ impl CreateCheckout {
         })
     }
 
+    /// The storefront's pre-flight answer to "can this tenant be paid,
+    /// and in what currency" — the *same* gate `execute` applies, asked
+    /// before a buyer commits to anything. Without it the Pay button can
+    /// only find out by being clicked and eating the refusal.
+    pub async fn readiness(&self, tenant_id: TenantId) -> Result<CheckoutReadiness, PaymentsError> {
+        match self.active_connection(tenant_id).await {
+            Ok(connection) => Ok(CheckoutReadiness {
+                can_accept_payments: true,
+                cannot_accept_reason: None,
+                currency: connection.default_currency.clone(),
+            }),
+            // The refusal key is the whole point of the call: it is what
+            // the storefront renders next to a disabled button.
+            Err(PaymentsError::ConnectionNotActive(reason)) => Ok(CheckoutReadiness {
+                can_accept_payments: false,
+                cannot_accept_reason: Some(reason),
+                currency: None,
+            }),
+            Err(err) => Err(err),
+        }
+    }
+
     /// Create the provider session on the connected account and move the
     /// row to `Open` — with the outbound isolation guard asserting the
     /// command carries *this* tenant's account id.
@@ -338,7 +373,7 @@ impl CreateCheckout {
         let addressed = CreateCheckoutCommand {
             external_account_id: connection.external_account_id.clone(),
             checkout: checkout.clone(),
-            success_url: command.success_url.clone(),
+            success_url: success_url_with_checkout_id(&command.success_url, checkout.id),
             cancel_url: command.cancel_url.clone(),
             locale: checkout.locale.clone().unwrap_or_default(),
             application_fee,
@@ -516,6 +551,32 @@ impl CreateCheckout {
 /// userinfo, no non-default port, no IP literals — anything else is an
 /// error before the allow-list is even consulted. The allow-list remains
 /// the authority; this parsing just makes sure we compare *a hostname*.
+/// Carry the checkout id back on the success URL.
+///
+/// The confirmation page is otherwise left resolving the checkout from
+/// tab-scoped session storage, so a return into a different tab — or with
+/// storage unavailable — cannot find a checkout the buyer has just paid
+/// for. Appended *after* `guard_domain` has ruled on the host: the
+/// authority is untouched here, so the verified-domain allow-list remains
+/// the only thing that decides where a buyer can be sent.
+fn success_url_with_checkout_id(raw: &str, checkout_id: CheckoutId) -> String {
+    let (before_fragment, fragment) = match raw.split_once('#') {
+        Some((head, frag)) => (head, Some(frag)),
+        None => (raw, None),
+    };
+    let separator = if before_fragment.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    let mut out = format!("{before_fragment}{separator}checkout_id={checkout_id}");
+    if let Some(fragment) = fragment {
+        out.push('#');
+        out.push_str(fragment);
+    }
+    out
+}
+
 fn https_hostname(raw: &str) -> Result<String, PaymentsError> {
     const MAX_URL_LEN: usize = 2048;
     if raw.len() > MAX_URL_LEN {

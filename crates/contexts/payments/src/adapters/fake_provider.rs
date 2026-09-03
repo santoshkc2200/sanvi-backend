@@ -118,6 +118,10 @@ pub struct LastCheckoutObservation {
     pub external_account_id: String,
     pub application_fee_minor: Option<i64>,
     pub currency: String,
+    /// The redirect the buyer is sent back to on success, exactly as the
+    /// use case built it — the checkout id it carries is what makes a
+    /// confirmation page survive a different tab or cleared storage.
+    pub success_url: String,
     /// The liability account when automatic tax was requested.
     pub automatic_tax_liability_account: Option<String>,
 }
@@ -400,6 +404,7 @@ impl PaymentProviderPort for FakeProvider {
             external_account_id: command.external_account_id.clone(),
             application_fee_minor: command.application_fee.as_ref().map(|fee| fee.amount_minor),
             currency: command.checkout.amount.currency.as_str().to_string(),
+            success_url: command.success_url.clone(),
             automatic_tax_liability_account: command
                 .automatic_tax
                 .as_ref()
