@@ -502,6 +502,11 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Set advertising spend caps and auto-pause guardrails",
     },
+    PermissionDef {
+        key: "media.assets.manage",
+        scope: PermissionScope::Tenant,
+        description: "Upload, read and delete media assets, and mint delivery URLs, via the tenant's media gateway",
+    },
 ];
 
 /// Registry lookup.
