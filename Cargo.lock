@@ -3594,6 +3594,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sanvi-media"
+version = "0.10.0"
+dependencies = [
+ "actix-web",
+ "async-trait",
+ "reqwest 0.12.28",
+ "sanvi-http",
+ "sanvi-kernel",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "sanvi-messaging"
 version = "0.10.0"
 dependencies = [
