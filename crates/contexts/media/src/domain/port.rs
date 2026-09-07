@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use sanvi_kernel::TenantId;
 
-use super::dto::{AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput, UploadPartView};
+use super::dto::{
+    AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput,
+    UploadPartView,
+};
 use super::error::MediaError;
 
 /// Driven port to the generic media service. `tenant_id` is converted to
@@ -30,7 +33,8 @@ pub trait MediaGatewayPort: Send + Sync {
         parts: Vec<CompletedPartInput>,
     ) -> Result<AssetView, MediaError>;
 
-    async fn get_asset(&self, tenant_id: TenantId, asset_id: &str) -> Result<AssetView, MediaError>;
+    async fn get_asset(&self, tenant_id: TenantId, asset_id: &str)
+    -> Result<AssetView, MediaError>;
 
     async fn delete_asset(&self, tenant_id: TenantId, asset_id: &str) -> Result<(), MediaError>;
 
