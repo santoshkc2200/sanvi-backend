@@ -366,6 +366,7 @@ async fn main() -> ExitCode {
             Arc::new(
                 sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
             ),
+            Arc::new(sanvi_media::adapters::MediaPrivacyProvider::new()),
         ];
         Some(build_privacy_state(
             pool.clone(),

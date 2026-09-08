@@ -21,6 +21,7 @@ members = [
     "crates/contexts/domains",
     "crates/contexts/payments",
     "crates/contexts/advertising",
+    "crates/contexts/media",
     "apps/api",
     "apps/worker",
     "apps/cli",
@@ -61,6 +62,7 @@ sanvi-theming = { path = "crates/contexts/theming" }
 sanvi-domains = { path = "crates/contexts/domains" }
 sanvi-payments = { path = "crates/contexts/payments" }
 sanvi-advertising = { path = "crates/contexts/advertising" }
+sanvi-media = { path = "crates/contexts/media" }
 sanvi-api = { path = "apps/api" }
 
 actix-web = "4"

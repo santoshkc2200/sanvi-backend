@@ -247,6 +247,7 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "advertising.campaign.write",
             "advertising.metrics.read",
             "advertising.budget.manage",
+            "media.assets.manage",
         ],
     },
     RoleSeed {
@@ -280,6 +281,7 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "advertising.campaign.write",
             "advertising.metrics.read",
             "advertising.budget.manage",
+            "media.assets.manage",
         ],
     },
     RoleSeed {
@@ -381,6 +383,7 @@ mod tests {
             "advertising.campaign.write",
             "advertising.metrics.read",
             "advertising.budget.manage",
+            "media.assets.manage",
         ] {
             assert!(owner.contains(&permission), "owner needs {permission}");
         }
@@ -391,12 +394,14 @@ mod tests {
             "advertising.campaign.write",
             "advertising.metrics.read",
             "advertising.budget.manage",
+            "media.assets.manage",
         ] {
             assert!(admin.contains(&permission), "admin needs {permission}");
         }
         let member = seed_by_key("tenant_member").unwrap().permissions;
         assert!(!member.contains(&"advertising.connect"));
         assert!(!member.contains(&"advertising.budget.manage"));
+        assert!(!member.contains(&"media.assets.manage"));
     }
 
     #[test]

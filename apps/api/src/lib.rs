@@ -152,6 +152,7 @@ use sanvi_localization::{
     },
     routes as localization_routes,
 };
+use sanvi_media::routes as media_routes;
 use sanvi_payments::{
     PaymentsConfig,
     adapters::{
@@ -3246,6 +3247,39 @@ pub async fn build_advertising_state(
     })
 }
 
+/// Build the media context's application state: the `hitox-media-service`
+/// HTTP gateway wrapped in the six asset use cases. Unlike the DB-backed
+/// contexts this is sync and infallible (an unconfigured service fails
+/// closed per call with `MediaError::Unavailable`), so `build_app` calls it
+/// directly instead of `main.rs`.
+pub fn build_media_state(
+    config: &sanvi_media::MediaConfig,
+) -> sanvi_media::adapters::http::MediaState {
+    let gateway: std::sync::Arc<dyn sanvi_media::domain::MediaGatewayPort> = std::sync::Arc::new(
+        sanvi_media::adapters::hitox::HitoxMediaAdapter::new(config.clone()),
+    );
+    sanvi_media::adapters::http::MediaState {
+        create_asset_upload: std::sync::Arc::new(sanvi_media::application::CreateAssetUpload::new(
+            gateway.clone(),
+        )),
+        presign_asset_parts: std::sync::Arc::new(sanvi_media::application::PresignAssetParts::new(
+            gateway.clone(),
+        )),
+        complete_asset_upload: std::sync::Arc::new(
+            sanvi_media::application::CompleteAssetUpload::new(gateway.clone()),
+        ),
+        get_media_asset: std::sync::Arc::new(sanvi_media::application::GetMediaAsset::new(
+            gateway.clone(),
+        )),
+        delete_media_asset: std::sync::Arc::new(sanvi_media::application::DeleteMediaAsset::new(
+            gateway.clone(),
+        )),
+        create_asset_delivery: std::sync::Arc::new(
+            sanvi_media::application::CreateAssetDelivery::new(gateway),
+        ),
+    }
+}
+
 /// Build the domains context's application state: repositories, the
 /// entitlement gate, the sandbox registrar/DNS/CA gateways and every use
 /// case. (The DoH verifier, prober and notification stub belong to the
@@ -3421,6 +3455,10 @@ pub fn build_app(
         config: config.clone(),
     };
 
+    // Media ships ungated (no feature flag): the state is a plain
+    // HTTP-client wrapper over `config.media`, built infallibly here.
+    let media_state = build_media_state(&config.media);
+
     // The billing context mounts its tenant routes inside the shared tenant
     // scope (a second scope on the same prefix would shadow the first).
     let tenant_scope = web::scope("/api/v1/tenant")
@@ -3470,6 +3508,12 @@ pub fn build_app(
     } else {
         tenant_scope
     };
+    // `media_tenant_scope_routes` registers `/v1/assets...` with no leading
+    // context segment, so it needs the extra `web::scope("/media")` wrapper
+    // here (contrast with advertising, whose routes carry `/ads/...`
+    // themselves and are `.configure()`'d directly).
+    let tenant_scope = tenant_scope
+        .service(web::scope("/media").configure(media_routes::media_tenant_scope_routes));
 
     let app = App::new()
         .app_data(web::Data::new(state))
@@ -3485,6 +3529,7 @@ pub fn build_app(
         })
         .app_data(web::Data::new(audit.state.clone()))
         .app_data(web::Data::new(platform_admin.state.clone()))
+        .app_data(web::Data::new(media_state))
         .app_data(web::JsonConfig::default().limit(server_config.max_body_bytes))
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)

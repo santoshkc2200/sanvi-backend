@@ -1,0 +1,208 @@
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.10.0
+openapi: 3.1.0
+paths:
+  /api/v1/tenant/media/v1/assets:
+    post:
+      operationId: create_media_asset
+      parameters:
+      - description: Required by hitox-media-service; a retried key returns the original asset.
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAssetInput'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetUploadView'
+          description: Asset minted, upload presigned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: hitox-media-service rejected the request (e.g. missing Idempotency-Key)
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing media.assets.manage permission
+      tags:
+      - media
+  /api/v1/tenant/media/v1/assets/{asset_id}:
+    delete:
+      operationId: delete_media_asset
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Asset deleted
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing media.assets.manage permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such asset in this tenant's namespace
+      tags:
+      - media
+    get:
+      operationId: get_media_asset
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetView'
+          description: Current asset state
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing media.assets.manage permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such asset in this tenant's namespace
+      tags:
+      - media
+  /api/v1/tenant/media/v1/assets/{asset_id}/complete:
+    post:
+      operationId: complete_media_asset_upload
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteUploadRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetView'
+          description: Upload completed, asset state after completion
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing media.assets.manage permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such asset in this tenant's namespace
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Upload already completed or part etags do not match
+      tags:
+      - media
+  /api/v1/tenant/media/v1/assets/{asset_id}/delivery:
+    post:
+      operationId: create_media_asset_delivery
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetDeliveryView'
+          description: Delivery URL for the asset
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing media.assets.manage permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such asset in this tenant's namespace
+      tags:
+      - media
+  /api/v1/tenant/media/v1/assets/{asset_id}/parts:
+    post:
+      operationId: presign_media_asset_parts
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignPartsRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: 'Presigned URLs for the requested parts, wrapped as {"part_urls": [...]} to match course-media''s wire.part_urls read'
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing media.assets.manage permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No such asset in this tenant's namespace
+      tags:
+      - media

@@ -424,3 +424,11 @@ google_ads_api_version = "v22"
 meta_api_version = "v24.0"
 quota_platform_wide_permits = 20
 quota_per_connection_permits = 3
+
+[media]
+# Both values are environment-only (SANVI__MEDIA__BASE_URL,
+# SANVI__MEDIA__SERVICE_API_KEY), never committed. Empty values are valid:
+# without hitox-media-service configured every media call fails closed with
+# `media_unavailable`, never silently unauthenticated.
+base_url = ""
+service_api_key = ""
