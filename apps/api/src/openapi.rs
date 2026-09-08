@@ -23,6 +23,10 @@ use sanvi_advertising::domain::{
     UploadState, ValueSource,
 };
 use sanvi_http::{ApiError, ProblemDetail};
+use sanvi_media::domain::{
+    AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput,
+    UploadPartView,
+};
 use utoipa::OpenApi;
 
 /// The merged OpenAPI document: every context contributes its paths and
@@ -235,6 +239,12 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::tracking_handlers::list_audiences,
         sanvi_advertising::adapters::http::tracking_handlers::create_audience,
         sanvi_advertising::adapters::http::tracking_handlers::refresh_audience,
+        sanvi_media::adapters::http::handlers::create_media_asset,
+        sanvi_media::adapters::http::handlers::presign_media_asset_parts,
+        sanvi_media::adapters::http::handlers::complete_media_asset_upload,
+        sanvi_media::adapters::http::handlers::get_media_asset,
+        sanvi_media::adapters::http::handlers::delete_media_asset,
+        sanvi_media::adapters::http::handlers::create_media_asset_delivery,
     ),
     components(schemas(
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
@@ -254,7 +264,8 @@ use utoipa::OpenApi;
         BudgetCapsView, BudgetAlertsView, PutBudgetCapRequest, PutBudgetCapResponse,
         BudgetCap, BudgetAlert, BudgetPeriod, AlertCondition, DataFreshness,
         SpendStatusItem, SpendStatusReport, BudgetActionsConfigured, DryRunEvaluationResult,
-        PlatformAdsHealthReport, PlatformConnectionCountView, ConnectionAttentionView, AdsFreshnessSummaryView
+        PlatformAdsHealthReport, PlatformConnectionCountView, ConnectionAttentionView, AdsFreshnessSummaryView,
+        AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput, UploadPartView
     )),
     tags(
         (name = "system", description = "System, health and build information"),
@@ -269,7 +280,8 @@ use utoipa::OpenApi;
         (name = "theming", description = "Theme registry, tenant theme drafts/publish/rollback, brand assets and resolved-theme delivery"),
         (name = "domains", description = "Custom domains: claims, verification, registrar search/purchase, TLS authorization and health"),
         (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/provider-auth, payments/provider-rate-limited, payments/invalid-country, payments/country-unsupported, payments/connection-exists, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header; connection creation keys the provider-side idempotency chain, so retries adopt instead of duplicate. Account Session secrets are never persisted or logged."),
-        (name = "advertising", description = "Tenant advertising. Money is integer minor units paired with ISO-4217 account currency; rendered FX values carry their rate date. Problem types: advertising/platform-unavailable, advertising/connection-not-active, advertising/capability-unsupported, advertising/token-expired, advertising/directive-suppressed, advertising/budget-cap-reached. Every mutating endpoint requires Idempotency-Key.")
+        (name = "advertising", description = "Tenant advertising. Money is integer minor units paired with ISO-4217 account currency; rendered FX values carry their rate date. Problem types: advertising/platform-unavailable, advertising/connection-not-active, advertising/capability-unsupported, advertising/token-expired, advertising/directive-suppressed, advertising/budget-cap-reached. Every mutating endpoint requires Idempotency-Key."),
+        (name = "media", description = "Tenant media assets: multipart upload (presign/complete), asset reads/deletes and delivery URLs via hitox-media-service. Upstream failures surface as problems carrying a `code` extension member.")
     ),
     info(
         title = "Sanvi API",

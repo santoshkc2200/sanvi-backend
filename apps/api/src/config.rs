@@ -9,6 +9,7 @@ use sanvi_http::ServerConfig;
 use sanvi_identity::IdentityConfig;
 use sanvi_kernel::IdsConfig;
 use sanvi_localization::LocalizationConfig;
+use sanvi_media::MediaConfig;
 use sanvi_messaging::RedisConfig;
 use sanvi_payments::PaymentsConfig;
 use sanvi_persistence::DatabaseConfig;
@@ -125,6 +126,7 @@ pub struct AppConfig {
     pub domains: DomainsConfig,
     pub payments: PaymentsConfig,
     pub advertising: AdvertisingConfig,
+    pub media: MediaConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -151,6 +153,7 @@ impl Default for AppConfig {
             domains: DomainsConfig::default(),
             payments: PaymentsConfig::default(),
             advertising: AdvertisingConfig::default(),
+            media: MediaConfig::default(),
             readiness_probe_secs: 2,
         }
     }

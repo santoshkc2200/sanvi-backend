@@ -3323,6 +3323,7 @@ dependencies = [
  "sanvi-identity",
  "sanvi-kernel",
  "sanvi-localization",
+ "sanvi-media",
  "sanvi-messaging",
  "sanvi-payments",
  "sanvi-persistence",

@@ -18,6 +18,7 @@ prometheus.workspace = true
 redis.workspace = true
 sanvi-access.workspace = true
 sanvi-advertising.workspace = true
+sanvi-media.workspace = true
 sanvi-audit.workspace = true
 sanvi-billing.workspace = true
 sanvi-http.workspace = true
