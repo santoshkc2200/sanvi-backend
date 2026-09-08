@@ -33,13 +33,17 @@ fn media_problem(err: MediaError) -> actix_web::Error {
         .into()
 }
 
-fn idempotency_key(request: &HttpRequest) -> String {
-    request
+fn idempotency_key(request: &HttpRequest) -> Result<String, ApiError> {
+    let raw = request
         .headers()
         .get("Idempotency-Key")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::BadRequest {
+            detail: "Idempotency-Key header is required".to_string(),
+        })?;
+    Ok(raw.to_string())
 }
 
 /// Wire-only shape for presigning multipart upload parts. This has no
@@ -79,13 +83,10 @@ pub async fn create_media_asset(
     request: HttpRequest,
     body: web::Json<CreateAssetInput>,
 ) -> Result<HttpResponse, actix_web::Error> {
+    let key = idempotency_key(&request)?;
     let view = state
         .create_asset_upload
-        .execute(
-            tenant.0.tenant_id,
-            idempotency_key(&request),
-            body.into_inner(),
-        )
+        .execute(tenant.0.tenant_id, key, body.into_inner())
         .await
         .map_err(media_problem)?;
     Ok(HttpResponse::Created().json(view))
@@ -395,6 +396,7 @@ mod tests {
             Ok(AssetDeliveryView {
                 url: Some("https://cdn.example/a1".to_string()),
                 expires_at: Some("2026-09-08T00:00:00Z".to_string()),
+                renditions: vec![],
             })
         }
     }
@@ -515,20 +517,52 @@ mod tests {
     #[actix_web::test]
     async fn create_maps_bad_request_with_code_in_the_body() {
         let gateway = FakeGateway::failing(MediaError::BadRequest {
-            code: "missing_idempotency_key".to_string(),
-            detail: "Idempotency-Key is required".to_string(),
+            code: "invalid_input".to_string(),
+            detail: "unsupported image format".to_string(),
         });
         let (status, bytes) = send(
             "POST",
             "/api/v1/tenant/v1/assets",
             Some(create_body()),
-            vec![("Idempotency-Key".to_string(), "".to_string())],
+            vec![("Idempotency-Key".to_string(), "idem-fail".to_string())],
             gateway,
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         let body = json_body(&bytes);
-        assert_eq!(body["code"], "missing_idempotency_key");
+        assert_eq!(body["code"], "invalid_input");
+    }
+
+    #[actix_web::test]
+    async fn create_returns_400_when_idempotency_key_is_missing_without_calling_gateway() {
+        let gateway = FakeGateway::succeeding();
+        let (status, bytes) = send(
+            "POST",
+            "/api/v1/tenant/v1/assets",
+            Some(create_body()),
+            vec![], // No Idempotency-Key header
+            gateway.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body = json_body(&bytes);
+        assert_eq!(body["detail"], "Idempotency-Key header is required");
+        // Ensure gateway was never called
+        assert!(gateway.seen_tenants.lock().unwrap().is_empty());
+
+        // Also test empty string header
+        let (status_empty, bytes_empty) = send(
+            "POST",
+            "/api/v1/tenant/v1/assets",
+            Some(create_body()),
+            vec![("Idempotency-Key".to_string(), "   ".to_string())],
+            gateway.clone(),
+        )
+        .await;
+        assert_eq!(status_empty, StatusCode::BAD_REQUEST);
+        let body_empty = json_body(&bytes_empty);
+        assert_eq!(body_empty["detail"], "Idempotency-Key header is required");
+        assert!(gateway.seen_tenants.lock().unwrap().is_empty());
     }
 
     #[actix_web::test]

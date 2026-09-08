@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 actix-web.workspace = true
+anyhow.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 sanvi-http.workspace = true

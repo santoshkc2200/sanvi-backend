@@ -234,6 +234,7 @@ mod tests {
             Ok(AssetDeliveryView {
                 url: Some("https://cdn.example/a1".to_string()),
                 expires_at: Some("2026-09-08T00:00:00Z".to_string()),
+                renditions: vec![],
             })
         }
     }
@@ -254,6 +255,7 @@ mod tests {
                     content_type: "image/png".to_string(),
                     filename: "a.png".to_string(),
                     size_bytes: 10,
+                    visibility: crate::domain::AssetVisibility::Private,
                     owner_id: None,
                 },
             )

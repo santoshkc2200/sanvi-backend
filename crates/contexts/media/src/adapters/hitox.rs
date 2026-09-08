@@ -30,7 +30,26 @@ impl std::fmt::Debug for HitoxMediaAdapter {
     }
 }
 
+fn encode_path_segment(segment: &str) -> String {
+    let mut encoded = String::with_capacity(segment.len());
+    for b in segment.as_bytes() {
+        match *b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*b as char);
+            }
+            byte => {
+                use std::fmt::Write;
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
+
 impl HitoxMediaAdapter {
+    /// Infallible by design: `base_url` is checked once at boot by
+    /// `AppConfig::validate`, which reports every configuration problem
+    /// together rather than panicking on the first one.
     pub fn new(config: MediaConfig) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
@@ -44,6 +63,29 @@ impl HitoxMediaAdapter {
         }
     }
 
+    fn endpoint_url(&self, path: &str) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        let path = if path.starts_with('/') {
+            path
+        } else {
+            &format!("/{path}")
+        };
+        format!("{base}{path}")
+    }
+
+    fn absolutize_url(&self, raw: &str) -> String {
+        if raw.starts_with("http://") || raw.starts_with("https://") {
+            raw.to_string()
+        } else {
+            let base = self.base_url.trim_end_matches('/');
+            if raw.starts_with('/') {
+                format!("{base}{raw}")
+            } else {
+                format!("{base}/{raw}")
+            }
+        }
+    }
+
     fn request(
         &self,
         method: reqwest::Method,
@@ -51,7 +93,7 @@ impl HitoxMediaAdapter {
         tenant_id: TenantId,
     ) -> reqwest::RequestBuilder {
         self.http
-            .request(method, format!("{}{}", self.base_url, path))
+            .request(method, self.endpoint_url(path))
             .bearer_auth(&self.service_api_key)
             .header("X-Namespace-ID", tenant_id.to_string())
     }
@@ -77,6 +119,10 @@ async fn map_error(response: reqwest::Response) -> MediaError {
         code: default_code(),
         detail: default_detail(),
     });
+    // 400/404/409 are `hitox-media-service`'s own tenant-facing validation
+    // problems: their detail is written for the caller, so it passes
+    // through as it always has. Everything else — auth failures above all —
+    // is service-internal and is logged here but never echoed to the tenant.
     match status.as_u16() {
         400 => MediaError::BadRequest {
             code: problem.code,
@@ -90,15 +136,40 @@ async fn map_error(response: reqwest::Response) -> MediaError {
             code: problem.code,
             detail: problem.detail,
         },
-        other => MediaError::Unavailable {
-            detail: format!("hitox-media-service returned {other}: {}", problem.detail),
-        },
+        413 => {
+            tracing::warn!(status = 413, code = %problem.code, detail = %problem.detail, "upstream payload too large");
+            MediaError::BadRequest {
+                code: problem.code,
+                detail: "upload payload too large".to_string(),
+            }
+        }
+        status_code if (400..500).contains(&status_code) => {
+            if status_code == 401 || status_code == 403 {
+                tracing::error!(status = status_code, code = %problem.code, detail = %problem.detail, "upstream service authentication failure");
+                MediaError::Unavailable {
+                    detail: "media service unavailable".to_string(),
+                }
+            } else {
+                tracing::warn!(status = status_code, code = %problem.code, detail = %problem.detail, "upstream client error");
+                MediaError::BadRequest {
+                    code: problem.code,
+                    detail: "invalid request".to_string(),
+                }
+            }
+        }
+        status_code => {
+            tracing::error!(status = status_code, code = %problem.code, detail = %problem.detail, "upstream service error");
+            MediaError::Unavailable {
+                detail: "media service unavailable".to_string(),
+            }
+        }
     }
 }
 
 fn connection_failure(error: reqwest::Error) -> MediaError {
+    tracing::error!(error = %error, "hitox-media-service connection error");
     MediaError::Unavailable {
-        detail: error.to_string(),
+        detail: "media service unavailable".to_string(),
     }
 }
 
@@ -137,10 +208,11 @@ impl MediaGatewayPort for HitoxMediaAdapter {
         struct Resp {
             part_urls: Vec<UploadPartView>,
         }
+        let encoded_id = encode_path_segment(asset_id);
         let response = self
             .request(
                 reqwest::Method::POST,
-                &format!("/v1/assets/{asset_id}/parts"),
+                &format!("/v1/assets/{encoded_id}/parts"),
                 tenant_id,
             )
             .json(&Req { part_numbers })
@@ -167,10 +239,11 @@ impl MediaGatewayPort for HitoxMediaAdapter {
         struct Req {
             parts: Vec<CompletedPartInput>,
         }
+        let encoded_id = encode_path_segment(asset_id);
         let response = self
             .request(
                 reqwest::Method::POST,
-                &format!("/v1/assets/{asset_id}/complete"),
+                &format!("/v1/assets/{encoded_id}/complete"),
                 tenant_id,
             )
             .json(&Req { parts })
@@ -188,10 +261,11 @@ impl MediaGatewayPort for HitoxMediaAdapter {
         tenant_id: TenantId,
         asset_id: &str,
     ) -> Result<AssetView, MediaError> {
+        let encoded_id = encode_path_segment(asset_id);
         let response = self
             .request(
                 reqwest::Method::GET,
-                &format!("/v1/assets/{asset_id}"),
+                &format!("/v1/assets/{encoded_id}"),
                 tenant_id,
             )
             .send()
@@ -204,10 +278,11 @@ impl MediaGatewayPort for HitoxMediaAdapter {
     }
 
     async fn delete_asset(&self, tenant_id: TenantId, asset_id: &str) -> Result<(), MediaError> {
+        let encoded_id = encode_path_segment(asset_id);
         let response = self
             .request(
                 reqwest::Method::DELETE,
-                &format!("/v1/assets/{asset_id}"),
+                &format!("/v1/assets/{encoded_id}"),
                 tenant_id,
             )
             .send()
@@ -225,10 +300,11 @@ impl MediaGatewayPort for HitoxMediaAdapter {
         tenant_id: TenantId,
         asset_id: &str,
     ) -> Result<AssetDeliveryView, MediaError> {
+        let encoded_id = encode_path_segment(asset_id);
         let response = self
             .request(
                 reqwest::Method::POST,
-                &format!("/v1/assets/{asset_id}/delivery"),
+                &format!("/v1/assets/{encoded_id}/delivery"),
                 tenant_id,
             )
             .send()
@@ -237,7 +313,16 @@ impl MediaGatewayPort for HitoxMediaAdapter {
         if !response.status().is_success() {
             return Err(map_error(response).await);
         }
-        response.json().await.map_err(connection_failure)
+        let mut view: AssetDeliveryView = response.json().await.map_err(connection_failure)?;
+        if let Some(ref url) = view.url {
+            view.url = Some(self.absolutize_url(url));
+        }
+        for rendition in &mut view.renditions {
+            if let Some(ref url) = rendition.url {
+                rendition.url = Some(self.absolutize_url(url));
+            }
+        }
+        Ok(view)
     }
 }
 
@@ -390,6 +475,7 @@ mod tests {
                     content_type: "image/png".to_string(),
                     filename: "a.png".to_string(),
                     size_bytes: 100,
+                    visibility: crate::domain::AssetVisibility::Private,
                     owner_id: None,
                 },
             )
@@ -406,6 +492,9 @@ mod tests {
             Some(test_tenant().to_string().as_str())
         );
         assert_eq!(recorded[0].header("idempotency-key"), Some("idem-1"));
+        let body: serde_json::Value = serde_json::from_slice(&recorded[0].body).unwrap();
+        assert_eq!(body["visibility"], "private");
+        assert_eq!(body["kind"], "image");
     }
 
     #[tokio::test]
@@ -531,11 +620,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_delivery_posts_and_returns_parsed_delivery_view() {
+    async fn create_delivery_posts_and_returns_parsed_hls_delivery_view_with_absolutized_url() {
         let mock = MockServer::start(vec![(
             200,
             serde_json::json!({
-                "url": "https://cdn.example/asset-1",
+                "visibility": "private",
+                "url": "/v1/delivery/asset-1/master.m3u8?token=xyz",
                 "expires_at": "2026-09-08T00:00:00Z"
             }),
         )])
@@ -550,10 +640,127 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(view.url.as_deref(), Some("https://cdn.example/asset-1"));
+        assert_eq!(
+            view.url.as_deref(),
+            Some(
+                format!(
+                    "http://{}/v1/delivery/asset-1/master.m3u8?token=xyz",
+                    mock.addr
+                )
+                .as_str()
+            )
+        );
         let recorded = mock.recorded();
         assert_eq!(recorded[0].method, "POST");
         assert_eq!(recorded[0].path, "/v1/assets/asset-1/delivery");
+    }
+
+    #[tokio::test]
+    async fn create_delivery_image_returns_renditions_with_absolutized_and_untouched_urls() {
+        let mock = MockServer::start(vec![(
+            200,
+            serde_json::json!({
+                "visibility": "private",
+                "expires_at": "2026-09-08T00:00:00Z",
+                "renditions": [
+                    {
+                        "name": "thumb",
+                        "content_type": "image/jpeg",
+                        "url": "/v1/public/ns-1/asset-1/thumb",
+                        "width": 320,
+                        "height": 240
+                    },
+                    {
+                        "name": "full",
+                        "content_type": "image/png",
+                        "url": "https://s3.example.com/bucket/full.png?token=presigned"
+                    }
+                ]
+            }),
+        )])
+        .await;
+        let adapter = super::HitoxMediaAdapter::new(crate::config::MediaConfig {
+            base_url: format!("http://{}", mock.addr),
+            service_api_key: "test-key".to_string(),
+        });
+
+        let view = adapter
+            .create_delivery(test_tenant(), "asset-1")
+            .await
+            .unwrap();
+
+        assert!(view.url.is_none());
+        assert_eq!(view.renditions.len(), 2);
+        assert_eq!(
+            view.renditions[0].url.as_deref(),
+            Some(format!("http://{}/v1/public/ns-1/asset-1/thumb", mock.addr).as_str())
+        );
+        assert_eq!(view.renditions[0].width, Some(320));
+        assert_eq!(view.renditions[0].height, Some(240));
+        assert_eq!(
+            view.renditions[1].url.as_deref(),
+            Some("https://s3.example.com/bucket/full.png?token=presigned")
+        );
+    }
+
+    #[tokio::test]
+    async fn path_traversal_encoding_protects_upstream_routes() {
+        let mock = MockServer::start(vec![
+            (
+                200,
+                serde_json::json!({
+                    "id": "1/../../healthz",
+                    "kind": "video",
+                    "status": "ready",
+                    "progress_percent": 100,
+                    "version": 1
+                }),
+            ),
+            (204, serde_json::json!({})),
+        ])
+        .await;
+        let adapter = super::HitoxMediaAdapter::new(crate::config::MediaConfig {
+            base_url: format!("http://{}", mock.addr),
+            service_api_key: "test-key".to_string(),
+        });
+
+        let _ = adapter
+            .get_asset(test_tenant(), "1/../../healthz")
+            .await
+            .unwrap();
+        adapter
+            .delete_asset(test_tenant(), "asset?evil=true#sec")
+            .await
+            .unwrap();
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded[0].path, "/v1/assets/1%2F..%2F..%2Fhealthz");
+        assert_eq!(recorded[1].path, "/v1/assets/asset%3Fevil%3Dtrue%23sec");
+    }
+
+    #[tokio::test]
+    async fn base_url_trailing_slash_is_joined_robustly() {
+        let mock = MockServer::start(vec![(
+            200,
+            serde_json::json!({
+                "id": "asset-1",
+                "kind": "video",
+                "status": "ready",
+                "progress_percent": 100,
+                "version": 1
+            }),
+        )])
+        .await;
+        // base_url with trailing slash
+        let adapter = super::HitoxMediaAdapter::new(crate::config::MediaConfig {
+            base_url: format!("http://{}/", mock.addr),
+            service_api_key: "test-key".to_string(),
+        });
+
+        let _ = adapter.get_asset(test_tenant(), "asset-1").await.unwrap();
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded[0].path, "/v1/assets/asset-1");
     }
 
     #[tokio::test]
@@ -576,6 +783,95 @@ mod tests {
         assert!(
             matches!(&err, crate::domain::MediaError::NotFound { code, detail } if code == "not_found" && detail == "asset gone"),
             "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_detail_redaction_hides_service_secret_and_maps_413() {
+        let mock = MockServer::start(vec![
+            (
+                401,
+                serde_json::json!({
+                    "code": "unauthenticated",
+                    "detail": "valid service API key required"
+                }),
+            ),
+            (
+                413,
+                serde_json::json!({
+                    "code": "upload_too_large",
+                    "detail": "upload size 1000 exceeds maximum 500"
+                }),
+            ),
+            (
+                500,
+                serde_json::json!({
+                    "code": "internal_error",
+                    "detail": "fatal postgres connection failure"
+                }),
+            ),
+            (
+                400,
+                serde_json::json!({
+                    "code": "invalid_input",
+                    "detail": "kind must be one of image, video, audio"
+                }),
+            ),
+        ])
+        .await;
+        let adapter = super::HitoxMediaAdapter::new(crate::config::MediaConfig {
+            base_url: format!("http://{}", mock.addr),
+            service_api_key: "test-key".to_string(),
+        });
+
+        // 1. 401 unauthenticated
+        let err401 = adapter
+            .get_asset(test_tenant(), "asset-1")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err401,
+            crate::domain::MediaError::Unavailable { .. }
+        ));
+        assert!(
+            !err401
+                .to_string()
+                .contains("valid service API key required")
+        );
+        assert!(err401.to_string().contains("media service unavailable"));
+
+        // 2. 413 upload too large
+        let err413 = adapter
+            .get_asset(test_tenant(), "asset-1")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err413, crate::domain::MediaError::BadRequest { code, detail } if code == "upload_too_large" && detail == "upload payload too large"),
+            "unexpected error: {err413:?}"
+        );
+        assert!(!err413.to_string().contains("1000 exceeds"));
+
+        // 3. 500 internal error
+        let err500 = adapter
+            .get_asset(test_tenant(), "asset-1")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err500,
+            crate::domain::MediaError::Unavailable { .. }
+        ));
+        assert!(!err500.to_string().contains("fatal postgres"));
+
+        // 4. 400 is the media service's own tenant-facing validation
+        // message: it must survive, or the caller loses the only
+        // explanation of what was wrong with the request.
+        let err400 = adapter
+            .get_asset(test_tenant(), "asset-1")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err400, crate::domain::MediaError::BadRequest { code, detail } if code == "invalid_input" && detail == "kind must be one of image, video, audio"),
+            "unexpected error: {err400:?}"
         );
     }
 

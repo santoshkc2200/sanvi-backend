@@ -211,6 +211,9 @@ impl AppConfig {
         if let Err(err) = self.advertising.validate() {
             problems.push(err.to_string());
         }
+        if let Err(err) = self.media.validate() {
+            problems.push(err.to_string());
+        }
         // Phase-09 invariant, enforced at boot: the Connect webhook
         // endpoint and the phase-04 platform endpoint must never share a
         // signing secret — a leaked one must not forge events for the
