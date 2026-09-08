@@ -150,6 +150,14 @@ pub const DATA_CLASSES: &[DataClassDef] = &[
         period_days: 1095,
         action: RetentionAction::Delete,
     },
+    DataClassDef {
+        class: DataClass::MediaAsset,
+        category: "Media",
+        sensitivity: SensitivityClass::Standard,
+        basis: LegalBasis::Contract,
+        period_days: 1095,
+        action: RetentionAction::Delete,
+    },
 ];
 
 /// Look up a class definition (used to seed `privacy.retention_rules`).

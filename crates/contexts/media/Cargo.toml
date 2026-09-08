@@ -14,6 +14,7 @@ async-trait.workspace = true
 reqwest.workspace = true
 sanvi-http.workspace = true
 sanvi-kernel.workspace = true
+sanvi-privacy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

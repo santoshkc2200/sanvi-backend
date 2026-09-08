@@ -544,6 +544,11 @@ pub enum DataClass {
     AdvertisingBudgetCap,
     /// A breach of one of those caps, and what was done about it.
     AdvertisingBudgetAlert,
+    /// A file a tenant's user uploaded through the media gateway —
+    /// images and video, which can depict or identify a person, plus the
+    /// owner reference stored alongside them. The bytes live in
+    /// `hitox-media-service`, not in this database.
+    MediaAsset,
 }
 
 impl DataClass {
@@ -567,6 +572,7 @@ impl DataClass {
             "advertising_campaign_change" => Ok(Self::AdvertisingCampaignChange),
             "advertising_budget_cap" => Ok(Self::AdvertisingBudgetCap),
             "advertising_budget_alert" => Ok(Self::AdvertisingBudgetAlert),
+            "media_asset" => Ok(Self::MediaAsset),
             other => Err(PrivacyError::InvalidDataClass(other.to_string())),
         }
     }
@@ -591,6 +597,7 @@ impl DataClass {
             Self::AdvertisingCampaignChange => "advertising_campaign_change",
             Self::AdvertisingBudgetCap => "advertising_budget_cap",
             Self::AdvertisingBudgetAlert => "advertising_budget_alert",
+            Self::MediaAsset => "media_asset",
         }
     }
 }
