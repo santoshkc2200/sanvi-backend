@@ -217,7 +217,7 @@ fn parse_json_f64(val: Option<&serde_json::Value>) -> f64 {
 fn map_status_to_google(status: CampaignStatus) -> &'static str {
     match status {
         CampaignStatus::Active => "ENABLED",
-        CampaignStatus::Paused | CampaignStatus::Draft => "PAUSED",
+        CampaignStatus::Paused | CampaignStatus::Draft | CampaignStatus::Publishing => "PAUSED",
         CampaignStatus::Ended | CampaignStatus::Archived => "REMOVED",
     }
 }

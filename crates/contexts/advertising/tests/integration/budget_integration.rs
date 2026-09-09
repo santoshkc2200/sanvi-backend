@@ -113,6 +113,7 @@ async fn seed_connection_and_campaign(
         revision: 1,
         intent: campaign_intent.clone(),
         remote_snapshot: campaign_intent.clone(),
+        publishing_mutation_id: None,
     };
 
     SqlxCampaignRepository::new()

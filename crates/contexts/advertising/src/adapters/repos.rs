@@ -132,6 +132,7 @@ struct CampaignRow {
     revision: i64,
     intent: serde_json::Value,
     remote_snapshot: serde_json::Value,
+    publishing_mutation_id: Option<uuid::Uuid>,
 }
 
 impl TryFrom<CampaignRow> for StoredCampaign {
@@ -159,6 +160,7 @@ impl TryFrom<CampaignRow> for StoredCampaign {
             remote_snapshot: serde_json::from_value(row.remote_snapshot).map_err(|error| {
                 AdvertisingError::Storage(format!("invalid campaign remote snapshot: {error}"))
             })?,
+            publishing_mutation_id: row.publishing_mutation_id,
         })
     }
 }
@@ -245,8 +247,8 @@ impl CampaignRepository for SqlxCampaignRepository {
         sqlx::query(
             "INSERT INTO advertising.campaigns
              (id, tenant_id, connection_id, platform, external_id, name, objective, status, budget,
-              schedule, drift, revision, intent, remote_snapshot)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+              schedule, drift, revision, intent, remote_snapshot, publishing_mutation_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
         )
         .bind(campaign.id.as_i64())
         .bind(campaign.tenant_id.as_i64())
@@ -277,6 +279,7 @@ impl CampaignRepository for SqlxCampaignRepository {
             serde_json::to_value(&campaign.remote_snapshot)
                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
         )
+        .bind(campaign.publishing_mutation_id)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -290,7 +293,7 @@ impl CampaignRepository for SqlxCampaignRepository {
         campaign_id: CampaignId,
     ) -> Result<Option<StoredCampaign>, AdvertisingError> {
         sqlx::query_as::<_, CampaignRow>(
-            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
+            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot, publishing_mutation_id
              FROM advertising.campaigns WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
         ).bind(tenant_id.as_i64()).bind(campaign_id.as_i64())
         .fetch_optional(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?
@@ -306,7 +309,7 @@ impl CampaignRepository for SqlxCampaignRepository {
         let result = sqlx::query(
             "UPDATE advertising.campaigns SET external_id=$1, name=$2, objective=$3, status=$4,
                budget=$5, schedule=$6, drift=$7, revision=$8, intent=$9, remote_snapshot=$10,
-               updated_at=now() WHERE tenant_id=$11 AND id=$12 AND revision=$13",
+               publishing_mutation_id=$11, updated_at=now() WHERE tenant_id=$12 AND id=$13 AND revision=$14",
         )
         .bind(&campaign.external_id)
         .bind(&campaign.intent.name)
@@ -333,6 +336,7 @@ impl CampaignRepository for SqlxCampaignRepository {
             serde_json::to_value(&campaign.remote_snapshot)
                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
         )
+        .bind(campaign.publishing_mutation_id)
         .bind(campaign.tenant_id.as_i64())
         .bind(campaign.id.as_i64())
         .bind(expected_revision)
@@ -348,7 +352,7 @@ impl CampaignRepository for SqlxCampaignRepository {
         tenant_id: TenantId,
     ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
         let rows = sqlx::query_as::<_, CampaignRow>(
-            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
+            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot, publishing_mutation_id
              FROM advertising.campaigns WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC",
         )
         .bind(tenant_id.as_i64())
@@ -364,7 +368,7 @@ impl CampaignRepository for SqlxCampaignRepository {
         limit: i64,
     ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
         let rows = sqlx::query_as::<_, CampaignRow>(
-            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot
+            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot, publishing_mutation_id
              FROM advertising.campaigns
              WHERE external_id IS NOT NULL
              ORDER BY updated_at ASC, id ASC
