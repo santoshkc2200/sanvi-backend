@@ -3,7 +3,15 @@ use sanvi_kernel::{EventEnvelope, RoleId, TenantId, UserId};
 use sanvi_messaging::ConsumerHandler;
 use std::sync::Arc;
 
-use crate::domain::AccessError;
+use crate::domain::{AccessError, Retryability};
+
+/// Wrap an `AccessError` in the messaging layer's retry classification.
+fn handler_error(err: AccessError) -> anyhow::Error {
+    match err.retryability() {
+        Retryability::Transient => sanvi_messaging::HandlerError::transient(err).into(),
+        Retryability::Permanent => sanvi_messaging::HandlerError::permanent(err).into(),
+    }
+}
 use crate::domain::ports::{DecisionCache, EntitlementCache, PermissionStore, Tuple};
 
 /// Store for tracking membership version to reject out-of-order and duplicate events.
@@ -151,10 +159,13 @@ pub fn access_sync_handler_with_version_store(
                     Ok(())
                 }
                 Err(err) => {
-                    // Consumer-level retry + dead-letter policy handles
-                    // poison messages; here we surface the failure so it can be retried.
+                    // Classify rather than stringify: `HandlerError` is what the
+                    // consumer downcasts to decide retry-with-backoff versus
+                    // dead-letter. `anyhow!(err.to_string())` erased the type, so
+                    // a momentary Keto outage used to dead-letter an authorization
+                    // change on its first failure.
                     tracing::error!(error = %err, "access sync failed");
-                    Err(anyhow::anyhow!(err.to_string()))
+                    Err(handler_error(err))
                 }
             }
         })
@@ -370,7 +381,7 @@ pub fn entitlement_sync_handler(
         Box::pin(async move {
             if let Err(err) = apply_access_event(&envelope, &cache, &decision_cache, &store).await {
                 tracing::error!(error = %err, event_type = %envelope.event_type, "access sync failed");
-                return Err(anyhow::anyhow!(err.to_string()));
+                return Err(handler_error(err));
             }
             Ok(())
         })
@@ -651,6 +662,57 @@ mod tests {
         assert!(
             result.is_err(),
             "resolution miss must return error for retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn errors_are_classified_for_the_consumer_retry_policy() {
+        // The consumer decides retry-versus-dead-letter by downcasting to
+        // HandlerError. Stringifying the cause erases that, so assert the
+        // classification survives the trip through the handler.
+        let store = Arc::new(MockPermissionStore::default());
+        let version_store = Arc::new(InMemoryMembershipVersionStore::new());
+        let handler =
+            access_sync_handler_with_version_store(store.clone(), None, version_store, |_| {
+                Box::pin(async { None })
+            });
+
+        // An unresolved role key may simply not have replicated yet: transient.
+        let err = handler(sample_envelope(
+            "identity.membership_granted",
+            serde_json::json!({
+                "tenant_id": TenantId::try_from(10).unwrap().to_string(),
+                "user_id": UserId::try_from(100).unwrap().to_string(),
+                "role_ids": [RoleId::try_from(1).unwrap().to_string()],
+                "version": 1,
+            }),
+        ))
+        .await
+        .expect_err("unresolved role key fails the handler");
+        assert!(
+            sanvi_messaging::is_transient_error(&err),
+            "an unresolved role key must be retried, not dead-lettered"
+        );
+    }
+
+    #[test]
+    fn retryability_separates_reachability_from_rejection() {
+        assert_eq!(
+            AccessError::BackendUnreachable("keto down".into()).retryability(),
+            Retryability::Transient
+        );
+        assert_eq!(
+            AccessError::Storage("pool timed out".into()).retryability(),
+            Retryability::Transient
+        );
+        // A rejection is the same on every attempt.
+        assert_eq!(
+            AccessError::BackendRejected("malformed tuple".into()).retryability(),
+            Retryability::Permanent
+        );
+        assert_eq!(
+            AccessError::UnknownPermission("nope".into()).retryability(),
+            Retryability::Permanent
         );
     }
 

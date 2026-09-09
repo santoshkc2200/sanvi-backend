@@ -1,6 +1,18 @@
 use sanvi_kernel::IdGenerationError;
 use thiserror::Error;
 
+/// Whether a failure is worth retrying.
+///
+/// The Keto sync consumer classifies its errors with this so the messaging
+/// layer retries a reachability blip with backoff instead of dead-lettering
+/// an authorization change on its first failure. A rejection, by contrast, is
+/// the same on every attempt and goes straight to the dead-letter stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retryability {
+    Transient,
+    Permanent,
+}
+
 /// Domain errors for the `access` context.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AccessError {
@@ -81,5 +93,23 @@ pub enum AccessError {
 impl From<IdGenerationError> for AccessError {
     fn from(error: IdGenerationError) -> Self {
         Self::IdGeneration(error.to_string())
+    }
+}
+
+impl AccessError {
+    /// Classify this error for the consumer's retry policy.
+    ///
+    /// Transient: the backend could not be reached, storage was unavailable,
+    /// or a role key had not replicated yet — all of which a later attempt may
+    /// resolve. Everything else describes the *content* of the request and
+    /// will fail identically on every retry.
+    pub fn retryability(&self) -> Retryability {
+        match self {
+            Self::BackendUnreachable(_)
+            | Self::EntitlementBackendUnavailable(_)
+            | Self::Storage(_)
+            | Self::RoleKeyResolutionFailed(_) => Retryability::Transient,
+            _ => Retryability::Permanent,
+        }
     }
 }

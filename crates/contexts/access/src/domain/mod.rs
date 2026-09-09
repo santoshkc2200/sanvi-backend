@@ -12,7 +12,7 @@ pub mod roles;
 pub use entitlements::{
     Entitlement, EntitlementSource, ResolvedEntitlement, resolve_all, resolve_entitlement,
 };
-pub use error::AccessError;
+pub use error::{AccessError, Retryability};
 pub use events::{AccessEvent, AccessEventName};
 pub use features::{
     FEATURE_SEEDS, Feature, FeatureKey, FeatureKind, FeatureSeed, Visibility, validate_seeds,
