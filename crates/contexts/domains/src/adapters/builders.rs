@@ -104,8 +104,10 @@ mod tests {
     #[test]
     fn ca_builder_modes() {
         let ids = sanvi_testsupport::test_ids();
-        let mut config = DomainsConfig::default();
-        config.ca_mode = "sandbox".to_string();
+        let mut config = DomainsConfig {
+            ca_mode: "sandbox".to_string(),
+            ..Default::default()
+        };
         let (_ca, mode) = build_certificate_authority(&config, ids.clone()).unwrap();
         assert_eq!(mode, CapabilityMode::Sandbox);
 
@@ -119,8 +121,10 @@ mod tests {
 
     #[test]
     fn charger_builder_modes() {
-        let mut config = DomainsConfig::default();
-        config.charger_mode = "sandbox".to_string();
+        let mut config = DomainsConfig {
+            charger_mode: "sandbox".to_string(),
+            ..Default::default()
+        };
         let (_charger, mode) = build_purchase_charger(&config).unwrap();
         assert_eq!(mode, CapabilityMode::Sandbox);
 

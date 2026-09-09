@@ -612,6 +612,7 @@ pub fn build_identity_state(
         invite_member: Arc::new(InviteMember::new(
             tx_manager.clone(),
             invitations.clone(),
+            memberships.clone(),
             role_catalog.clone(),
             events.clone(),
             notifications.clone(),

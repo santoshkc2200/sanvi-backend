@@ -171,51 +171,39 @@ impl Default for AdvertisingConfig {
 
 impl AdvertisingConfig {
     pub fn resolved_platform_mode(&self) -> sanvi_kernel::CapabilityMode {
-        if let Some(ref m) = self.platform_mode {
-            sanvi_kernel::CapabilityMode::parse(m).unwrap_or_else(|_| {
-                if self.real_platform_adapters {
-                    sanvi_kernel::CapabilityMode::Live
-                } else {
-                    sanvi_kernel::CapabilityMode::Sandbox
-                }
-            })
-        } else if self.real_platform_adapters {
+        let fallback = if self.real_platform_adapters {
             sanvi_kernel::CapabilityMode::Live
         } else {
             sanvi_kernel::CapabilityMode::Sandbox
-        }
+        };
+        self.platform_mode
+            .as_deref()
+            .and_then(|m| sanvi_kernel::CapabilityMode::parse(m).ok())
+            .unwrap_or(fallback)
     }
 
     pub fn resolved_conversion_sink_mode(&self) -> sanvi_kernel::CapabilityMode {
-        if let Some(ref m) = self.conversion_sink_mode {
-            sanvi_kernel::CapabilityMode::parse(m).unwrap_or_else(|_| {
-                if self.real_platform_adapters {
-                    sanvi_kernel::CapabilityMode::Live
-                } else {
-                    sanvi_kernel::CapabilityMode::Sandbox
-                }
-            })
-        } else if self.real_platform_adapters {
+        let fallback = if self.real_platform_adapters {
             sanvi_kernel::CapabilityMode::Live
         } else {
             sanvi_kernel::CapabilityMode::Sandbox
-        }
+        };
+        self.conversion_sink_mode
+            .as_deref()
+            .and_then(|m| sanvi_kernel::CapabilityMode::parse(m).ok())
+            .unwrap_or(fallback)
     }
 
     pub fn resolved_audience_sink_mode(&self) -> sanvi_kernel::CapabilityMode {
-        if let Some(ref m) = self.audience_sink_mode {
-            sanvi_kernel::CapabilityMode::parse(m).unwrap_or_else(|_| {
-                if self.real_platform_adapters {
-                    sanvi_kernel::CapabilityMode::Live
-                } else {
-                    sanvi_kernel::CapabilityMode::Sandbox
-                }
-            })
-        } else if self.real_platform_adapters {
+        let fallback = if self.real_platform_adapters {
             sanvi_kernel::CapabilityMode::Live
         } else {
             sanvi_kernel::CapabilityMode::Sandbox
-        }
+        };
+        self.audience_sink_mode
+            .as_deref()
+            .and_then(|m| sanvi_kernel::CapabilityMode::parse(m).ok())
+            .unwrap_or(fallback)
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {

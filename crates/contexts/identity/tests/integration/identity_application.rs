@@ -570,6 +570,7 @@ impl Notifications for World {
 #[derive(Clone, Copy)]
 struct FakeRoleCatalog {
     tenant_owner: RoleId,
+    tenant_admin: RoleId,
     tenant_member: RoleId,
 }
 
@@ -581,6 +582,7 @@ impl RoleCatalog for FakeRoleCatalog {
     ) -> Result<Vec<(RoleId, String)>, IdentityError> {
         Ok(vec![
             (self.tenant_owner, "tenant_owner".to_string()),
+            (self.tenant_admin, "tenant_admin".to_string()),
             (self.tenant_member, "tenant_member".to_string()),
         ])
     }
@@ -592,6 +594,7 @@ impl RoleCatalog for FakeRoleCatalog {
     ) -> Result<Option<String>, IdentityError> {
         Ok(match role_id {
             id if id == self.tenant_owner => Some("tenant_owner".to_string()),
+            id if id == self.tenant_admin => Some("tenant_admin".to_string()),
             id if id == self.tenant_member => Some("tenant_member".to_string()),
             _ => None,
         })
@@ -606,6 +609,7 @@ impl RoleCatalog for FakeRoleCatalog {
             .iter()
             .filter_map(|id| match *id {
                 id if id == self.tenant_owner => Some("identity.member.read".to_string()),
+                id if id == self.tenant_admin => Some("identity.member.read".to_string()),
                 id if id == self.tenant_member => Some("tenancy.settings.read".to_string()),
                 _ => None,
             })
@@ -687,6 +691,7 @@ impl Fixture {
             world: World::new(),
             roles: FakeRoleCatalog {
                 tenant_owner: RoleId::try_from(101_i64).unwrap(),
+                tenant_admin: RoleId::try_from(103_i64).unwrap(),
                 tenant_member: RoleId::try_from(102_i64).unwrap(),
             },
             tenant_id: TenantId::try_from(1_i64).unwrap(),
@@ -716,6 +721,7 @@ impl Fixture {
     fn invite(&self) -> InviteMember {
         InviteMember::new(
             self.tx.clone(),
+            Arc::new(self.world.clone()),
             Arc::new(self.world.clone()),
             Arc::new(self.roles),
             Arc::new(self.world.clone()),
@@ -1234,6 +1240,7 @@ async fn role_updates_emit_delta_events() {
             UpdateRolesCommand {
                 role_ids: vec![fixture.roles.tenant_owner],
             },
+            alice,
         )
         .await
         .unwrap();
@@ -1266,4 +1273,136 @@ async fn logout_webhook_emits_revocation() {
             } if *id == alice && session_id == "session-42"
         )));
     }
+}
+
+#[tokio::test]
+async fn delegation_policy_enforces_ownership_limits() {
+    let fixture = Fixture::new(sanvi_testsupport::test_db().await);
+    let alice = fixture.seed_user_async("alice@example.com", true).await;
+    let bob = fixture.seed_user_async("bob@example.com", true).await;
+    let _charlie = fixture.seed_user_async("charlie@example.com", true).await;
+
+    // Alice is granted the initial tenant_owner (bootstrap allowed when 0 owners exist).
+    fixture
+        .grant_member()
+        .execute(
+            fixture.tenant_id,
+            GrantMembershipCommand {
+                email: "alice@example.com".to_string(),
+                role_ids: vec![fixture.roles.tenant_owner],
+            },
+            alice,
+        )
+        .await
+        .unwrap();
+
+    // Alice (owner) grants Bob tenant_admin.
+    fixture
+        .grant_member()
+        .execute(
+            fixture.tenant_id,
+            GrantMembershipCommand {
+                email: "bob@example.com".to_string(),
+                role_ids: vec![fixture.roles.tenant_admin],
+            },
+            alice,
+        )
+        .await
+        .unwrap();
+
+    // Bob (tenant_admin) attempts to grant Charlie tenant_owner -> Denied!
+    let grant_err = fixture
+        .grant_member()
+        .execute(
+            fixture.tenant_id,
+            GrantMembershipCommand {
+                email: "charlie@example.com".to_string(),
+                role_ids: vec![fixture.roles.tenant_owner],
+            },
+            bob,
+        )
+        .await;
+    assert!(matches!(
+        grant_err,
+        Err(IdentityError::DelegationDenied { .. })
+    ));
+
+    // Bob (tenant_admin) attempts to invite Charlie as tenant_owner -> Denied!
+    let invite_err = fixture
+        .invite()
+        .execute(
+            fixture.tenant_id,
+            InviteMemberCommand {
+                email: "charlie@example.com".to_string(),
+                role_ids: vec![fixture.roles.tenant_owner],
+            },
+            bob,
+        )
+        .await;
+    assert!(matches!(
+        invite_err,
+        Err(IdentityError::DelegationDenied { .. })
+    ));
+
+    // Bob (tenant_admin) attempts to elevate self to tenant_owner via update_roles -> Denied!
+    let update_err = fixture
+        .update_roles()
+        .execute(
+            fixture.tenant_id,
+            bob,
+            UpdateRolesCommand {
+                role_ids: vec![fixture.roles.tenant_owner],
+            },
+            bob,
+        )
+        .await;
+    assert!(matches!(
+        update_err,
+        Err(IdentityError::DelegationDenied { .. })
+    ));
+
+    // Alice (sole owner) attempts to replace her role with tenant_member -> LastRoleHolder!
+    let last_owner_err = fixture
+        .update_roles()
+        .execute(
+            fixture.tenant_id,
+            alice,
+            UpdateRolesCommand {
+                role_ids: vec![fixture.roles.tenant_member],
+            },
+            alice,
+        )
+        .await;
+    assert!(matches!(
+        last_owner_err,
+        Err(IdentityError::LastRoleHolder { .. })
+    ));
+
+    // Alice (owner) promotes Bob to tenant_owner -> Succeeded!
+    fixture
+        .update_roles()
+        .execute(
+            fixture.tenant_id,
+            bob,
+            UpdateRolesCommand {
+                role_ids: vec![fixture.roles.tenant_owner],
+            },
+            alice,
+        )
+        .await
+        .unwrap();
+
+    // Now that there are 2 owners, Alice can replace her own role with tenant_member -> Succeeded!
+    fixture
+        .update_roles()
+        .execute(
+            fixture.tenant_id,
+            alice,
+            UpdateRolesCommand {
+                role_ids: vec![fixture.roles.tenant_member],
+            },
+            alice,
+        )
+        .await
+        .unwrap();
 }
