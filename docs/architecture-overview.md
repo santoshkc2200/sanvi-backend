@@ -53,6 +53,13 @@ Context list and responsibility:
 - **Adapters**: implement ports. Never leak `sqlx::Error` or `reqwest::Error` upward — map to domain
   or infrastructure errors at the boundary.
 
+### 2.1 Accepted Layering Exceptions (Enforced by `scripts/check-layering.sh`)
+
+The architecture gate enforces domain purity and dependency direction, with narrow, individually reviewed exceptions for existing technical debt:
+
+- **Infrastructure types in domain port signatures**: Twelve contexts (`access`, `advertising`, `audit`, `billing`, `domains`, `identity`, `localization`, `payments`, `platform_admin`, `privacy`, `tenancy`, `theming`) import `sanvi_persistence` (`ScopedTx`, `PlatformScope`, or `PgPool`) in `src/domain/ports.rs` (or domain store/event definitions). These are permitted pending the transaction abstraction migration (ADR-002) to decouple port signatures from concrete database transaction handles.
+- **Application-to-adapter references**: A narrow set of application services in `advertising`, `billing`, `domains`, `localization`, `payments`, `privacy`, and `theming` reference adapter types directly (Prometheus metrics instances, in-memory caches, adapter utility functions, and test fake providers). These are listed as exact-file exceptions pending port extraction.
+
 ## 3. Inter-context communication
 
 - **Synchronous**: caller's application layer depends on a *port it defines itself*; the composition
@@ -62,6 +69,18 @@ Context list and responsibility:
   change. A dispatcher in `apps/worker` publishes to Redis Streams; consumers are idempotent by
   `(consumer_group, event_id)`. This is the default for anything cross-context and non-critical-path.
 - **Forbidden**: cross-schema SQL joins, shared tables, direct repository reuse across contexts.
+
+### 3.1 Accepted Context Ownership Exceptions (Enforced by `scripts/check-layering.sh`)
+
+Bounded contexts must not import another context's domain or repository types. The following specific exceptions are documented and gated:
+
+- **Privacy SPI (`PersonalDataProvider`)**: Every context's `src/adapters/privacy_provider.rs` implements `sanvi_privacy::domain::PersonalDataProvider` to support platform subject requests (export and erasure) pending port extraction to `sanvi-kernel`.
+- **Audit Logging (`AuditWriter`)**: Security-critical use cases in `access`, `billing`, `payments`, and `platform_admin` import `sanvi_audit::domain::{ActorType, AuditEntryData, AuditWriter}` directly pending extraction of an audit port.
+- **Platform Admin Composition**: `platform_admin` acts as a composite administration aggregate directly delegating tenant, membership, and entitlement state across `access`, `identity`, and `tenancy`.
+- **Cross-context integrations**:
+  - `billing/src/application/plans.rs` and `sync.rs` import `sanvi_access::domain` to synchronize subscription plan entitlements with access feature keys.
+  - `advertising` imports `sanvi_payments::domain::CheckoutRepository` for conversion attribution and `sanvi_privacy::domain` for tracking consent directives.
+  - `access` imports `sanvi_identity::domain` for membership synchronization and relation tuple rebuilding.
 
 ## 4. Persistence
 
@@ -74,6 +93,13 @@ Context list and responsibility:
   The transaction manager sets it with `SET LOCAL` at the start of each request transaction. The
   application role is `NOBYPASSRLS`; migrations use a separate owner role.
 - No `SELECT *`. Explicit column lists so schema drift is a compile error.
+
+### 4.1 Accepted Cross-Schema SQL Exceptions (Enforced by `scripts/check-layering.sh`)
+
+Contexts must only query their own database schema. Two narrow exceptions exist for existing queries:
+
+- `billing`: `crates/contexts/billing/src/adapters/repos.rs:764` joins `tenancy.tenants` in `list_dunning_due` to verify tenant status (`t.status = 'active'`) pending an asynchronous tenant state projection or port call.
+- `localization`: `crates/contexts/localization/src/adapters/repos.rs:39` queries `identity.users` for user locale preference pending an identity client adapter.
 
 ## 5. Transport
 
