@@ -59,3 +59,120 @@ impl PurchaseCharger for SandboxPurchaseCharger {
         Ok(())
     }
 }
+
+/// A disabled purchase charger that rejects all charge and refund operations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DisabledPurchaseCharger;
+
+#[async_trait]
+impl PurchaseCharger for DisabledPurchaseCharger {
+    async fn charge(
+        &self,
+        _tenant_id: TenantId,
+        _order_id: DomainOrderId,
+        _amount_minor: i64,
+        _currency: &str,
+        _description: &str,
+    ) -> Result<String, DomainsError> {
+        Err(DomainsError::Charge(
+            "purchase charger capability is disabled".to_string(),
+        ))
+    }
+
+    async fn refund(
+        &self,
+        _tenant_id: TenantId,
+        _order_id: DomainOrderId,
+        _charge_id: &str,
+    ) -> Result<(), DomainsError> {
+        Err(DomainsError::Refund(
+            "purchase charger capability is disabled".to_string(),
+        ))
+    }
+}
+
+/// A disabled certificate authority that rejects all issuance and renewal operations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DisabledCertificateAuthority;
+
+#[async_trait]
+impl crate::domain::CertificateAuthorityPort for DisabledCertificateAuthority {
+    async fn issue(
+        &self,
+        _domain: &crate::domain::CustomDomain,
+    ) -> Result<crate::domain::Certificate, DomainsError> {
+        Err(DomainsError::CertificateAuthority(
+            "certificate authority capability is disabled".to_string(),
+        ))
+    }
+
+    async fn renew(
+        &self,
+        _cert: &crate::domain::Certificate,
+        _domain: &crate::domain::CustomDomain,
+    ) -> Result<crate::domain::Certificate, DomainsError> {
+        Err(DomainsError::CertificateAuthority(
+            "certificate authority capability is disabled".to_string(),
+        ))
+    }
+
+    async fn revoke(&self, _cert: &crate::domain::Certificate) -> Result<(), DomainsError> {
+        Err(DomainsError::CertificateAuthority(
+            "certificate authority capability is disabled".to_string(),
+        ))
+    }
+}
+
+/// A disabled domain registrar that rejects all catalog, search, quote, register, and renew operations.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DisabledRegistrar;
+
+#[async_trait]
+impl crate::domain::DomainRegistrarPort for DisabledRegistrar {
+    fn registrar_id(&self) -> String {
+        "disabled".to_string()
+    }
+
+    fn catalog(&self) -> Vec<crate::domain::TldPrice> {
+        Vec::new()
+    }
+
+    async fn search(&self, _query: &str) -> Result<Vec<crate::domain::DomainQuote>, DomainsError> {
+        Err(DomainsError::Registrar(
+            "domain registrar capability is disabled".to_string(),
+        ))
+    }
+
+    async fn quote(
+        &self,
+        _hostname: &crate::domain::Hostname,
+        _term_years: u8,
+    ) -> Result<crate::domain::DomainQuote, DomainsError> {
+        Err(DomainsError::Registrar(
+            "domain registrar capability is disabled".to_string(),
+        ))
+    }
+
+    async fn register(
+        &self,
+        _order_id: DomainOrderId,
+        _hostname: &crate::domain::Hostname,
+        _term_years: u8,
+        _whois_privacy: bool,
+    ) -> Result<crate::domain::RegistrationResult, DomainsError> {
+        Err(DomainsError::Registrar(
+            "domain registrar capability is disabled".to_string(),
+        ))
+    }
+
+    async fn renew(
+        &self,
+        _external_ref: &str,
+        _hostname: &crate::domain::Hostname,
+        _term_years: u8,
+    ) -> Result<crate::domain::RenewalResult, DomainsError> {
+        Err(DomainsError::Registrar(
+            "domain registrar capability is disabled".to_string(),
+        ))
+    }
+}

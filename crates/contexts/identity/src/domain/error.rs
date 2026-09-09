@@ -79,6 +79,13 @@ pub enum IdentityError {
     #[error("role id {0} is not assignable in this tenant")]
     RoleNotAssignable(RoleId),
 
+    #[error("actor {actor} lacks authority to delegate or revoke role {role}: {detail}")]
+    DelegationDenied {
+        actor: UserId,
+        role: String,
+        detail: String,
+    },
+
     #[error("no roles specified")]
     NoRoles,
 

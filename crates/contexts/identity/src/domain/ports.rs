@@ -49,11 +49,17 @@ pub trait UserRepository: Send + Sync {
 #[async_trait]
 pub trait MembershipRepository: Send + Sync {
     /// Insert (or fully replace) a membership, including its roles.
+    ///
+    /// Returns the membership's new version: a per-`(tenant_id, user_id)`
+    /// counter bumped inside this transaction, under the row lock. The access
+    /// context orders its Keto tuple writes by this value, so a redelivered or
+    /// reordered event cannot apply an older membership state over a newer one.
+    /// Wall-clock timestamps cannot serve here — API replicas' clocks skew.
     async fn save(
         &self,
         scope: &mut ScopedTx<'_>,
         membership: &Membership,
-    ) -> Result<(), IdentityError>;
+    ) -> Result<i64, IdentityError>;
 
     async fn find(
         &self,
@@ -77,12 +83,16 @@ pub trait MembershipRepository: Send + Sync {
         tenant_id: TenantId,
     ) -> Result<Vec<(Membership, Email)>, IdentityError>;
 
+    /// Delete a membership and its roles, returning the version the revocation
+    /// takes in this membership's order (the deleted row's version plus one),
+    /// so the access context can reject a revoke that arrives after a later
+    /// re-grant. Returns `None` when there was no membership to remove.
     async fn remove(
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         user_id: UserId,
-    ) -> Result<(), IdentityError>;
+    ) -> Result<Option<i64>, IdentityError>;
 
     /// Phase-05 erasure: delete every membership (and membership role) of
     /// one user across all tenants, under the audited platform scope.

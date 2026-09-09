@@ -18,6 +18,8 @@ pub struct StoredCampaign {
     pub revision: i64,
     pub intent: Campaign,
     pub remote_snapshot: Campaign,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publishing_mutation_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

@@ -5,6 +5,7 @@
 //! work through `ScopedTx::begin_for` (RLS-filtered). Domain events are
 //! written to the outbox in the same transaction as the state change.
 
+pub mod delegation;
 pub mod get_me;
 pub mod handle_logout;
 pub mod invitations;
@@ -12,6 +13,8 @@ pub mod link_challenge;
 pub mod members;
 pub mod sessions;
 pub mod sync_identity;
+
+pub use delegation::DelegationPolicy;
 
 pub use get_me::{GetMe, MeView, MembershipSummary};
 pub use handle_logout::HandleLogoutWebhook;

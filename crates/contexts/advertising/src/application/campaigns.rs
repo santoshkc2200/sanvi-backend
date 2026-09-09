@@ -191,6 +191,7 @@ impl CreateCampaign {
             revision: 1,
             intent: draft.clone(),
             remote_snapshot: draft.clone(),
+            publishing_mutation_id: None,
         };
         self.campaigns.insert(&mut scope, &stored).await?;
         self.campaigns
@@ -1173,6 +1174,32 @@ pub struct PublishCampaign {
     ids: Arc<dyn crate::domain::IdGenerator>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PublishError {
+    #[error(transparent)]
+    Preflight(#[from] AdvertisingError),
+    #[error(transparent)]
+    RemoteMayHaveOccurred(AdvertisingError),
+}
+
+impl PublishError {
+    pub fn into_inner(self) -> AdvertisingError {
+        match self {
+            Self::Preflight(err) | Self::RemoteMayHaveOccurred(err) => err,
+        }
+    }
+
+    pub fn remote_may_have_occurred(&self) -> bool {
+        matches!(self, Self::RemoteMayHaveOccurred(_))
+    }
+}
+
+impl From<PublishError> for AdvertisingError {
+    fn from(err: PublishError) -> Self {
+        err.into_inner()
+    }
+}
+
 impl PublishCampaign {
     pub fn new(
         tx: TxManager,
@@ -1201,80 +1228,240 @@ impl PublishCampaign {
         mutation_id: Uuid,
         actor_id: UserId,
     ) -> Result<StoredCampaign, AdvertisingError> {
+        self.execute_with_safety(tenant_id, campaign_id, mutation_id, actor_id)
+            .await
+            .map_err(PublishError::into_inner)
+    }
+
+    pub async fn execute_with_safety(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        mutation_id: Uuid,
+        actor_id: UserId,
+    ) -> Result<StoredCampaign, PublishError> {
+        // Step 1 (Tx 1): Check state and persist Publishing intent before external side effect.
         let mut scope = self
             .tx
             .begin_for(tenant_id.as_i64())
             .await
-            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let stored = self
+            .map_err(|error| {
+                PublishError::Preflight(AdvertisingError::Storage(error.to_string()))
+            })?;
+
+        let stored = match self
             .campaigns
             .find(&mut scope, tenant_id, campaign_id)
-            .await?
-            .ok_or(AdvertisingError::CampaignNotFound)?;
+            .await
+        {
+            Ok(Some(stored)) => stored,
+            Ok(None) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::Preflight(AdvertisingError::CampaignNotFound));
+            }
+            Err(err) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::Preflight(err));
+            }
+        };
+
         if stored.external_id.is_some() {
             // Already live. A retried publish is a no-op success, not a
             // second campaign.
-            scope
-                .rollback()
-                .await
-                .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+            scope.rollback().await.map_err(|error| {
+                PublishError::Preflight(AdvertisingError::Storage(error.to_string()))
+            })?;
             return Ok(stored);
         }
-        let adapter = self.platforms.adapter(&stored.platform)?;
-        let violations = validate_campaign(&adapter.descriptor().capability_matrix, &stored.intent);
-        if !violations.is_empty() {
-            return Err(AdvertisingError::Validation(violations));
-        }
-        verify_ad_creatives_exist(
-            &mut scope,
-            self.creatives.as_ref(),
-            tenant_id,
-            &stored.intent,
-        )
-        .await?;
-        let before = stored.intent.clone();
+
+        let adapter = match self.platforms.adapter(&stored.platform) {
+            Ok(adapter) => adapter,
+            Err(err) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::Preflight(err));
+            }
+        };
+
+        let is_publishing = stored.publishing_mutation_id.is_some()
+            || stored.intent.status == crate::domain::CampaignStatus::Publishing;
+
+        let (stable_mutation_id, handle) = if is_publishing {
+            let stable_id = stored.publishing_mutation_id.unwrap_or(mutation_id);
+            let connection = match load_connection_for_handle(
+                &mut scope,
+                self.connections.as_ref(),
+                tenant_id,
+                stored.connection_id,
+            )
+            .await
+            {
+                Ok(conn) => conn,
+                Err(err) => {
+                    let _ = scope.rollback().await;
+                    return Err(PublishError::Preflight(err));
+                }
+            };
+            let handle = connection_handle(&connection);
+            scope.rollback().await.map_err(|error| {
+                PublishError::Preflight(AdvertisingError::Storage(error.to_string()))
+            })?;
+            (stable_id, handle)
+        } else {
+            let violations =
+                validate_campaign(&adapter.descriptor().capability_matrix, &stored.intent);
+            if !violations.is_empty() {
+                let _ = scope.rollback().await;
+                return Err(PublishError::Preflight(AdvertisingError::Validation(
+                    violations,
+                )));
+            }
+            if let Err(err) = verify_ad_creatives_exist(
+                &mut scope,
+                self.creatives.as_ref(),
+                tenant_id,
+                &stored.intent,
+            )
+            .await
+            {
+                let _ = scope.rollback().await;
+                return Err(PublishError::Preflight(err));
+            }
+
+            let connection = match load_connection_for_handle(
+                &mut scope,
+                self.connections.as_ref(),
+                tenant_id,
+                stored.connection_id,
+            )
+            .await
+            {
+                Ok(conn) => conn,
+                Err(err) => {
+                    let _ = scope.rollback().await;
+                    return Err(PublishError::Preflight(err));
+                }
+            };
+            let handle = connection_handle(&connection);
+
+            let mut intent = stored.intent.clone();
+            intent.status = crate::domain::CampaignStatus::Publishing;
+            let publishing_stored = StoredCampaign {
+                intent,
+                publishing_mutation_id: Some(mutation_id),
+                revision: stored.revision + 1,
+                ..stored.clone()
+            };
+
+            match self
+                .campaigns
+                .update(&mut scope, &publishing_stored, stored.revision)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    let _ = scope.rollback().await;
+                    return Err(PublishError::Preflight(AdvertisingError::StaleRevision));
+                }
+                Err(err) => {
+                    let _ = scope.rollback().await;
+                    return Err(PublishError::Preflight(err));
+                }
+            }
+
+            scope.commit().await.map_err(|error| {
+                PublishError::Preflight(AdvertisingError::Storage(error.to_string()))
+            })?;
+
+            (mutation_id, handle)
+        };
+
+        // Step 2: Provider call outside the database transaction.
         let mut published = stored.intent.clone();
         published.status = crate::domain::CampaignStatus::Active;
         let remote = adapter
-            .create_campaign(
-                &connection_handle(
-                    &load_connection_for_handle(
-                        &mut scope,
-                        self.connections.as_ref(),
-                        tenant_id,
-                        stored.connection_id,
-                    )
-                    .await?,
-                ),
-                published,
-                mutation_id,
-            )
-            .await?;
+            .create_campaign(&handle, published, stable_mutation_id)
+            .await
+            .map_err(PublishError::RemoteMayHaveOccurred)?;
         let external_id = remote.id.clone();
 
+        // Step 3 (Tx 2): Finalization.
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(|error| {
+                PublishError::RemoteMayHaveOccurred(AdvertisingError::Storage(error.to_string()))
+            })?;
+
+        let current = match self
+            .campaigns
+            .find(&mut scope, tenant_id, campaign_id)
+            .await
+        {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::RemoteMayHaveOccurred(
+                    AdvertisingError::CampaignNotFound,
+                ));
+            }
+            Err(err) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::RemoteMayHaveOccurred(err));
+            }
+        };
+
+        if current.external_id.is_some() {
+            let _ = scope.rollback().await;
+            return Ok(current);
+        }
+
+        let before = current.intent.clone();
         let updated = StoredCampaign {
             external_id: Some(external_id),
-            revision: stored.revision + 1,
+            revision: current.revision + 1,
             intent: remote.clone(),
             remote_snapshot: remote,
-            ..stored
+            publishing_mutation_id: None,
+            ..current
         };
-        if !self
+
+        match self
             .campaigns
-            .update(&mut scope, &updated, updated.revision - 1)
-            .await?
+            .update(&mut scope, &updated, current.revision)
+            .await
         {
-            return Err(AdvertisingError::StaleRevision);
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::RemoteMayHaveOccurred(
+                    AdvertisingError::StaleRevision,
+                ));
+            }
+            Err(err) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::RemoteMayHaveOccurred(err));
+            }
         }
-        self.campaigns
+
+        let change_id = match self.ids.next_campaign_change_id() {
+            Ok(id) => id,
+            Err(err) => {
+                let _ = scope.rollback().await;
+                return Err(PublishError::RemoteMayHaveOccurred(err));
+            }
+        };
+
+        if let Err(err) = self
+            .campaigns
             .append_change(
                 &mut scope,
                 &CampaignChange {
-                    id: self.ids.next_campaign_change_id()?,
+                    id: change_id,
                     tenant_id,
                     campaign_id,
                     revision: updated.revision,
-                    mutation_id: Some(mutation_id),
+                    mutation_id: Some(stable_mutation_id),
                     actor_id: Some(actor_id),
                     source: ChangeSource::Sanvi,
                     changed_fields: vec!["status".to_string(), "external_id".to_string()],
@@ -1285,19 +1472,65 @@ impl PublishCampaign {
                     created_at: Utc::now(),
                 },
             )
-            .await?;
-        self.events
+            .await
+        {
+            let _ = scope.rollback().await;
+            return Err(PublishError::RemoteMayHaveOccurred(err));
+        }
+
+        if let Err(err) = self
+            .events
             .publish_scoped(
                 &mut scope,
                 tenant_id,
                 &[AdEvent::CampaignUpdated { campaign_id }],
             )
-            .await?;
-        scope
-            .commit()
             .await
-            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+        {
+            let _ = scope.rollback().await;
+            return Err(PublishError::RemoteMayHaveOccurred(err));
+        }
+
+        scope.commit().await.map_err(|error| {
+            PublishError::RemoteMayHaveOccurred(AdvertisingError::Storage(error.to_string()))
+        })?;
+
         Ok(updated)
+    }
+
+    /// Reconcile an in-flight or uncertain publishing campaign against the provider.
+    /// If the campaign is already live, returns it. If it is in `publishing` state,
+    /// re-drives the provider call using the persisted `publishing_mutation_id`.
+    pub async fn reconcile_publishing(
+        &self,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+        actor_id: UserId,
+    ) -> Result<StoredCampaign, AdvertisingError> {
+        let stable_mutation_id = {
+            let mut scope = self
+                .tx
+                .begin_for(tenant_id.as_i64())
+                .await
+                .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+            let stored = self
+                .campaigns
+                .find(&mut scope, tenant_id, campaign_id)
+                .await?
+                .ok_or(AdvertisingError::CampaignNotFound)?;
+            scope
+                .rollback()
+                .await
+                .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
+            if stored.external_id.is_some() {
+                return Ok(stored);
+            }
+            stored.publishing_mutation_id.ok_or_else(|| {
+                AdvertisingError::Storage("campaign is not in publishing state".to_string())
+            })?
+        };
+        self.execute(tenant_id, campaign_id, stable_mutation_id, actor_id)
+            .await
     }
 }
 

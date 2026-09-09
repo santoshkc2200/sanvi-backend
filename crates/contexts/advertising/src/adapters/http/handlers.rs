@@ -21,7 +21,8 @@ use crate::{
     application::{
         AdFields, AdGroupFields, CampaignFields, DriftResolution, NewAdFields, NewAdGroupFields,
         NewCampaignFields, NewCreativeFields, PlacementPreview, PlatformAdsHealthReport,
-        PutBudgetCapCommand, PutBudgetCapResponse, ResolvedCampaignDrift, SpendStatusReport,
+        PublishError, PutBudgetCapCommand, PutBudgetCapResponse, ResolvedCampaignDrift,
+        SpendStatusReport,
     },
     domain::{
         AdGroup, AdvertisingConnection, AdvertisingError, AssetMetadata, BidSettings, Budget,
@@ -939,16 +940,19 @@ pub async fn publish_campaign(
 
     let result = state
         .publish_campaign
-        .execute(tenant_id, campaign_id, mutation_id, subject.0.user_id)
+        .execute_with_safety(tenant_id, campaign_id, mutation_id, subject.0.user_id)
         .await;
     let stored = match result {
         Ok(stored) => stored,
-        Err(AdvertisingError::Validation(violations)) => {
+        Err(PublishError::Preflight(AdvertisingError::Validation(violations))) => {
             release_idempotent(&state, &key, &scope).await;
             return Err(campaign_validation_problem(violations));
         }
-        Err(error) => {
+        Err(PublishError::Preflight(error)) => {
             release_idempotent(&state, &key, &scope).await;
+            return Err(api_error(error).into());
+        }
+        Err(PublishError::RemoteMayHaveOccurred(error)) => {
             return Err(api_error(error).into());
         }
     };

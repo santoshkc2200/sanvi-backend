@@ -26,20 +26,25 @@ impl MembershipRepository for SqlxMembershipRepository {
         &self,
         scope: &mut ScopedTx<'_>,
         membership: &Membership,
-    ) -> Result<(), IdentityError> {
-        sqlx::query!(
-            "INSERT INTO identity.memberships (tenant_id, user_id, status, invited_by, created_at)
-             VALUES ($1, $2, $3, $4, $5)
+    ) -> Result<i64, IdentityError> {
+        // `version + 1` is evaluated under this statement's row lock, so
+        // concurrent writers serialise and every save observes a strictly
+        // greater value than the one before it.
+        let version = sqlx::query_scalar!(
+            "INSERT INTO identity.memberships (tenant_id, user_id, status, invited_by, created_at, version)
+             VALUES ($1, $2, $3, $4, $5, 1)
              ON CONFLICT (tenant_id, user_id) DO UPDATE SET
                status = EXCLUDED.status,
-               invited_by = EXCLUDED.invited_by",
+               invited_by = EXCLUDED.invited_by,
+               version = identity.memberships.version + 1
+             RETURNING version",
             membership.tenant_id().as_i64(),
             membership.user_id().as_i64(),
             membership.status().as_str(),
             membership.invited_by().map(|id| id.as_i64()),
             membership.created_at(),
         )
-        .execute(&mut **scope.tx_mut().as_inner())
+        .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| IdentityError::Storage(err.to_string()))?;
 
@@ -64,7 +69,7 @@ impl MembershipRepository for SqlxMembershipRepository {
             .await
             .map_err(|err| IdentityError::Storage(err.to_string()))?;
         }
-        Ok(())
+        Ok(version)
     }
 
     async fn find(
@@ -181,16 +186,17 @@ impl MembershipRepository for SqlxMembershipRepository {
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         user_id: UserId,
-    ) -> Result<(), IdentityError> {
-        sqlx::query!(
-            "DELETE FROM identity.memberships WHERE tenant_id = $1 AND user_id = $2",
+    ) -> Result<Option<i64>, IdentityError> {
+        let version = sqlx::query_scalar!(
+            "DELETE FROM identity.memberships WHERE tenant_id = $1 AND user_id = $2
+             RETURNING version + 1",
             tenant_id.as_i64(),
             user_id.as_i64(),
         )
-        .execute(&mut **scope.tx_mut().as_inner())
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| IdentityError::Storage(err.to_string()))?;
-        Ok(())
+        Ok(version.flatten())
     }
 
     async fn remove_all_platform(

@@ -150,8 +150,22 @@ pub struct DomainsConfig {
     pub connect_entitlement_key: String,
     #[serde(default = "default_purchase_entitlement")]
     pub purchase_entitlement_key: String,
+    /// Certificate authority mode (`disabled`, `sandbox`, `live`).
+    #[serde(default = "default_ca_mode")]
+    pub ca_mode: String,
+    /// Purchase charger mode (`disabled`, `sandbox`, `live`).
+    #[serde(default = "default_charger_mode")]
+    pub charger_mode: String,
     #[serde(default)]
     pub registrar: RegistrarConfig,
+}
+
+fn default_ca_mode() -> String {
+    "sandbox".to_string()
+}
+
+fn default_charger_mode() -> String {
+    "sandbox".to_string()
 }
 
 fn default_doh_min_agreement() -> usize {
@@ -246,6 +260,8 @@ impl Default for DomainsConfig {
             order_renewal_max_attempts: default_renewal_attempts(),
             connect_entitlement_key: default_connect_entitlement(),
             purchase_entitlement_key: default_purchase_entitlement(),
+            ca_mode: default_ca_mode(),
+            charger_mode: default_charger_mode(),
             registrar: RegistrarConfig::default(),
         }
     }

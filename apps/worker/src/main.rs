@@ -25,8 +25,8 @@ use figment::{
 use sanvi_access::{
     AccessConfig,
     adapters::{
-        HttpKetoClient, InMemoryDecisionCache, OutboxEventPublisher as AccessEventPublisher,
-        RedisEntitlementCache, SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleRepository,
+        HttpKetoClient, OutboxEventPublisher as AccessEventPublisher, RedisEntitlementCache,
+        SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleRepository,
         sync::entitlement_sync_handler,
     },
     application::ExpireEntitlements,
@@ -36,11 +36,10 @@ use sanvi_access::{
     },
 };
 use sanvi_advertising::{
-    AudienceRepository, AudienceSyncPort, ConversionSinkPort, PlatformKey,
+    AudienceRepository, PlatformKey,
     adapters::{
-        AdvertisingMetrics, FakeAdPlatform, FakeAudienceSync, FakeConversionSink,
-        OutboxEventPublisher as AdvertisingEventPublisher, SqlxAdvertisingConnectionRepository,
-        SqlxCampaignRepository,
+        AdvertisingMetrics, OutboxEventPublisher as AdvertisingEventPublisher,
+        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
     },
     application::{
         ReconcileCampaign, ReconcileDueCampaigns, RetractWithdrawnConversions, SyncAudiences,
@@ -1128,11 +1127,15 @@ async fn main() -> ExitCode {
     }
     let access_consumer = access_consumer.with_metrics(access_consumer_metrics);
     let access_consumer_name = format!("access-{}", uuid::Uuid::now_v7());
-    let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> =
-        Arc::new(InMemoryDecisionCache::new(10_000));
-    let access_handler = sanvi_access::adapters::sync::access_sync_handler(
+    let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> = Arc::new(
+        sanvi_access::adapters::RedisDecisionCache::new(redis.clone()),
+    );
+    let version_store: Arc<dyn sanvi_access::adapters::sync::MembershipVersionStore> =
+        Arc::new(sanvi_access::adapters::sync::RedisMembershipVersionStore::new(redis.clone()));
+    let access_handler = sanvi_access::adapters::sync::access_sync_handler_with_version_store(
         access_store.clone(),
         Some(decision_cache.clone()),
+        version_store,
         role_key_resolver,
     );
 
@@ -1371,16 +1374,12 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsProvider::new(
             domains_records.clone(),
         ));
-    let domains_registrar: std::sync::Arc<dyn sanvi_domains::domain::DomainRegistrarPort> =
-        std::sync::Arc::new(sanvi_domains::adapters::SandboxRegistrar::new(
-            config.domains.registrar.registrar_id.clone(),
-            &config.domains.registrar.tlds,
-        ));
-    let domains_ca: std::sync::Arc<dyn sanvi_domains::domain::CertificateAuthorityPort> =
-        std::sync::Arc::new(sanvi_domains::adapters::SandboxCertificateAuthority::new(
-            config.domains.cert_lifetime_days,
-            ids.clone(),
-        ));
+    let (domains_registrar, domains_registrar_mode) =
+        sanvi_domains::adapters::build_domain_registrar(&config.domains)
+            .expect("domains registrar must initialize cleanly");
+    let (domains_ca, domains_ca_mode) =
+        sanvi_domains::adapters::build_certificate_authority(&config.domains, ids.clone())
+            .expect("domains certificate authority must initialize cleanly");
     let domains_verifier: std::sync::Arc<dyn sanvi_domains::domain::DnsVerifierPort> =
         std::sync::Arc::new(sanvi_domains::adapters::DohDnsVerifier::new(
             config.domains.doh_resolvers.clone(),
@@ -1404,10 +1403,16 @@ async fn main() -> ExitCode {
         metrics.prometheus_registry(),
     ));
 
-    // The worker's charger is the same sandbox adapter the API uses (the
-    // purchase saga's charge step is a port; both processes implement it).
-    let domains_charger: std::sync::Arc<dyn sanvi_domains::domain::PurchaseCharger> =
-        std::sync::Arc::new(sanvi_domains::adapters::SandboxPurchaseCharger);
+    // The worker's charger is the same charger the API uses.
+    let (domains_charger, domains_charger_mode) =
+        sanvi_domains::adapters::build_purchase_charger(&config.domains)
+            .expect("domains purchase charger must initialize cleanly");
+    tracing::info!(
+        registrar_mode = %domains_registrar_mode,
+        ca_mode = %domains_ca_mode,
+        charger_mode = %domains_charger_mode,
+        "domains capabilities initialized"
+    );
 
     let domains_place_order =
         std::sync::Arc::new(sanvi_domains::application::PlaceDomainOrder::new(
@@ -1801,11 +1806,19 @@ async fn main() -> ExitCode {
     let advertising_ids: Arc<dyn sanvi_advertising::domain::IdGenerator> = Arc::new(
         sanvi_advertising::adapters::SystemIdGenerator::new(ids.clone()),
     );
-    let advertising_platforms = Arc::new(sanvi_advertising::adapters::rate_limited_registry(
-        &sanvi_advertising::adapters::build_platform_registry(
+    let (ad_platform_registry, ad_platform_mode) =
+        match sanvi_advertising::adapters::build_platform_registry(
             &config.advertising,
             &advertising_token_providers,
-        ),
+        ) {
+            Ok(res) => res,
+            Err(err) => {
+                tracing::error!(%err, "failed to initialize advertising platform registry");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+    let advertising_platforms = Arc::new(sanvi_advertising::adapters::rate_limited_registry(
+        &ad_platform_registry,
         |platform| match platform.as_str() {
             "meta" => (10, 2),
             _ => (
@@ -1829,16 +1842,14 @@ async fn main() -> ExitCode {
         advertising_platforms.clone(),
         advertising_reconcile_campaign,
     ));
-    let mut advertising_conversion_sinks: std::collections::BTreeMap<
-        PlatformKey,
-        Arc<dyn ConversionSinkPort>,
-    > = std::collections::BTreeMap::new();
-    for descriptor in FakeAdPlatform::fixtures().into_iter().take(2) {
-        advertising_conversion_sinks.insert(
-            descriptor.key.clone(),
-            Arc::new(FakeConversionSink::new(descriptor)),
-        );
-    }
+    let (advertising_conversion_sinks, conversion_sink_mode) =
+        match sanvi_advertising::adapters::build_conversion_sinks(&config.advertising) {
+            Ok(res) => res,
+            Err(err) => {
+                tracing::error!(%err, "failed to initialize advertising conversion sinks");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
     let advertising_conversion_events: Arc<dyn ConversionEventRepository> =
         Arc::new(SqlxCampaignRepository::new());
     let advertising_metrics = Arc::new(AdvertisingMetrics::new(registry));
@@ -1859,16 +1870,20 @@ async fn main() -> ExitCode {
         advertising_metrics.clone(),
     ));
 
-    let mut advertising_audience_sinks: std::collections::BTreeMap<
-        PlatformKey,
-        Arc<dyn AudienceSyncPort>,
-    > = std::collections::BTreeMap::new();
-    for descriptor in FakeAdPlatform::fixtures().into_iter().take(2) {
-        advertising_audience_sinks.insert(
-            descriptor.key.clone(),
-            Arc::new(FakeAudienceSync::new(descriptor)),
-        );
-    }
+    let (advertising_audience_sinks, audience_sink_mode) =
+        match sanvi_advertising::adapters::build_audience_sinks(&config.advertising) {
+            Ok(res) => res,
+            Err(err) => {
+                tracing::error!(%err, "failed to initialize advertising audience sinks");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+    tracing::info!(
+        platform_mode = %ad_platform_mode,
+        conversion_sink_mode = %conversion_sink_mode,
+        audience_sink_mode = %audience_sink_mode,
+        "advertising capabilities initialized"
+    );
     let advertising_audiences: Arc<dyn AudienceRepository> =
         Arc::new(SqlxCampaignRepository::new());
     let advertising_audience_sync_sweep = Arc::new(SyncAudiences::new(

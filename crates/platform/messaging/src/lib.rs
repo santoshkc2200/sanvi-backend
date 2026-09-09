@@ -18,7 +18,9 @@ mod scheduler;
 mod writer;
 
 pub use config::RedisConfig;
-pub use consumer::{ConsumerHandler, StreamConsumer};
+pub use consumer::{
+    ConsumerHandler, HandlerError, StreamConsumer, TransactionalConsumerHandler, is_transient_error,
+};
 pub use metrics::{ConsumerMetrics, OutboxMetrics};
 pub use outbox::{OutboxDispatcher, OutboxRecord, StreamName};
 pub use redis::{StreamsClient, connect_redis};

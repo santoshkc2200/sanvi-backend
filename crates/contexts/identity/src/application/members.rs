@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use utoipa::ToSchema;
 
+use crate::application::delegation::DelegationPolicy;
 use crate::application::storage;
 use crate::domain::events::IdentityEvent;
 use crate::domain::membership::{Membership, MembershipStatus};
@@ -91,6 +92,7 @@ pub struct GrantMembership {
     roles: Arc<dyn RoleCatalog>,
     events: Arc<dyn EventPublisher>,
     clock: Arc<dyn Clock>,
+    protected_role_key: String,
 }
 
 impl GrantMembership {
@@ -109,7 +111,13 @@ impl GrantMembership {
             roles,
             events,
             clock,
+            protected_role_key: "tenant_owner".to_string(),
         }
+    }
+
+    pub fn with_protected_role_key(mut self, key: impl Into<String>) -> Self {
+        self.protected_role_key = key.into();
+        self
     }
 
     /// Grant a brand-new membership (or error when one already exists —
@@ -121,7 +129,8 @@ impl GrantMembership {
         actor: UserId,
     ) -> Result<MemberView, IdentityError> {
         let email = Email::parse(&cmd.email)?;
-        self.validate_roles(tenant_id, &cmd.role_ids).await?;
+        let assignable =
+            DelegationPolicy::validate_assignable(tenant_id, &cmd.role_ids, &*self.roles).await?;
 
         let mut platform = self
             .tx_manager
@@ -139,14 +148,26 @@ impl GrantMembership {
         let user_id = user.id();
         platform.commit().await.map_err(storage)?;
 
-        let now = self.clock.now();
-        let membership = Membership::grant(tenant_id, user_id, cmd.role_ids, Some(actor), now)?;
-
         let mut scope = self
             .tx_manager
             .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
+
+        DelegationPolicy::check_grant(
+            &mut scope,
+            tenant_id,
+            actor,
+            &cmd.role_ids,
+            &assignable,
+            &self.protected_role_key,
+            &*self.memberships,
+        )
+        .await?;
+
+        let now = self.clock.now();
+        let membership = Membership::grant(tenant_id, user_id, cmd.role_ids, Some(actor), now)?;
+
         if self
             .memberships
             .find(&mut scope, tenant_id, user_id)
@@ -155,11 +176,12 @@ impl GrantMembership {
         {
             return Err(IdentityError::NotAMember { user_id, tenant_id });
         }
-        self.memberships.save(&mut scope, &membership).await?;
+        let version = self.memberships.save(&mut scope, &membership).await?;
         let events = vec![IdentityEvent::MembershipGranted {
             tenant_id,
             user_id,
             role_ids: membership.role_ids().to_vec(),
+            version,
         }];
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;
@@ -173,25 +195,6 @@ impl GrantMembership {
             created_at: membership.created_at(),
         })
     }
-
-    async fn validate_roles(
-        &self,
-        tenant_id: TenantId,
-        role_ids: &[RoleId],
-    ) -> Result<(), IdentityError> {
-        if role_ids.is_empty() {
-            return Err(IdentityError::NoRoles);
-        }
-        let assignable = self.roles.assignable_roles(tenant_id).await?;
-        let assignable_ids: std::collections::BTreeSet<RoleId> =
-            assignable.into_iter().map(|(id, _)| id).collect();
-        for id in role_ids {
-            if !assignable_ids.contains(id) {
-                return Err(IdentityError::RoleNotAssignable(*id));
-            }
-        }
-        Ok(())
-    }
 }
 
 pub struct UpdateMemberRoles {
@@ -199,6 +202,7 @@ pub struct UpdateMemberRoles {
     memberships: Arc<dyn MembershipRepository>,
     roles: Arc<dyn RoleCatalog>,
     events: Arc<dyn EventPublisher>,
+    protected_role_key: String,
 }
 
 impl UpdateMemberRoles {
@@ -213,7 +217,13 @@ impl UpdateMemberRoles {
             memberships,
             roles,
             events,
+            protected_role_key: "tenant_owner".to_string(),
         }
+    }
+
+    pub fn with_protected_role_key(mut self, key: impl Into<String>) -> Self {
+        self.protected_role_key = key.into();
+        self
     }
 
     pub async fn execute(
@@ -221,18 +231,10 @@ impl UpdateMemberRoles {
         tenant_id: TenantId,
         user_id: UserId,
         cmd: UpdateRolesCommand,
+        actor: UserId,
     ) -> Result<(), IdentityError> {
-        if cmd.role_ids.is_empty() {
-            return Err(IdentityError::NoRoles);
-        }
-        let assignable = self.roles.assignable_roles(tenant_id).await?;
-        let assignable_ids: std::collections::BTreeSet<RoleId> =
-            assignable.into_iter().map(|(id, _)| id).collect();
-        for id in &cmd.role_ids {
-            if !assignable_ids.contains(id) {
-                return Err(IdentityError::RoleNotAssignable(*id));
-            }
-        }
+        let assignable =
+            DelegationPolicy::validate_assignable(tenant_id, &cmd.role_ids, &*self.roles).await?;
 
         let mut scope = self
             .tx_manager
@@ -244,12 +246,27 @@ impl UpdateMemberRoles {
             .find(&mut scope, tenant_id, user_id)
             .await?
             .ok_or(IdentityError::NotAMember { user_id, tenant_id })?;
-        membership.replace_roles(cmd.role_ids)?;
-        self.memberships.save(&mut scope, &membership).await?;
+
+        DelegationPolicy::check_update_roles(
+            &mut scope,
+            tenant_id,
+            actor,
+            &membership,
+            &cmd.role_ids,
+            &assignable,
+            &self.protected_role_key,
+            &*self.memberships,
+        )
+        .await?;
+
+        let (_added, removed) = membership.replace_roles(cmd.role_ids)?;
+        let version = self.memberships.save(&mut scope, &membership).await?;
         let events = vec![IdentityEvent::MembershipRolesChanged {
             tenant_id,
             user_id,
             role_ids: membership.role_ids().to_vec(),
+            removed_role_ids: removed,
+            version,
         }];
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;
@@ -309,28 +326,48 @@ impl RemoveMember {
         for role_id in membership.role_ids() {
             if self.roles.role_key(tenant_id, *role_id).await?.as_deref()
                 == Some(self.protected_role_key.as_str())
-                && self
+            {
+                if self
                     .memberships
                     .count_role_holders(&mut scope, tenant_id, *role_id)
                     .await?
                     <= 1
-            {
-                return Err(IdentityError::LastRoleHolder {
-                    from: membership.status(),
-                    to: MembershipStatus::Suspended,
-                    role: self.protected_role_key.clone(),
-                });
+                {
+                    return Err(IdentityError::LastRoleHolder {
+                        from: membership.status(),
+                        to: MembershipStatus::Suspended,
+                        role: self.protected_role_key.clone(),
+                    });
+                }
+
+                let actor_membership = self.memberships.find(&mut scope, tenant_id, actor).await?;
+                let actor_has_owner = actor_membership
+                    .map(|m| m.is_active() && m.role_ids().contains(role_id))
+                    .unwrap_or(false);
+                if !actor_has_owner {
+                    return Err(IdentityError::DelegationDenied {
+                        actor,
+                        role: self.protected_role_key.clone(),
+                        detail: format!(
+                            "only holders of '{}' can remove a holder of this role",
+                            self.protected_role_key
+                        ),
+                    });
+                }
             }
         }
 
         let revoked_role_ids = membership.role_ids().to_vec();
-        self.memberships
+        let version = self
+            .memberships
             .remove(&mut scope, tenant_id, user_id)
-            .await?;
+            .await?
+            .ok_or(IdentityError::NotAMember { user_id, tenant_id })?;
         let events = vec![IdentityEvent::MembershipRevoked {
             tenant_id,
             user_id,
             role_ids: revoked_role_ids,
+            version,
         }];
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;

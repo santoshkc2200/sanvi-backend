@@ -1,27 +1,29 @@
-//! Redis Streams consumer with exactly-once processing semantics.
+//! Redis Streams consumer with at-least-once delivery and durable processing.
 //!
-//! - Reads as part of a consumer group; every handler run is guarded by a
-//!   `(consumer_group, event_id)` dedup key in `platform.processed_events`,
-//!   so at-least-once delivery (Redis semantics) collapses to exactly-once
-//!   *processing*.
-//! - Failed handlers get the event acked out of the group and forwarded to
-//!   the dead-letter stream (`{stream}.dlq`) — poison messages can never
-//!   block the group forever.
-//! - Periodically reclaims entries that have sat unacked for longer than
-//!   [`RECOVERY_MIN_IDLE`] via `XAUTOCLAIM` (crash recovery). This scans the
-//!   *whole group*, not just this consumer's own pending list: a consumer
-//!   name is a fresh UUID per process start (see `apps/worker`), so a
-//!   crashed/restarted process would never again see entries left pending
-//!   under its old, now-nonexistent name if recovery only looked at "its
-//!   own" pending list. `XAUTOCLAIM` reassigns stale entries — regardless of
-//!   which (possibly dead) consumer originally owned them — to whichever
-//!   live consumer asks for them.
+//! - **Guarantees**:
+//!   Redis Streams provides at-least-once delivery semantics. To ensure correctness:
+//!   - For handlers whose effects are database writes, [`StreamConsumer::run_transactional_until_shutdown`]
+//!     commits the inbox deduplication record in `platform.processed_events` and the domain business
+//!     mutations inside the same PostgreSQL transaction. A crash before commit leaves no trace of the
+//!     effect and no dedup row, allowing clean replay upon redelivery without duplicate side effects.
+//!   - For handlers with external side effects (e.g. caches, third-party network APIs), transactional
+//!     atomicity across system boundaries is impossible. Handlers executed via
+//!     [`StreamConsumer::run_until_shutdown`] MUST be idempotent and support reconciliation rather
+//!     than assuming exactly-once execution.
 //!
-//!   The dedup key is only written *after* the handler succeeds (not before
-//!   it runs), so a reclaimed entry whose handler never finished (the
-//!   original consumer crashed mid-handler) is retried rather than skipped.
-//!   A genuine duplicate delivery of an already-completed event still finds
-//!   the dedup row and is skipped without re-running the handler.
+//! - **Failure handling and durability**:
+//!   - Handler errors are classified as transient or permanent via [`HandlerError`].
+//!   - Transient errors (e.g. connection pool exhaustion, database serialization/deadlock conflicts)
+//!     are retried with exponential backoff up to a configured limit (`max_retries`).
+//!   - Permanent errors (or exhausted retries) are forwarded to the dead-letter stream (`{stream}.dlq`).
+//!   - Crucially, the original entry is **never acknowledged (`XACK`) unless the outcome is durable**:
+//!     if appending to the dead-letter stream fails, the consumer refuses to ack the entry so that the
+//!     message remains pending in the group and is not lost.
+//!
+//! - **Crash recovery**:
+//!   Periodically reclaims entries that have sat unacked for longer than [`RECOVERY_MIN_IDLE`] via
+//!   `XAUTOCLAIM`. This scans the whole consumer group, reassigning stale unacked entries from crashed
+//!   consumers to live consumers.
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
@@ -34,14 +36,104 @@ use tracing::{error, info};
 
 use crate::{ConsumerMetrics, StreamsClient};
 
-/// Boxed handler future: consume an event, return whether it was handled
-/// (`Ok(())`) or must be dead-lettered (`Err`).
+/// Classification of a consumer handler error.
+#[derive(Debug, thiserror::Error)]
+pub enum HandlerError {
+    /// A transient failure (e.g. network glitch, lock contention, timeout).
+    /// The consumer will retry this event with exponential backoff.
+    #[error("transient error: {0}")]
+    Transient(#[source] anyhow::Error),
+
+    /// A permanent failure (e.g. invalid payload, constraint violation).
+    /// The consumer will immediately dead-letter this event without retrying.
+    #[error("permanent error: {0}")]
+    Permanent(#[source] anyhow::Error),
+}
+
+impl HandlerError {
+    pub fn transient(err: impl Into<anyhow::Error>) -> Self {
+        Self::Transient(err.into())
+    }
+
+    pub fn permanent(err: impl Into<anyhow::Error>) -> Self {
+        Self::Permanent(err.into())
+    }
+
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Transient(_))
+    }
+}
+
+/// Checks whether an error represents a transient failure eligible for retry.
+pub fn is_transient_error(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if let Some(he) = cause.downcast_ref::<HandlerError>() {
+            return he.is_transient();
+        }
+        if let Some(sqlx_err) = cause.downcast_ref::<sqlx::Error>() {
+            return is_sqlx_transient(sqlx_err);
+        }
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+            return is_io_transient(io_err);
+        }
+    }
+    false
+}
+
+fn is_sqlx_transient(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_) => true,
+        sqlx::Error::Database(db_err) => {
+            let code = db_err.code().unwrap_or_default();
+            // 40001: serialization_failure, 40P01: deadlock_detected, 08*: connection errors, 57P*: admin shutdown
+            code == "40001" || code == "40P01" || code.starts_with("08") || code.starts_with("57P")
+        }
+        _ => false,
+    }
+}
+
+fn is_io_transient(err: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        err.kind(),
+        ErrorKind::TimedOut
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::BrokenPipe
+            | ErrorKind::WouldBlock
+    )
+}
+
+/// Boxed handler future for external/non-transactional handlers.
+///
+/// External effects cannot participate in a database transaction; handlers
+/// must be idempotent and support reconciliation upon redelivery.
 pub type ConsumerHandler = Arc<
     dyn Fn(EventEnvelope) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
         + Send
         + Sync
         + 'static,
 >;
+
+/// Boxed handler future for transactional database handlers.
+///
+/// The handler executes within an active PostgreSQL transaction that also commits
+/// the inbox dedup row (`platform.processed_events`).
+pub type TransactionalConsumerHandler = Arc<
+    dyn for<'c> Fn(
+            &'c mut sqlx::Transaction<'_, sqlx::Postgres>,
+            EventEnvelope,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'c>>
+        + Send
+        + Sync
+        + 'static,
+>;
+
+#[derive(Clone)]
+enum ConsumerHandlerKind {
+    External(ConsumerHandler),
+    Transactional(TransactionalConsumerHandler),
+}
 
 /// How often pending entries are re-scanned for crash recovery.
 const RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
@@ -55,6 +147,11 @@ const RECOVERY_MIN_IDLE: Duration = Duration::from_secs(60);
 /// (including the dispatcher sharing the manager) until the timeout.
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+/// Default retry settings for transient handler failures.
+const DEFAULT_MAX_RETRIES: u32 = 3;
+const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(50);
+const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(2);
+
 /// One consumer instance within a consumer group.
 #[derive(Clone)]
 pub struct StreamConsumer {
@@ -63,6 +160,9 @@ pub struct StreamConsumer {
     metrics: Option<Arc<ConsumerMetrics>>,
     recovery_min_idle: Duration,
     recovery_interval: Duration,
+    max_retries: u32,
+    initial_backoff: Duration,
+    max_backoff: Duration,
 }
 
 impl StreamConsumer {
@@ -73,6 +173,9 @@ impl StreamConsumer {
             metrics: None,
             recovery_min_idle: RECOVERY_MIN_IDLE,
             recovery_interval: RECOVERY_INTERVAL,
+            max_retries: DEFAULT_MAX_RETRIES,
+            initial_backoff: DEFAULT_INITIAL_BACKOFF,
+            max_backoff: DEFAULT_MAX_BACKOFF,
         }
     }
 
@@ -92,13 +195,72 @@ impl StreamConsumer {
         self
     }
 
-    /// Run until `shutdown` fires. Exits after the current batch.
+    /// Override retry policy for transient failures.
+    pub fn with_retry_tuning(
+        mut self,
+        max_retries: u32,
+        initial_backoff: Duration,
+        max_backoff: Duration,
+    ) -> Self {
+        self.max_retries = max_retries;
+        self.initial_backoff = initial_backoff;
+        self.max_backoff = max_backoff;
+        self
+    }
+
+    fn backoff_for_attempt(&self, attempt: u32) -> Duration {
+        let mult = 2u32.saturating_pow(attempt.saturating_sub(1));
+        let duration = self.initial_backoff.saturating_mul(mult);
+        duration.min(self.max_backoff)
+    }
+
+    /// Run until `shutdown` fires using an external-effects handler. Exits after the current batch.
     pub async fn run_until_shutdown(
         &self,
         stream: &str,
         group: &str,
         consumer_name: &str,
         handler: ConsumerHandler,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
+        self.run_loop(
+            stream,
+            group,
+            consumer_name,
+            ConsumerHandlerKind::External(handler),
+            shutdown,
+        )
+        .await;
+    }
+
+    /// Run until `shutdown` fires using a transactional database handler. Exits after the current batch.
+    ///
+    /// The handler executes inside an active PostgreSQL transaction alongside the
+    /// `platform.processed_events` deduplication insert, achieving atomic commit of both.
+    pub async fn run_transactional_until_shutdown(
+        &self,
+        stream: &str,
+        group: &str,
+        consumer_name: &str,
+        handler: TransactionalConsumerHandler,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
+        self.run_loop(
+            stream,
+            group,
+            consumer_name,
+            ConsumerHandlerKind::Transactional(handler),
+            shutdown,
+        )
+        .await;
+    }
+
+    async fn run_loop(
+        &self,
+        stream: &str,
+        group: &str,
+        consumer_name: &str,
+        handler: ConsumerHandlerKind,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
         info!(
@@ -139,11 +301,7 @@ impl StreamConsumer {
             }
 
             // Crash recovery: reclaim entries idle longer than
-            // recovery_min_idle across the whole group (not just entries
-            // this consumer name happens to own) periodically. Runs on this
-            // timer regardless of whether the poll above found anything —
-            // a quiet stream must not stall recovery of a stale entry left
-            // by a consumer that crashed mid-handler.
+            // recovery_min_idle across the whole group periodically.
             if last_recovery.elapsed() >= self.recovery_interval {
                 if let Err(err) = self
                     .recover_pending(stream, group, consumer_name, &handler)
@@ -200,18 +358,12 @@ impl StreamConsumer {
     /// Reclaim entries that have sat unacked for longer than
     /// [`RECOVERY_MIN_IDLE`], regardless of which consumer originally
     /// claimed them, and (re)process them under `consumer_name`.
-    ///
-    /// Uses `XAUTOCLAIM` rather than re-reading `consumer_name`'s own
-    /// pending list: consumer names are ephemeral (a fresh UUID per process
-    /// start), so a crashed process's stale entries sit under a name that
-    /// will never read its own pending list again. `XAUTOCLAIM` scans the
-    /// whole group and reassigns ownership to whoever calls it.
     async fn recover_pending(
         &self,
         stream: &str,
         group: &str,
         consumer_name: &str,
-        handler: &ConsumerHandler,
+        handler: &ConsumerHandlerKind,
     ) -> Result<()> {
         let mut conn = self.streams.connection_manager();
         let min_idle_ms = self.recovery_min_idle.as_millis() as usize;
@@ -241,9 +393,6 @@ impl StreamConsumer {
                     .await;
             }
 
-            // Entries Redis dropped from the stream (e.g. trimmed) while
-            // still pending can never be delivered again; nothing to do but
-            // note it so an operator can investigate data loss upstream.
             if !reply.deleted_ids.is_empty() {
                 error!(
                     stream,
@@ -267,27 +416,160 @@ impl StreamConsumer {
         group: &str,
         entry_id: &str,
         event_json: &str,
-        handler: &ConsumerHandler,
+        handler_kind: &ConsumerHandlerKind,
     ) {
         let envelope: EventEnvelope = match serde_json::from_str(event_json) {
             Ok(envelope) => envelope,
             Err(err) => {
-                // Unparseable payloads are poison by definition: ack them out
-                // of the group so they cannot block delivery forever.
                 error!(error = %err, entry_id, stream, group, "unparseable event payload");
-                if let Err(err) = self.ack(stream, group, entry_id).await {
-                    error!(error = %err, entry_id, "failed to ack unparseable event");
+                let dlq = format!("{stream}.dlq");
+                if let Err(dlq_err) = self
+                    .streams
+                    .append(
+                        &dlq,
+                        &[("raw_event", event_json), ("error", &err.to_string())],
+                        10_000,
+                    )
+                    .await
+                {
+                    error!(
+                        error = %dlq_err,
+                        stream = %dlq,
+                        entry_id,
+                        "failed to append unparseable event to dead-letter stream; refusing to ack"
+                    );
+                    return;
+                }
+                if let Err(ack_err) = self.ack(stream, group, entry_id).await {
+                    error!(error = %ack_err, entry_id, "failed to ack unparseable event");
+                }
+                if let Some(metrics) = &self.metrics {
+                    metrics.dead_lettered.inc();
                 }
                 return;
             }
         };
 
-        // Dedup keyed per consumer group so two different groups may process
-        // the same event. Checked *before* the handler runs and written
-        // *after* it succeeds (not the other way around): if this process
-        // dies mid-handler, no dedup row exists, so a reclaimed redelivery
-        // (see `recover_pending`) retries the handler instead of finding a
-        // stale claim and silently skipping it.
+        match handler_kind {
+            ConsumerHandlerKind::Transactional(handler) => {
+                self.process_transactional(stream, group, entry_id, &envelope, handler)
+                    .await;
+            }
+            ConsumerHandlerKind::External(handler) => {
+                self.process_external(stream, group, entry_id, &envelope, handler)
+                    .await;
+            }
+        }
+    }
+
+    async fn process_transactional(
+        &self,
+        stream: &str,
+        group: &str,
+        entry_id: &str,
+        envelope: &EventEnvelope,
+        handler: &TransactionalConsumerHandler,
+    ) {
+        let mut attempt: u32 = 0;
+        loop {
+            let mut tx = match self.pool.begin().await {
+                Ok(tx) => tx,
+                Err(err) => {
+                    let err = anyhow::Error::new(err);
+                    if is_transient_error(&err) && attempt < self.max_retries {
+                        attempt += 1;
+                        let backoff = self.backoff_for_attempt(attempt);
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                        .await;
+                    return;
+                }
+            };
+
+            // Atomically record inbox dedup row inside the transaction.
+            // If already committed, ON CONFLICT DO NOTHING returns 0 rows.
+            let inserted: Option<i64> = match sqlx::query_scalar::<_, i64>(
+                "INSERT INTO platform.processed_events (consumer, event_id)
+                 VALUES ($1, $2)
+                 ON CONFLICT (consumer, event_id) DO NOTHING
+                 RETURNING event_id",
+            )
+            .bind(group)
+            .bind(envelope.id.as_i64())
+            .fetch_optional(&mut *tx)
+            .await
+            {
+                Ok(res) => res,
+                Err(err) => {
+                    let _ = tx.rollback().await;
+                    let err = anyhow::Error::new(err);
+                    if is_transient_error(&err) && attempt < self.max_retries {
+                        attempt += 1;
+                        let backoff = self.backoff_for_attempt(attempt);
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                        .await;
+                    return;
+                }
+            };
+
+            if inserted.is_none() {
+                // Event already processed by this group: drop tx and ack duplicate
+                let _ = tx.rollback().await;
+                if let Err(err) = self.ack(stream, group, entry_id).await {
+                    error!(error = %err, entry_id, "failed to ack duplicate event");
+                }
+                return;
+            }
+
+            match handler(&mut tx, envelope.clone()).await {
+                Ok(()) => {
+                    if let Err(err) = tx.commit().await {
+                        let err = anyhow::Error::new(err);
+                        if is_transient_error(&err) && attempt < self.max_retries {
+                            attempt += 1;
+                            let backoff = self.backoff_for_attempt(attempt);
+                            tokio::time::sleep(backoff).await;
+                            continue;
+                        }
+                        self.dead_letter(stream, group, entry_id, envelope, &err)
+                            .await;
+                        return;
+                    }
+
+                    if let Err(err) = self.ack(stream, group, entry_id).await {
+                        error!(error = %err, entry_id, "failed to ack processed event");
+                    }
+                    return;
+                }
+                Err(err) => {
+                    let _ = tx.rollback().await;
+                    if is_transient_error(&err) && attempt < self.max_retries {
+                        attempt += 1;
+                        let backoff = self.backoff_for_attempt(attempt);
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                        .await;
+                    return;
+                }
+            }
+        }
+    }
+
+    async fn process_external(
+        &self,
+        stream: &str,
+        group: &str,
+        entry_id: &str,
+        envelope: &EventEnvelope,
+        handler: &ConsumerHandler,
+    ) {
         let already_done = match sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM platform.processed_events WHERE consumer = $1 AND event_id = $2)",
         )
@@ -303,54 +585,93 @@ impl StreamConsumer {
             }
         };
         if already_done {
-            // Already fully processed by this group: safe to forget.
             if let Err(err) = self.ack(stream, group, entry_id).await {
                 error!(error = %err, entry_id, "failed to ack duplicate event");
             }
             return;
         }
 
-        match handler(envelope.clone()).await {
-            Ok(()) => {
-                if let Err(err) = sqlx::query(
-                    "INSERT INTO platform.processed_events (consumer, event_id)
-                     VALUES ($1, $2)
-                     ON CONFLICT DO NOTHING",
-                )
-                .bind(group)
-                .bind(envelope.id.as_i64())
-                .execute(&self.pool)
-                .await
-                {
-                    error!(error = %err, event_id = %envelope.id, group, "failed to record processed event");
-                }
-                if let Err(err) = self.ack(stream, group, entry_id).await {
-                    error!(error = %err, entry_id, "failed to ack processed event");
-                }
-            }
-            Err(err) => {
-                error!(error = %err, event_id = %envelope.id, event_type = %envelope.event_type,
-                    "handler failed; dead-lettering event");
-                let payload = serde_json::to_string(&envelope).unwrap_or_default();
-                let dlq = format!("{stream}.dlq");
-                if let Err(dlq_err) = self
-                    .streams
-                    .append(
-                        &dlq,
-                        &[("event", payload.as_str()), ("error", &err.to_string())],
-                        10_000,
+        let mut attempt: u32 = 0;
+        loop {
+            match handler(envelope.clone()).await {
+                Ok(()) => {
+                    if let Err(err) = sqlx::query(
+                        "INSERT INTO platform.processed_events (consumer, event_id)
+                         VALUES ($1, $2)
+                         ON CONFLICT DO NOTHING",
                     )
+                    .bind(group)
+                    .bind(envelope.id.as_i64())
+                    .execute(&self.pool)
                     .await
-                {
-                    error!(error = %dlq_err, stream = %dlq, "failed to append to dead-letter stream");
+                    {
+                        error!(
+                            error = %err,
+                            event_id = %envelope.id,
+                            group,
+                            "failed to record processed event; refusing to ack so event will be retried"
+                        );
+                        return;
+                    }
+                    if let Err(err) = self.ack(stream, group, entry_id).await {
+                        error!(error = %err, entry_id, "failed to ack processed event");
+                    }
+                    return;
                 }
-                if let Err(ack_err) = self.ack(stream, group, entry_id).await {
-                    error!(error = %ack_err, entry_id, "failed to ack dead-lettered event");
-                }
-                if let Some(metrics) = &self.metrics {
-                    metrics.dead_lettered.inc();
+                Err(err) => {
+                    if is_transient_error(&err) && attempt < self.max_retries {
+                        attempt += 1;
+                        let backoff = self.backoff_for_attempt(attempt);
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                        .await;
+                    return;
                 }
             }
+        }
+    }
+
+    async fn dead_letter(
+        &self,
+        stream: &str,
+        group: &str,
+        entry_id: &str,
+        envelope: &EventEnvelope,
+        err: &anyhow::Error,
+    ) {
+        error!(
+            error = %err,
+            event_id = %envelope.id,
+            event_type = %envelope.event_type,
+            group,
+            "handler failed; dead-lettering event"
+        );
+        let payload = serde_json::to_string(envelope).unwrap_or_default();
+        let dlq = format!("{stream}.dlq");
+        if let Err(dlq_err) = self
+            .streams
+            .append(
+                &dlq,
+                &[("event", payload.as_str()), ("error", &err.to_string())],
+                10_000,
+            )
+            .await
+        {
+            error!(
+                error = %dlq_err,
+                stream = %dlq,
+                entry_id,
+                "failed to append to dead-letter stream; refusing to ack so message is not lost"
+            );
+            return;
+        }
+        if let Err(ack_err) = self.ack(stream, group, entry_id).await {
+            error!(error = %ack_err, entry_id, "failed to ack dead-lettered event");
+        }
+        if let Some(metrics) = &self.metrics {
+            metrics.dead_lettered.inc();
         }
     }
 

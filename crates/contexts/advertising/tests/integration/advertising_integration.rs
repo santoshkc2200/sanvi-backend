@@ -21,8 +21,8 @@ use sanvi_advertising::{
         GetCreativePreviews, GetPlatformAdsHealth, IngestConnectionMetrics, JoinCampaignRevenue,
         ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields,
         NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign,
-        QueryMetrics, ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign, RunTokenRefresh,
-        UpdateAd, UpdateAdGroup, ValidateCampaign,
+        PublishError, QueryMetrics, ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign,
+        RunTokenRefresh, UpdateAd, UpdateAdGroup, ValidateCampaign,
     },
     domain::{
         AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
@@ -4292,4 +4292,213 @@ async fn vault_access_token_provider_mints_and_caches_a_token_per_connection() {
         external_account_id: String::new(),
     };
     assert!(provider.access_token(&unknown).await.is_err());
+}
+
+#[tokio::test]
+async fn publishing_intent_is_persisted_before_remote_call_and_reconciliation_works() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "advertising-publish-intent").await;
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
+
+    let connections = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "123-456-7890",
+        "USD",
+        "America/New_York",
+        SecretRef::new("vault-ref"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    connections.upsert(&mut scope, &connection).await.unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections_repo: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connections);
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections_repo.clone(),
+        registry.clone(),
+        events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let get = GetCampaign::new(manager.clone(), campaigns.clone());
+    let publish = PublishCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections_repo.clone(),
+        creatives.clone(),
+        events.clone(),
+        registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let changes = ListCampaignChanges::new(manager.clone(), campaigns.clone());
+
+    // 1. Create a draft campaign.
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Fall promo".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(10_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(draft.intent.status, CampaignStatus::Draft);
+    assert!(draft.publishing_mutation_id.is_none());
+
+    // 2. Preflight error handling: validating non-existent campaign fails at Preflight stage.
+    // Notice remote_may_have_occurred() is FALSE for preflight failures.
+    let preflight_err = publish
+        .execute_with_safety(
+            tenant_id,
+            sanvi_advertising::domain::CampaignId::from_snowflake(
+                sanvi_testsupport::test_ids().next_id().unwrap(),
+            ),
+            Uuid::now_v7(),
+            actor_id,
+        )
+        .await
+        .unwrap_err();
+    assert!(!preflight_err.remote_may_have_occurred());
+    assert!(matches!(
+        preflight_err,
+        PublishError::Preflight(sanvi_advertising::domain::AdvertisingError::CampaignNotFound)
+    ));
+
+    // 3. Normal publish persists Publishing intent and finalizes to Active.
+    let publish_mid = Uuid::now_v7();
+    let published = publish
+        .execute_with_safety(tenant_id, draft.id, publish_mid, actor_id)
+        .await
+        .unwrap();
+    assert_eq!(published.intent.status, CampaignStatus::Active);
+    assert!(published.external_id.is_some());
+    assert!(published.publishing_mutation_id.is_none());
+
+    // 4. Test re-driving an operation left in `publishing`:
+    // Simulate a crash/failure right after Tx 1 by creating another campaign and setting its status to Publishing with a stable mutation id.
+    let draft2 = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Winter clearance".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(15_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let initial_publishing_mid = Uuid::now_v7();
+    {
+        let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+        let mut in_flight = draft2.clone();
+        in_flight.intent.status = CampaignStatus::Publishing;
+        in_flight.publishing_mutation_id = Some(initial_publishing_mid);
+        in_flight.revision += 1;
+        campaigns
+            .update(&mut scope, &in_flight, draft2.revision)
+            .await
+            .unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    // Verify it is indeed persisted in Publishing state in the database.
+    let stored_in_flight = get.execute(tenant_id, draft2.id).await.unwrap();
+    assert_eq!(stored_in_flight.intent.status, CampaignStatus::Publishing);
+    assert_eq!(
+        stored_in_flight.publishing_mutation_id,
+        Some(initial_publishing_mid)
+    );
+
+    // Now re-drive it via execute_with_safety with a DIFFERENT mutation id (e.g. caller retried with fresh id).
+    let retried_mid = Uuid::now_v7();
+    let redriven = publish
+        .execute_with_safety(tenant_id, draft2.id, retried_mid, actor_id)
+        .await
+        .unwrap();
+    assert_eq!(redriven.intent.status, CampaignStatus::Active);
+    assert!(redriven.external_id.is_some());
+    assert!(redriven.publishing_mutation_id.is_none());
+
+    // Verify the change record used the initial stable mutation id, NOT the retried one!
+    let campaign2_changes = changes.execute(tenant_id, draft2.id, 50).await.unwrap();
+    let publish_change = campaign2_changes
+        .iter()
+        .find(|c| c.revision == redriven.revision)
+        .expect("publish change must exist");
+    assert_eq!(publish_change.mutation_id, Some(initial_publishing_mid));
+
+    // 5. Test reconcile_publishing on a campaign left in `Publishing`:
+    let draft3 = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Spring preview".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(20_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let recovery_mid = Uuid::now_v7();
+    {
+        let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+        let mut in_flight3 = draft3.clone();
+        in_flight3.intent.status = CampaignStatus::Publishing;
+        in_flight3.publishing_mutation_id = Some(recovery_mid);
+        in_flight3.revision += 1;
+        campaigns
+            .update(&mut scope, &in_flight3, draft3.revision)
+            .await
+            .unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    let reconciled = publish
+        .reconcile_publishing(tenant_id, draft3.id, actor_id)
+        .await
+        .unwrap();
+    assert_eq!(reconciled.intent.status, CampaignStatus::Active);
+    assert!(reconciled.external_id.is_some());
+    assert!(reconciled.publishing_mutation_id.is_none());
 }

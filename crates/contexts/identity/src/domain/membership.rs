@@ -163,6 +163,9 @@ impl Membership {
     pub fn status(&self) -> MembershipStatus {
         self.status
     }
+    pub fn is_active(&self) -> bool {
+        self.status == MembershipStatus::Active
+    }
     pub fn invited_by(&self) -> Option<UserId> {
         self.invited_by
     }

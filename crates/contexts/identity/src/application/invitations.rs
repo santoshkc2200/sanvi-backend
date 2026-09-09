@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use utoipa::ToSchema;
 
+use crate::application::delegation::DelegationPolicy;
 use crate::application::storage;
 use crate::domain::events::IdentityEvent;
 use crate::domain::invitation::{Invitation, InvitationId, InvitationToken};
@@ -58,18 +59,22 @@ pub enum InvitationStatus {
 pub struct InviteMember {
     tx_manager: TxManager,
     invitations: Arc<dyn InvitationRepository>,
+    memberships: Arc<dyn MembershipRepository>,
     roles: Arc<dyn RoleCatalog>,
     events: Arc<dyn EventPublisher>,
     notifications: Arc<dyn Notifications>,
     ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
     ttl_days: i64,
+    protected_role_key: String,
 }
 
 impl InviteMember {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tx_manager: TxManager,
         invitations: Arc<dyn InvitationRepository>,
+        memberships: Arc<dyn MembershipRepository>,
         roles: Arc<dyn RoleCatalog>,
         events: Arc<dyn EventPublisher>,
         notifications: Arc<dyn Notifications>,
@@ -80,13 +85,20 @@ impl InviteMember {
         Self {
             tx_manager,
             invitations,
+            memberships,
             roles,
             events,
             notifications,
             ids,
             clock,
             ttl_days,
+            protected_role_key: "tenant_owner".to_string(),
         }
+    }
+
+    pub fn with_protected_role_key(mut self, key: impl Into<String>) -> Self {
+        self.protected_role_key = key.into();
+        self
     }
 
     pub async fn execute(
@@ -96,17 +108,8 @@ impl InviteMember {
         actor: UserId,
     ) -> Result<(InvitationView, String), IdentityError> {
         let email = Email::parse(&cmd.email)?;
-        if cmd.role_ids.is_empty() {
-            return Err(IdentityError::NoRoles);
-        }
-        let assignable = self.roles.assignable_roles(tenant_id).await?;
-        let assignable_ids: std::collections::BTreeSet<RoleId> =
-            assignable.into_iter().map(|(id, _)| id).collect();
-        for id in &cmd.role_ids {
-            if !assignable_ids.contains(id) {
-                return Err(IdentityError::RoleNotAssignable(*id));
-            }
-        }
+        let assignable =
+            DelegationPolicy::validate_assignable(tenant_id, &cmd.role_ids, &*self.roles).await?;
 
         let now = self.clock.now();
         let token = InvitationToken::generate();
@@ -126,6 +129,18 @@ impl InviteMember {
             .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
+
+        DelegationPolicy::check_invite(
+            &mut scope,
+            tenant_id,
+            actor,
+            &cmd.role_ids,
+            &assignable,
+            &self.protected_role_key,
+            &*self.memberships,
+        )
+        .await?;
+
         self.invitations.save(&mut scope, &invitation).await?;
         let events = vec![IdentityEvent::InvitationSent {
             invitation_id: invitation.id(),
@@ -162,6 +177,7 @@ pub struct AcceptInvitation {
     roles: Arc<dyn RoleCatalog>,
     events: Arc<dyn EventPublisher>,
     clock: Arc<dyn Clock>,
+    protected_role_key: String,
 }
 
 impl AcceptInvitation {
@@ -180,7 +196,13 @@ impl AcceptInvitation {
             roles,
             events,
             clock,
+            protected_role_key: "tenant_owner".to_string(),
         }
+    }
+
+    pub fn with_protected_role_key(mut self, key: impl Into<String>) -> Self {
+        self.protected_role_key = key.into();
+        self
     }
 
     /// Accept with the signed-in user's identity: the invitation's email
@@ -213,7 +235,7 @@ impl AcceptInvitation {
         // Roles may have been deleted between invite and accept.
         let assignable = self.roles.assignable_roles(tenant_id).await?;
         let assignable_ids: std::collections::BTreeSet<RoleId> =
-            assignable.into_iter().map(|(id, _)| id).collect();
+            assignable.iter().map(|(id, _)| id).copied().collect();
         if let Some(unknown) = invitation
             .role_ids()
             .iter()
@@ -221,6 +243,17 @@ impl AcceptInvitation {
         {
             return Err(IdentityError::UnknownRole(*unknown));
         }
+
+        DelegationPolicy::check_accept(
+            &mut scope,
+            tenant_id,
+            invitation.invited_by(),
+            invitation.role_ids(),
+            &assignable,
+            &self.protected_role_key,
+            &*self.memberships,
+        )
+        .await?;
 
         let mut events = Vec::new();
         if let Some(existing) = self
@@ -236,12 +269,14 @@ impl AcceptInvitation {
                 }
             }
             let mut membership = existing;
-            membership.replace_roles(merged)?;
-            self.memberships.save(&mut scope, &membership).await?;
+            let (_added, removed) = membership.replace_roles(merged)?;
+            let version = self.memberships.save(&mut scope, &membership).await?;
             events.push(IdentityEvent::MembershipRolesChanged {
                 tenant_id,
                 user_id,
                 role_ids: membership.role_ids().to_vec(),
+                removed_role_ids: removed,
+                version,
             });
         } else {
             let membership = Membership::grant(
@@ -251,11 +286,12 @@ impl AcceptInvitation {
                 invitation.invited_by(),
                 now,
             )?;
-            self.memberships.save(&mut scope, &membership).await?;
+            let version = self.memberships.save(&mut scope, &membership).await?;
             events.push(IdentityEvent::MembershipGranted {
                 tenant_id,
                 user_id,
                 role_ids: membership.role_ids().to_vec(),
+                version,
             });
         }
 

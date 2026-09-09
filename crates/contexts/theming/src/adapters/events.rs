@@ -1,3 +1,8 @@
+//!
+//! External-effect consumer handler: cache invalidation only, no database
+//! transaction, so it runs on `run_until_shutdown` rather than the
+//! transactional path. Redelivery is safe — invalidating an already-invalid
+//! entry is a no-op.
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};

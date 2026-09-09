@@ -2,6 +2,7 @@
 //! gateways, the DoH verifier, the SSRF-guarded storefront prober, the
 //! resolution cache, outbox publishing and the privacy provider.
 
+pub mod builders;
 pub mod ca;
 pub mod cache;
 pub mod dns_checker;
@@ -16,6 +17,7 @@ pub mod registrar;
 pub mod repos;
 pub mod stubs;
 
+pub use builders::{build_certificate_authority, build_domain_registrar, build_purchase_charger};
 pub use ca::SandboxCertificateAuthority;
 pub use cache::LiveDomainCache;
 pub use dns_checker::DohDnsVerifier;
@@ -29,4 +31,7 @@ pub use repos::{
     SqlxCertificateRepository, SqlxCustomDomainRepository, SqlxDnsRecordRepository,
     SqlxDomainOrderRepository,
 };
-pub use stubs::{AlwaysDisabledGate, SandboxPurchaseCharger};
+pub use stubs::{
+    AlwaysDisabledGate, DisabledCertificateAuthority, DisabledPurchaseCharger, DisabledRegistrar,
+    SandboxPurchaseCharger,
+};

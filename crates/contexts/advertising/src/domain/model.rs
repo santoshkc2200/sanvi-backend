@@ -210,6 +210,7 @@ pub struct DriftState {
 #[serde(rename_all = "snake_case")]
 pub enum CampaignStatus {
     Draft,
+    Publishing,
     Active,
     Paused,
     Ended,
@@ -220,6 +221,7 @@ impl CampaignStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Draft => "draft",
+            Self::Publishing => "publishing",
             Self::Active => "active",
             Self::Paused => "paused",
             Self::Ended => "ended",

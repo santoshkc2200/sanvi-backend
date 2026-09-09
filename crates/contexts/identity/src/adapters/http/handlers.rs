@@ -70,6 +70,9 @@ pub fn api_error(err: IdentityError) -> ApiError {
         IdentityError::CannotRemoveSelf => ApiError::Forbidden {
             detail: "a member cannot remove their own membership".to_string(),
         },
+        IdentityError::DelegationDenied { detail, .. } => ApiError::Forbidden {
+            detail: detail.clone(),
+        },
         IdentityError::LastRoleHolder { role, .. } => ApiError::Conflict {
             detail: format!("this change would remove the last holder of role {role}"),
         },
@@ -419,6 +422,7 @@ pub async fn update_member_roles(
     state: web::Data<IdentityState>,
     current: CurrentTenant,
     path: web::Path<String>,
+    subject: CurrentSubject,
     body: web::Json<crate::application::UpdateRolesCommand>,
     _guard: RequiredPermission,
 ) -> impl Responder {
@@ -429,10 +433,11 @@ pub async fn update_member_roles(
                 .json(ApiError::bad_request("invalid user id").problem());
         }
     };
+    let actor = subject.0.user_id;
     respond(
         state
             .update_member_roles
-            .execute(current.0.tenant_id, user_id, body.into_inner())
+            .execute(current.0.tenant_id, user_id, body.into_inner(), actor)
             .await,
         actix_web::http::StatusCode::OK,
     )

@@ -1,5 +1,10 @@
 //! Driven adapters for the event, id and clock ports — plus the consumer
 //! that keeps caches coherent when tenant events arrive over the stream.
+//!
+//! Runs on the consumer's external-effect path (`run_until_shutdown`), not the
+//! transactional one: it holds no database transaction, so there is nothing to
+//! commit atomically with the inbox dedup row. Redelivery is safe because
+//! dropping a cache entry twice is indistinguishable from dropping it once.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

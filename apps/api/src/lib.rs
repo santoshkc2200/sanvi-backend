@@ -21,9 +21,9 @@ use chrono::{DateTime, Utc};
 use sanvi_access::{
     AccessConfig,
     adapters::{
-        HttpKetoClient, InMemoryDecisionCache, InMemoryEntitlementCache, OutboxEventPublisher,
-        RedisEntitlementCache, SqlxEntitlementRepository, SqlxFeatureRepository,
-        SqlxMembershipSource, SqlxQuotaUsageStore, SqlxRoleRepository,
+        HttpKetoClient, InMemoryEntitlementCache, OutboxEventPublisher, RedisEntitlementCache,
+        SqlxEntitlementRepository, SqlxFeatureRepository, SqlxMembershipSource,
+        SqlxQuotaUsageStore, SqlxRoleRepository,
     },
     application::entitlements::EntitlementPolicy,
     application::{
@@ -87,9 +87,9 @@ use sanvi_domains::{
     DomainsConfig,
     adapters::{
         DomainsMetrics, LiveDomainCache, OutboxEventPublisher as DomainsEvents,
-        SandboxCertificateAuthority, SandboxRegistrar, SqlxCertificateRepository,
-        SqlxCustomDomainRepository, SqlxDnsProvider, SqlxDnsRecordRepository,
-        SqlxDomainOrderRepository, SystemClock as DomainsClock,
+        SqlxCertificateRepository, SqlxCustomDomainRepository, SqlxDnsProvider,
+        SqlxDnsRecordRepository, SqlxDomainOrderRepository, SystemClock as DomainsClock,
+        build_certificate_authority, build_domain_registrar, build_purchase_charger,
     },
     application::{
         AuthorizeTls, ClaimCustomDomain, GetDomainInstructions, ListCustomDomains,
@@ -99,7 +99,7 @@ use sanvi_domains::{
     },
     domain::{
         CustomDomainRepository, DomainFeatureGate, DomainOrderRepository, DomainsError,
-        EventPublisher as DomainsEventPublisher, GuideTranslator, PurchaseCharger, TenantState,
+        EventPublisher as DomainsEventPublisher, GuideTranslator, TenantState,
     },
     routes as domains_routes,
 };
@@ -612,6 +612,7 @@ pub fn build_identity_state(
         invite_member: Arc::new(InviteMember::new(
             tx_manager.clone(),
             invitations.clone(),
+            memberships.clone(),
             role_catalog.clone(),
             events.clone(),
             notifications.clone(),
@@ -813,9 +814,23 @@ pub fn build_access_state(
         HttpKetoClient::new(keto_read_url.to_string(), keto_write_url.to_string())
             .expect("keto client construction is infallible"),
     );
-    let cache: Arc<dyn DecisionCache> = Arc::new(InMemoryDecisionCache::new(
-        config.decision_cache_max_entries,
-    ));
+    // A process-local decision cache is unsafe here: the Keto sync consumer
+    // runs in the worker, so its `invalidate_user` can never reach an API
+    // replica's own map, and a demoted member keeps their old permissions
+    // until each replica's TTL lapses independently. Without Redis we cache
+    // nothing rather than cache staleness — slower, never wrong.
+    let cache: Arc<dyn DecisionCache> = match &redis {
+        Some(conn) => Arc::new(sanvi_access::adapters::RedisDecisionCache::new(
+            conn.clone(),
+        )),
+        None => {
+            tracing::warn!(
+                "no Redis connection: permission decisions will not be cached. \
+                 Authorization stays correct but every check reaches Keto."
+            );
+            Arc::new(sanvi_access::adapters::NoopDecisionCache)
+        }
+    };
     let features: Arc<dyn FeatureRepository> = Arc::new(SqlxFeatureRepository::new());
     let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
     let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());
@@ -2459,45 +2474,6 @@ impl sanvi_tenancy::adapters::resolution::CustomDomainLookup for DomainsTenantLo
     }
 }
 
-/// The reference purchase charger: deterministic sandbox charges recorded
-/// in the audit log. The production adapter implements the same port over
-/// the billing context's one-off charge capability (phase-04 extension) —
-/// the saga's compensation logic (refund paths, idempotency on the order
-/// id) is already exercised against this adapter.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SandboxPurchaseCharger;
-
-#[async_trait::async_trait]
-impl PurchaseCharger for SandboxPurchaseCharger {
-    async fn charge(
-        &self,
-        _tenant_id: TenantId,
-        order_id: sanvi_domains::domain::DomainOrderId,
-        amount_minor: i64,
-        currency: &str,
-        description: &str,
-    ) -> Result<String, DomainsError> {
-        tracing::info!(
-            order_id = %order_id,
-            amount_minor,
-            currency,
-            description,
-            "sandbox charge recorded"
-        );
-        Ok(format!("sandbox-ch-{order_id}"))
-    }
-
-    async fn refund(
-        &self,
-        _tenant_id: TenantId,
-        order_id: sanvi_domains::domain::DomainOrderId,
-        charge_id: &str,
-    ) -> Result<(), DomainsError> {
-        tracing::info!(order_id = %order_id, charge_id, "sandbox refund recorded");
-        Ok(())
-    }
-}
-
 /// Build the host → tenant lookup service (needed before the tenancy
 /// resolver, so it exists as its own step in `main`).
 pub fn build_domains_lookup(
@@ -2866,8 +2842,14 @@ pub async fn build_advertising_state(
         tx.clone(),
         token_vault.clone(),
     );
+    let (platform_registry, ad_platform_mode) =
+        sanvi_advertising::adapters::build_platform_registry(config, &token_providers)?;
+    tracing::info!(
+        platform_mode = %ad_platform_mode,
+        "advertising platform capability initialized"
+    );
     let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
-        &sanvi_advertising::adapters::build_platform_registry(config, &token_providers),
+        &platform_registry,
         |platform| match platform.as_str() {
             "meta" => (10, 2),
             _ => (
@@ -3309,17 +3291,20 @@ pub fn build_domains_state(
     let clock: Arc<dyn sanvi_domains::domain::Clock> = Arc::new(DomainsClock);
     let metrics = Arc::new(DomainsMetrics::new(registry));
 
-    let registrar: Arc<dyn sanvi_domains::domain::DomainRegistrarPort> =
-        Arc::new(SandboxRegistrar::new(
-            config.registrar.registrar_id.clone(),
-            &config.registrar.tlds,
-        ));
+    let (registrar, registrar_mode) =
+        build_domain_registrar(config).expect("registrar adapter must initialize cleanly");
     let provider: Arc<dyn sanvi_domains::domain::DnsProviderPort> =
         Arc::new(SqlxDnsProvider::new(records.clone()));
-    let ca: Arc<dyn sanvi_domains::domain::CertificateAuthorityPort> = Arc::new(
-        SandboxCertificateAuthority::new(config.cert_lifetime_days, ids.clone()),
+    let (ca, ca_mode) = build_certificate_authority(config, ids.clone())
+        .expect("certificate authority adapter must initialize cleanly");
+    let (charger, charger_mode) =
+        build_purchase_charger(config).expect("purchase charger adapter must initialize cleanly");
+    tracing::info!(
+        registrar_mode = %registrar_mode,
+        ca_mode = %ca_mode,
+        charger_mode = %charger_mode,
+        "domains capabilities initialized"
     );
-    let charger: Arc<dyn PurchaseCharger> = Arc::new(SandboxPurchaseCharger);
     let tenant_state: Arc<dyn TenantState> =
         Arc::new(DomainsTenantStateAdapter::new(tenancy_resolve));
 

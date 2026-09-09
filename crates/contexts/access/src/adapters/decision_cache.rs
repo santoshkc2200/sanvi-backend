@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use redis::AsyncCommands;
 use sanvi_kernel::UserId;
 
 use crate::domain::ports::{Decision, DecisionCache};
@@ -78,6 +79,78 @@ impl DecisionCache for InMemoryDecisionCache {
 
     async fn invalidate_all(&self) {
         self.entries.lock().expect("cache mutex poisoned").clear();
+    }
+}
+
+/// Redis-backed decision cache shared across worker and API replicas.
+#[derive(Clone)]
+pub struct RedisDecisionCache {
+    conn: redis::aio::ConnectionManager,
+}
+
+impl RedisDecisionCache {
+    pub fn new(conn: redis::aio::ConnectionManager) -> Self {
+        Self { conn }
+    }
+
+    /// SCAN for `pattern` and delete the matches in batches. Deleting one key
+    /// per round trip costs a round trip per cached decision the member held;
+    /// batching keeps an invalidation to a handful regardless of fan-out.
+    async fn delete_matching(&self, pattern: &str) {
+        const BATCH: usize = 256;
+        let mut scan_conn = self.conn.clone();
+        let mut conn = self.conn.clone();
+        let Ok(iter) = scan_conn.scan_match::<_, String>(pattern).await else {
+            return;
+        };
+        let mut iter: redis::AsyncIter<String> = iter;
+        let mut batch: Vec<String> = Vec::with_capacity(BATCH);
+        while let Some(Ok(key)) = iter.next_item().await {
+            batch.push(key);
+            if batch.len() >= BATCH {
+                let _ = conn.del::<_, ()>(std::mem::take(&mut batch)).await;
+                batch.reserve(BATCH);
+            }
+        }
+        if !batch.is_empty() {
+            let _ = conn.del::<_, ()>(batch).await;
+        }
+    }
+}
+
+#[async_trait]
+impl DecisionCache for RedisDecisionCache {
+    async fn get(&self, key: &str) -> Option<Decision> {
+        let redis_key = format!("sanvi:decision:{key}");
+        let mut conn = self.conn.clone();
+        let raw: Option<String> = conn.get(&redis_key).await.ok()?;
+        match raw.as_deref() {
+            Some("allowed") => Some(Decision::Allowed),
+            Some("denied") => Some(Decision::Denied),
+            _ => None,
+        }
+    }
+
+    async fn put(&self, key: &str, decision: Decision, ttl_secs: u64) {
+        if ttl_secs == 0 {
+            return;
+        }
+        let redis_key = format!("sanvi:decision:{key}");
+        let val = match decision {
+            Decision::Allowed => "allowed",
+            Decision::Denied => "denied",
+        };
+        let mut conn = self.conn.clone();
+        let _ = conn.set_ex::<_, _, ()>(&redis_key, val, ttl_secs).await;
+    }
+
+    async fn invalidate_user(&self, user_id: UserId) {
+        self.delete_matching(&format!("sanvi:decision:{user_id}:*"))
+            .await;
+    }
+
+    async fn invalidate_all(&self) {
+        self.delete_matching("sanvi:decision:*").await;
     }
 }
 

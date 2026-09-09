@@ -30,14 +30,24 @@ pub struct AdvertisingConfig {
     /// When `false` (default), every platform uses the fake in-process adapter
     /// (current, safe default — no credentials configured yet). When `true`,
     /// the composition root tries to build the real `GoogleAdsAdapter`/`MetaAdsAdapter`
-    /// per platform, falling back to the fake for any single platform whose
-    /// credentials are still missing or invalid rather than failing the whole process.
+    /// per platform.
     #[serde(default)]
     pub real_platform_adapters: bool,
+    /// Explicit platform capability mode (`disabled`, `sandbox`, `live`).
+    /// If not specified, falls back to `live` when `real_platform_adapters` is true, else `sandbox`.
+    #[serde(default)]
+    pub platform_mode: Option<String>,
+    /// Explicit conversion sink capability mode (`disabled`, `sandbox`, `live`).
+    #[serde(default)]
+    pub conversion_sink_mode: Option<String>,
+    /// Explicit audience sink capability mode (`disabled`, `sandbox`, `live`).
+    #[serde(default)]
+    pub audience_sink_mode: Option<String>,
     /// Platform-wide cap on in-flight adapter calls (the shared
     /// developer-token quota). See `adapters::rate_limit`.
     #[serde(default = "default_quota_platform_wide_permits")]
     pub quota_platform_wide_permits: usize,
+
     /// Per-connection cap nested inside the platform-wide one, so one
     /// tenant's bulk edit cannot claim every platform-wide slot.
     #[serde(default = "default_quota_per_connection_permits")]
@@ -146,6 +156,9 @@ impl Default for AdvertisingConfig {
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
             real_platform_adapters: false,
+            platform_mode: None,
+            conversion_sink_mode: None,
+            audience_sink_mode: None,
             quota_platform_wide_permits: default_quota_platform_wide_permits(),
             quota_per_connection_permits: default_quota_per_connection_permits(),
             metrics_max_query_span_days: default_metrics_max_query_span_days(),
@@ -157,6 +170,47 @@ impl Default for AdvertisingConfig {
 }
 
 impl AdvertisingConfig {
+    /// Resolve one optional mode string, falling back to the mode implied by
+    /// `real_platform_adapters`. A *malformed* value is an error, never a
+    /// silent fallback: `platform_mode = "liv"` degrading to sandbox is the
+    /// same class of defect as the fake-adapter fallback this replaced.
+    fn resolve_mode(
+        raw: Option<&str>,
+        field: &str,
+        real_adapters: bool,
+    ) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        match raw {
+            Some(value) => sanvi_kernel::CapabilityMode::parse(value)
+                .map_err(|err| anyhow::anyhow!("advertising.{field}: {err}")),
+            None if real_adapters => Ok(sanvi_kernel::CapabilityMode::Live),
+            None => Ok(sanvi_kernel::CapabilityMode::Sandbox),
+        }
+    }
+
+    pub fn resolved_platform_mode(&self) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        Self::resolve_mode(
+            self.platform_mode.as_deref(),
+            "platform_mode",
+            self.real_platform_adapters,
+        )
+    }
+
+    pub fn resolved_conversion_sink_mode(&self) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        Self::resolve_mode(
+            self.conversion_sink_mode.as_deref(),
+            "conversion_sink_mode",
+            self.real_platform_adapters,
+        )
+    }
+
+    pub fn resolved_audience_sink_mode(&self) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        Self::resolve_mode(
+            self.audience_sink_mode.as_deref(),
+            "audience_sink_mode",
+            self.real_platform_adapters,
+        )
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.google_ads_api_version.trim().is_empty() || self.meta_api_version.trim().is_empty()
         {
