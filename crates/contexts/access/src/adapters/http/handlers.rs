@@ -50,6 +50,9 @@ pub fn api_error(err: AccessError) -> ApiError {
         AccessError::RoleNotFound { key }
         | AccessError::FeatureNotFound { key }
         | AccessError::EntitlementNotFound { feature: key } => ApiError::NotFound { resource: key },
+        AccessError::RoleKeyResolutionFailed(role_id) => ApiError::NotFound {
+            resource: format!("role {role_id}"),
+        },
         AccessError::SystemRoleImmutable { key } => ApiError::Forbidden {
             detail: format!("role '{key}' is a system role and cannot be modified"),
         },

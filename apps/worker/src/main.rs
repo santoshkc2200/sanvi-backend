@@ -25,8 +25,8 @@ use figment::{
 use sanvi_access::{
     AccessConfig,
     adapters::{
-        HttpKetoClient, InMemoryDecisionCache, OutboxEventPublisher as AccessEventPublisher,
-        RedisEntitlementCache, SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleRepository,
+        HttpKetoClient, OutboxEventPublisher as AccessEventPublisher, RedisEntitlementCache,
+        SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleRepository,
         sync::entitlement_sync_handler,
     },
     application::ExpireEntitlements,
@@ -1127,11 +1127,15 @@ async fn main() -> ExitCode {
     }
     let access_consumer = access_consumer.with_metrics(access_consumer_metrics);
     let access_consumer_name = format!("access-{}", uuid::Uuid::now_v7());
-    let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> =
-        Arc::new(InMemoryDecisionCache::new(10_000));
-    let access_handler = sanvi_access::adapters::sync::access_sync_handler(
+    let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> = Arc::new(
+        sanvi_access::adapters::RedisDecisionCache::new(redis.clone()),
+    );
+    let version_store: Arc<dyn sanvi_access::adapters::sync::MembershipVersionStore> =
+        Arc::new(sanvi_access::adapters::sync::RedisMembershipVersionStore::new(redis.clone()));
+    let access_handler = sanvi_access::adapters::sync::access_sync_handler_with_version_store(
         access_store.clone(),
         Some(decision_cache.clone()),
+        version_store,
         role_key_resolver,
     );
 

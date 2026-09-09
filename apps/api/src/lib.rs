@@ -21,9 +21,9 @@ use chrono::{DateTime, Utc};
 use sanvi_access::{
     AccessConfig,
     adapters::{
-        HttpKetoClient, InMemoryDecisionCache, InMemoryEntitlementCache, OutboxEventPublisher,
-        RedisEntitlementCache, SqlxEntitlementRepository, SqlxFeatureRepository,
-        SqlxMembershipSource, SqlxQuotaUsageStore, SqlxRoleRepository,
+        HttpKetoClient, InMemoryEntitlementCache, OutboxEventPublisher, RedisEntitlementCache,
+        SqlxEntitlementRepository, SqlxFeatureRepository, SqlxMembershipSource,
+        SqlxQuotaUsageStore, SqlxRoleRepository,
     },
     application::entitlements::EntitlementPolicy,
     application::{
@@ -814,9 +814,23 @@ pub fn build_access_state(
         HttpKetoClient::new(keto_read_url.to_string(), keto_write_url.to_string())
             .expect("keto client construction is infallible"),
     );
-    let cache: Arc<dyn DecisionCache> = Arc::new(InMemoryDecisionCache::new(
-        config.decision_cache_max_entries,
-    ));
+    // A process-local decision cache is unsafe here: the Keto sync consumer
+    // runs in the worker, so its `invalidate_user` can never reach an API
+    // replica's own map, and a demoted member keeps their old permissions
+    // until each replica's TTL lapses independently. Without Redis we cache
+    // nothing rather than cache staleness — slower, never wrong.
+    let cache: Arc<dyn DecisionCache> = match &redis {
+        Some(conn) => Arc::new(sanvi_access::adapters::RedisDecisionCache::new(
+            conn.clone(),
+        )),
+        None => {
+            tracing::warn!(
+                "no Redis connection: permission decisions will not be cached. \
+                 Authorization stays correct but every check reaches Keto."
+            );
+            Arc::new(sanvi_access::adapters::NoopDecisionCache)
+        }
+    };
     let features: Arc<dyn FeatureRepository> = Arc::new(SqlxFeatureRepository::new());
     let entitlements: Arc<dyn EntitlementRepository> = Arc::new(SqlxEntitlementRepository::new());
     let quota: Arc<dyn QuotaUsageStore> = Arc::new(SqlxQuotaUsageStore::new());

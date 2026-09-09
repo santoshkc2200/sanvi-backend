@@ -22,6 +22,9 @@ pub enum AccessError {
     #[error("role {key} not found")]
     RoleNotFound { key: String },
 
+    #[error("failed to resolve role key for role {0}")]
+    RoleKeyResolutionFailed(sanvi_kernel::RoleId),
+
     #[error("system roles cannot be modified: {key}")]
     SystemRoleImmutable { key: String },
 

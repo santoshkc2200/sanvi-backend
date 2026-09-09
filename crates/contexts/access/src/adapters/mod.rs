@@ -14,7 +14,7 @@ pub mod roles_repo;
 pub mod sync;
 pub mod system;
 
-pub use decision_cache::{InMemoryDecisionCache, NoopDecisionCache};
+pub use decision_cache::{InMemoryDecisionCache, NoopDecisionCache, RedisDecisionCache};
 pub use entitlement_cache::{
     InMemoryEntitlementCache, NoopEntitlementCache, RedisEntitlementCache, entitlement_key,
 };
