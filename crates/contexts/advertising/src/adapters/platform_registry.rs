@@ -5,13 +5,18 @@ use std::sync::Arc;
 
 use sanvi_persistence::TxManager;
 
+use sanvi_kernel::CapabilityMode;
+
 use crate::adapters::{
-    FakeAdPlatform, GoogleAdsAdapter, GoogleRefreshTokenGrant, MetaAdsAdapter,
-    MetaRefreshTokenGrant,
+    FakeAdPlatform, FakeAudienceSync, FakeConversionSink, GoogleAdsAdapter,
+    GoogleRefreshTokenGrant, MetaAdsAdapter, MetaRefreshTokenGrant,
 };
 use crate::application::{PlatformRegistry, VaultAccessTokenProvider};
 use crate::config::AdvertisingConfig;
-use crate::domain::{ConnectionAccessTokenProvider, PlatformKey, TokenVault};
+use crate::domain::{
+    AdvertisingError, AudienceSyncPort, ConnectionAccessTokenProvider, ConversionSinkPort,
+    PlatformKey, TokenVault,
+};
 
 /// Build connection access token providers for platforms whose OAuth client
 /// credentials are configured.
@@ -68,86 +73,135 @@ pub fn build_access_token_providers(
 
 /// Construct the platform registry for advertising.
 ///
-/// If `config.real_platform_adapters` is false, this returns the fake in-process
-/// platform catalog.
-/// If `config.real_platform_adapters` is true, this attempts to construct and
-/// register the real adapter for each supported platform (`google_ads`, `meta`).
-/// If a platform's token provider is missing or adapter construction fails (e.g.
-/// missing credentials), it logs a warning and falls back to that platform's fake
-/// adapter fixture.
+/// Under `CapabilityMode::Disabled`, this returns an empty platform registry.
+/// Under `CapabilityMode::Sandbox`, this returns the fake in-process platform catalog.
+/// Under `CapabilityMode::Live`, this attempts to construct and register the real adapter
+/// for each supported platform (`google_ads`, `meta`). In live mode, a missing token provider
+/// or unconstructable adapter for a configured platform is a hard error — never a silent fallback to a fake.
 pub fn build_platform_registry(
     config: &AdvertisingConfig,
     token_providers: &HashMap<PlatformKey, Arc<dyn ConnectionAccessTokenProvider>>,
-) -> PlatformRegistry {
-    if !config.real_platform_adapters {
-        return FakeAdPlatform::registered_catalog();
-    }
+) -> Result<(PlatformRegistry, CapabilityMode), AdvertisingError> {
+    let mode = config.resolved_platform_mode();
+    match mode {
+        CapabilityMode::Disabled => {
+            tracing::info!("advertising platform registry: disabled mode");
+            Ok((PlatformRegistry::new(), CapabilityMode::Disabled))
+        }
+        CapabilityMode::Sandbox => {
+            tracing::info!("advertising platform registry: sandbox mode (using fixtures)");
+            Ok((
+                FakeAdPlatform::registered_catalog(),
+                CapabilityMode::Sandbox,
+            ))
+        }
+        CapabilityMode::Live => {
+            tracing::info!("advertising platform registry: live mode");
+            let mut registry = PlatformRegistry::new();
 
-    let mut registry = PlatformRegistry::new();
-
-    // Google Ads
-    let google_key = PlatformKey::parse("google_ads").expect("static platform key");
-    if let Some(provider) = token_providers.get(&google_key) {
-        match GoogleAdsAdapter::new(config, provider.clone()) {
-            Ok(adapter) => {
+            // Google Ads
+            let google_key = PlatformKey::parse("google_ads").expect("static platform key");
+            if config.google_ads_client_id.is_empty() {
+                tracing::info!(
+                    "google ads client id not configured; google ads capability disabled"
+                );
+            } else {
+                let Some(provider) = token_providers.get(&google_key) else {
+                    return Err(AdvertisingError::PlatformUnavailable(
+                        "google ads token provider not available in live mode".to_string(),
+                    ));
+                };
+                let adapter = GoogleAdsAdapter::new(config, provider.clone())?;
                 registry
                     .register(Arc::new(adapter))
                     .expect("distinct platform key registration cannot fail");
             }
-            Err(error) => {
-                tracing::warn!(%error, "google ads adapter unavailable, falling back to fake platform");
-                let descriptor = FakeAdPlatform::fixtures()
-                    .into_iter()
-                    .find(|d| d.key == google_key)
-                    .expect("fake descriptor for google_ads fixture exists");
-                registry
-                    .register(Arc::new(FakeAdPlatform::new(descriptor)))
-                    .expect("distinct platform key registration cannot fail");
-            }
-        }
-    } else {
-        tracing::warn!("google ads token provider not available, falling back to fake platform");
-        let descriptor = FakeAdPlatform::fixtures()
-            .into_iter()
-            .find(|d| d.key == google_key)
-            .expect("fake descriptor for google_ads fixture exists");
-        registry
-            .register(Arc::new(FakeAdPlatform::new(descriptor)))
-            .expect("distinct platform key registration cannot fail");
-    }
 
-    // Meta
-    let meta_key = PlatformKey::parse("meta").expect("static platform key");
-    if let Some(provider) = token_providers.get(&meta_key) {
-        match MetaAdsAdapter::new(config, provider.clone()) {
-            Ok(adapter) => {
+            // Meta
+            let meta_key = PlatformKey::parse("meta").expect("static platform key");
+            if config.meta_client_id.is_empty() {
+                tracing::info!("meta client id not configured; meta capability disabled");
+            } else {
+                let Some(provider) = token_providers.get(&meta_key) else {
+                    return Err(AdvertisingError::PlatformUnavailable(
+                        "meta token provider not available in live mode".to_string(),
+                    ));
+                };
+                let adapter = MetaAdsAdapter::new(config, provider.clone())?;
                 registry
                     .register(Arc::new(adapter))
                     .expect("distinct platform key registration cannot fail");
             }
-            Err(error) => {
-                tracing::warn!(%error, "meta ads adapter unavailable, falling back to fake platform");
-                let descriptor = FakeAdPlatform::fixtures()
-                    .into_iter()
-                    .find(|d| d.key == meta_key)
-                    .expect("fake descriptor for meta fixture exists");
-                registry
-                    .register(Arc::new(FakeAdPlatform::new(descriptor)))
-                    .expect("distinct platform key registration cannot fail");
-            }
-        }
-    } else {
-        tracing::warn!("meta token provider not available, falling back to fake platform");
-        let descriptor = FakeAdPlatform::fixtures()
-            .into_iter()
-            .find(|d| d.key == meta_key)
-            .expect("fake descriptor for meta fixture exists");
-        registry
-            .register(Arc::new(FakeAdPlatform::new(descriptor)))
-            .expect("distinct platform key registration cannot fail");
-    }
 
-    registry
+            Ok((registry, CapabilityMode::Live))
+        }
+    }
+}
+
+/// Construct conversion sinks for advertising.
+pub fn build_conversion_sinks(
+    config: &AdvertisingConfig,
+) -> Result<
+    (
+        std::collections::BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>>,
+        CapabilityMode,
+    ),
+    AdvertisingError,
+> {
+    let mode = config.resolved_conversion_sink_mode();
+    match mode {
+        CapabilityMode::Disabled => {
+            Ok((std::collections::BTreeMap::new(), CapabilityMode::Disabled))
+        }
+        CapabilityMode::Sandbox => {
+            let mut sinks: std::collections::BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> =
+                std::collections::BTreeMap::new();
+            for descriptor in FakeAdPlatform::fixtures().into_iter().take(2) {
+                sinks.insert(
+                    descriptor.key.clone(),
+                    Arc::new(FakeConversionSink::new(descriptor)),
+                );
+            }
+            Ok((sinks, CapabilityMode::Sandbox))
+        }
+        CapabilityMode::Live => {
+            tracing::info!("live conversion sinks not available; capability disabled");
+            Ok((std::collections::BTreeMap::new(), CapabilityMode::Live))
+        }
+    }
+}
+
+/// Construct audience sync sinks for advertising.
+pub fn build_audience_sinks(
+    config: &AdvertisingConfig,
+) -> Result<
+    (
+        std::collections::BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>>,
+        CapabilityMode,
+    ),
+    AdvertisingError,
+> {
+    let mode = config.resolved_audience_sink_mode();
+    match mode {
+        CapabilityMode::Disabled => {
+            Ok((std::collections::BTreeMap::new(), CapabilityMode::Disabled))
+        }
+        CapabilityMode::Sandbox => {
+            let mut sinks: std::collections::BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>> =
+                std::collections::BTreeMap::new();
+            for descriptor in FakeAdPlatform::fixtures().into_iter().take(2) {
+                sinks.insert(
+                    descriptor.key.clone(),
+                    Arc::new(FakeAudienceSync::new(descriptor)),
+                );
+            }
+            Ok((sinks, CapabilityMode::Sandbox))
+        }
+        CapabilityMode::Live => {
+            tracing::info!("live audience sinks not available; capability disabled");
+            Ok((std::collections::BTreeMap::new(), CapabilityMode::Live))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -175,7 +229,8 @@ mod tests {
             ..AdvertisingConfig::default()
         };
         let token_providers = HashMap::new();
-        let registry = build_platform_registry(&config, &token_providers);
+        let (registry, mode) = build_platform_registry(&config, &token_providers).unwrap();
+        assert_eq!(mode, CapabilityMode::Sandbox);
         let expected: std::collections::BTreeSet<_> = FakeAdPlatform::fixtures()
             .into_iter()
             .take(2)
@@ -190,40 +245,87 @@ mod tests {
     }
 
     #[test]
-    fn flag_true_empty_credentials_falls_back_to_fakes_for_both_platforms() {
+    fn explicit_disabled_mode_returns_empty_registry() {
+        let config = AdvertisingConfig {
+            platform_mode: Some("disabled".to_string()),
+            ..AdvertisingConfig::default()
+        };
+        let token_providers = HashMap::new();
+        let (registry, mode) = build_platform_registry(&config, &token_providers).unwrap();
+        assert_eq!(mode, CapabilityMode::Disabled);
+        assert_eq!(registry.adapters().len(), 0);
+    }
+
+    #[test]
+    fn flag_true_empty_credentials_disables_capabilities_without_fake_fallback() {
         let config = AdvertisingConfig {
             real_platform_adapters: true,
             ..AdvertisingConfig::default()
         };
         let token_providers = HashMap::new();
-        let registry = build_platform_registry(&config, &token_providers);
-
-        let google_key = PlatformKey::parse("google_ads").unwrap();
-        let meta_key = PlatformKey::parse("meta").unwrap();
-
-        assert!(registry.adapter(&google_key).is_ok());
-        assert!(registry.adapter(&meta_key).is_ok());
-        assert_eq!(registry.adapters().len(), 2);
+        let (registry, mode) = build_platform_registry(&config, &token_providers).unwrap();
+        assert_eq!(mode, CapabilityMode::Live);
+        // Neither platform configured, so neither registered (no fake fallback!)
+        assert_eq!(registry.adapters().len(), 0);
     }
 
     #[test]
-    fn flag_true_partial_credentials_falls_back_cleanly() {
+    fn flag_true_missing_token_provider_fails_startup() {
         let config = AdvertisingConfig {
             real_platform_adapters: true,
+            google_ads_client_id: "google-client-id".to_string(),
+            ..AdvertisingConfig::default()
+        };
+        let token_providers = HashMap::new();
+        match build_platform_registry(&config, &token_providers) {
+            Err(err) => assert!(matches!(err, AdvertisingError::PlatformUnavailable(_))),
+            Ok(_) => panic!("expected failure in live mode with missing token provider"),
+        }
+    }
+
+    #[test]
+    fn flag_true_missing_developer_token_fails_startup() {
+        let config = AdvertisingConfig {
+            real_platform_adapters: true,
+            google_ads_client_id: "google-client-id".to_string(),
             google_ads_developer_token: String::new(),
             ..AdvertisingConfig::default()
         };
         let mut token_providers: HashMap<PlatformKey, Arc<dyn ConnectionAccessTokenProvider>> =
             HashMap::new();
         let google_key = PlatformKey::parse("google_ads").unwrap();
-        token_providers.insert(google_key.clone(), Arc::new(StubTokenProvider));
+        token_providers.insert(google_key, Arc::new(StubTokenProvider));
 
-        let registry = build_platform_registry(&config, &token_providers);
+        match build_platform_registry(&config, &token_providers) {
+            Err(err) => assert!(matches!(err, AdvertisingError::PlatformUnavailable(_))),
+            Ok(_) => panic!("expected failure in live mode with missing developer token"),
+        }
+    }
 
-        let meta_key = PlatformKey::parse("meta").unwrap();
+    #[test]
+    fn sinks_builders_modes() {
+        let sandbox_config = AdvertisingConfig {
+            real_platform_adapters: false,
+            ..AdvertisingConfig::default()
+        };
+        let (conv_sinks, conv_mode) = build_conversion_sinks(&sandbox_config).unwrap();
+        assert_eq!(conv_mode, CapabilityMode::Sandbox);
+        assert_eq!(conv_sinks.len(), 2);
 
-        assert!(registry.adapter(&google_key).is_ok());
-        assert!(registry.adapter(&meta_key).is_ok());
-        assert_eq!(registry.adapters().len(), 2);
+        let (aud_sinks, aud_mode) = build_audience_sinks(&sandbox_config).unwrap();
+        assert_eq!(aud_mode, CapabilityMode::Sandbox);
+        assert_eq!(aud_sinks.len(), 2);
+
+        let live_config = AdvertisingConfig {
+            real_platform_adapters: true,
+            ..AdvertisingConfig::default()
+        };
+        let (conv_live, conv_live_mode) = build_conversion_sinks(&live_config).unwrap();
+        assert_eq!(conv_live_mode, CapabilityMode::Live);
+        assert_eq!(conv_live.len(), 0);
+
+        let (aud_live, aud_live_mode) = build_audience_sinks(&live_config).unwrap();
+        assert_eq!(aud_live_mode, CapabilityMode::Live);
+        assert_eq!(aud_live.len(), 0);
     }
 }

@@ -30,14 +30,24 @@ pub struct AdvertisingConfig {
     /// When `false` (default), every platform uses the fake in-process adapter
     /// (current, safe default — no credentials configured yet). When `true`,
     /// the composition root tries to build the real `GoogleAdsAdapter`/`MetaAdsAdapter`
-    /// per platform, falling back to the fake for any single platform whose
-    /// credentials are still missing or invalid rather than failing the whole process.
+    /// per platform.
     #[serde(default)]
     pub real_platform_adapters: bool,
+    /// Explicit platform capability mode (`disabled`, `sandbox`, `live`).
+    /// If not specified, falls back to `live` when `real_platform_adapters` is true, else `sandbox`.
+    #[serde(default)]
+    pub platform_mode: Option<String>,
+    /// Explicit conversion sink capability mode (`disabled`, `sandbox`, `live`).
+    #[serde(default)]
+    pub conversion_sink_mode: Option<String>,
+    /// Explicit audience sink capability mode (`disabled`, `sandbox`, `live`).
+    #[serde(default)]
+    pub audience_sink_mode: Option<String>,
     /// Platform-wide cap on in-flight adapter calls (the shared
     /// developer-token quota). See `adapters::rate_limit`.
     #[serde(default = "default_quota_platform_wide_permits")]
     pub quota_platform_wide_permits: usize,
+
     /// Per-connection cap nested inside the platform-wide one, so one
     /// tenant's bulk edit cannot claim every platform-wide slot.
     #[serde(default = "default_quota_per_connection_permits")]
@@ -146,6 +156,9 @@ impl Default for AdvertisingConfig {
             google_ads_api_version: "v22".to_string(),
             meta_api_version: "v24.0".to_string(),
             real_platform_adapters: false,
+            platform_mode: None,
+            conversion_sink_mode: None,
+            audience_sink_mode: None,
             quota_platform_wide_permits: default_quota_platform_wide_permits(),
             quota_per_connection_permits: default_quota_per_connection_permits(),
             metrics_max_query_span_days: default_metrics_max_query_span_days(),
@@ -157,6 +170,54 @@ impl Default for AdvertisingConfig {
 }
 
 impl AdvertisingConfig {
+    pub fn resolved_platform_mode(&self) -> sanvi_kernel::CapabilityMode {
+        if let Some(ref m) = self.platform_mode {
+            sanvi_kernel::CapabilityMode::parse(m).unwrap_or_else(|_| {
+                if self.real_platform_adapters {
+                    sanvi_kernel::CapabilityMode::Live
+                } else {
+                    sanvi_kernel::CapabilityMode::Sandbox
+                }
+            })
+        } else if self.real_platform_adapters {
+            sanvi_kernel::CapabilityMode::Live
+        } else {
+            sanvi_kernel::CapabilityMode::Sandbox
+        }
+    }
+
+    pub fn resolved_conversion_sink_mode(&self) -> sanvi_kernel::CapabilityMode {
+        if let Some(ref m) = self.conversion_sink_mode {
+            sanvi_kernel::CapabilityMode::parse(m).unwrap_or_else(|_| {
+                if self.real_platform_adapters {
+                    sanvi_kernel::CapabilityMode::Live
+                } else {
+                    sanvi_kernel::CapabilityMode::Sandbox
+                }
+            })
+        } else if self.real_platform_adapters {
+            sanvi_kernel::CapabilityMode::Live
+        } else {
+            sanvi_kernel::CapabilityMode::Sandbox
+        }
+    }
+
+    pub fn resolved_audience_sink_mode(&self) -> sanvi_kernel::CapabilityMode {
+        if let Some(ref m) = self.audience_sink_mode {
+            sanvi_kernel::CapabilityMode::parse(m).unwrap_or_else(|_| {
+                if self.real_platform_adapters {
+                    sanvi_kernel::CapabilityMode::Live
+                } else {
+                    sanvi_kernel::CapabilityMode::Sandbox
+                }
+            })
+        } else if self.real_platform_adapters {
+            sanvi_kernel::CapabilityMode::Live
+        } else {
+            sanvi_kernel::CapabilityMode::Sandbox
+        }
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.google_ads_api_version.trim().is_empty() || self.meta_api_version.trim().is_empty()
         {

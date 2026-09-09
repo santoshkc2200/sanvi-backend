@@ -30,7 +30,10 @@ pub use metrics_repo::SqlxMetricsRepository;
 pub use notifications::LoggingBudgetNotifier;
 pub use oauth_state_store::SqlxOAuthStateStore;
 pub use payment_lookup::CheckoutPaymentLookup;
-pub use platform_registry::{build_access_token_providers, build_platform_registry};
+pub use platform_registry::{
+    build_access_token_providers, build_audience_sinks, build_conversion_sinks,
+    build_platform_registry,
+};
 pub use privacy_provider::AdvertisingPrivacyProvider;
 pub use rate_limit::{QuotaLimiter, RateLimitedAdapter, rate_limited_registry};
 pub use repos::{

@@ -9,6 +9,7 @@ pub mod clock;
 pub mod error;
 pub mod events;
 pub mod ids;
+pub mod mode;
 pub mod pagination;
 
 pub use clock::{Clock, SystemClock};
@@ -18,4 +19,5 @@ pub use ids::{
     Id, IdsConfig, NodeId, RawIdGenerator, RoleId, RoleTag, SNOWFLAKE_EPOCH_MS, SnowflakeGenerator,
     SnowflakeId, TenantId, TenantTag, UserId, UserTag,
 };
+pub use mode::CapabilityMode;
 pub use pagination::{Page, PageRequest};
