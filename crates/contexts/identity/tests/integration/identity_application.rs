@@ -33,6 +33,10 @@ use sanvi_persistence::{PlatformScope, ScopedTx, TxManager};
 struct Memory {
     users: Vec<User>,
     memberships: Vec<Membership>,
+    /// Mirrors `identity.memberships.version`: a per-(tenant, user) counter
+    /// bumped on every save and carried into the emitted event, so tests
+    /// exercise the same ordering the access sync consumer relies on.
+    membership_versions: std::collections::HashMap<(TenantId, UserId), i64>,
     links: Vec<LinkedAccount>,
     invitations: Vec<Invitation>,
     intents: Vec<LinkIntent>,
@@ -158,7 +162,7 @@ impl MembershipRepository for World {
         &self,
         _scope: &mut ScopedTx<'_>,
         membership: &Membership,
-    ) -> Result<(), IdentityError> {
+    ) -> Result<i64, IdentityError> {
         let mut memory = self.memory.lock().unwrap();
         if let Some(existing) = memory.memberships.iter_mut().find(|m| {
             m.tenant_id() == membership.tenant_id() && m.user_id() == membership.user_id()
@@ -167,7 +171,12 @@ impl MembershipRepository for World {
         } else {
             memory.memberships.push(membership.clone());
         }
-        Ok(())
+        let version = memory
+            .membership_versions
+            .entry((membership.tenant_id(), membership.user_id()))
+            .or_insert(0);
+        *version += 1;
+        Ok(*version)
     }
 
     async fn find(
@@ -228,12 +237,21 @@ impl MembershipRepository for World {
         _scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         user_id: UserId,
-    ) -> Result<(), IdentityError> {
+    ) -> Result<Option<i64>, IdentityError> {
         let mut memory = self.memory.lock().unwrap();
+        let before = memory.memberships.len();
         memory
             .memberships
             .retain(|m| !(m.tenant_id() == tenant_id && m.user_id() == user_id));
-        Ok(())
+        if memory.memberships.len() == before {
+            return Ok(None);
+        }
+        let version = memory
+            .membership_versions
+            .entry((tenant_id, user_id))
+            .or_insert(0);
+        *version += 1;
+        Ok(Some(*version))
     }
 
     async fn list_all_platform(

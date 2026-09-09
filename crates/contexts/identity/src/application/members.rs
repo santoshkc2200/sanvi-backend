@@ -176,11 +176,12 @@ impl GrantMembership {
         {
             return Err(IdentityError::NotAMember { user_id, tenant_id });
         }
-        self.memberships.save(&mut scope, &membership).await?;
+        let version = self.memberships.save(&mut scope, &membership).await?;
         let events = vec![IdentityEvent::MembershipGranted {
             tenant_id,
             user_id,
             role_ids: membership.role_ids().to_vec(),
+            version,
         }];
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;
@@ -258,12 +259,14 @@ impl UpdateMemberRoles {
         )
         .await?;
 
-        membership.replace_roles(cmd.role_ids)?;
-        self.memberships.save(&mut scope, &membership).await?;
+        let (_added, removed) = membership.replace_roles(cmd.role_ids)?;
+        let version = self.memberships.save(&mut scope, &membership).await?;
         let events = vec![IdentityEvent::MembershipRolesChanged {
             tenant_id,
             user_id,
             role_ids: membership.role_ids().to_vec(),
+            removed_role_ids: removed,
+            version,
         }];
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;
@@ -355,13 +358,16 @@ impl RemoveMember {
         }
 
         let revoked_role_ids = membership.role_ids().to_vec();
-        self.memberships
+        let version = self
+            .memberships
             .remove(&mut scope, tenant_id, user_id)
-            .await?;
+            .await?
+            .ok_or(IdentityError::NotAMember { user_id, tenant_id })?;
         let events = vec![IdentityEvent::MembershipRevoked {
             tenant_id,
             user_id,
             role_ids: revoked_role_ids,
+            version,
         }];
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;

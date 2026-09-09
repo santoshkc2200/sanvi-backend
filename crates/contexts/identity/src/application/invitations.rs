@@ -269,12 +269,14 @@ impl AcceptInvitation {
                 }
             }
             let mut membership = existing;
-            membership.replace_roles(merged)?;
-            self.memberships.save(&mut scope, &membership).await?;
+            let (_added, removed) = membership.replace_roles(merged)?;
+            let version = self.memberships.save(&mut scope, &membership).await?;
             events.push(IdentityEvent::MembershipRolesChanged {
                 tenant_id,
                 user_id,
                 role_ids: membership.role_ids().to_vec(),
+                removed_role_ids: removed,
+                version,
             });
         } else {
             let membership = Membership::grant(
@@ -284,11 +286,12 @@ impl AcceptInvitation {
                 invitation.invited_by(),
                 now,
             )?;
-            self.memberships.save(&mut scope, &membership).await?;
+            let version = self.memberships.save(&mut scope, &membership).await?;
             events.push(IdentityEvent::MembershipGranted {
                 tenant_id,
                 user_id,
                 role_ids: membership.role_ids().to_vec(),
+                version,
             });
         }
 

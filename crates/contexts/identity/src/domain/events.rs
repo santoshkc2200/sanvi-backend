@@ -85,16 +85,24 @@ pub enum IdentityEvent {
         tenant_id: TenantId,
         user_id: UserId,
         role_ids: Vec<RoleId>,
+        #[serde(default)]
+        version: i64,
     },
     MembershipRolesChanged {
         tenant_id: TenantId,
         user_id: UserId,
         role_ids: Vec<RoleId>,
+        #[serde(default)]
+        removed_role_ids: Vec<RoleId>,
+        #[serde(default)]
+        version: i64,
     },
     MembershipRevoked {
         tenant_id: TenantId,
         user_id: UserId,
         role_ids: Vec<RoleId>,
+        #[serde(default)]
+        version: i64,
     },
     InvitationSent {
         invitation_id: InvitationId,
@@ -212,6 +220,7 @@ mod tests {
             tenant_id,
             user_id,
             role_ids: vec![],
+            version: 1,
         };
         let envelope = event.envelope(EventId::try_from(103_i64).unwrap());
         assert_eq!(envelope.aggregate_id, user_id.as_snowflake());
