@@ -9,8 +9,37 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use redis::AsyncCommands;
 use tracing::{debug, error, info, warn};
+
+static ACQUIRE_OR_RENEW_SCRIPT: std::sync::LazyLock<redis::Script> =
+    std::sync::LazyLock::new(|| {
+        redis::Script::new(
+            r#"
+        local current = redis.call('GET', KEYS[1])
+        if not current then
+            redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+            return 1
+        elseif current == ARGV[1] then
+            redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+            return 1
+        else
+            return 0
+        end
+        "#,
+        )
+    });
+
+static RELEASE_SCRIPT: std::sync::LazyLock<redis::Script> = std::sync::LazyLock::new(|| {
+    redis::Script::new(
+        r#"
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+        else
+            return 0
+        end
+        "#,
+    )
+});
 
 /// Boxed job future.
 pub type JobFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
@@ -67,6 +96,8 @@ pub struct Scheduler {
     lock_key: String,
     instance_id: String,
     jobs: Vec<Arc<dyn Job>>,
+    lock_ttl_secs: u64,
+    tick: Duration,
 }
 
 impl Scheduler {
@@ -80,35 +111,64 @@ impl Scheduler {
             lock_key: "sanvi:scheduler:leader".to_string(),
             instance_id: instance_id.into(),
             jobs,
+            lock_ttl_secs: LOCK_TTL_SECS,
+            tick: TICK,
         }
+    }
+
+    pub fn with_lock_key(mut self, lock_key: impl Into<String>) -> Self {
+        self.lock_key = lock_key.into();
+        self
+    }
+
+    pub fn with_lock_ttl(mut self, ttl_secs: u64) -> Self {
+        self.lock_ttl_secs = ttl_secs;
+        self
+    }
+
+    pub fn with_tick(mut self, tick: Duration) -> Self {
+        self.tick = tick;
+        self
     }
 
     /// Run until `shutdown` fires.
     pub async fn run_until_shutdown(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         info!(instance = %self.instance_id, jobs = self.jobs.len(), "scheduler started");
+        if *shutdown.borrow() {
+            info!("scheduler stopped: already shut down");
+            return;
+        }
+
         let mut next_due: Vec<tokio::time::Instant> = self
             .jobs
             .iter()
             .map(|_| tokio::time::Instant::now())
             .collect();
 
+        let mut ticker = tokio::time::interval(self.tick);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         loop {
-            if shutdown.changed().await.is_err() || *shutdown.borrow() {
+            tokio::select! {
+                _ = ticker.tick() => {}
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
+            if *shutdown.borrow() {
                 break;
             }
 
             match self.acquire_or_renew().await {
                 Ok(true) => {
-                    // We are (still) the leader: run due jobs sequentially.
-                    let now = tokio::time::Instant::now();
-                    for (index, job) in self.jobs.iter().enumerate() {
-                        if next_due[index] <= now {
-                            debug!(job = job.name(), "running scheduled job");
-                            if let Err(err) = job.run().await {
-                                error!(error = %err, job = job.name(), "scheduled job failed");
-                            }
-                            next_due[index] = now + job.interval();
-                        }
+                    // We are (still) the leader: run due jobs with lease renewal.
+                    self.run_due_jobs(&mut next_due, &mut shutdown).await;
+                    if *shutdown.borrow() {
+                        break;
                     }
                 }
                 Ok(false) => {
@@ -118,46 +178,125 @@ impl Scheduler {
                     warn!(error = %err, "scheduler lock check failed; waiting");
                 }
             }
+        }
 
-            tokio::time::sleep(TICK).await;
+        if let Err(err) = self.release_lock().await {
+            warn!(error = %err, "failed to release scheduler lock on shutdown");
         }
         info!("scheduler stopped");
     }
 
+    async fn run_due_jobs(
+        &self,
+        next_due: &mut [tokio::time::Instant],
+        shutdown: &mut tokio::sync::watch::Receiver<bool>,
+    ) {
+        let now = tokio::time::Instant::now();
+        let due_indices: Vec<usize> = self
+            .jobs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| next_due[*index] <= now)
+            .map(|(index, _)| index)
+            .collect();
+
+        if due_indices.is_empty() {
+            return;
+        }
+
+        // Renew frequently enough that a sequence outliving the lease cannot cause
+        // lease expiry. We renew at min(tick, 1/3 TTL), bounded to at least 10ms.
+        let ttl_third = Duration::from_millis(((self.lock_ttl_secs * 1000) / 3).max(10));
+        let renew_interval = self.tick.min(ttl_third).max(Duration::from_millis(10));
+
+        let mut renew_interval_timer = tokio::time::interval(renew_interval);
+        renew_interval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // First tick completes immediately, consume it since lock was just acquired/renewed
+        renew_interval_timer.tick().await;
+
+        let keepalive = async {
+            loop {
+                renew_interval_timer.tick().await;
+                match self.acquire_or_renew().await {
+                    Ok(true) => {
+                        debug!(instance = %self.instance_id, "renewed leader lease during job execution");
+                    }
+                    Ok(false) => {
+                        warn!(instance = %self.instance_id, "lost leader lease during job execution");
+                        return Err(anyhow::anyhow!("lease lost to another worker"));
+                    }
+                    Err(err) => {
+                        warn!(error = %err, instance = %self.instance_id, "failed to renew leader lease during job execution");
+                        return Err(err);
+                    }
+                }
+            }
+            #[allow(unreachable_code)]
+            Ok::<(), anyhow::Error>(())
+        };
+
+        let shutdown_jobs = shutdown.clone();
+        let jobs_runner = async {
+            for index in due_indices {
+                if *shutdown_jobs.borrow() {
+                    break;
+                }
+                let job = &self.jobs[index];
+                debug!(job = job.name(), "running scheduled job");
+                if let Err(err) = job.run().await {
+                    error!(error = %err, job = job.name(), "scheduled job failed");
+                }
+                next_due[index] = tokio::time::Instant::now() + job.interval();
+            }
+        };
+
+        tokio::select! {
+            biased;
+
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    info!("shutdown signaled during job execution; cancelling remaining jobs");
+                }
+            }
+            lease_res = keepalive => {
+                if let Err(err) = lease_res {
+                    error!(error = %err, "lost leadership lease during job sequence; cancelled running jobs");
+                }
+            }
+            _ = jobs_runner => {
+                debug!("completed due jobs sequence");
+            }
+        }
+    }
+
     /// Take the leader lock, or extend it if we already hold it.
-    async fn acquire_or_renew(&self) -> Result<bool> {
+    ///
+    /// Atomic single round trip using Lua compare-and-set:
+    /// - If nobody holds the lock, claims it with TTL.
+    /// - If this instance already holds the lock, refreshes the TTL.
+    /// - If another instance holds the lock, returns `Ok(false)` without modifying it.
+    pub async fn acquire_or_renew(&self) -> Result<bool> {
         let mut conn = self.conn.clone();
-        // SET NX succeeds only when nobody holds the lock; when we already
-        // hold it the key matches our instance id, in which case EXPIRE
-        // (kept-live) is enough.
-        let acquired: Option<String> = conn
-            .set_options(
-                &self.lock_key,
-                &self.instance_id,
-                redis::SetOptions::default()
-                    .conditional_set(redis::ExistenceCheck::NX)
-                    .with_expiration(redis::SetExpiry::EX(LOCK_TTL_SECS)),
-            )
+        let res: i64 = ACQUIRE_OR_RENEW_SCRIPT
+            .key(&self.lock_key)
+            .arg(&self.instance_id)
+            .arg(self.lock_ttl_secs)
+            .invoke_async(&mut conn)
             .await
-            .context("failed to take scheduler leader lock")?;
+            .context("failed to acquire or renew scheduler leader lock")?;
+        Ok(res == 1)
+    }
 
-        if acquired.is_some() {
-            return Ok(true);
-        }
-
-        let current: Option<String> = conn
-            .get(&self.lock_key)
+    /// Release the leader lock if held by this instance.
+    pub async fn release_lock(&self) -> Result<bool> {
+        let mut conn = self.conn.clone();
+        let res: i64 = RELEASE_SCRIPT
+            .key(&self.lock_key)
+            .arg(&self.instance_id)
+            .invoke_async(&mut conn)
             .await
-            .context("failed to read scheduler leader lock")?;
-        if current.as_deref() == Some(self.instance_id.as_str()) {
-            let _: () = conn
-                .expire(&self.lock_key, LOCK_TTL_SECS as i64)
-                .await
-                .context("failed to renew scheduler leader lock")?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+            .context("failed to release scheduler leader lock")?;
+        Ok(res == 1)
     }
 }
 
