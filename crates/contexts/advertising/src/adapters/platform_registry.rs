@@ -82,7 +82,9 @@ pub fn build_platform_registry(
     config: &AdvertisingConfig,
     token_providers: &HashMap<PlatformKey, Arc<dyn ConnectionAccessTokenProvider>>,
 ) -> Result<(PlatformRegistry, CapabilityMode), AdvertisingError> {
-    let mode = config.resolved_platform_mode();
+    let mode = config
+        .resolved_platform_mode()
+        .map_err(|err| AdvertisingError::InvalidInput(err.to_string()))?;
     match mode {
         CapabilityMode::Disabled => {
             tracing::info!("advertising platform registry: disabled mode");
@@ -148,7 +150,9 @@ pub fn build_conversion_sinks(
     ),
     AdvertisingError,
 > {
-    let mode = config.resolved_conversion_sink_mode();
+    let mode = config
+        .resolved_conversion_sink_mode()
+        .map_err(|err| AdvertisingError::InvalidInput(err.to_string()))?;
     match mode {
         CapabilityMode::Disabled => {
             Ok((std::collections::BTreeMap::new(), CapabilityMode::Disabled))
@@ -181,7 +185,9 @@ pub fn build_audience_sinks(
     ),
     AdvertisingError,
 > {
-    let mode = config.resolved_audience_sink_mode();
+    let mode = config
+        .resolved_audience_sink_mode()
+        .map_err(|err| AdvertisingError::InvalidInput(err.to_string()))?;
     match mode {
         CapabilityMode::Disabled => {
             Ok((std::collections::BTreeMap::new(), CapabilityMode::Disabled))

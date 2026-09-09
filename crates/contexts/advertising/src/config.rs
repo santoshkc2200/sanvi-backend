@@ -170,40 +170,45 @@ impl Default for AdvertisingConfig {
 }
 
 impl AdvertisingConfig {
-    pub fn resolved_platform_mode(&self) -> sanvi_kernel::CapabilityMode {
-        let fallback = if self.real_platform_adapters {
-            sanvi_kernel::CapabilityMode::Live
-        } else {
-            sanvi_kernel::CapabilityMode::Sandbox
-        };
-        self.platform_mode
-            .as_deref()
-            .and_then(|m| sanvi_kernel::CapabilityMode::parse(m).ok())
-            .unwrap_or(fallback)
+    /// Resolve one optional mode string, falling back to the mode implied by
+    /// `real_platform_adapters`. A *malformed* value is an error, never a
+    /// silent fallback: `platform_mode = "liv"` degrading to sandbox is the
+    /// same class of defect as the fake-adapter fallback this replaced.
+    fn resolve_mode(
+        raw: Option<&str>,
+        field: &str,
+        real_adapters: bool,
+    ) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        match raw {
+            Some(value) => sanvi_kernel::CapabilityMode::parse(value)
+                .map_err(|err| anyhow::anyhow!("advertising.{field}: {err}")),
+            None if real_adapters => Ok(sanvi_kernel::CapabilityMode::Live),
+            None => Ok(sanvi_kernel::CapabilityMode::Sandbox),
+        }
     }
 
-    pub fn resolved_conversion_sink_mode(&self) -> sanvi_kernel::CapabilityMode {
-        let fallback = if self.real_platform_adapters {
-            sanvi_kernel::CapabilityMode::Live
-        } else {
-            sanvi_kernel::CapabilityMode::Sandbox
-        };
-        self.conversion_sink_mode
-            .as_deref()
-            .and_then(|m| sanvi_kernel::CapabilityMode::parse(m).ok())
-            .unwrap_or(fallback)
+    pub fn resolved_platform_mode(&self) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        Self::resolve_mode(
+            self.platform_mode.as_deref(),
+            "platform_mode",
+            self.real_platform_adapters,
+        )
     }
 
-    pub fn resolved_audience_sink_mode(&self) -> sanvi_kernel::CapabilityMode {
-        let fallback = if self.real_platform_adapters {
-            sanvi_kernel::CapabilityMode::Live
-        } else {
-            sanvi_kernel::CapabilityMode::Sandbox
-        };
-        self.audience_sink_mode
-            .as_deref()
-            .and_then(|m| sanvi_kernel::CapabilityMode::parse(m).ok())
-            .unwrap_or(fallback)
+    pub fn resolved_conversion_sink_mode(&self) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        Self::resolve_mode(
+            self.conversion_sink_mode.as_deref(),
+            "conversion_sink_mode",
+            self.real_platform_adapters,
+        )
+    }
+
+    pub fn resolved_audience_sink_mode(&self) -> anyhow::Result<sanvi_kernel::CapabilityMode> {
+        Self::resolve_mode(
+            self.audience_sink_mode.as_deref(),
+            "audience_sink_mode",
+            self.real_platform_adapters,
+        )
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
