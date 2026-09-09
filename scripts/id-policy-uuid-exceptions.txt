@@ -4,6 +4,7 @@ idempotency_key: retry deduplication key
 command_id: Stripe command correlation key
 nonce: OAuth state nonce
 mutation_id: provider mutation correlation key
+publishing_mutation_id: provider mutation correlation key held on a campaign while its publish is in flight
 provider_event_id: external provider event identifier
 request_id: HTTP request correlation identifier
 trace_id: distributed tracing correlation identifier
