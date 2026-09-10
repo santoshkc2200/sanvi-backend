@@ -54,6 +54,7 @@ pub struct SyncIdentityFromKratos {
     users: Arc<dyn UserRepository>,
     links: Arc<dyn LinkedAccountRepository>,
     events: Arc<dyn EventPublisher>,
+    #[allow(dead_code)]
     notifications: Arc<dyn Notifications>,
     ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
@@ -201,30 +202,6 @@ impl SyncIdentityFromKratos {
             self.events.publish(&mut scope, &events).await?;
         }
         scope.commit().await.map_err(storage)?;
-
-        // Security notices leave the transaction (best effort): the owner
-        // must be told when a provider auto-linked to their account.
-        for event in &events {
-            if let IdentityEvent::AccountLinked {
-                user_id,
-                provider,
-                linked_via: LinkedVia::AutoVerified,
-                ..
-            } = event
-            {
-                let _ = self
-                    .notifications
-                    .send_security_notice(
-                        user.primary_email(),
-                        "provider_linked",
-                        &format!(
-                            "a new sign-in provider was linked to the account (user {user_id}): {}",
-                            provider.as_str()
-                        ),
-                    )
-                    .await;
-            }
-        }
         Ok(())
     }
 
@@ -268,6 +245,7 @@ impl SyncIdentityFromKratos {
                     provider: provider.clone(),
                     subject: subject.as_str().to_string(),
                     linked_via: LinkedVia::Registration,
+                    email: Some(user.primary_email().clone()),
                 });
                 continue;
             }
@@ -294,6 +272,7 @@ impl SyncIdentityFromKratos {
                     provider: provider.clone(),
                     subject: subject.as_str().to_string(),
                     linked_via: LinkedVia::AutoVerified,
+                    email: Some(user.primary_email().clone()),
                 });
             } else {
                 events.push(IdentityEvent::AccountLinkRejected {

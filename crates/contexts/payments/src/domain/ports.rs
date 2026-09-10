@@ -497,59 +497,6 @@ pub trait ConnectionLifecycleStore: Send + Sync {
 /// Tenant-admin notifications on connection-lifecycle changes, through the
 /// phase-05/06 notification path (locale-resolved rendering in the worker;
 /// a logging implementation everywhere else). Failures are logged by the
-/// caller — a lost notification must never fail a committed transition.
-#[async_trait]
-pub trait ConnectionNotifier: Send + Sync {
-    async fn connection_activated(
-        &self,
-        tenant_id: TenantId,
-        connection_id: ConnectionId,
-    ) -> Result<(), PaymentsError>;
-
-    async fn connection_restricted(
-        &self,
-        tenant_id: TenantId,
-        connection_id: ConnectionId,
-        detail: &str,
-    ) -> Result<(), PaymentsError>;
-
-    /// A dispute was opened on one of the tenant's payments — the
-    /// response deadline is attached when the provider supplies one.
-    async fn dispute_opened(
-        &self,
-        tenant_id: TenantId,
-        dispute_id: DisputeId,
-        due_by: Option<DateTime<Utc>>,
-    ) -> Result<(), PaymentsError>;
-    /// An outstanding requirement's deadline is approaching while the
-    /// connection still cannot take payments.
-    async fn requirement_deadline_approaching(
-        &self,
-        tenant_id: TenantId,
-        connection_id: ConnectionId,
-        deadline: DateTime<Utc>,
-    ) -> Result<(), PaymentsError>;
-
-    /// A payout to the tenant's bank **failed** — their money is stuck at
-    /// the provider. An alert, not a row: the notification is the
-    /// deliverable, and a lost one must never fail the committed
-    /// projection.
-    async fn payout_failed(
-        &self,
-        tenant_id: TenantId,
-        external_payout_id: &str,
-        amount: &Money,
-    ) -> Result<(), PaymentsError>;
-
-    /// A tenant with automatic tax enabled has lapsed compliance (status
-    /// left `active`, or the last registration went away) — they are now
-    /// silently under-collecting on new sales.
-    async fn tax_compliance_lapsed(
-        &self,
-        tenant_id: TenantId,
-        detail: &str,
-    ) -> Result<(), PaymentsError>;
-}
 
 // ---------------------------------------------------------------------------
 // 09.4: checkout persistence, the phase-08 domain allow-list and the

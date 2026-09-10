@@ -17,8 +17,8 @@ use sanvi_domains::domain::{
     CertificateAuthorityPort, CertificateRepository, Clock, CustomDomain, CustomDomainId,
     CustomDomainRepository, DnsCheckResult, DnsProviderPort, DnsRecordType, DnsVerifierPort,
     DomainFeatureGate, DomainOrderId, DomainOrderRepository, DomainQuote, DomainRegistrarPort,
-    DomainRole, DomainStatus, DomainsError, EventPublisher, Hostname, Notifications, ProbeResult,
-    PurchaseCharger, RegistrationResult, RenewalResult, StorefrontProbePort, TenantState, TldPrice,
+    DomainRole, DomainStatus, DomainsError, EventPublisher, Hostname, ProbeResult, PurchaseCharger,
+    RegistrationResult, RenewalResult, StorefrontProbePort, TenantState, TldPrice,
 };
 use sanvi_kernel::{RawIdGenerator, TenantId};
 use sanvi_persistence::TxManager;
@@ -212,28 +212,6 @@ impl StorefrontProbePort for FakeProber {
             redirects: 0,
             detail: String::new(),
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct FakeNotifications;
-
-#[async_trait::async_trait]
-impl Notifications for FakeNotifications {
-    async fn domain_degraded(&self, _h: &str, _c: &str, _d: &str) -> Result<(), DomainsError> {
-        Ok(())
-    }
-    async fn certificate_renewal_failed(&self, _h: &str, _d: &str) -> Result<(), DomainsError> {
-        Ok(())
-    }
-    async fn domain_expiring_soon(&self, _h: &str, _d: u32) -> Result<(), DomainsError> {
-        Ok(())
-    }
-    async fn order_failed(&self, _h: &str, _d: &str) -> Result<(), DomainsError> {
-        Ok(())
-    }
-    async fn domain_removed(&self, _h: &str, _r: &str) -> Result<(), DomainsError> {
-        Ok(())
     }
 }
 
@@ -847,7 +825,6 @@ async fn renewal_failure_escalates_and_expiry_warnings_fire() {
         harness.registrar.clone(),
         Arc::new(FakeCharger::default()),
         harness.events.clone(),
-        Arc::new(FakeNotifications),
         harness.tx.clone(),
         30,
         vec![30, 14, 7, 1],
@@ -906,7 +883,6 @@ async fn health_monitor_detects_dns_drift_and_recovers() {
         Arc::new(FakeVerifier::new(true, true)),
         Arc::new(FakeProber { ok: true }),
         harness.events.clone(),
-        Arc::new(FakeNotifications),
         harness.clock.clone(),
         harness.tx.clone(),
         harness.config.edge_hostname.clone(),
@@ -922,7 +898,6 @@ async fn health_monitor_detects_dns_drift_and_recovers() {
         Arc::new(FakeVerifier::new(true, false)),
         Arc::new(FakeProber { ok: true }),
         harness.events.clone(),
-        Arc::new(FakeNotifications),
         harness.clock.clone(),
         harness.tx.clone(),
         harness.config.edge_hostname.clone(),

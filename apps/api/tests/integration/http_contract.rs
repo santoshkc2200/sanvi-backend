@@ -76,6 +76,7 @@ fn test_app() -> actix_web::App<
             role_catalog,
             tenant_catalog,
             notification_localizer: None,
+            notification_gateway: None,
         },
     );
     let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);

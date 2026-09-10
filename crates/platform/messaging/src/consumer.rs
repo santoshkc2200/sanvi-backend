@@ -223,12 +223,27 @@ impl StreamConsumer {
         handler: ConsumerHandler,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
-        self.run_loop(
+        self.run_until_shutdown_at(stream, group, consumer_name, handler, shutdown, "0")
+            .await;
+    }
+
+    /// Run until `shutdown` fires, ensuring the consumer group starts at `start_id` (e.g. `"$"` for tail-only).
+    pub async fn run_until_shutdown_at(
+        &self,
+        stream: &str,
+        group: &str,
+        consumer_name: &str,
+        handler: ConsumerHandler,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+        start_id: &str,
+    ) {
+        self.run_loop_at(
             stream,
             group,
             consumer_name,
             ConsumerHandlerKind::External(handler),
             shutdown,
+            start_id,
         )
         .await;
     }
@@ -245,32 +260,39 @@ impl StreamConsumer {
         handler: TransactionalConsumerHandler,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
-        self.run_loop(
+        self.run_loop_at(
             stream,
             group,
             consumer_name,
             ConsumerHandlerKind::Transactional(handler),
             shutdown,
+            "0",
         )
         .await;
     }
 
-    async fn run_loop(
+    async fn run_loop_at(
         &self,
         stream: &str,
         group: &str,
         consumer_name: &str,
         handler: ConsumerHandlerKind,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
+        start_id: &str,
     ) {
         info!(
             stream,
             group,
             consumer = consumer_name,
+            start_id,
             "stream consumer started"
         );
-        if let Err(err) = self.streams.ensure_consumer_group(stream, group).await {
-            error!(error = %err, stream, group, "failed to ensure consumer group; stopping");
+        if let Err(err) = self
+            .streams
+            .ensure_consumer_group_at(stream, group, start_id)
+            .await
+        {
+            error!(error = %err, stream, group, start_id, "failed to ensure consumer group; stopping");
             return;
         }
 

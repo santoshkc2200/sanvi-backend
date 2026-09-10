@@ -66,6 +66,8 @@ pub enum IdentityEvent {
         provider: ProviderId,
         subject: String,
         linked_via: LinkedVia,
+        #[serde(default)]
+        email: Option<Email>,
     },
     AccountLinkRejected {
         user_id: Option<UserId>,
@@ -80,6 +82,8 @@ pub enum IdentityEvent {
     SessionRevoked {
         user_id: Option<UserId>,
         session_id: String,
+        #[serde(default)]
+        email: Option<Email>,
     },
     MembershipGranted {
         tenant_id: TenantId,

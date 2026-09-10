@@ -16,8 +16,7 @@ use sanvi_persistence::TxManager;
 
 use crate::domain::{
     CertificateAuthorityPort, CertificateRepository, CustomDomainRepository, DomainOrderRepository,
-    DomainRegistrarPort, DomainsError, DomainsEvent, EventPublisher, Notifications,
-    PurchaseCharger, storage,
+    DomainRegistrarPort, DomainsError, DomainsEvent, EventPublisher, PurchaseCharger, storage,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -38,7 +37,6 @@ pub struct RunRenewalSweep {
     registrar: Arc<dyn DomainRegistrarPort>,
     charger: Arc<dyn PurchaseCharger>,
     events: Arc<dyn EventPublisher>,
-    notifications: Arc<dyn Notifications>,
     tx: TxManager,
     renew_before_days: u32,
     expiry_warning_days: Vec<u32>,
@@ -57,7 +55,6 @@ impl RunRenewalSweep {
         registrar: Arc<dyn DomainRegistrarPort>,
         charger: Arc<dyn PurchaseCharger>,
         events: Arc<dyn EventPublisher>,
-        notifications: Arc<dyn Notifications>,
         tx: TxManager,
         renew_before_days: u32,
         expiry_warning_days: Vec<u32>,
@@ -73,7 +70,6 @@ impl RunRenewalSweep {
             registrar,
             charger,
             events,
-            notifications,
             tx,
             renew_before_days,
             expiry_warning_days,
@@ -182,9 +178,6 @@ impl RunRenewalSweep {
                         )
                         .await?;
                     scope.commit().await.map_err(storage)?;
-                    self.notifications
-                        .certificate_renewal_failed(cert.hostname.as_str(), &err.to_string())
-                        .await?;
                     report.cert_renewal_failures += 1;
                 }
             }
@@ -239,9 +232,6 @@ impl RunRenewalSweep {
                 )
                 .await?;
             scope.commit().await.map_err(storage)?;
-            self.notifications
-                .domain_expiring_soon(cert.hostname.as_str(), days)
-                .await?;
             report.expiry_warnings += 1;
         }
         Ok(())
@@ -362,9 +352,6 @@ impl RunRenewalSweep {
                 }],
             )
             .await?;
-            self.notifications
-                .order_failed(order.hostname.as_str(), detail)
-                .await?;
             report.order_renewals_escalated += 1;
         }
         Ok(())

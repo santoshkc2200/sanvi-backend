@@ -1200,7 +1200,6 @@ fn create_test_advertising_state(
                 status_service.clone(),
                 events.clone(),
                 Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
-                Arc::new(sanvi_advertising::adapters::LoggingBudgetNotifier::new()),
                 Arc::new(AdvertisingMetrics::default()),
             ));
             Arc::new(sanvi_advertising::application::PutBudgetCap::new(

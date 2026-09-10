@@ -137,6 +137,18 @@ impl SubjectRef {
         }
     }
 
+    /// The subject's email address, when one of its identifiers is an email.
+    ///
+    /// A `Contact` subject always carries one; a `TenantUser`, `EndUser` or
+    /// `Device` subject may not. Callers that need to mail the subject must
+    /// treat `None` as "no address on file" rather than substituting one.
+    pub fn email(&self) -> Option<&str> {
+        self.identifiers
+            .iter()
+            .find(|id| id.id_type == "email")
+            .map(|id| id.value.as_str())
+    }
+
     pub fn canonical_key(&self) -> &str {
         &self.key
     }

@@ -12,8 +12,8 @@ use sanvi_persistence::TxManager;
 
 use crate::domain::{
     CertificateRepository, Clock, CustomDomain, CustomDomainRepository, DnsVerifierPort,
-    DomainErrorCode, DomainKind, DomainsError, DomainsEvent, EventPublisher, Notifications,
-    StorefrontProbePort, storage,
+    DomainErrorCode, DomainKind, DomainsError, DomainsEvent, EventPublisher, StorefrontProbePort,
+    storage,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -29,7 +29,6 @@ pub struct RunHealthSweep {
     verifier: Arc<dyn DnsVerifierPort>,
     prober: Arc<dyn StorefrontProbePort>,
     events: Arc<dyn EventPublisher>,
-    notifications: Arc<dyn Notifications>,
     clock: Arc<dyn Clock>,
     tx: TxManager,
     edge_hostname: String,
@@ -44,7 +43,6 @@ impl RunHealthSweep {
         verifier: Arc<dyn DnsVerifierPort>,
         prober: Arc<dyn StorefrontProbePort>,
         events: Arc<dyn EventPublisher>,
-        notifications: Arc<dyn Notifications>,
         clock: Arc<dyn Clock>,
         tx: TxManager,
         edge_hostname: String,
@@ -56,7 +54,6 @@ impl RunHealthSweep {
             verifier,
             prober,
             events,
-            notifications,
             clock,
             tx,
             edge_hostname,
@@ -199,9 +196,6 @@ impl RunHealthSweep {
         }
         scope.commit().await.map_err(storage)?;
         if was_healthy {
-            self.notifications
-                .domain_degraded(domain.hostname.as_str(), code, &detail)
-                .await?;
             report.degraded += 1;
         }
         Ok(())

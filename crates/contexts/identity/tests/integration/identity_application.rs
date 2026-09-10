@@ -41,7 +41,6 @@ struct Memory {
     invitations: Vec<Invitation>,
     intents: Vec<LinkIntent>,
     events: Vec<sanvi_identity::domain::IdentityEvent>,
-    notices: Vec<(String, String, String)>,
     invites_sent: Vec<(String, String)>,
     now: chrono::DateTime<Utc>,
     next_id: u64,
@@ -558,6 +557,7 @@ impl Notifications for World {
     async fn send_invitation(
         &self,
         _tenant_id: TenantId,
+        _invitation_id: sanvi_identity::domain::InvitationId,
         email: &Email,
         _tenant_name: &str,
         invite_url: &str,
@@ -567,20 +567,6 @@ impl Notifications for World {
             .unwrap()
             .invites_sent
             .push((email.to_string(), invite_url.to_string()));
-        Ok(())
-    }
-
-    async fn send_security_notice(
-        &self,
-        email: &Email,
-        kind: &str,
-        detail: &str,
-    ) -> Result<(), IdentityError> {
-        self.memory.lock().unwrap().notices.push((
-            email.to_string(),
-            kind.to_string(),
-            detail.to_string(),
-        ));
         Ok(())
     }
 }
@@ -747,6 +733,7 @@ impl Fixture {
             Arc::new(self.world.clone()),
             Arc::new(self.world.clone()),
             7,
+            "https://app.sanvi.dev",
         )
     }
 
@@ -928,13 +915,16 @@ async fn auto_link_only_when_both_sides_are_verified_and_provider_trusted() {
                     && link.provider().as_str() == "google"
                     && link.linked_via() == LinkedVia::AutoVerified
             }));
-            // Security notice to the account owner.
-            assert!(
-                memory
-                    .notices
-                    .iter()
-                    .any(|(_, kind, _)| kind == "provider_linked")
-            );
+            // Security notice trigger: AccountLinked event with AutoVerified and user email.
+            assert!(memory.events.iter().any(|event| matches!(
+                event,
+                sanvi_identity::domain::IdentityEvent::AccountLinked {
+                    user_id,
+                    linked_via: LinkedVia::AutoVerified,
+                    email: Some(email),
+                    ..
+                } if *user_id == alice && email.as_str() == "alice@example.com"
+            )));
         }
     }
 
@@ -1288,6 +1278,7 @@ async fn logout_webhook_emits_revocation() {
             sanvi_identity::domain::IdentityEvent::SessionRevoked {
                 user_id: Some(id),
                 session_id,
+                ..
             } if *id == alice && session_id == "session-42"
         )));
     }

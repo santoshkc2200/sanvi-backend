@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use sanvi_advertising::adapters::{
-    AdvertisingMetrics, FakeAdPlatform, LoggingBudgetNotifier, OutboxEventPublisher,
-    SqlxAdvertisingConnectionRepository, SqlxBudgetAlertRepository, SqlxBudgetCapRepository,
-    SqlxCampaignRepository, SqlxMetricsRepository, SystemIdGenerator, UnavailableFxRate,
+    AdvertisingMetrics, FakeAdPlatform, OutboxEventPublisher, SqlxAdvertisingConnectionRepository,
+    SqlxBudgetAlertRepository, SqlxBudgetCapRepository, SqlxCampaignRepository,
+    SqlxMetricsRepository, SystemIdGenerator, UnavailableFxRate,
 };
 use sanvi_advertising::application::{
     AcknowledgeBudgetAlert, BudgetRolloverSweep, GetBudgetCaps, GetCampaignBudgetCap,
@@ -189,7 +189,6 @@ impl TestHarness {
         let connections_repo = Arc::new(SqlxAdvertisingConnectionRepository::new());
         let events = Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
         let ids = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
-        let notifier = Arc::new(LoggingBudgetNotifier::new());
         let registry = prometheus::Registry::new();
         let metrics = Arc::new(AdvertisingMetrics::new(&registry));
         let fx_rates: Arc<dyn FxRatePort> = Arc::new(UnavailableFxRate::new());
@@ -228,7 +227,6 @@ impl TestHarness {
             status_query.clone(),
             events.clone(),
             ids.clone(),
-            notifier.clone(),
             metrics.clone(),
         ));
 
@@ -1228,7 +1226,6 @@ async fn test_spend_anomaly_detector_persists_budget_alert_row_and_events() {
     let alerts = Arc::new(SqlxBudgetAlertRepository::new());
     let events = Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
     let ids = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
-    let notifier = Arc::new(LoggingBudgetNotifier::new());
 
     let detector = SpendAnomalyDetector::new(
         tx.clone(),
@@ -1237,7 +1234,6 @@ async fn test_spend_anomaly_detector_persists_budget_alert_row_and_events() {
         campaigns.clone(),
         events.clone(),
         ids.clone(),
-        notifier.clone(),
         7,
     );
 

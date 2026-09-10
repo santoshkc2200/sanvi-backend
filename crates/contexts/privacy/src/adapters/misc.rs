@@ -136,39 +136,36 @@ pub struct LoggingNotifications;
 
 #[async_trait]
 impl Notifications for LoggingNotifications {
-    async fn send_verification_code(&self, to: &str, code: &str) -> Result<(), PrivacyError> {
-        tracing::info!(to, code, "verification code generated (logging adapter)");
+    async fn send_verification_code(
+        &self,
+        to: &str,
+        code: &str,
+        request_id: crate::domain::DsrId,
+    ) -> Result<(), PrivacyError> {
+        tracing::info!(
+            to,
+            code,
+            request_id = %request_id,
+            "verification code generated (logging adapter)"
+        );
         Ok(())
     }
 
     async fn send_export_credentials(
         &self,
         subject: &crate::domain::SubjectRef,
+        recipient: &str,
         token: &str,
         passphrase: &str,
-        request_id: &str,
+        request_id: crate::domain::DsrId,
     ) -> Result<(), PrivacyError> {
         tracing::info!(
             subject = subject.canonical_key(),
+            recipient,
             token,
             passphrase,
-            request_id,
+            request_id = %request_id,
             "export credentials generated (logging adapter)"
-        );
-        Ok(())
-    }
-
-    async fn send_request_status(
-        &self,
-        to: &str,
-        subject: &str,
-        status: &str,
-    ) -> Result<(), PrivacyError> {
-        tracing::info!(
-            to,
-            subject,
-            status,
-            "request status notification (logging adapter)"
         );
         Ok(())
     }

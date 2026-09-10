@@ -23,6 +23,7 @@ sanvi-kernel.workspace = true
 sanvi-http.workspace = true
 sanvi-localization.workspace = true
 sanvi-messaging.workspace = true
+sanvi-notifications.workspace = true
 sanvi-persistence.workspace = true
 sanvi-platform-admin.workspace = true
 sanvi-privacy.workspace = true

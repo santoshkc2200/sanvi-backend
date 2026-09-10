@@ -362,6 +362,7 @@ impl SubmitDsr {
 
         let mut challenge_id = None;
         let mut verification_token = None;
+        let mut pending_code: Option<(String, String)> = None;
         if verified_at.is_none() {
             let code = generate_otp(self.otp_digits);
             let token = Uuid::now_v7().to_string();
@@ -379,11 +380,14 @@ impl SubmitDsr {
             self.challenges.save(&mut scope, &challenge).await?;
             challenge_id = Some(challenge.id);
             verification_token = Some(token);
-            if let Some(email) = &command.subject.email {
-                self.notifications
-                    .send_verification_code(email, &code)
-                    .await?;
-            }
+            // Held until after the commit: the notification service is an
+            // outbound HTTP dependency, and a slow or failing mailer must not
+            // be able to roll back a recorded request.
+            pending_code = command
+                .subject
+                .email
+                .as_ref()
+                .map(|email| (email.clone(), code));
         } else {
             self.participants
                 .ensure_participants(
@@ -448,6 +452,12 @@ impl SubmitDsr {
             .commit()
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+
+        if let Some((email, code)) = pending_code {
+            self.notifications
+                .send_verification_code(&email, &code, request_id)
+                .await?;
+        }
 
         Ok(SubmitDsrOutput {
             request_id,

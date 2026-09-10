@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use crate::domain::connection::ProviderConnection;
 use crate::domain::error::PaymentsError;
 use crate::domain::events::{EventPublisher, PaymentsEvent};
-use crate::domain::ports::{ConnectionLifecycleStore, ConnectionNotifier, ProviderAccountStatus};
+use crate::domain::ports::{ConnectionLifecycleStore, ProviderAccountStatus};
 use crate::domain::provider::ConnectionStatus;
 
 /// How long before an outstanding requirement's deadline the tenant-admin
@@ -97,7 +97,6 @@ pub enum AppliedTransition {
 pub async fn apply_account_snapshot(
     store: &dyn ConnectionLifecycleStore,
     events: &dyn EventPublisher,
-    notifier: &dyn ConnectionNotifier,
     scope: &mut sanvi_persistence::PlatformScope<'_>,
     connection: &ProviderConnection,
     snapshot: &ProviderAccountStatus,
@@ -154,27 +153,6 @@ pub async fn apply_account_snapshot(
             provider: updated.provider.as_str().to_string(),
             detail: restriction_detail(&updated),
         });
-    }
-    if !outbox.is_empty() {
-        events.publish(scope, updated.tenant_id, &outbox).await?;
-    }
-
-    // Notifications are best-effort: a committed transition is never
-    // rolled back because the mailer sneezed.
-    if activated
-        && let Err(err) = notifier
-            .connection_activated(updated.tenant_id, updated.id)
-            .await
-    {
-        tracing::error!(connection_id = %updated.id, error = %err, "activation notification failed");
-    }
-    if restricted {
-        if let Err(err) = notifier
-            .connection_restricted(updated.tenant_id, updated.id, &restriction_detail(&updated))
-            .await
-        {
-            tracing::error!(connection_id = %updated.id, error = %err, "restriction notification failed");
-        }
     } else if significant {
         // Deadline reminders ride real projection changes (and sync passes
         // that observe an approaching deadline), not every idle touch.
@@ -183,13 +161,16 @@ pub async fn apply_account_snapshot(
                 && *deadline - observed_at <= chrono::Duration::days(DEADLINE_REMINDER_WINDOW_DAYS)
                 && updated.status != ConnectionStatus::Active
         });
-        if let Some(deadline) = deadline_reminder
-            && let Err(err) = notifier
-                .requirement_deadline_approaching(updated.tenant_id, updated.id, deadline)
-                .await
-        {
-            tracing::error!(connection_id = %updated.id, error = %err, "deadline reminder failed");
+        if let Some(deadline) = deadline_reminder {
+            outbox.push(PaymentsEvent::RequirementDeadlineApproaching {
+                connection_id: updated.id,
+                provider: updated.provider.as_str().to_string(),
+                deadline,
+            });
         }
+    }
+    if !outbox.is_empty() {
+        events.publish(scope, updated.tenant_id, &outbox).await?;
     }
 
     Ok(if significant {

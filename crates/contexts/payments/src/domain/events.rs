@@ -9,6 +9,7 @@
 //! carry no PII and no card data — identifiers, statuses and amounts only,
 //! per the phase's storage invariant.
 
+use chrono::{DateTime, Utc};
 use sanvi_kernel::events::EventEnvelope;
 use sanvi_kernel::{EventId, SnowflakeId, TenantId};
 use serde::Serialize;
@@ -26,6 +27,7 @@ pub const PAYMENT_AGGREGATE: &str = "payments.payment";
 pub const REFUND_AGGREGATE: &str = "payments.refund";
 pub const DISPUTE_AGGREGATE: &str = "payments.dispute";
 pub const PAYOUT_AGGREGATE: &str = "payments.payout";
+pub const TAX_SETTINGS_AGGREGATE: &str = "payments.tax_settings";
 pub const DEFAULT_LOCALE: &str = "en";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +42,9 @@ pub enum PaymentsEventName {
     RefundIssued,
     DisputeOpened,
     PayoutPaid,
+    RequirementDeadlineApproaching,
+    PayoutFailed,
+    TaxComplianceLapsed,
 }
 
 impl PaymentsEventName {
@@ -55,6 +60,9 @@ impl PaymentsEventName {
             Self::RefundIssued => "payments.refund_issued",
             Self::DisputeOpened => "payments.dispute_opened",
             Self::PayoutPaid => "payments.payout_paid",
+            Self::RequirementDeadlineApproaching => "payments.requirement_deadline_approaching",
+            Self::PayoutFailed => "payments.payout_failed",
+            Self::TaxComplianceLapsed => "payments.tax_compliance_lapsed",
         }
     }
 
@@ -70,6 +78,9 @@ impl PaymentsEventName {
             "payments.refund_issued" => Self::RefundIssued,
             "payments.dispute_opened" => Self::DisputeOpened,
             "payments.payout_paid" => Self::PayoutPaid,
+            "payments.requirement_deadline_approaching" => Self::RequirementDeadlineApproaching,
+            "payments.payout_failed" => Self::PayoutFailed,
+            "payments.tax_compliance_lapsed" => Self::TaxComplianceLapsed,
             _ => return None,
         })
     }
@@ -147,12 +158,30 @@ pub enum PaymentsEvent {
         payment_id: PaymentId,
         provider: String,
         amount: EventAmount,
+        #[serde(default)]
+        due_by: Option<DateTime<Utc>>,
     },
     PayoutPaid {
         payout_id: PayoutId,
         connection_id: ConnectionId,
         provider: String,
         amount: EventAmount,
+    },
+    RequirementDeadlineApproaching {
+        connection_id: ConnectionId,
+        provider: String,
+        deadline: DateTime<Utc>,
+    },
+    PayoutFailed {
+        payout_id: PayoutId,
+        connection_id: ConnectionId,
+        provider: String,
+        external_payout_id: String,
+        amount: EventAmount,
+    },
+    TaxComplianceLapsed {
+        tenant_id: TenantId,
+        detail: String,
     },
 }
 
@@ -173,6 +202,11 @@ impl PaymentsEvent {
             Self::RefundIssued { .. } => PaymentsEventName::RefundIssued,
             Self::DisputeOpened { .. } => PaymentsEventName::DisputeOpened,
             Self::PayoutPaid { .. } => PaymentsEventName::PayoutPaid,
+            Self::RequirementDeadlineApproaching { .. } => {
+                PaymentsEventName::RequirementDeadlineApproaching
+            }
+            Self::PayoutFailed { .. } => PaymentsEventName::PayoutFailed,
+            Self::TaxComplianceLapsed { .. } => PaymentsEventName::TaxComplianceLapsed,
         }
     }
 
@@ -185,7 +219,8 @@ impl PaymentsEvent {
             Self::ProviderConnectionStarted { connection_id, .. }
             | Self::ProviderConnectionActivated { connection_id, .. }
             | Self::ProviderConnectionRestricted { connection_id, .. }
-            | Self::ProviderDisconnected { connection_id, .. } => {
+            | Self::ProviderDisconnected { connection_id, .. }
+            | Self::RequirementDeadlineApproaching { connection_id, .. } => {
                 (CONNECTION_AGGREGATE, connection_id.as_snowflake())
             }
             Self::CheckoutCreated { checkout_id, .. } => {
@@ -198,7 +233,12 @@ impl PaymentsEvent {
             Self::DisputeOpened { dispute_id, .. } => {
                 (DISPUTE_AGGREGATE, dispute_id.as_snowflake())
             }
-            Self::PayoutPaid { payout_id, .. } => (PAYOUT_AGGREGATE, payout_id.as_snowflake()),
+            Self::PayoutPaid { payout_id, .. } | Self::PayoutFailed { payout_id, .. } => {
+                (PAYOUT_AGGREGATE, payout_id.as_snowflake())
+            }
+            Self::TaxComplianceLapsed { tenant_id, .. } => {
+                (TAX_SETTINGS_AGGREGATE, tenant_id.as_snowflake())
+            }
         }
     }
 
@@ -282,6 +322,7 @@ mod tests {
                 payment_id: PaymentId::try_from(5_i64).unwrap(),
                 provider: "fake".to_string(),
                 amount: EventAmount::new(&Money::new(2000, "JPY").unwrap()),
+                due_by: None,
             },
             PaymentsEvent::PayoutPaid {
                 payout_id: PayoutId::try_from(9_i64).unwrap(),
@@ -296,7 +337,7 @@ mod tests {
                 Some(event.name())
             );
         }
-        assert_eq!(PaymentsEventName::parse("payments.payout_failed"), None);
+        assert_eq!(PaymentsEventName::parse("payments.unknown_event"), None);
     }
 
     #[test]

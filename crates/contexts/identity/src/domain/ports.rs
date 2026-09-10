@@ -312,25 +312,27 @@ pub trait SessionCache: Send + Sync {
     async fn invalidate_session(&self, session_id: &str) -> Result<(), IdentityError>;
 }
 
-/// Outbound mail: invitations and security notices. The notifications
-/// context owns real delivery (later phase); this port keeps identity
-/// decoupled from it.
+/// Outbound invitation mail.
+///
+/// Every other identity notification is derived from a committed domain event
+/// by the notification consumer. This one is not: `invite_url` embeds the raw
+/// invitation token, which must never be written to `platform.outbox` and
+/// relayed through Redis. So it stays a direct, post-commit call.
+///
+/// `invitation_id` is here so the adapter can build a delivery-idempotency key
+/// that survives a transport retry. The key pairs it with a hash of
+/// `invite_url`: the url is a pure function of the token, so a retry of the
+/// same send replays, while a resend — which mints a fresh token — is
+/// correctly a different message.
 #[async_trait]
 pub trait Notifications: Send + Sync {
     async fn send_invitation(
         &self,
         tenant_id: TenantId,
+        invitation_id: InvitationId,
         email: &Email,
         tenant_name: &str,
         invite_url: &str,
-    ) -> Result<(), IdentityError>;
-
-    /// Security notice: a new provider was linked, a session was revoked, …
-    async fn send_security_notice(
-        &self,
-        email: &Email,
-        kind: &str,
-        detail: &str,
     ) -> Result<(), IdentityError>;
 }
 

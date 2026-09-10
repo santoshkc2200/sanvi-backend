@@ -11,6 +11,7 @@ use sanvi_kernel::IdsConfig;
 use sanvi_localization::LocalizationConfig;
 use sanvi_media::MediaConfig;
 use sanvi_messaging::RedisConfig;
+use sanvi_notifications::NotificationConfig;
 use sanvi_payments::PaymentsConfig;
 use sanvi_persistence::DatabaseConfig;
 use sanvi_platform_admin::PlatformAdminConfig;
@@ -93,6 +94,9 @@ pub struct FeaturesConfig {
     /// Phase-10 gate: advertising stays off until its staged rollout.
     #[serde(default)]
     pub advertising: bool,
+    /// Mounts the notification service integration when enabled.
+    #[serde(default = "default_true")]
+    pub notifications: bool,
     /// Never removed: lets later phases gate behaviour without config churn.
     #[serde(default)]
     pub placeholders: std::collections::BTreeMap<String, serde_json::Value>,
@@ -127,6 +131,7 @@ pub struct AppConfig {
     pub payments: PaymentsConfig,
     pub advertising: AdvertisingConfig,
     pub media: MediaConfig,
+    pub notification: NotificationConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
 }
@@ -154,6 +159,7 @@ impl Default for AppConfig {
             payments: PaymentsConfig::default(),
             advertising: AdvertisingConfig::default(),
             media: MediaConfig::default(),
+            notification: NotificationConfig::default(),
             readiness_probe_secs: 2,
         }
     }
@@ -212,6 +218,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.media.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.notification.validate() {
             problems.push(err.to_string());
         }
         // Phase-09 invariant, enforced at boot: the Connect webhook

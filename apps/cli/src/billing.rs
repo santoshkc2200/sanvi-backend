@@ -6,16 +6,16 @@ use std::sync::Arc;
 
 use sanvi_billing::{
     adapters::{
-        AccessEntitlementSyncer, HttpStripeClient, LoggingNotifications, OutboxEventPublisher,
-        SqlxInvoiceRepository, SqlxPlanEntitlementRepository, SqlxPlanPriceRepository,
-        SqlxPlanRepository, SqlxSubscriptionRepository, SqlxWebhookEventRepository, SystemClock,
-        SystemIdGenerator, TenancyTenantLifecycle,
+        AccessEntitlementSyncer, HttpStripeClient, OutboxEventPublisher, SqlxInvoiceRepository,
+        SqlxPlanEntitlementRepository, SqlxPlanPriceRepository, SqlxPlanRepository,
+        SqlxSubscriptionRepository, SqlxWebhookEventRepository, SystemClock, SystemIdGenerator,
+        TenancyTenantLifecycle,
     },
     application::{
         CheckTaxRegistrations, DunningSweep, ListPlans, ReconcileSubscriptions, WebhookDispatcher,
     },
     domain::{
-        Clock, EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRepository, Notifications,
+        Clock, EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRepository,
         PlanEntitlementRepository, PlanPriceRepository, PlanRepository, StripeClient,
         SubscriptionRepository, TenantLifecycle, WebhookEventRepository,
     },
@@ -57,7 +57,6 @@ async fn build_stack(
     let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
     let events: Arc<dyn EventPublisher> = Arc::new(OutboxEventPublisher::new(ids.clone()));
-    let notifications: Arc<dyn Notifications> = Arc::new(LoggingNotifications::new());
     let billing_ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(ids.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let entitlements: Arc<dyn sanvi_access::domain::EntitlementRepository> =
@@ -90,7 +89,6 @@ async fn build_stack(
         grants.clone(),
         syncer.clone(),
         lifecycle.clone(),
-        notifications.clone(),
         events.clone(),
         stripe.clone(),
         billing_ids,
@@ -112,7 +110,6 @@ async fn build_stack(
         subscriptions,
         syncer,
         lifecycle,
-        notifications,
         events,
         clock,
         config.dunning_grace_days,

@@ -493,25 +493,6 @@ pub trait TenantLifecycle: Send + Sync {
     async fn resume_billing(&self, tenant_id: TenantId) -> Result<(), BillingError>;
 }
 
-/// Tenant-facing notifications (stub logs today; the notifications context
-/// takes over delivery in a later phase).
-#[async_trait]
-pub trait Notifications: Send + Sync {
-    async fn payment_failed(&self, tenant_id: TenantId) -> Result<(), BillingError>;
-
-    async fn grace_expired(&self, tenant_id: TenantId) -> Result<(), BillingError>;
-
-    async fn trial_ending(
-        &self,
-        tenant_id: TenantId,
-        trial_end: DateTime<Utc>,
-    ) -> Result<(), BillingError>;
-
-    async fn subscription_canceled(&self, tenant_id: TenantId) -> Result<(), BillingError>;
-
-    async fn subscription_restored(&self, tenant_id: TenantId) -> Result<(), BillingError>;
-}
-
 /// Publishes billing events into the transactional outbox.
 #[async_trait]
 pub trait EventPublisher: Send + Sync {

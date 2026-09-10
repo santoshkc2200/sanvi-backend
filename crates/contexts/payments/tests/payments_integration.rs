@@ -1344,9 +1344,7 @@ async fn creating_a_connection_requires_the_entitlement() {
 
 use sanvi_payments::adapters::SqlxWebhookEventRepository;
 use sanvi_payments::application::{SyncConnections, WebhookDispatcher, WebhookReceiver};
-use sanvi_payments::domain::{
-    ConnectionLifecycleStore, ConnectionNotifier, EventPublisher, WebhookEventRepository,
-};
+use sanvi_payments::domain::{ConnectionLifecycleStore, EventPublisher, WebhookEventRepository};
 
 type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 
@@ -1389,94 +1387,8 @@ struct WebhookFixture {
     webhooks: Arc<dyn WebhookEventRepository>,
     checkouts: Arc<dyn CheckoutLifecycleStore>,
     tax_recheck: Arc<sanvi_payments::application::CheckTenantTaxCompliance>,
-    notifier: Arc<RecordingNotifier>,
     tx: TxManager,
     provider: FakeProvider,
-}
-
-/// A notifier that records alerts so tests can assert "the failure raised
-/// an alert" without parsing logs.
-#[derive(Default)]
-struct RecordingNotifier {
-    payout_failures: std::sync::Mutex<Vec<String>>,
-    tax_lapses: std::sync::Mutex<Vec<(TenantId, String)>>,
-}
-
-impl RecordingNotifier {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn payout_failure_count(&self) -> usize {
-        self.payout_failures.lock().unwrap().len()
-    }
-
-    fn tax_lapse_count(&self) -> usize {
-        self.tax_lapses.lock().unwrap().len()
-    }
-}
-
-#[async_trait::async_trait]
-impl ConnectionNotifier for RecordingNotifier {
-    async fn connection_activated(
-        &self,
-        _tenant_id: TenantId,
-        _connection_id: ConnectionId,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        Ok(())
-    }
-
-    async fn connection_restricted(
-        &self,
-        _tenant_id: TenantId,
-        _connection_id: ConnectionId,
-        _detail: &str,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        Ok(())
-    }
-
-    async fn requirement_deadline_approaching(
-        &self,
-        _tenant_id: TenantId,
-        _connection_id: ConnectionId,
-        _deadline: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        Ok(())
-    }
-
-    async fn dispute_opened(
-        &self,
-        _tenant_id: TenantId,
-        _dispute_id: DisputeId,
-        _due_by: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        Ok(())
-    }
-
-    async fn payout_failed(
-        &self,
-        _tenant_id: TenantId,
-        external_payout_id: &str,
-        _amount: &sanvi_payments::Money,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        self.payout_failures
-            .lock()
-            .unwrap()
-            .push(external_payout_id.to_string());
-        Ok(())
-    }
-
-    async fn tax_compliance_lapsed(
-        &self,
-        tenant_id: TenantId,
-        detail: &str,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        self.tax_lapses
-            .lock()
-            .unwrap()
-            .push((tenant_id, detail.to_string()));
-        Ok(())
-    }
 }
 
 async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
@@ -1491,8 +1403,6 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         Arc::new(SqlxProviderConnectionRepository::new());
     let events: Arc<dyn EventPublisher> =
         Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
-    let notifier = Arc::new(RecordingNotifier::new());
-    let notifier_trait: Arc<dyn ConnectionNotifier> = notifier.clone();
     let tax_settings: Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
         Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new());
     let tax_recheck = Arc::new(sanvi_payments::application::CheckTenantTaxCompliance::new(
@@ -1500,7 +1410,7 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         connection_rows.clone(),
         registry.clone(),
         tax_settings,
-        notifier_trait.clone(),
+        events.clone(),
     ));
     let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let receiver = Arc::new(WebhookReceiver::new(
@@ -1519,7 +1429,6 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
             lifecycle.clone(),
             registry.clone(),
             events.clone(),
-            notifier_trait.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
         )
         .with_checkout_store(checkouts.clone())
@@ -1535,7 +1444,6 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         lifecycle,
         registry,
         events,
-        notifier_trait,
         chrono::Duration::zero(),
     ));
     WebhookFixture {
@@ -1545,7 +1453,6 @@ async fn webhook_fixture(pool: &sanvi_persistence::PgPool) -> WebhookFixture {
         webhooks,
         checkouts,
         tax_recheck,
-        notifier,
         tx,
         provider,
     }
@@ -4332,7 +4239,7 @@ async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_al
     );
     fixture.dispatcher.dispatch(10).await.unwrap();
     assert_eq!(
-        fixture.notifier.payout_failure_count(),
+        fixture.outbox_events("payments.payout_failed").await,
         1,
         "a failed payout raises exactly one tenant alert"
     );
@@ -4355,7 +4262,7 @@ async fn a_payout_paid_and_a_payout_failed_are_both_reflected_and_the_failure_al
     // by transition): still one paid event, still one alert.
     fixture.dispatcher.dispatch(10).await.unwrap();
     assert_eq!(fixture.outbox_events("payments.payout_paid").await, 1);
-    assert_eq!(fixture.notifier.payout_failure_count(), 1);
+    assert_eq!(fixture.outbox_events("payments.payout_failed").await, 1);
 }
 
 /// Enable automatic tax through the use case against the fixture's fake.
@@ -4480,7 +4387,12 @@ async fn lapsed_registrations_warn_on_the_scheduled_re_check() {
     let report = fixture.tax_recheck.execute(10).await.unwrap();
     assert_eq!(report.checked, 1, "{report:?}");
     assert_eq!(report.warned, 1, "{report:?}");
-    assert_eq!(fixture.notifier.tax_lapse_count(), 1);
+    assert_eq!(
+        fixture
+            .outbox_events("payments.tax_compliance_lapsed")
+            .await,
+        1
+    );
 
     // The warning is stored next to the (still enabled) toggle.
     let mut scope = fixture.tx.begin_unscoped("t", "tests").await.unwrap();
@@ -4515,7 +4427,12 @@ async fn a_tax_event_on_the_account_triggers_the_recheck() {
     enable_tax(&pool, &fixture.provider, tenant_id)
         .await
         .unwrap();
-    assert_eq!(fixture.notifier.tax_lapse_count(), 0);
+    assert_eq!(
+        fixture
+            .outbox_events("payments.tax_compliance_lapsed")
+            .await,
+        0
+    );
 
     // The registration lapses; Stripe tells us with tax.settings.updated.
     fixture.provider.script(FakeScript {
@@ -4534,7 +4451,9 @@ async fn a_tax_event_on_the_account_triggers_the_recheck() {
     fixture.dispatcher.dispatch(10).await.unwrap();
 
     assert_eq!(
-        fixture.notifier.tax_lapse_count(),
+        fixture
+            .outbox_events("payments.tax_compliance_lapsed")
+            .await,
         1,
         "the webhook-triggered recheck warned about the lapse"
     );

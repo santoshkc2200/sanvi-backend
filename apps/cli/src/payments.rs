@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use sanvi_kernel::{RawIdGenerator, TenantId};
+use sanvi_kernel::RawIdGenerator;
 use sanvi_payments::{
     adapters::{
         OutboxEventPublisher as PaymentsEvents, SqlxProviderConnectionRepository,
@@ -16,8 +16,7 @@ use sanvi_payments::{
         RuntimeEnvironment as PaymentsRuntimeEnvironment, SyncConnections,
     },
     domain::{
-        ConnectionLifecycleStore, ConnectionNotifier as PaymentsConnectionNotifier,
-        EventPublisher as PaymentsEventPublisher, WebhookEventRepository,
+        ConnectionLifecycleStore, EventPublisher as PaymentsEventPublisher, WebhookEventRepository,
     },
 };
 use sanvi_persistence::TxManager;
@@ -60,77 +59,6 @@ fn build_registry(
             .expect("the stripe connect adapter registers");
     }
     Arc::new(providers)
-}
-
-/// A notifier that logs — the CLI has no tenant session to notify through.
-#[derive(Default)]
-struct CliNotifier;
-
-#[async_trait::async_trait]
-impl PaymentsConnectionNotifier for CliNotifier {
-    async fn connection_activated(
-        &self,
-        tenant_id: TenantId,
-        connection_id: sanvi_payments::domain::ConnectionId,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        tracing::info!(tenant_id = %tenant_id, connection_id = %connection_id, "connection activated");
-        Ok(())
-    }
-
-    async fn connection_restricted(
-        &self,
-        tenant_id: TenantId,
-        connection_id: sanvi_payments::domain::ConnectionId,
-        detail: &str,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        tracing::warn!(tenant_id = %tenant_id, connection_id = %connection_id, detail = %detail, "connection restricted");
-        Ok(())
-    }
-
-    async fn requirement_deadline_approaching(
-        &self,
-        tenant_id: TenantId,
-        connection_id: sanvi_payments::domain::ConnectionId,
-        deadline: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        tracing::info!(tenant_id = %tenant_id, connection_id = %connection_id, deadline = %deadline, "requirement deadline approaching");
-        Ok(())
-    }
-
-    async fn dispute_opened(
-        &self,
-        tenant_id: TenantId,
-        dispute_id: sanvi_payments::domain::DisputeId,
-        due_by: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        tracing::warn!(tenant_id = %tenant_id, dispute_id = %dispute_id, due_by = ?due_by, "dispute opened");
-        Ok(())
-    }
-
-    async fn payout_failed(
-        &self,
-        tenant_id: TenantId,
-        external_payout_id: &str,
-        amount: &sanvi_payments::Money,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        tracing::error!(
-            tenant_id = %tenant_id,
-            payout = %external_payout_id,
-            amount_minor = amount.amount_minor,
-            currency = amount.currency.as_str(),
-            "payout failed — the tenant's money is stuck at the provider"
-        );
-        Ok(())
-    }
-
-    async fn tax_compliance_lapsed(
-        &self,
-        tenant_id: TenantId,
-        detail: &str,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        tracing::warn!(tenant_id = %tenant_id, detail = %detail, "tax compliance lapsed");
-        Ok(())
-    }
 }
 
 /// `payments webhooks` — the store-first queue's backlog plus its
@@ -208,18 +136,10 @@ pub async fn sync(environment: &str, ids: Arc<dyn RawIdGenerator>) -> anyhow::Re
     let lifecycle: Arc<dyn ConnectionLifecycleStore> =
         Arc::new(SqlxProviderConnectionRepository::new());
     let events: Arc<dyn PaymentsEventPublisher> = Arc::new(PaymentsEvents::new(ids));
-    let notifier: Arc<dyn PaymentsConnectionNotifier> = Arc::new(CliNotifier);
     let registry = build_registry(&config, environment);
     // One full pass regardless of staleness: an operator-invoked sync is
     // explicit about wanting fresh truth.
-    let sync = SyncConnections::new(
-        tx,
-        lifecycle,
-        registry,
-        events,
-        notifier,
-        chrono::Duration::zero(),
-    );
+    let sync = SyncConnections::new(tx, lifecycle, registry, events, chrono::Duration::zero());
     let report = sync
         .execute(1000)
         .await

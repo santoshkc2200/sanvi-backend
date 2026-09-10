@@ -64,12 +64,22 @@ impl StreamsClient {
     /// dedup key, so replaying the stream on first start is safe, while a
     /// `$` group silently loses everything published before it existed.
     pub async fn ensure_consumer_group(&self, stream: &str, group: &str) -> Result<()> {
+        self.ensure_consumer_group_at(stream, group, "0").await
+    }
+
+    /// Create a consumer group at a specified offset (idempotent).
+    pub async fn ensure_consumer_group_at(
+        &self,
+        stream: &str,
+        group: &str,
+        start_id: &str,
+    ) -> Result<()> {
         let mut conn = self.conn.clone();
         match redis::cmd("XGROUP")
             .arg("CREATE")
             .arg(stream)
             .arg(group)
-            .arg("0")
+            .arg(start_id)
             .arg("MKSTREAM")
             .query_async::<()>(&mut conn)
             .await
@@ -77,8 +87,9 @@ impl StreamsClient {
             Ok(()) => Ok(()),
             // "BUSYGROUP" means the group already exists: fine.
             Err(err) if err.to_string().contains("BUSYGROUP") => Ok(()),
-            Err(err) => Err(err)
-                .with_context(|| format!("failed to create consumer group {group} on {stream}")),
+            Err(err) => Err(err).with_context(|| {
+                format!("failed to create consumer group {group} on {stream} at {start_id}")
+            }),
         }
     }
 

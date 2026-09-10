@@ -9,7 +9,7 @@ pub mod http;
 pub mod meta;
 pub mod metrics;
 pub mod metrics_repo;
-pub mod notifications;
+pub mod notification_intent;
 pub mod oauth_state_store;
 pub mod payment_lookup;
 pub mod platform_registry;
@@ -27,7 +27,7 @@ pub use google::{GoogleAdsAdapter, GoogleRefreshTokenGrant};
 pub use meta::{MetaAdsAdapter, MetaRefreshTokenGrant};
 pub use metrics::AdvertisingMetrics;
 pub use metrics_repo::SqlxMetricsRepository;
-pub use notifications::LoggingBudgetNotifier;
+pub use notification_intent::notification_intent;
 pub use oauth_state_store::SqlxOAuthStateStore;
 pub use payment_lookup::CheckoutPaymentLookup;
 pub use platform_registry::{

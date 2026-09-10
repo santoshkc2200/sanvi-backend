@@ -28,6 +28,13 @@ pub struct IdentityConfig {
     /// Providers whose `email_verified` claim we trust for auto-linking.
     /// Anything not listed here can never auto-link.
     pub trusted_email_verified_providers: Vec<String>,
+    /// Base URL for user-facing invitation links.
+    #[serde(default = "default_app_base_url")]
+    pub app_base_url: String,
+}
+
+fn default_app_base_url() -> String {
+    "https://app.sanvi.dev".to_string()
 }
 
 impl Default for IdentityConfig {
@@ -40,6 +47,7 @@ impl Default for IdentityConfig {
             webhook_secret: String::new(),
             webhook_allowed_clients: vec!["127.0.0.1".to_string(), "::1".to_string()],
             trusted_email_verified_providers: vec!["google".to_string(), "microsoft".to_string()],
+            app_base_url: default_app_base_url(),
         }
     }
 }
@@ -57,6 +65,12 @@ impl IdentityConfig {
         }
         if self.session_cookie_name.is_empty() {
             anyhow::bail!("identity.session_cookie_name must not be empty");
+        }
+        if self.app_base_url.is_empty() {
+            anyhow::bail!("identity.app_base_url must not be empty");
+        }
+        if !self.app_base_url.starts_with("http://") && !self.app_base_url.starts_with("https://") {
+            anyhow::bail!("identity.app_base_url must be an http(s) URL");
         }
         Ok(())
     }

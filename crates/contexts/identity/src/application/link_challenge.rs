@@ -124,6 +124,7 @@ pub struct CompleteLinkChallenge {
     intents: Arc<dyn LinkIntentRepository>,
     links: Arc<dyn LinkedAccountRepository>,
     events: Arc<dyn EventPublisher>,
+    #[allow(dead_code)]
     notifications: Arc<dyn Notifications>,
     clock: Arc<dyn Clock>,
 }
@@ -219,18 +220,11 @@ impl CompleteLinkChallenge {
             provider: provider.clone(),
             subject: subject.as_str().to_string(),
             linked_via: LinkedVia::Challenge,
+            email: Some(email.clone()),
         }];
         self.events.publish(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;
 
-        let _ = self
-            .notifications
-            .send_security_notice(
-                email,
-                "provider_linked",
-                &format!("a new sign-in provider was linked: {}", provider.as_str()),
-            )
-            .await;
         info!(user_id = %user_id, provider = %provider.as_str(), "account link challenge completed");
         Ok(LinkChallengeResult::Linked { provider, subject })
     }

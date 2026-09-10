@@ -69,4 +69,4 @@ pub use model::{
     AlertCondition, BudgetActionsConfigured, BudgetAlert, BudgetAlertId, BudgetAlertTag, BudgetCap,
     BudgetCapId, BudgetCapTag, BudgetPeriod, BudgetScope, DataFreshness, SpendStatusItem,
 };
-pub use ports::{BudgetAlertRepository, BudgetCapRepository, BudgetNotifier};
+pub use ports::{BudgetAlertRepository, BudgetCapRepository};

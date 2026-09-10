@@ -345,12 +345,16 @@ impl ProcessDsrBatch {
             )
         });
 
+        let mut export_mail = None;
         let outcome = if all_done {
             match self
                 .finish(&mut scope, request, bundles, erase_reports)
                 .await?
             {
-                Some(outcome) => outcome,
+                Some(finished) => {
+                    export_mail = finished.export_mail;
+                    finished.outcome
+                }
                 None => return Ok(None),
             }
         } else if any_failed {
@@ -363,16 +367,35 @@ impl ProcessDsrBatch {
             .commit()
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+
+        if let Some(mail) = export_mail {
+            self.notifications
+                .send_export_credentials(
+                    &request.subject_ref,
+                    &mail.recipient,
+                    &mail.token,
+                    &mail.passphrase,
+                    request.id,
+                )
+                .await?;
+        }
+
         Ok(Some(outcome))
     }
 
+    /// Complete a request inside the caller's transaction.
+    ///
+    /// Export credentials are *not* mailed here. They are a live credential
+    /// and the mailer is an outbound HTTP dependency, so they ride back to
+    /// [`Self::advance_one`] in [`FinishOutcome::export_mail`] and are sent
+    /// only once the transaction that minted them has committed.
     async fn finish(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
         request: &crate::domain::DataSubjectRequest,
         bundles: Vec<DataBundle>,
         erase_reports: Vec<EraseReport>,
-    ) -> Result<Option<AdvanceOutcome>, PrivacyError> {
+    ) -> Result<Option<FinishOutcome>, PrivacyError> {
         let now = self.clock.now();
 
         if request.kind.collects() {
@@ -403,14 +426,23 @@ impl ProcessDsrBatch {
             self.requests
                 .set_status(scope, request.id, DsrStatus::Completed, Some(now), None)
                 .await?;
-            self.notifications
-                .send_export_credentials(
-                    &request.subject_ref,
-                    &token,
-                    &passphrase,
-                    &request.id.as_i64().to_string(),
-                )
-                .await?;
+            let export_mail = match request.subject_ref.email() {
+                Some(recipient) => Some(PendingExportMail {
+                    recipient: recipient.to_string(),
+                    token,
+                    passphrase,
+                }),
+                None => {
+                    // No address on file: the artifact is still stored and
+                    // downloadable, but nobody can be mailed its credentials.
+                    tracing::warn!(
+                        request_id = %request.id,
+                        subject = request.subject_ref.canonical_key(),
+                        "export packaged but the subject has no email identifier; credentials not mailed"
+                    );
+                    None
+                }
+            };
             self.events
                 .publish(
                     scope,
@@ -423,7 +455,10 @@ impl ProcessDsrBatch {
                     }],
                 )
                 .await?;
-            return Ok(Some(AdvanceOutcome::Packaged));
+            return Ok(Some(FinishOutcome {
+                outcome: AdvanceOutcome::Packaged,
+                export_mail,
+            }));
         }
 
         if request.kind.erases() {
@@ -464,7 +499,10 @@ impl ProcessDsrBatch {
 
             let _ = retained; // surfaced in the participant reports
             let _ = self.backup_retention_days; // published in the notice
-            return Ok(Some(AdvanceOutcome::Completed { shred: true }));
+            return Ok(Some(FinishOutcome {
+                outcome: AdvanceOutcome::Completed { shred: true },
+                export_mail: None,
+            }));
         }
 
         // Rectification / opt-out kinds: the directive flip already happened
@@ -484,7 +522,10 @@ impl ProcessDsrBatch {
                 }],
             )
             .await?;
-        Ok(Some(AdvanceOutcome::Completed { shred: false }))
+        Ok(Some(FinishOutcome {
+            outcome: AdvanceOutcome::Completed { shred: false },
+            export_mail: None,
+        }))
     }
 
     fn generate_passphrase(&self) -> String {
@@ -501,6 +542,20 @@ enum AdvanceOutcome {
     PartiallyComplete,
     Packaged,
     Escalated,
+}
+
+/// What [`ProcessDsr::finish`] decided, plus any credential mail that must wait
+/// for the transaction to commit before it is sent.
+struct FinishOutcome {
+    outcome: AdvanceOutcome,
+    export_mail: Option<PendingExportMail>,
+}
+
+/// Export credentials minted inside a transaction, held until it commits.
+struct PendingExportMail {
+    recipient: String,
+    token: String,
+    passphrase: String,
 }
 
 enum ProviderOutcome {
