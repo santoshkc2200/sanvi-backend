@@ -10,6 +10,7 @@ pub mod error;
 pub mod events;
 pub mod ids;
 pub mod mode;
+pub mod notifications;
 pub mod pagination;
 
 pub use clock::{Clock, SystemClock};
@@ -20,4 +21,5 @@ pub use ids::{
     SnowflakeId, TenantId, TenantTag, UserId, UserTag,
 };
 pub use mode::CapabilityMode;
+pub use notifications::{Audience, IntentArg, NotificationIntent};
 pub use pagination::{Page, PageRequest};

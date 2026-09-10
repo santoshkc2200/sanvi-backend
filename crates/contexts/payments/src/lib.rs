@@ -35,13 +35,12 @@ pub use config::PaymentsConfig;
 
 pub use domain::{
     CapabilitySet, CapabilityStatus, Checkout, CheckoutLifecycleStore, CheckoutRepository,
-    CheckoutStatus, CheckoutThrottle, ConnectionLifecycleStore, ConnectionNotifier,
-    ConnectionStatus, CountryCode, Currency, DisputeFilter, DisputePage, DisputeRecord,
-    DisputeRepository, DisputeStatus, MerchantOrderRef, Money, PaymentFilter, PaymentPage,
-    PaymentRecord, PaymentRepository, PaymentStatus, PaymentTimeline, PaymentsError, PaymentsEvent,
-    PayoutStatus, ProviderConnection, ProviderKind, RefundRecord, RefundRepository, RefundStatus,
-    TenantDomainAllowList, TimelineEntry, WebhookEventRecord, WebhookEventRepository,
-    WebhookVerificationError,
+    CheckoutStatus, CheckoutThrottle, ConnectionLifecycleStore, ConnectionStatus, CountryCode,
+    Currency, DisputeFilter, DisputePage, DisputeRecord, DisputeRepository, DisputeStatus,
+    MerchantOrderRef, Money, PaymentFilter, PaymentPage, PaymentRecord, PaymentRepository,
+    PaymentStatus, PaymentTimeline, PaymentsError, PaymentsEvent, PayoutStatus, ProviderConnection,
+    ProviderKind, RefundRecord, RefundRepository, RefundStatus, TenantDomainAllowList,
+    TimelineEntry, WebhookEventRecord, WebhookEventRepository, WebhookVerificationError,
 };
 
 /// Wire payments routes into an actix `ServiceConfig`.

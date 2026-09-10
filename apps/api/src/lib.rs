@@ -153,6 +153,9 @@ use sanvi_localization::{
     routes as localization_routes,
 };
 use sanvi_media::routes as media_routes;
+use sanvi_notifications::{
+    EnqueueEmail, NotificationGatewayPort, build_idempotency_key, secret_fingerprint,
+};
 use sanvi_payments::{
     PaymentsConfig,
     adapters::{
@@ -412,8 +415,15 @@ pub struct IdentityWiring {
     pub memberships: Arc<dyn MembershipRepository>,
 }
 
+/// Invitation mail: rendered here, delivered by the notification service.
+///
+/// This is Lane B — a direct, post-commit send rather than an outbox-driven
+/// one, because `invite_url` embeds the raw invitation token. With no gateway
+/// configured it falls back to logging so a dev machine still boots; it never
+/// logs the address, the token or the body.
 struct LocalizedIdentityNotifications {
     localizer: Arc<NotificationLocalizer>,
+    gateway: Option<Arc<dyn NotificationGatewayPort>>,
 }
 
 #[async_trait::async_trait]
@@ -421,6 +431,7 @@ impl Notifications for LocalizedIdentityNotifications {
     async fn send_invitation(
         &self,
         tenant_id: TenantId,
+        invitation_id: sanvi_identity::domain::InvitationId,
         email: &sanvi_identity::domain::Email,
         tenant_name: &str,
         invite_url: &str,
@@ -441,43 +452,36 @@ impl Notifications for LocalizedIdentityNotifications {
                 ("days", LocalizationArg::from(7i64)),
             ],
         );
-        tracing::info!(
-            to = %email,
-            tenant_id = %tenant_id,
-            locale = %context.locale,
-            subject,
-            body,
-            notification = "invitation",
-            "localized notification rendered"
-        );
-        Ok(())
-    }
 
-    async fn send_security_notice(
-        &self,
-        email: &sanvi_identity::domain::Email,
-        _kind: &str,
-        detail: &str,
-    ) -> Result<(), IdentityError> {
-        let context = self.localizer.platform_locale().await;
-        let subject = self.localizer.render(
-            &context,
-            "emails.security_notice.subject",
-            &[("tenant", LocalizationArg::from("Sanvi"))],
+        let Some(gateway) = &self.gateway else {
+            tracing::info!(
+                tenant_id = %tenant_id,
+                invitation_id = %invitation_id,
+                locale = %context.locale,
+                notification = "invitation",
+                "notification service not configured; invitation not delivered"
+            );
+            return Ok(());
+        };
+
+        let tenant = tenant_id.to_string();
+        let key = build_idempotency_key(
+            "identity",
+            "invitation",
+            &invitation_id.to_string(),
+            &secret_fingerprint(invite_url),
         );
-        let body = self.localizer.render(
-            &context,
-            "emails.security_notice.body",
-            &[("detail", LocalizationArg::from(detail))],
-        );
-        tracing::info!(
-            to = %email,
-            locale = %context.locale,
-            subject,
-            body,
-            notification = "security_notice",
-            "localized notification rendered"
-        );
+        gateway
+            .enqueue_email(EnqueueEmail {
+                tenant_id: Some(&tenant),
+                recipient: email.as_str(),
+                subject: &subject,
+                text_body: &body,
+                html_body: None,
+                idempotency_key: &key,
+            })
+            .await
+            .map_err(|err| IdentityError::NotificationUnavailable(err.to_string()))?;
         Ok(())
     }
 }
@@ -487,6 +491,9 @@ pub struct IdentityDependencies {
     pub role_catalog: Arc<dyn RoleCatalog>,
     pub tenant_catalog: Arc<dyn TenantCatalog>,
     pub notification_localizer: Option<Arc<NotificationLocalizer>>,
+    /// Delivery for Lane B invitation mail. `None` leaves the adapter logging
+    /// only, which is what a dev machine without the service configured gets.
+    pub notification_gateway: Option<Arc<dyn NotificationGatewayPort>>,
 }
 
 /// Build the identity context's application state.
@@ -507,7 +514,10 @@ pub fn build_identity_state(
     let link_intents: Arc<dyn LinkIntentRepository> = Arc::new(SqlxLinkIntentRepository::new());
     let events: Arc<dyn EventPublisher> = Arc::new(IdentityEventPublisher::new(ids.clone()));
     let notifications: Arc<dyn Notifications> = match deps.notification_localizer {
-        Some(localizer) => Arc::new(LocalizedIdentityNotifications { localizer }),
+        Some(localizer) => Arc::new(LocalizedIdentityNotifications {
+            localizer,
+            gateway: deps.notification_gateway,
+        }),
         None => Arc::new(LoggingNotifications::new()),
     };
     let ids: Arc<dyn sanvi_identity::domain::IdGenerator> = Arc::new(SystemIdGenerator::new(ids));
@@ -619,6 +629,7 @@ pub fn build_identity_state(
             ids,
             clock.clone(),
             config.invitation_ttl_days,
+            config.app_base_url.clone(),
         )),
         accept_invitation: Arc::new(AcceptInvitation::new(
             tx_manager.clone(),
@@ -635,6 +646,7 @@ pub fn build_identity_state(
             notifications.clone(),
             clock.clone(),
             config.invitation_ttl_days,
+            config.app_base_url.clone(),
         )),
         revoke_invitation: Arc::new(RevokeInvitation::new(tx_manager.clone(), invitations)),
         link_intent_ttl_secs: config.link_intent_ttl_secs,
@@ -1332,8 +1344,14 @@ pub struct PrivacyWiring {
     pub lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock>,
 }
 
+/// DSR verification codes and export credentials.
+///
+/// Lane B, for the same reason as invitations: both payloads are live
+/// credentials and must not travel through the outbox. Neither the code, the
+/// passphrase, the token nor the recipient is ever logged.
 struct LocalizedPrivacyNotifications {
     localizer: Arc<NotificationLocalizer>,
+    gateway: Option<Arc<dyn NotificationGatewayPort>>,
 }
 
 #[async_trait::async_trait]
@@ -1342,6 +1360,7 @@ impl PrivacyNotifications for LocalizedPrivacyNotifications {
         &self,
         to: &str,
         code: &str,
+        request_id: sanvi_privacy::domain::DsrId,
     ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
         let context = self.localizer.platform_locale().await;
         let subject = self
@@ -1352,21 +1371,50 @@ impl PrivacyNotifications for LocalizedPrivacyNotifications {
             "emails.verification.body",
             &[("code", LocalizationArg::from(code))],
         );
-        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy notification rendered");
+
+        let Some(gateway) = &self.gateway else {
+            tracing::info!(
+                request_id = %request_id,
+                locale = %context.locale,
+                notification = "verification",
+                "notification service not configured; verification code not delivered"
+            );
+            return Ok(());
+        };
+
+        let key = build_idempotency_key(
+            "privacy",
+            "verification",
+            &request_id.to_string(),
+            &secret_fingerprint(code),
+        );
+        gateway
+            .enqueue_email(EnqueueEmail {
+                tenant_id: None,
+                recipient: to,
+                subject: &subject,
+                text_body: &body,
+                html_body: None,
+                idempotency_key: &key,
+            })
+            .await
+            .map_err(|err| sanvi_privacy::domain::PrivacyError::Upstream(err.to_string()))?;
         Ok(())
     }
 
     async fn send_export_credentials(
         &self,
         subject_ref: &sanvi_privacy::domain::SubjectRef,
+        recipient: &str,
         token: &str,
         passphrase: &str,
-        request_id: &str,
+        request_id: sanvi_privacy::domain::DsrId,
     ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
         let context = match subject_ref.tenant_id {
             Some(tenant_id) => self.localizer.tenant_locale(tenant_id).await,
             None => self.localizer.platform_locale().await,
         };
+        let request = request_id.to_string();
         let subject = self
             .localizer
             .render(&context, "emails.export_passphrase.subject", &[]);
@@ -1374,39 +1422,35 @@ impl PrivacyNotifications for LocalizedPrivacyNotifications {
             &context,
             "emails.export_passphrase.body",
             &[
-                ("request_id", LocalizationArg::from(request_id)),
+                ("request_id", LocalizationArg::from(request.as_str())),
                 ("passphrase", LocalizationArg::from(passphrase)),
             ],
         );
-        tracing::info!(
-            subject_ref = %subject_ref.canonical_key(),
-            token,
-            locale = %context.locale,
-            subject,
-            body,
-            "localized privacy export notification rendered"
-        );
-        Ok(())
-    }
 
-    async fn send_request_status(
-        &self,
-        to: &str,
-        request_subject: &str,
-        status: &str,
-    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
-        let context = self.localizer.platform_locale().await;
-        let subject = self.localizer.render(
-            &context,
-            "emails.privacy_status.subject",
-            &[("subject", LocalizationArg::from(request_subject))],
-        );
-        let body = self.localizer.render(
-            &context,
-            "emails.privacy_status.body",
-            &[("status", LocalizationArg::from(status))],
-        );
-        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy status notification rendered");
+        let Some(gateway) = &self.gateway else {
+            tracing::info!(
+                subject_ref = %subject_ref.canonical_key(),
+                request_id = %request_id,
+                locale = %context.locale,
+                notification = "export_credentials",
+                "notification service not configured; export credentials not delivered"
+            );
+            return Ok(());
+        };
+
+        let tenant = subject_ref.tenant_id.map(|id| id.to_string());
+        let key = build_idempotency_key("privacy", "export", &request, &secret_fingerprint(token));
+        gateway
+            .enqueue_email(EnqueueEmail {
+                tenant_id: tenant.as_deref(),
+                recipient,
+                subject: &subject,
+                text_body: &body,
+                html_body: None,
+                idempotency_key: &key,
+            })
+            .await
+            .map_err(|err| sanvi_privacy::domain::PrivacyError::Upstream(err.to_string()))?;
         Ok(())
     }
 }
@@ -1467,6 +1511,7 @@ pub fn build_privacy_state(
     providers: ProviderRegistry,
     audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter>,
     notification_localizer: Option<Arc<NotificationLocalizer>>,
+    notification_gateway: Option<Arc<dyn NotificationGatewayPort>>,
 ) -> PrivacyWiring {
     let registered: std::collections::BTreeSet<_> = providers
         .iter()
@@ -1516,7 +1561,10 @@ pub fn build_privacy_state(
 
     let events: Arc<dyn PrivacyEventPublisher> = Arc::new(PrivacyEvents::new(ids.clone()));
     let notifications: Arc<dyn PrivacyNotifications> = match notification_localizer {
-        Some(localizer) => Arc::new(LocalizedPrivacyNotifications { localizer }),
+        Some(localizer) => Arc::new(LocalizedPrivacyNotifications {
+            localizer,
+            gateway: notification_gateway,
+        }),
         None => Arc::new(PrivacyLoggingNotifications),
     };
     let clock: Arc<dyn PrivacyClock> = Arc::new(PrivacySystemClock);
@@ -2994,7 +3042,6 @@ pub async fn build_advertising_state(
             registry.clone(),
             advertising_ids.clone(),
         ));
-    let notifier = std::sync::Arc::new(sanvi_advertising::adapters::LoggingBudgetNotifier::new());
     let spend_status_service =
         std::sync::Arc::new(sanvi_advertising::application::GetSpendStatus::new(
             tx.clone(),
@@ -3015,7 +3062,6 @@ pub async fn build_advertising_state(
         spend_status_service.clone(),
         events.clone(),
         advertising_ids.clone(),
-        notifier,
         advertising_metrics.clone(),
     ));
     let get_budget_caps = std::sync::Arc::new(sanvi_advertising::application::GetBudgetCaps::new(

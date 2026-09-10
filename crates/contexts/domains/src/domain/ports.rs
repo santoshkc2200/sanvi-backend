@@ -498,34 +498,6 @@ pub trait TenantState: Send + Sync {
     async fn is_active(&self, tenant_id: TenantId) -> Result<bool, DomainsError>;
 }
 
-/// Tenant-facing notifications (a logging stub today; the notifications
-/// context takes over delivery in a later phase).
-#[async_trait]
-pub trait Notifications: Send + Sync {
-    async fn domain_degraded(
-        &self,
-        hostname: &str,
-        code: &str,
-        detail: &str,
-    ) -> Result<(), DomainsError>;
-
-    async fn certificate_renewal_failed(
-        &self,
-        hostname: &str,
-        detail: &str,
-    ) -> Result<(), DomainsError>;
-
-    async fn domain_expiring_soon(
-        &self,
-        hostname: &str,
-        days_left: u32,
-    ) -> Result<(), DomainsError>;
-
-    async fn order_failed(&self, hostname: &str, detail: &str) -> Result<(), DomainsError>;
-
-    async fn domain_removed(&self, hostname: &str, reason: &str) -> Result<(), DomainsError>;
-}
-
 /// Publishes domain events into the transactional outbox.
 #[async_trait]
 pub trait EventPublisher: Send + Sync {

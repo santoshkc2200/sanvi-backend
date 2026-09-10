@@ -124,6 +124,12 @@ pub fn api_error(err: IdentityError) -> ApiError {
         IdentityError::IllegalUserTransition { .. } => ApiError::Conflict {
             detail: "illegal user state transition".to_string(),
         },
+        IdentityError::NotificationUnavailable(detail) => {
+            tracing::error!(error = %detail, "notification service unavailable");
+            ApiError::ServiceUnavailable {
+                detail: "notification delivery is temporarily unavailable".to_string(),
+            }
+        }
         IdentityError::Storage(detail) => {
             tracing::error!(error = %detail, "identity storage failure");
             ApiError::internal("storage failure")

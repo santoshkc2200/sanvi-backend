@@ -67,6 +67,7 @@ impl HandleLogoutWebhook {
                     &[IdentityEvent::SessionRevoked {
                         user_id,
                         session_id: session_id.clone(),
+                        email: None,
                     }],
                 )
                 .await?;

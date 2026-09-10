@@ -4,7 +4,7 @@ pub mod events;
 pub mod http;
 pub mod lifecycle;
 pub mod metrics;
-pub mod notifications;
+pub mod notification_intent;
 pub mod privacy_provider;
 pub mod repos;
 pub mod stripe;
@@ -12,7 +12,7 @@ pub mod sync;
 
 pub use events::{OutboxEventPublisher, SystemClock, SystemIdGenerator};
 pub use lifecycle::TenancyTenantLifecycle;
-pub use notifications::LoggingNotifications;
+pub use notification_intent::notification_intent;
 pub use repos::{
     SqlxCheckoutStateRepository, SqlxInvoiceRepository, SqlxPlanEntitlementRepository,
     SqlxPlanPriceRepository, SqlxPlanRepository, SqlxSubscriptionRepository,

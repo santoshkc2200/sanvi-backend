@@ -143,6 +143,49 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  notification-migration:
+    build: ../notification
+    profiles: ["full"]
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgres://postgres:postgres-local-dev@postgres:5432/postgres?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  notification-service:
+    build: ../notification
+    profiles: ["full"]
+    environment:
+      HTTP_ADDRESS: :8080
+      DATABASE_URL: postgres://postgres:postgres-local-dev@postgres:5432/postgres?sslmode=disable
+      # Local-dev tokens published in notification repo README; acceptable ONLY for local dev.
+      NOTIFICATION_SEND_API_KEYS: c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M
+      NOTIFICATION_READ_API_KEYS: cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI
+      PUSH_ENABLED: "false"
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_FROM_ADDRESS: notifications@example.test
+      SMTP_FROM_NAME: Notification Service
+      SMTP_MESSAGE_ID_DOMAIN: mail.example.test
+      SMTP_TLS_MODE: insecure
+      ALLOW_INSECURE_SMTP: "true"
+      LOG_LEVEL: info
+    ports:
+      - "58080:8080"
+    depends_on:
+      notification-migration:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
+    restart: unless-stopped
 
   # minio/minio on Docker Hub was archived in Feb 2026 (community edition is
   # source-only now); Chainguard publishes an actively-maintained,

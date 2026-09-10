@@ -26,9 +26,8 @@ use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 
 use crate::domain::error::PaymentsError;
-use crate::domain::ports::{
-    ConnectionNotifier, ProviderConnectionRepository, TaxSettingsRepository,
-};
+use crate::domain::events::{EventPublisher, PaymentsEvent};
+use crate::domain::ports::{ProviderConnectionRepository, TaxSettingsRepository};
 use crate::domain::tax::TaxSettingsRecord;
 
 /// The tenant-facing view: our toggle, the last observed snapshot, any
@@ -235,7 +234,7 @@ pub struct CheckTenantTaxCompliance {
     connections: Arc<dyn ProviderConnectionRepository>,
     registry: Arc<crate::application::ProviderRegistry>,
     tax_settings: Arc<dyn TaxSettingsRepository>,
-    notifier: Arc<dyn ConnectionNotifier>,
+    events: Arc<dyn EventPublisher>,
     metrics: Option<crate::adapters::PaymentsMetrics>,
 }
 
@@ -245,14 +244,14 @@ impl CheckTenantTaxCompliance {
         connections: Arc<dyn ProviderConnectionRepository>,
         registry: Arc<crate::application::ProviderRegistry>,
         tax_settings: Arc<dyn TaxSettingsRepository>,
-        notifier: Arc<dyn ConnectionNotifier>,
+        events: Arc<dyn EventPublisher>,
     ) -> Self {
         Self {
             tx_manager,
             connections,
             registry,
             tax_settings,
-            notifier,
+            events,
             metrics: None,
         }
     }
@@ -305,23 +304,11 @@ impl CheckTenantTaxCompliance {
                     let mut updated = record.clone();
                     updated.observe(&account, &snapshot, Utc::now());
                     let lapsed = updated.warning.is_some();
-                    self.persist(&updated).await?;
+                    self.persist(&updated, lapsed.then(|| account.clone()))
+                        .await?;
                     report.checked += 1;
                     if lapsed {
                         report.warned += 1;
-                        // The warning path: alert the tenant — their money
-                        // (and liability) is accumulating unrecorded.
-                        if let Err(err) = self
-                            .notifier
-                            .tax_compliance_lapsed(record.tenant_id, &account)
-                            .await
-                        {
-                            tracing::warn!(
-                                tenant_id = %record.tenant_id,
-                                error = %err,
-                                "tax-compliance lapse notification failed"
-                            );
-                        }
                     }
                     if let Some(metrics) = &self.metrics
                         && lapsed
@@ -370,16 +357,8 @@ impl CheckTenantTaxCompliance {
         let snapshot = adapter.fetch_tax_compliance(&account).await?;
         record.observe(&account, &snapshot, Utc::now());
         let lapsed = record.warning.is_some();
-        self.persist(&record).await?;
-        if lapsed {
-            if let Err(err) = self
-                .notifier
-                .tax_compliance_lapsed(tenant_id, &account)
-                .await
-            {
-                tracing::warn!(tenant_id = %tenant_id, error = %err, "tax-compliance lapse notification failed");
-            }
-        }
+        self.persist(&record, lapsed.then(|| account.clone()))
+            .await?;
         Ok(())
     }
 
@@ -412,13 +391,29 @@ impl CheckTenantTaxCompliance {
             .map(|c| c.external_account_id)
     }
 
-    async fn persist(&self, record: &TaxSettingsRecord) -> Result<(), PaymentsError> {
+    async fn persist(
+        &self,
+        record: &TaxSettingsRecord,
+        lapsed_detail: Option<String>,
+    ) -> Result<(), PaymentsError> {
         let mut scope = self
             .tx_manager
             .begin_unscoped("save_tax_settings_recheck", ACTOR)
             .await
             .map_err(|err| PaymentsError::Storage(err.to_string()))?;
         self.tax_settings.upsert(&mut scope, record).await?;
+        if let Some(detail) = lapsed_detail {
+            self.events
+                .publish(
+                    &mut scope,
+                    record.tenant_id,
+                    &[PaymentsEvent::TaxComplianceLapsed {
+                        tenant_id: record.tenant_id,
+                        detail,
+                    }],
+                )
+                .await?;
+        }
         scope
             .commit()
             .await

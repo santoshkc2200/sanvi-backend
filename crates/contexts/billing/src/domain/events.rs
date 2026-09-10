@@ -20,6 +20,7 @@ pub enum BillingEventName {
     InvoicePaid,
     InvoicePaymentFailed,
     EntitlementsRecomputed,
+    SubscriptionRestored,
 }
 
 impl BillingEventName {
@@ -35,6 +36,7 @@ impl BillingEventName {
             Self::InvoicePaid => "billing.invoice_paid",
             Self::InvoicePaymentFailed => "billing.invoice_payment_failed",
             Self::EntitlementsRecomputed => "billing.entitlements_recomputed",
+            Self::SubscriptionRestored => "billing.subscription_restored",
         }
     }
 
@@ -96,6 +98,9 @@ pub enum BillingEvent {
     EntitlementsRecomputed {
         tenant_id: TenantId,
     },
+    SubscriptionRestored {
+        tenant_id: TenantId,
+    },
 }
 
 impl BillingEvent {
@@ -111,6 +116,7 @@ impl BillingEvent {
             Self::InvoicePaid { .. } => BillingEventName::InvoicePaid,
             Self::InvoicePaymentFailed { .. } => BillingEventName::InvoicePaymentFailed,
             Self::EntitlementsRecomputed { .. } => BillingEventName::EntitlementsRecomputed,
+            Self::SubscriptionRestored { .. } => BillingEventName::SubscriptionRestored,
         }
     }
 
@@ -125,7 +131,8 @@ impl BillingEvent {
             | Self::TrialEnding { tenant_id, .. }
             | Self::InvoicePaid { tenant_id, .. }
             | Self::InvoicePaymentFailed { tenant_id, .. }
-            | Self::EntitlementsRecomputed { tenant_id } => *tenant_id,
+            | Self::EntitlementsRecomputed { tenant_id }
+            | Self::SubscriptionRestored { tenant_id } => *tenant_id,
         }
     }
 

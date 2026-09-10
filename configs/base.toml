@@ -123,6 +123,7 @@ webhook_secret = ""                 # env only: SANVI__IDENTITY__WEBHOOK_SECRET
 trusted_email_verified_providers = ["google", "microsoft"]
 # Client IPs allowed to call /internal/kratos/* (comma-separated CIDRs).
 webhook_allowed_clients = ["127.0.0.1", "::1", "172.16.0.0/12", "192.168.0.0/16"]
+app_base_url = "https://app.sanvi.dev"
 
 [access]
 decision_cache_ttl_secs = 30
@@ -308,6 +309,7 @@ payments = true
 # Phase 10 starts deployed but unreachable. Rollback remains a boundary-only
 # flag until future slices introduce background token/conversion work.
 advertising = false
+notifications = true
 
 [outbox]
 poll_interval_ms = 1000
@@ -432,3 +434,14 @@ quota_per_connection_permits = 3
 # `media_unavailable`, never silently unauthenticated.
 base_url = ""
 service_api_key = ""
+
+[notification]
+# All values are environment-only (SANVI__NOTIFICATION__BASE_URL,
+# SANVI__NOTIFICATION__SEND_API_KEY, SANVI__NOTIFICATION__READ_API_KEY),
+# never committed. Empty values are valid: without notification-service
+# configured every call fails closed with `unavailable`, never silently
+# unauthenticated.
+base_url = ""
+send_api_key = ""
+read_api_key = ""
+max_event_age_secs = 86400

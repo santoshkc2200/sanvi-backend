@@ -835,21 +835,32 @@ pub trait ExportPackager: Send + Sync {
 }
 
 /// Sends verification codes and complete export credentials out of band.
+///
+/// Both payloads are live credentials, so neither may be written to
+/// `platform.outbox` and relayed through Redis the way every other privacy
+/// notification is. They stay direct calls, made *after* the transaction that
+/// minted them has committed.
+///
+/// `request_id` is what the adapter builds a delivery-idempotency key from, so
+/// a transport retry replays rather than mailing a second code.
+/// `send_export_credentials` takes the recipient explicitly because a
+/// [`SubjectRef`] does not always carry an email identifier — resolving it is
+/// the caller's decision, not something the adapter may guess.
 #[async_trait]
 pub trait Notifications: Send + Sync {
-    async fn send_verification_code(&self, to: &str, code: &str) -> Result<(), PrivacyError>;
+    async fn send_verification_code(
+        &self,
+        to: &str,
+        code: &str,
+        request_id: DsrId,
+    ) -> Result<(), PrivacyError>;
     async fn send_export_credentials(
         &self,
         subject: &SubjectRef,
+        recipient: &str,
         token: &str,
         passphrase: &str,
-        request_id: &str,
-    ) -> Result<(), PrivacyError>;
-    async fn send_request_status(
-        &self,
-        to: &str,
-        subject: &str,
-        status: &str,
+        request_id: DsrId,
     ) -> Result<(), PrivacyError>;
 }
 
@@ -925,7 +936,7 @@ pub trait IdGenerator: Send + Sync {
 /// The registry of every context that must register a provider. The CI test
 /// derives the workspace's context crates and asserts this list matches
 /// exactly; the DSR saga asserts every registered provider participated.
-pub const CONTEXT_NAMES: [&str; 14] = [
+pub const CONTEXT_NAMES: [&str; 15] = [
     "system",
     "tenancy",
     "identity",
@@ -940,6 +951,7 @@ pub const CONTEXT_NAMES: [&str; 14] = [
     "payments",
     "advertising",
     "media",
+    "notifications",
 ];
 
 #[cfg(test)]

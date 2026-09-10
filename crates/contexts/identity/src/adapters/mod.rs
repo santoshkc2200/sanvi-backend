@@ -3,6 +3,7 @@
 pub mod events;
 pub mod http;
 pub mod kratos;
+pub mod notification_intent;
 pub mod notifications;
 pub mod privacy_provider;
 pub mod repo;
@@ -11,6 +12,7 @@ pub mod verifier;
 
 pub use events::{OutboxEventPublisher, SystemClock, SystemIdGenerator};
 pub use kratos::{HttpKratosClient, kratos_client_impl};
+pub use notification_intent::notification_intent;
 pub use notifications::LoggingNotifications;
 pub use session_cache::{NoopSessionCache, RedisSessionCache};
 pub use verifier::KratosSessionVerifier;

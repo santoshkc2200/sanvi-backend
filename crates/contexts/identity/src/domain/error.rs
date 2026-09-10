@@ -110,6 +110,9 @@ pub enum IdentityError {
     #[error("ID generation failure: {0}")]
     IdGeneration(String),
 
+    #[error("notification service unavailable: {0}")]
+    NotificationUnavailable(String),
+
     #[error("storage failure")]
     Storage(String),
 }

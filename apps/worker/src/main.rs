@@ -26,7 +26,7 @@ use sanvi_access::{
     AccessConfig,
     adapters::{
         HttpKetoClient, OutboxEventPublisher as AccessEventPublisher, RedisEntitlementCache,
-        SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleRepository,
+        SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleCatalog, SqlxRoleRepository,
         sync::entitlement_sync_handler,
     },
     application::ExpireEntitlements,
@@ -66,12 +66,13 @@ use sanvi_billing::{
     application::{CheckTaxRegistrations, DunningSweep, ReconcileSubscriptions, WebhookDispatcher},
     domain::{
         Clock as BillingClock, EntitlementSyncer, EventPublisher as BillingEvents,
-        IdGenerator as BillingIds, InvoiceRepository, Notifications, PlanEntitlementRepository,
+        IdGenerator as BillingIds, InvoiceRepository, PlanEntitlementRepository,
         PlanPriceRepository, PlanRepository, StripeClient, SubscriptionRepository,
         WebhookEventRepository,
     },
 };
 use sanvi_domains::{DomainsConfig, adapters::events::domains_event_handler};
+use sanvi_kernel::notifications::{Audience, IntentArg};
 use sanvi_kernel::{IdsConfig, RawIdGenerator, SnowflakeGenerator, TenantId};
 use sanvi_localization::{
     LocalizationConfig,
@@ -85,6 +86,11 @@ use sanvi_messaging::{
     ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
     StreamConsumer, StreamName, StreamsClient, connect_redis,
 };
+use sanvi_notifications::{
+    CopyRenderer, EnqueueEmail, HttpNotificationGateway, NotificationDispatcher, NotificationError,
+    NotificationGatewayPort, Recipient, RecipientDirectory, RenderedNotification,
+    build_idempotency_key, secret_fingerprint,
+};
 use sanvi_payments::{
     adapters::{
         OutboxEventPublisher as PaymentsEvents, SqlxProviderConnectionRepository,
@@ -96,8 +102,7 @@ use sanvi_payments::{
         WebhookDispatcher as ConnectWebhookDispatcher,
     },
     domain::{
-        ConnectionLifecycleStore, ConnectionNotifier as PaymentsConnectionNotifier,
-        EventPublisher as PaymentsEventPublisher,
+        ConnectionLifecycleStore, EventPublisher as PaymentsEventPublisher,
         WebhookEventRepository as PaymentsWebhookEventRepository,
     },
 };
@@ -144,279 +149,136 @@ use sanvi_theming::{
 };
 use serde::{Deserialize, Serialize};
 
-struct WorkerBillingNotifications {
-    localizer: Arc<NotificationLocalizer>,
-}
-
-impl WorkerBillingNotifications {
-    async fn render(
-        &self,
-        tenant_id: TenantId,
-        subject_key: &str,
-        body_key: &str,
-        extra_args: &[(&str, LocalizationArg)],
-    ) {
-        let context = self.localizer.tenant_locale(tenant_id).await;
-        let tenant = tenant_id.to_string();
-        let tenant_arg = [("tenant", LocalizationArg::from(tenant))];
-        let subject = self.localizer.render(&context, subject_key, &tenant_arg);
-        let mut body_args = tenant_arg.to_vec();
-        body_args.extend_from_slice(extra_args);
-        let body = self.localizer.render(&context, body_key, &body_args);
-        tracing::info!(tenant_id = %tenant_id, locale = %context.locale, subject, body, "localized billing notification rendered");
-    }
+struct WorkerRecipientDirectory {
+    tx_manager: sanvi_persistence::TxManager,
+    memberships: Arc<dyn sanvi_identity::domain::MembershipRepository>,
+    roles: Arc<dyn sanvi_identity::domain::RoleCatalog>,
 }
 
 #[async_trait::async_trait]
-impl Notifications for WorkerBillingNotifications {
-    async fn payment_failed(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<(), sanvi_billing::domain::BillingError> {
-        self.render(
-            tenant_id,
-            "emails.payment_failed.subject",
-            "emails.payment_failed.body",
-            &[],
-        )
-        .await;
-        Ok(())
-    }
+impl RecipientDirectory for WorkerRecipientDirectory {
+    async fn resolve(&self, audience: &Audience) -> Result<Vec<Recipient>, NotificationError> {
+        match audience {
+            Audience::Email(addr) => Ok(vec![Recipient {
+                key: String::new(),
+                email: addr.clone(),
+            }]),
+            Audience::TenantRoles { tenant_id, roles } => {
+                let assignable = self
+                    .roles
+                    .assignable_roles(*tenant_id)
+                    .await
+                    .map_err(|err| NotificationError::Unavailable {
+                        detail: err.to_string(),
+                    })?;
 
-    async fn grace_expired(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<(), sanvi_billing::domain::BillingError> {
-        self.render(
-            tenant_id,
-            "emails.grace_expired.subject",
-            "emails.grace_expired.body",
-            &[],
-        )
-        .await;
-        Ok(())
-    }
+                let matching_role_ids: std::collections::HashSet<_> = assignable
+                    .into_iter()
+                    .filter(|(_, key)| roles.contains(&key.as_str()))
+                    .map(|(id, _)| id)
+                    .collect();
 
-    async fn trial_ending(
-        &self,
-        tenant_id: TenantId,
-        trial_end: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), sanvi_billing::domain::BillingError> {
-        self.render(
-            tenant_id,
-            "emails.trial_ending.subject",
-            "emails.trial_ending.body",
-            &[("date", LocalizationArg::from(trial_end))],
-        )
-        .await;
-        Ok(())
-    }
+                let mut scope = self
+                    .tx_manager
+                    .begin_for(tenant_id.as_i64())
+                    .await
+                    .map_err(|err| NotificationError::Unavailable {
+                        detail: err.to_string(),
+                    })?;
 
-    async fn subscription_canceled(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<(), sanvi_billing::domain::BillingError> {
-        self.render(
-            tenant_id,
-            "emails.subscription_canceled.subject",
-            "emails.subscription_canceled.body",
-            &[],
-        )
-        .await;
-        Ok(())
-    }
+                let members = self
+                    .memberships
+                    .list_with_emails(&mut scope, *tenant_id)
+                    .await
+                    .map_err(|err| NotificationError::Unavailable {
+                        detail: err.to_string(),
+                    })?;
 
-    async fn subscription_restored(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<(), sanvi_billing::domain::BillingError> {
-        self.render(
-            tenant_id,
-            "emails.subscription_restored.subject",
-            "emails.subscription_restored.body",
-            &[],
-        )
-        .await;
-        Ok(())
-    }
-}
+                scope
+                    .commit()
+                    .await
+                    .map_err(|err| NotificationError::Unavailable {
+                        detail: err.to_string(),
+                    })?;
 
-/// Phase-09: tenant-admin notifications for connection-lifecycle changes,
-/// rendered through the phase-06 localizer (tenant locale, override-aware
-/// catalogs) — the same path billing's notifications take.
-struct WorkerPaymentsNotifications {
-    localizer: Arc<NotificationLocalizer>,
-}
-
-impl WorkerPaymentsNotifications {
-    async fn render(
-        &self,
-        tenant_id: TenantId,
-        subject_key: &str,
-        body_key: &str,
-        extra_args: &[(&str, LocalizationArg)],
-    ) {
-        let context = self.localizer.tenant_locale(tenant_id).await;
-        let tenant = tenant_id.to_string();
-        let tenant_arg = [("tenant", LocalizationArg::from(tenant))];
-        let subject = self.localizer.render(&context, subject_key, &tenant_arg);
-        let mut body_args = tenant_arg.to_vec();
-        body_args.extend_from_slice(extra_args);
-        let body = self.localizer.render(&context, body_key, &body_args);
-        tracing::info!(tenant_id = %tenant_id, locale = %context.locale, subject, body, "localized payments notification rendered");
-    }
-}
-
-#[async_trait::async_trait]
-impl PaymentsConnectionNotifier for WorkerPaymentsNotifications {
-    async fn connection_activated(
-        &self,
-        tenant_id: TenantId,
-        connection_id: sanvi_payments::domain::ConnectionId,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        self.render(
-            tenant_id,
-            "emails.payments_connection_activated.subject",
-            "emails.payments_connection_activated.body",
-            &[(
-                "connection",
-                LocalizationArg::from(connection_id.to_string()),
-            )],
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn connection_restricted(
-        &self,
-        tenant_id: TenantId,
-        connection_id: sanvi_payments::domain::ConnectionId,
-        detail: &str,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        self.render(
-            tenant_id,
-            "emails.payments_connection_restricted.subject",
-            "emails.payments_connection_restricted.body",
-            &[
-                (
-                    "connection",
-                    LocalizationArg::from(connection_id.to_string()),
-                ),
-                ("detail", LocalizationArg::from(detail)),
-            ],
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn requirement_deadline_approaching(
-        &self,
-        tenant_id: TenantId,
-        connection_id: sanvi_payments::domain::ConnectionId,
-        deadline: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        self.render(
-            tenant_id,
-            "emails.payments_requirement_deadline.subject",
-            "emails.payments_requirement_deadline.body",
-            &[
-                (
-                    "connection",
-                    LocalizationArg::from(connection_id.to_string()),
-                ),
-                ("date", LocalizationArg::from(deadline)),
-            ],
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn dispute_opened(
-        &self,
-        tenant_id: TenantId,
-        dispute_id: sanvi_payments::domain::DisputeId,
-        due_by: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        let dispute_arg = [("dispute", LocalizationArg::from(dispute_id.to_string()))];
-        match due_by {
-            Some(due) => {
-                let mut args = dispute_arg.to_vec();
-                args.push(("due", LocalizationArg::from(due)));
-                self.render(
-                    tenant_id,
-                    "emails.payments_dispute_opened.subject",
-                    "emails.payments_dispute_opened.body_due",
-                    &args,
-                )
-                .await;
+                let mut recipients = Vec::new();
+                for (membership, email) in members {
+                    if membership.is_active()
+                        && membership
+                            .role_ids()
+                            .iter()
+                            .any(|id| matching_role_ids.contains(id))
+                    {
+                        recipients.push(Recipient {
+                            key: membership.user_id().to_string(),
+                            email: email.as_str().to_string(),
+                        });
+                    }
+                }
+                recipients.sort_by(|a, b| a.key.cmp(&b.key));
+                recipients.dedup_by(|a, b| a.key == b.key);
+                Ok(recipients)
             }
-            None => {
-                self.render(
-                    tenant_id,
-                    "emails.payments_dispute_opened.subject",
-                    "emails.payments_dispute_opened.body",
-                    &dispute_arg,
-                )
-                .await;
+            Audience::Platform => {
+                tracing::debug!("platform audience notifications not yet delivered");
+                Ok(vec![])
             }
         }
-        Ok(())
-    }
-
-    async fn payout_failed(
-        &self,
-        tenant_id: TenantId,
-        external_payout_id: &str,
-        amount: &sanvi_payments::Money,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        // A failed payout means the tenant's money is stuck at the
-        // provider — an alert, not a row.
-        self.render(
-            tenant_id,
-            "emails.payments_payout_failed.subject",
-            "emails.payments_payout_failed.body",
-            &[
-                (
-                    "payout",
-                    LocalizationArg::from(external_payout_id.to_string()),
-                ),
-                (
-                    "amount",
-                    LocalizationArg::from(format!(
-                        "{} {}",
-                        amount.amount_minor,
-                        amount.currency.as_str()
-                    )),
-                ),
-            ],
-        )
-        .await;
-        tracing::error!(
-            tenant_id = %tenant_id,
-            payout = %external_payout_id,
-            "tenant notified of a FAILED payout"
-        );
-        Ok(())
-    }
-
-    async fn tax_compliance_lapsed(
-        &self,
-        tenant_id: TenantId,
-        detail: &str,
-    ) -> Result<(), sanvi_payments::domain::PaymentsError> {
-        self.render(
-            tenant_id,
-            "emails.payments_tax_lapsed.subject",
-            "emails.payments_tax_lapsed.body",
-            &[("detail", LocalizationArg::from(detail.to_string()))],
-        )
-        .await;
-        Ok(())
     }
 }
 
+struct WorkerCopyRenderer {
+    localizer: Arc<NotificationLocalizer>,
+}
+
+#[async_trait::async_trait]
+impl CopyRenderer for WorkerCopyRenderer {
+    async fn render(
+        &self,
+        audience: &Audience,
+        subject_key: &str,
+        body_key: &str,
+        args: &[(String, IntentArg)],
+    ) -> Result<RenderedNotification, NotificationError> {
+        let context = match audience {
+            Audience::TenantRoles { tenant_id, .. } => {
+                self.localizer.tenant_locale(*tenant_id).await
+            }
+            _ => self.localizer.platform_locale().await,
+        };
+
+        let loc_args: Vec<(&str, LocalizationArg)> = args
+            .iter()
+            .map(|(k, v)| {
+                let arg = match v {
+                    IntentArg::Text(s) => LocalizationArg::Text(s.clone()),
+                    IntentArg::Int(i) => LocalizationArg::Number(*i as f64),
+                    IntentArg::Timestamp(dt) => LocalizationArg::DateTime(*dt),
+                };
+                (k.as_str(), arg)
+            })
+            .collect();
+
+        let subject = self.localizer.render(&context, subject_key, &loc_args);
+        let text_body = self.localizer.render(&context, body_key, &loc_args);
+
+        Ok(RenderedNotification {
+            locale: context.locale,
+            subject,
+            text_body,
+        })
+    }
+}
+
+/// The worker's half of privacy Lane B.
+///
+/// `ProcessDsr` runs here, so export credentials are minted and mailed on this
+/// side while DSR verification codes are minted in the API. Both payloads are
+/// live credentials and never travel through the outbox. Neither the code, the
+/// passphrase, the token nor the recipient is logged.
 struct WorkerPrivacyNotifications {
     localizer: Arc<NotificationLocalizer>,
+    gateway: Option<Arc<dyn NotificationGatewayPort>>,
 }
 
 #[async_trait::async_trait]
@@ -425,6 +287,7 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
         &self,
         to: &str,
         code: &str,
+        request_id: sanvi_privacy::domain::DsrId,
     ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
         let context = self.localizer.platform_locale().await;
         let subject = self
@@ -435,21 +298,50 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
             "emails.verification.body",
             &[("code", LocalizationArg::from(code))],
         );
-        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy notification rendered");
+
+        let Some(gateway) = &self.gateway else {
+            tracing::info!(
+                request_id = %request_id,
+                locale = %context.locale,
+                notification = "verification",
+                "notification service not configured; verification code not delivered"
+            );
+            return Ok(());
+        };
+
+        let key = build_idempotency_key(
+            "privacy",
+            "verification",
+            &request_id.to_string(),
+            &secret_fingerprint(code),
+        );
+        gateway
+            .enqueue_email(EnqueueEmail {
+                tenant_id: None,
+                recipient: to,
+                subject: &subject,
+                text_body: &body,
+                html_body: None,
+                idempotency_key: &key,
+            })
+            .await
+            .map_err(|err| sanvi_privacy::domain::PrivacyError::Upstream(err.to_string()))?;
         Ok(())
     }
 
     async fn send_export_credentials(
         &self,
         subject_ref: &sanvi_privacy::domain::SubjectRef,
+        recipient: &str,
         token: &str,
         passphrase: &str,
-        request_id: &str,
+        request_id: sanvi_privacy::domain::DsrId,
     ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
         let context = match subject_ref.tenant_id {
             Some(tenant_id) => self.localizer.tenant_locale(tenant_id).await,
             None => self.localizer.platform_locale().await,
         };
+        let request = request_id.to_string();
         let subject = self
             .localizer
             .render(&context, "emails.export_passphrase.subject", &[]);
@@ -457,230 +349,35 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
             &context,
             "emails.export_passphrase.body",
             &[
-                ("request_id", LocalizationArg::from(request_id)),
+                ("request_id", LocalizationArg::from(request.as_str())),
                 ("passphrase", LocalizationArg::from(passphrase)),
             ],
         );
-        tracing::info!(subject_ref = %subject_ref.canonical_key(), token, locale = %context.locale, subject, body, "localized privacy export notification rendered");
-        Ok(())
-    }
 
-    async fn send_request_status(
-        &self,
-        to: &str,
-        request_subject: &str,
-        status: &str,
-    ) -> Result<(), sanvi_privacy::domain::PrivacyError> {
-        let context = self.localizer.platform_locale().await;
-        let subject = self.localizer.render(
-            &context,
-            "emails.privacy_status.subject",
-            &[("subject", LocalizationArg::from(request_subject))],
-        );
-        let body = self.localizer.render(
-            &context,
-            "emails.privacy_status.body",
-            &[("status", LocalizationArg::from(status))],
-        );
-        tracing::info!(to, locale = %context.locale, subject, body, "localized privacy status notification rendered");
-        Ok(())
-    }
-}
-
-/// Renders budget guardrail notifications to the log.
-///
-/// **This does not deliver anything.** There is no notifications bounded context
-/// and no message transport in this repository, so the rendered subject/body are
-/// emitted as a structured `tracing` event and go nowhere else; tenant
-/// notification preferences are not consulted. `LoggingBudgetNotifier` on the API
-/// side behaves the same way, as does the privacy notifier above.
-///
-/// Wiring real delivery means introducing a transport, which is out of scope for
-/// TASK-017. Until then, treat budget alerts as observable in logs and via
-/// `GET /ads/budget-alerts` only — not as something a tenant is told about.
-struct WorkerAdvertisingNotifications {
-    localizer: Arc<NotificationLocalizer>,
-}
-
-impl WorkerAdvertisingNotifications {
-    async fn render(
-        &self,
-        tenant_id: TenantId,
-        subject_key: &str,
-        body_key: &str,
-        args: &[(&str, LocalizationArg)],
-    ) {
-        let context = self.localizer.tenant_locale(tenant_id).await;
-        let subject = self.localizer.render(&context, subject_key, args);
-        let body = self.localizer.render(&context, body_key, args);
-        tracing::info!(
-            %tenant_id,
-            locale = %context.locale,
-            subject = %subject,
-            body = %body,
-            "localized budget guardrail notification rendered"
-        );
-    }
-}
-
-#[async_trait::async_trait]
-impl sanvi_advertising::domain::BudgetNotifier for WorkerAdvertisingNotifications {
-    async fn notify_threshold_80(
-        &self,
-        tenant_id: TenantId,
-        scope: &str,
-        current_spend: &sanvi_advertising::domain::Money,
-        cap_amount: &sanvi_advertising::domain::Money,
-        period: sanvi_advertising::domain::BudgetPeriod,
-    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
-        let period_str = match period {
-            sanvi_advertising::domain::BudgetPeriod::Daily => "daily",
-            sanvi_advertising::domain::BudgetPeriod::Monthly => "monthly",
+        let Some(gateway) = &self.gateway else {
+            tracing::info!(
+                subject_ref = %subject_ref.canonical_key(),
+                request_id = %request_id,
+                locale = %context.locale,
+                notification = "export_credentials",
+                "notification service not configured; export credentials not delivered"
+            );
+            return Ok(());
         };
-        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
-        let formatted_cap = format!("{} {}", cap_amount.amount_minor, cap_amount.currency);
-        self.render(
-            tenant_id,
-            "emails.budget_warning_80.subject",
-            "emails.budget_warning_80.body",
-            &[
-                ("scope", LocalizationArg::from(scope.to_string())),
-                ("spend", LocalizationArg::from(formatted_spend)),
-                ("cap", LocalizationArg::from(formatted_cap)),
-                ("period", LocalizationArg::from(period_str.to_string())),
-            ],
-        )
-        .await;
-        Ok(())
-    }
 
-    async fn notify_cap_breached(
-        &self,
-        tenant_id: TenantId,
-        scope: &str,
-        current_spend: &sanvi_advertising::domain::Money,
-        cap_amount: &sanvi_advertising::domain::Money,
-        period: sanvi_advertising::domain::BudgetPeriod,
-        action_taken: &str,
-    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
-        let period_str = match period {
-            sanvi_advertising::domain::BudgetPeriod::Daily => "daily",
-            sanvi_advertising::domain::BudgetPeriod::Monthly => "monthly",
-        };
-        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
-        let formatted_cap = format!("{} {}", cap_amount.amount_minor, cap_amount.currency);
-        self.render(
-            tenant_id,
-            "emails.budget_cap_breached.subject",
-            "emails.budget_cap_breached.body",
-            &[
-                ("scope", LocalizationArg::from(scope.to_string())),
-                ("spend", LocalizationArg::from(formatted_spend)),
-                ("cap", LocalizationArg::from(formatted_cap)),
-                ("period", LocalizationArg::from(period_str.to_string())),
-                ("action", LocalizationArg::from(action_taken.to_string())),
-            ],
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn notify_provisional_warning(
-        &self,
-        tenant_id: TenantId,
-        scope: &str,
-        current_spend: &sanvi_advertising::domain::Money,
-        cap_amount: &sanvi_advertising::domain::Money,
-        lower_bound: &sanvi_advertising::domain::Money,
-        period: sanvi_advertising::domain::BudgetPeriod,
-    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
-        let period_str = match period {
-            sanvi_advertising::domain::BudgetPeriod::Daily => "daily",
-            sanvi_advertising::domain::BudgetPeriod::Monthly => "monthly",
-        };
-        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
-        let formatted_cap = format!("{} {}", cap_amount.amount_minor, cap_amount.currency);
-        let formatted_lower = format!("{} {}", lower_bound.amount_minor, lower_bound.currency);
-        self.render(
-            tenant_id,
-            "emails.budget_provisional_warning.subject",
-            "emails.budget_provisional_warning.body",
-            &[
-                ("scope", LocalizationArg::from(scope.to_string())),
-                ("spend", LocalizationArg::from(formatted_spend)),
-                ("cap", LocalizationArg::from(formatted_cap)),
-                ("lower_bound", LocalizationArg::from(formatted_lower)),
-                ("period", LocalizationArg::from(period_str.to_string())),
-            ],
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn notify_stale_warning(
-        &self,
-        tenant_id: TenantId,
-        scope: &str,
-        lag_hours: f64,
-    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
-        self.render(
-            tenant_id,
-            "emails.budget_stale_warning.subject",
-            "emails.budget_stale_warning.body",
-            &[
-                ("scope", LocalizationArg::from(scope.to_string())),
-                (
-                    "lag_hours",
-                    LocalizationArg::from(format!("{:.1}", lag_hours)),
-                ),
-            ],
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn notify_spend_anomaly(
-        &self,
-        tenant_id: TenantId,
-        scope: &str,
-        current_spend: &sanvi_advertising::domain::Money,
-        historical_mean: &sanvi_advertising::domain::Money,
-        sigma_multiple: f64,
-    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
-        let formatted_spend = format!("{} {}", current_spend.amount_minor, current_spend.currency);
-        let formatted_mean = format!(
-            "{} {}",
-            historical_mean.amount_minor, historical_mean.currency
-        );
-        self.render(
-            tenant_id,
-            "emails.budget_spend_anomaly.subject",
-            "emails.budget_spend_anomaly.body",
-            &[
-                ("scope", LocalizationArg::from(scope.to_string())),
-                ("spend", LocalizationArg::from(formatted_spend)),
-                ("mean", LocalizationArg::from(formatted_mean)),
-                (
-                    "sigma",
-                    LocalizationArg::from(format!("{:.1}", sigma_multiple)),
-                ),
-            ],
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn notify_guardrails_rollback(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<(), sanvi_advertising::domain::AdvertisingError> {
-        self.render(
-            tenant_id,
-            "emails.budget_guardrails_rollback.subject",
-            "emails.budget_guardrails_rollback.body",
-            &[],
-        )
-        .await;
+        let tenant = subject_ref.tenant_id.map(|id| id.to_string());
+        let key = build_idempotency_key("privacy", "export", &request, &secret_fingerprint(token));
+        gateway
+            .enqueue_email(EnqueueEmail {
+                tenant_id: tenant.as_deref(),
+                recipient,
+                subject: &subject,
+                text_body: &body,
+                html_body: None,
+                idempotency_key: &key,
+            })
+            .await
+            .map_err(|err| sanvi_privacy::domain::PrivacyError::Upstream(err.to_string()))?;
         Ok(())
     }
 }
@@ -859,6 +556,54 @@ impl Default for OryConfig {
     }
 }
 
+/// The subset of the api's `[features]` section this process acts on.
+///
+/// Same section the api reads, declared separately because the worker does not
+/// depend on `sanvi-api` — exactly as [`OryConfig`] is. Serde ignores the keys
+/// listed here that only gate api routes.
+///
+/// Unlike the api's struct, `Default` is written out rather than derived, so an
+/// absent `[features]` section and an absent key mean the same thing. A derived
+/// all-off default would silently stop every outbound notification whenever the
+/// section was missing, which is the opposite of what a missing rollback switch
+/// should do.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FeaturesConfig {
+    /// Gates the notification-service integration: the six Lane A consumer
+    /// groups and the worker's Lane B export-credentials mail. Turning this
+    /// off must stop *all* outbound mail from this process.
+    #[serde(default = "default_true")]
+    pub notifications: bool,
+}
+
+/// Why this process is not sending notifications, if it is not.
+///
+/// The two reasons are kept apart because an operator debugging silent mail
+/// needs to know whether the rollback switch was thrown or the endpoint was
+/// never configured.
+fn notifications_disabled_reason(config: &WorkerConfig) -> Option<&'static str> {
+    if !config.features.notifications {
+        Some("features.notifications is off")
+    } else if config.notification.base_url.is_empty() {
+        Some("notification service base_url is empty")
+    } else {
+        None
+    }
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self {
+            notifications: default_true(),
+        }
+    }
+}
+
+const fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct WorkerConfig {
@@ -894,6 +639,10 @@ pub struct WorkerConfig {
     pub payments: sanvi_payments::PaymentsConfig,
     #[serde(default)]
     pub advertising: sanvi_advertising::AdvertisingConfig,
+    #[serde(default)]
+    pub notification: sanvi_notifications::NotificationConfig,
+    #[serde(default)]
+    pub features: FeaturesConfig,
 }
 
 impl WorkerConfig {
@@ -912,6 +661,7 @@ impl WorkerConfig {
         self.domains.validate()?;
         self.payments.validate()?;
         self.advertising.validate()?;
+        self.notification.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -1179,10 +929,6 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(SqlxWebhookEventRepository::new());
     let billing_events: std::sync::Arc<dyn BillingEvents> =
         std::sync::Arc::new(BillingEventPublisher::new(ids.clone()));
-    let billing_notifications: std::sync::Arc<dyn Notifications> =
-        std::sync::Arc::new(WorkerBillingNotifications {
-            localizer: notification_localizer.clone(),
-        });
     let billing_ids: std::sync::Arc<dyn BillingIds> =
         std::sync::Arc::new(SystemIdGenerator::new(ids.clone()));
     let billing_clock: std::sync::Arc<dyn BillingClock> = std::sync::Arc::new(SystemClock);
@@ -1216,7 +962,6 @@ async fn main() -> ExitCode {
             billing_grants.clone(),
             billing_syncer.clone(),
             billing_lifecycle.clone(),
-            billing_notifications.clone(),
             billing_events.clone(),
             billing_stripe.clone(),
             billing_ids.clone(),
@@ -1229,7 +974,6 @@ async fn main() -> ExitCode {
         billing_subscriptions.clone(),
         billing_syncer.clone(),
         billing_lifecycle.clone(),
-        billing_notifications.clone(),
         billing_events.clone(),
         billing_clock.clone(),
         config.billing.dunning_grace_days,
@@ -1261,10 +1005,6 @@ async fn main() -> ExitCode {
     let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> = std::sync::Arc::new(
         sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()),
     );
-    let payments_notifier: std::sync::Arc<dyn PaymentsConnectionNotifier> =
-        std::sync::Arc::new(WorkerPaymentsNotifications {
-            localizer: notification_localizer.clone(),
-        });
     let mut payments_providers = PaymentsProviderRegistry::new();
     if PaymentsRuntimeEnvironment::from_config(&config.telemetry.environment)
         == PaymentsRuntimeEnvironment::NonProduction
@@ -1308,7 +1048,7 @@ async fn main() -> ExitCode {
             payments_connections_repo.clone(),
             payments_registry.clone(),
             payments_tax_settings.clone(),
-            payments_notifier.clone(),
+            payments_events.clone(),
         )
         .with_metrics(payments_metrics.clone()),
     );
@@ -1319,7 +1059,6 @@ async fn main() -> ExitCode {
             payments_lifecycle.clone(),
             payments_registry.clone(),
             payments_events.clone(),
-            payments_notifier.clone(),
             payment_ids,
         )
         .with_checkout_store(payments_checkouts.clone())
@@ -1337,7 +1076,6 @@ async fn main() -> ExitCode {
             payments_lifecycle.clone(),
             payments_registry.clone(),
             payments_events.clone(),
-            payments_notifier.clone(),
             chrono::Duration::seconds(
                 config.scheduler.payments_connection_sync_interval_secs as i64,
             ),
@@ -1397,8 +1135,6 @@ async fn main() -> ExitCode {
         ));
     let domains_clock: std::sync::Arc<dyn sanvi_domains::domain::Clock> =
         std::sync::Arc::new(sanvi_domains::adapters::SystemClock);
-    let domains_notifications: std::sync::Arc<dyn sanvi_domains::domain::Notifications> =
-        std::sync::Arc::new(sanvi_domains::adapters::LogNotifications::new());
     let domains_metrics = std::sync::Arc::new(sanvi_domains::adapters::DomainsMetrics::new(
         metrics.prometheus_registry(),
     ));
@@ -1463,7 +1199,6 @@ async fn main() -> ExitCode {
             domains_registrar.clone(),
             domains_charger.clone(),
             domains_events.clone(),
-            domains_notifications.clone(),
             domains_tx.clone(),
             config.domains.cert_renewal_before_days,
             config.domains.cert_expiry_warning_days.clone(),
@@ -1478,7 +1213,6 @@ async fn main() -> ExitCode {
             domains_verifier.clone(),
             domains_prober.clone(),
             domains_events.clone(),
-            domains_notifications.clone(),
             domains_clock.clone(),
             domains_tx.clone(),
             config.domains.edge_hostname.clone(),
@@ -1532,10 +1266,33 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(SqlxRetentionRuleRepository::new());
     let privacy_metrics: std::sync::Arc<dyn RequestMetricsRepository> =
         std::sync::Arc::new(SqlxRequestMetricsRepository::new());
+    // One decision for the whole process: the Lane A consumer groups and the
+    // Lane B export-credentials adapter both read it, so
+    // `features.notifications = false` stops *all* outbound mail from the
+    // worker rather than half of it.
+    let notifications_enabled = match notifications_disabled_reason(&config) {
+        Some(reason) => {
+            tracing::info!(reason, "worker notification delivery disabled");
+            false
+        }
+        None => true,
+    };
+
+    // Delivery for privacy Lane B (export credentials). `None` leaves the
+    // adapter logging instead of sending.
+    let privacy_notification_gateway: Option<std::sync::Arc<dyn NotificationGatewayPort>> =
+        if notifications_enabled {
+            Some(std::sync::Arc::new(HttpNotificationGateway::new(
+                config.notification.clone(),
+            )))
+        } else {
+            None
+        };
     let privacy_events = std::sync::Arc::new(PrivacyEvents::new(ids.clone()));
     let privacy_notifications: std::sync::Arc<dyn PrivacyNotificationsTrait> =
         std::sync::Arc::new(WorkerPrivacyNotifications {
             localizer: notification_localizer.clone(),
+            gateway: privacy_notification_gateway.clone(),
         });
     let privacy_clock = std::sync::Arc::new(PrivacySystemClock);
     let privacy_ids: std::sync::Arc<dyn sanvi_privacy::domain::IdGenerator> =
@@ -1673,6 +1430,7 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(
             sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
         ),
+        std::sync::Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
     ];
 
     let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(
@@ -1941,10 +1699,6 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new());
     let advertising_fx_rates: Arc<dyn sanvi_advertising::domain::FxRatePort> =
         Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new());
-    let advertising_budget_notifier: Arc<dyn sanvi_advertising::domain::BudgetNotifier> =
-        Arc::new(WorkerAdvertisingNotifications {
-            localizer: notification_localizer.clone(),
-        });
     let advertising_spend_status = Arc::new(sanvi_advertising::application::GetSpendStatus::new(
         tx_manager.clone(),
         advertising_metrics_repo.clone(),
@@ -1975,7 +1729,6 @@ async fn main() -> ExitCode {
             advertising_spend_status,
             advertising_events.clone(),
             advertising_ids.clone(),
-            advertising_budget_notifier.clone(),
             advertising_metrics.clone(),
         ));
     let advertising_spend_anomaly_detector =
@@ -1986,7 +1739,6 @@ async fn main() -> ExitCode {
             advertising_campaigns.clone(),
             advertising_events,
             advertising_ids,
-            advertising_budget_notifier,
             config.advertising.metrics_restatement_days,
         ));
     let advertising_rollover_sweep =
@@ -3000,13 +2752,112 @@ async fn main() -> ExitCode {
         scheduler.run_until_shutdown(scheduler_shutdown).await;
     });
 
+    let dispatcher_shutdown = shutdown_rx.clone();
     let dispatcher_task = tokio::spawn(async move {
         dispatcher
             .run_until_shutdown(
                 Duration::from_millis(config.outbox.poll_interval_ms),
-                shutdown_rx,
+                dispatcher_shutdown,
             )
             .await;
+    });
+
+    let notif_tasks: Vec<tokio::task::JoinHandle<()>> = if !notifications_enabled {
+        Vec::new()
+    } else {
+        let notif_gateway = Arc::new(HttpNotificationGateway::new(config.notification.clone()));
+        let notif_directory = Arc::new(WorkerRecipientDirectory {
+            tx_manager: tx_manager.clone(),
+            memberships: Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),
+            roles: Arc::new(SqlxRoleCatalog::new(
+                tx_manager.clone(),
+                Arc::new(SqlxRoleRepository::new()),
+            )),
+        });
+        let notif_renderer = Arc::new(WorkerCopyRenderer {
+            localizer: notification_localizer.clone(),
+        });
+
+        type IntentMapper = fn(
+            &sanvi_kernel::EventEnvelope,
+        ) -> Option<sanvi_kernel::notifications::NotificationIntent>;
+        type ConsumerSpec = (&'static str, &'static str, IntentMapper);
+
+        let consumers: [ConsumerSpec; 6] = [
+            (
+                "identity",
+                "notifications-identity",
+                sanvi_identity::adapters::notification_intent,
+            ),
+            (
+                "billing",
+                "notifications-billing",
+                sanvi_billing::adapters::notification_intent,
+            ),
+            (
+                "payments",
+                "notifications-payments",
+                sanvi_payments::adapters::notification_intent,
+            ),
+            (
+                "privacy",
+                "notifications-privacy",
+                sanvi_privacy::adapters::notification_intent,
+            ),
+            (
+                "domains",
+                "notifications-domains",
+                sanvi_domains::adapters::notification_intent,
+            ),
+            (
+                "advertising",
+                "notifications-advertising",
+                sanvi_advertising::adapters::notification_intent,
+            ),
+        ];
+
+        let mut tasks = Vec::with_capacity(consumers.len());
+        for (stream_suffix, group_name, mapper) in consumers {
+            let stream_name = format!("{}.{stream_suffix}", config.outbox.stream);
+            let consumer_name = format!("{group_name}-{}", uuid::Uuid::now_v7());
+            let shutdown = shutdown_rx.clone();
+
+            let metrics = Arc::new(ConsumerMetrics::new(group_name));
+            if let Err(err) = metrics.register(registry) {
+                eprintln!("failed to register {group_name} consumer metrics: {err}");
+                return ExitCode::from(1);
+            }
+
+            let consumer = StreamConsumer::new(pool.clone(), streams.clone()).with_metrics(metrics);
+            let dispatcher = Arc::new(NotificationDispatcher::new(
+                notif_gateway.clone(),
+                notif_directory.clone(),
+                notif_renderer.clone(),
+                mapper,
+                config.notification.max_event_age_secs,
+            ));
+            let handler = dispatcher.into_consumer_handler();
+
+            tasks.push(tokio::spawn(async move {
+                consumer
+                    .run_until_shutdown_at(
+                        &stream_name,
+                        group_name,
+                        &consumer_name,
+                        handler,
+                        shutdown,
+                        "$",
+                    )
+                    .await;
+            }));
+        }
+        tasks
+    };
+
+    let notif_supervisor = tokio::spawn(async move {
+        for task in notif_tasks {
+            let _ = task.await;
+        }
     });
 
     let _ = tokio::join!(
@@ -3018,7 +2869,8 @@ async fn main() -> ExitCode {
         access_task,
         entitlement_task,
         billing_task,
-        scheduler_task
+        scheduler_task,
+        notif_supervisor
     );
 
     telemetry_guard.shutdown();
@@ -3027,7 +2879,51 @@ async fn main() -> ExitCode {
 
 #[cfg(test)]
 mod config_tests {
+    use super::{FeaturesConfig, WorkerConfig, notifications_disabled_reason};
     use sanvi_kernel::IdsConfig;
+
+    fn configured() -> WorkerConfig {
+        let mut config = WorkerConfig::default();
+        config.notification.base_url = "http://localhost:58080".to_string();
+        config
+    }
+
+    #[test]
+    fn an_absent_features_section_leaves_notifications_on() {
+        // `#[serde(default)]` on the field means an absent `[features]`
+        // section resolves to `FeaturesConfig::default()`. That default must
+        // match the serde key default, or deploying without the section would
+        // silently stop every outbound notification — the opposite of what a
+        // missing rollback switch should do.
+        assert!(FeaturesConfig::default().notifications);
+        assert!(WorkerConfig::default().features.notifications);
+    }
+
+    #[test]
+    fn the_feature_flag_stops_worker_notifications_even_when_configured() {
+        let mut config = configured();
+        assert_eq!(notifications_disabled_reason(&config), None);
+
+        config.features = FeaturesConfig {
+            notifications: false,
+        };
+        // Both the Lane A consumers and the Lane B export mail read this one
+        // decision, so the flag is a real rollback switch for the worker and
+        // not just for the api.
+        assert_eq!(
+            notifications_disabled_reason(&config),
+            Some("features.notifications is off")
+        );
+    }
+
+    #[test]
+    fn an_unset_base_url_is_reported_separately_from_the_flag() {
+        let config = WorkerConfig::default();
+        assert_eq!(
+            notifications_disabled_reason(&config),
+            Some("notification service base_url is empty")
+        );
+    }
 
     #[test]
     fn staging_requires_an_explicit_node_id() {

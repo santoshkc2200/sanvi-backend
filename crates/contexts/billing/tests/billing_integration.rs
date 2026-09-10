@@ -14,10 +14,10 @@ use uuid::Uuid;
 
 use sanvi_billing::{
     adapters::{
-        AccessEntitlementSyncer, LoggingNotifications, OutboxEventPublisher,
-        SqlxCheckoutStateRepository, SqlxInvoiceRepository, SqlxPlanEntitlementRepository,
-        SqlxPlanPriceRepository, SqlxPlanRepository, SqlxSubscriptionRepository,
-        SqlxWebhookEventRepository, SystemClock, SystemIdGenerator, TenancyTenantLifecycle,
+        AccessEntitlementSyncer, OutboxEventPublisher, SqlxCheckoutStateRepository,
+        SqlxInvoiceRepository, SqlxPlanEntitlementRepository, SqlxPlanPriceRepository,
+        SqlxPlanRepository, SqlxSubscriptionRepository, SqlxWebhookEventRepository, SystemClock,
+        SystemIdGenerator, TenancyTenantLifecycle,
     },
     application::{
         ApplySubscriptionOverride, ApplySubscriptionOverrideCommand, CreateCheckoutSession,
@@ -26,7 +26,7 @@ use sanvi_billing::{
     },
     domain::{
         BillingError, CheckoutSessionRequest, CheckoutSessionResult, Clock, CollectionState,
-        EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRepository, Notifications,
+        EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRepository,
         PlanEntitlementRepository, PlanId, PlanPriceRepository, PlanRepository,
         PortalSessionRequest, PortalSessionResult, PriceId, StripeClient, StripeCustomer,
         StripeSubscriptionView, SubscriptionRepository, SubscriptionSource, SubscriptionStatus,
@@ -253,7 +253,6 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
     let webhooks: Arc<dyn WebhookEventRepository> = Arc::new(SqlxWebhookEventRepository::new());
     let events: Arc<dyn EventPublisher> =
         Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
-    let notifications: Arc<dyn Notifications> = Arc::new(LoggingNotifications::new());
     let ids: Arc<dyn IdGenerator> = Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let entitlements: Arc<dyn sanvi_access::domain::EntitlementRepository> =
@@ -287,7 +286,6 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
         grants.clone(),
         syncer.clone(),
         lifecycle.clone(),
-        notifications.clone(),
         events.clone(),
         stripe.clone(),
         ids.clone(),
@@ -323,7 +321,6 @@ async fn build_stack(pool: sanvi_persistence::PgPool, fake: Arc<FakeStripe>) -> 
         subscriptions.clone(),
         syncer.clone(),
         lifecycle.clone(),
-        notifications.clone(),
         events.clone(),
         clock.clone(),
         14,

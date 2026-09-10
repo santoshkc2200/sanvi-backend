@@ -7,6 +7,7 @@ use sanvi_kernel::TenantId;
 use tracing::info;
 
 use crate::domain::IdentityError;
+use crate::domain::invitation::InvitationId;
 use crate::domain::ports::Notifications;
 use crate::domain::values::Email;
 
@@ -24,6 +25,7 @@ impl Notifications for LoggingNotifications {
     async fn send_invitation(
         &self,
         tenant_id: TenantId,
+        invitation_id: InvitationId,
         email: &Email,
         tenant_name: &str,
         invite_url: &str,
@@ -31,26 +33,11 @@ impl Notifications for LoggingNotifications {
         info!(
             email = %email,
             tenant_id = %tenant_id,
+            invitation_id = %invitation_id,
             tenant = %tenant_name,
             url = %invite_url,
             notification = "invitation",
             "notification stub: invitation email"
-        );
-        Ok(())
-    }
-
-    async fn send_security_notice(
-        &self,
-        email: &Email,
-        kind: &str,
-        detail: &str,
-    ) -> Result<(), IdentityError> {
-        info!(
-            email = %email,
-            kind,
-            detail,
-            notification = "security_notice",
-            "notification stub: security notice"
         );
         Ok(())
     }

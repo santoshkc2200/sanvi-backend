@@ -14,8 +14,8 @@ use crate::domain::model::{
 };
 use crate::domain::{
     AdEvent, AdvertisingConnectionRepository, AdvertisingError, BudgetAlertRepository,
-    BudgetCapRepository, BudgetNotifier, CampaignRepository, EventPublisher, IdGenerator,
-    MetricsGroupBy, MetricsRangeQuery, MetricsRepository,
+    BudgetCapRepository, CampaignRepository, EventPublisher, IdGenerator, MetricsGroupBy,
+    MetricsRangeQuery, MetricsRepository,
 };
 
 pub struct ThresholdEvaluator {
@@ -28,7 +28,6 @@ pub struct ThresholdEvaluator {
     status_query: Arc<super::status::GetSpendStatus>,
     events: Arc<dyn EventPublisher>,
     ids: Arc<dyn IdGenerator>,
-    notifier: Arc<dyn BudgetNotifier>,
     metrics: Arc<AdvertisingMetrics>,
 }
 
@@ -44,7 +43,6 @@ impl ThresholdEvaluator {
         status_query: Arc<super::status::GetSpendStatus>,
         events: Arc<dyn EventPublisher>,
         ids: Arc<dyn IdGenerator>,
-        notifier: Arc<dyn BudgetNotifier>,
         metrics: Arc<AdvertisingMetrics>,
     ) -> Self {
         Self {
@@ -57,7 +55,6 @@ impl ThresholdEvaluator {
             status_query,
             events,
             ids,
-            notifier,
             metrics,
         }
     }
@@ -265,6 +262,14 @@ impl ThresholdEvaluator {
                         &[AdEvent::SpendThresholdReached {
                             campaign_id: cap.campaign_id,
                             threshold: 80,
+                            alert_id: Some(alert.id),
+                            scope_name: Some(scope_str.clone()),
+                            spend_minor: Some(total_spend.amount_minor),
+                            currency: Some(total_spend.currency.to_string()),
+                            cap_minor: Some(cap.amount.amount_minor),
+                            period: Some(cap.period),
+                            action_taken: None,
+                            condition: Some(AlertCondition::Threshold80),
                         }],
                     )
                     .await?;
@@ -277,17 +282,6 @@ impl ThresholdEvaluator {
                     .budget_threshold_alerts_total()
                     .with_label_values(&[scope_metric_label, "80"])
                     .inc();
-
-                let _ = self
-                    .notifier
-                    .notify_threshold_80(
-                        tenant_id,
-                        &scope_str,
-                        &total_spend,
-                        &cap.amount,
-                        cap.period,
-                    )
-                    .await;
             } else {
                 scope
                     .commit()
@@ -432,6 +426,14 @@ impl ThresholdEvaluator {
                         &[AdEvent::SpendThresholdReached {
                             campaign_id: cap.campaign_id,
                             threshold: 100,
+                            alert_id: Some(alert.id),
+                            scope_name: Some(scope_str.clone()),
+                            spend_minor: Some(total_spend.amount_minor),
+                            currency: Some(total_spend.currency.to_string()),
+                            cap_minor: Some(cap.amount.amount_minor),
+                            period: Some(cap.period),
+                            action_taken: Some(action_taken_desc.to_string()),
+                            condition: Some(condition),
                         }],
                     )
                     .await?;
@@ -444,47 +446,6 @@ impl ThresholdEvaluator {
                     .budget_threshold_alerts_total()
                     .with_label_values(&[scope_metric_label, "100"])
                     .inc();
-
-                // Dispatch notification based on condition
-                match condition {
-                    AlertCondition::StaleDataWarning => {
-                        let _ = self
-                            .notifier
-                            .notify_stale_warning(
-                                tenant_id,
-                                &scope_str,
-                                freshness.lag_hours.unwrap_or(0.0),
-                            )
-                            .await;
-                    }
-                    AlertCondition::ProvisionalWarning => {
-                        let _ = self
-                            .notifier
-                            .notify_provisional_warning(
-                                tenant_id,
-                                &scope_str,
-                                &total_spend,
-                                &cap.amount,
-                                &spend_details.provisional_lower_bound,
-                                cap.period,
-                            )
-                            .await;
-                    }
-                    AlertCondition::SettledBreach | AlertCondition::ProvisionalLowerBoundBreach => {
-                        let _ = self
-                            .notifier
-                            .notify_cap_breached(
-                                tenant_id,
-                                &scope_str,
-                                &total_spend,
-                                &cap.amount,
-                                cap.period,
-                                action_taken_desc,
-                            )
-                            .await;
-                    }
-                    _ => {}
-                }
             } else {
                 // Duplicate: alert already on record. Commit the read transaction but skip the
                 // alert record and notification. The auto-pause was still executed above if warranted.
@@ -620,7 +581,6 @@ pub struct SpendAnomalyDetector {
     campaigns: Arc<dyn CampaignRepository>,
     events: Arc<dyn EventPublisher>,
     ids: Arc<dyn IdGenerator>,
-    notifier: Arc<dyn BudgetNotifier>,
     restatement_days: i64,
 }
 
@@ -633,7 +593,6 @@ impl SpendAnomalyDetector {
         campaigns: Arc<dyn CampaignRepository>,
         events: Arc<dyn EventPublisher>,
         ids: Arc<dyn IdGenerator>,
-        notifier: Arc<dyn BudgetNotifier>,
         restatement_days: i64,
     ) -> Self {
         Self {
@@ -643,7 +602,6 @@ impl SpendAnomalyDetector {
             campaigns,
             events,
             ids,
-            notifier,
             restatement_days,
         }
     }
@@ -731,7 +689,6 @@ impl SpendAnomalyDetector {
                     if anomalous {
                         let currency = &today_spend_row.currency;
                         let current_money = Money::new(today_spend, currency)?;
-                        let mean_money = Money::new(mean.round() as i64, currency)?;
                         let scope_name = format!("campaign {}", camp.id);
 
                         tracing::warn!(
@@ -791,6 +748,14 @@ impl SpendAnomalyDetector {
                                     &[AdEvent::SpendThresholdReached {
                                         campaign_id: Some(camp.id),
                                         threshold: 100,
+                                        alert_id: Some(alert.id),
+                                        scope_name: Some(scope_name.clone()),
+                                        spend_minor: Some(current_money.amount_minor),
+                                        currency: Some(current_money.currency.to_string()),
+                                        cap_minor: Some(0),
+                                        period: None,
+                                        action_taken: None,
+                                        condition: Some(AlertCondition::SpendAnomaly),
                                     }],
                                 )
                                 .await?;
@@ -798,17 +763,6 @@ impl SpendAnomalyDetector {
                                 .commit()
                                 .await
                                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
-
-                            let _ = self
-                                .notifier
-                                .notify_spend_anomaly(
-                                    tenant_id,
-                                    &scope_name,
-                                    &current_money,
-                                    &mean_money,
-                                    sigma_multiple,
-                                )
-                                .await;
                         } else {
                             alert_scope
                                 .commit()

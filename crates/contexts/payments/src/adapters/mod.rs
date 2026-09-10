@@ -7,6 +7,7 @@ pub mod events;
 pub mod fake_provider;
 pub mod http;
 pub mod metrics;
+pub mod notification_intent;
 pub mod notify;
 pub mod privacy_provider;
 pub mod repos;
@@ -17,7 +18,8 @@ pub mod throttle;
 pub use events::{OutboxEventPublisher, SystemIdGenerator};
 pub use fake_provider::{FAKE_WEBHOOK_SECRET, FakeProvider, FakeScript};
 pub use metrics::PaymentsMetrics;
-pub use notify::{DenyAllVerifier, LoggingConnectionNotifier};
+pub use notification_intent::notification_intent;
+pub use notify::DenyAllVerifier;
 pub use privacy_provider::PaymentsPrivacyProvider;
 pub use repos::{
     SqlxCheckoutRepository, SqlxDisputeRepository, SqlxPaymentRepository, SqlxPayoutRepository,

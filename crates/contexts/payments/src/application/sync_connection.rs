@@ -18,7 +18,7 @@ use crate::application::ProviderRegistry;
 use crate::application::lifecycle::{AppliedTransition, apply_account_snapshot};
 use crate::domain::error::PaymentsError;
 use crate::domain::events::EventPublisher;
-use crate::domain::ports::{ConnectionLifecycleStore, ConnectionNotifier};
+use crate::domain::ports::ConnectionLifecycleStore;
 use sanvi_persistence::TxManager;
 
 const ACTOR: &str = "payments-reconciler";
@@ -40,7 +40,6 @@ pub struct SyncConnections {
     connections: Arc<dyn ConnectionLifecycleStore>,
     registry: Arc<ProviderRegistry>,
     events: Arc<dyn EventPublisher>,
-    notifier: Arc<dyn ConnectionNotifier>,
     /// Sync connections whose last observation is older than this.
     stale_after: Duration,
     metrics: Option<PaymentsMetrics>,
@@ -52,7 +51,6 @@ impl SyncConnections {
         connections: Arc<dyn ConnectionLifecycleStore>,
         registry: Arc<ProviderRegistry>,
         events: Arc<dyn EventPublisher>,
-        notifier: Arc<dyn ConnectionNotifier>,
         stale_after: Duration,
     ) -> Self {
         Self {
@@ -60,7 +58,6 @@ impl SyncConnections {
             connections,
             registry,
             events,
-            notifier,
             stale_after,
             metrics: None,
         }
@@ -155,7 +152,6 @@ impl SyncConnections {
         let outcome = apply_account_snapshot(
             self.connections.as_ref(),
             self.events.as_ref(),
-            self.notifier.as_ref(),
             &mut scope,
             connection,
             snapshot,

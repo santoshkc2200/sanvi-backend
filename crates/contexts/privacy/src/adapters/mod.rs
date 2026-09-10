@@ -7,6 +7,7 @@ pub mod events;
 pub mod gpc;
 pub mod http;
 pub mod misc;
+pub mod notification_intent;
 pub mod packager;
 pub mod providers;
 pub mod repos;
@@ -18,6 +19,7 @@ pub use misc::{
     LoggingNotifications, LoggingSubProcessorNotifier, RuleBasedObligationCalculator, Sha256Hasher,
     SystemClock, SystemIdGenerator,
 };
+pub use notification_intent::notification_intent;
 pub use packager::{ZipPackager, archive_sha256};
 pub use providers::{PrivacyContextProvider, anonymised_subject_ref, is_pseudonym, pseudonym};
 pub use repos::{

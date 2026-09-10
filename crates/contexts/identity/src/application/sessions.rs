@@ -58,6 +58,7 @@ pub struct RevokeSession {
     kratos: Arc<dyn KratosClient>,
     users: Arc<dyn UserRepository>,
     events: Arc<dyn EventPublisher>,
+    #[allow(dead_code)]
     notifications: Arc<dyn Notifications>,
     cache: Arc<dyn SessionCache>,
 }
@@ -113,24 +114,15 @@ impl RevokeSession {
             .begin_unscoped("revoke_session", "identity")
             .await
             .map_err(storage)?;
+        let user = self.users.find_by_id(&mut scope, user_id).await?;
+        let email = user.as_ref().map(|u| u.primary_email().clone());
         let events = vec![IdentityEvent::SessionRevoked {
             user_id: Some(user_id),
             session_id: session_id.to_string(),
+            email,
         }];
         self.events.publish(&mut scope, &events).await?;
-        let user = self.users.find_by_id(&mut scope, user_id).await?;
         scope.commit().await.map_err(storage)?;
-
-        if let Some(user) = user {
-            let _ = self
-                .notifications
-                .send_security_notice(
-                    user.primary_email(),
-                    "session_revoked",
-                    "a session was revoked from the account",
-                )
-                .await;
-        }
         Ok(())
     }
 }

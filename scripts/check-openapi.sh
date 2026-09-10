@@ -26,10 +26,21 @@ else
     hash_stream() { cksum | awk '{print $1}'; }
 fi
 
+# `git ls-files --cached` lists index entries, so a file deleted in the working
+# tree but not yet staged is still named here and the hash step then fails on a
+# path that no longer exists. Drop those: an unstaged deletion is an ordinary
+# working-tree state, not a reason for the gate to error out.
+keep_existing() {
+    while IFS= read -r -d '' path; do
+        [[ -e "$path" ]] && printf '%s\0' "$path"
+    done
+    return 0
+}
+
 calc_code_hash() {
     local roots=(apps crates Cargo.toml Cargo.lock migrations .sqlx)
     if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git ls-files -z --cached --others --exclude-standard -- "${roots[@]}" | LC_ALL=C sort -z | hash_files | hash_stream
+        git ls-files -z --cached --others --exclude-standard -- "${roots[@]}" | keep_existing | LC_ALL=C sort -z | hash_files | hash_stream
     else
         local existing_roots=()
         for root in "${roots[@]}"; do

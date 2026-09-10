@@ -22,9 +22,9 @@ use utoipa::ToSchema;
 use crate::application::{entitlements_sync::sync_action, storage};
 use crate::domain::{
     BillingError, Clock, EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRef,
-    InvoiceRepository, InvoiceStatus, Notifications, PlanEntitlementRepository,
-    PlanPriceRepository, PlanRepository, StripeClient, StripeInvoiceData, StripeSubscriptionData,
-    Subscription, SubscriptionRepository, SubscriptionSource, SubscriptionStatus, TenantLifecycle,
+    InvoiceRepository, InvoiceStatus, PlanEntitlementRepository, PlanPriceRepository,
+    PlanRepository, StripeClient, StripeInvoiceData, StripeSubscriptionData, Subscription,
+    SubscriptionRepository, SubscriptionSource, SubscriptionStatus, TenantLifecycle,
     WebhookEventRecord, WebhookEventRepository,
 };
 
@@ -388,7 +388,6 @@ pub struct WebhookDispatcher {
     grants_repo: Arc<dyn PlanEntitlementRepository>,
     syncer: Arc<dyn EntitlementSyncer>,
     lifecycle: Arc<dyn TenantLifecycle>,
-    notifications: Arc<dyn Notifications>,
     events: Arc<dyn EventPublisher>,
     stripe: Arc<dyn StripeClient>,
     ids: Arc<dyn IdGenerator>,
@@ -408,7 +407,6 @@ impl WebhookDispatcher {
         grants_repo: Arc<dyn PlanEntitlementRepository>,
         syncer: Arc<dyn EntitlementSyncer>,
         lifecycle: Arc<dyn TenantLifecycle>,
-        notifications: Arc<dyn Notifications>,
         events: Arc<dyn EventPublisher>,
         stripe: Arc<dyn StripeClient>,
         ids: Arc<dyn IdGenerator>,
@@ -424,7 +422,6 @@ impl WebhookDispatcher {
             grants_repo,
             syncer,
             lifecycle,
-            notifications,
             events,
             stripe,
             ids,
@@ -887,7 +884,6 @@ impl WebhookDispatcher {
                 &[crate::domain::BillingEvent::SubscriptionCanceled { tenant_id }],
             )
             .await?;
-        self.notifications.subscription_canceled(tenant_id).await?;
         Ok(ApplyOutcome::Applied)
     }
 
@@ -921,14 +917,16 @@ impl WebhookDispatcher {
             self.events
                 .publish(
                     scope,
-                    &[crate::domain::BillingEvent::InvoicePaid {
-                        tenant_id,
-                        number: data.number.clone(),
-                        total_minor: data.total_minor,
-                    }],
+                    &[
+                        crate::domain::BillingEvent::InvoicePaid {
+                            tenant_id,
+                            number: data.number.clone(),
+                            total_minor: data.total_minor,
+                        },
+                        crate::domain::BillingEvent::SubscriptionRestored { tenant_id },
+                    ],
                 )
                 .await?;
-            self.notifications.subscription_restored(tenant_id).await?;
         }
         subscription.record_invoice_event(event_created, self.clock.now());
         self.subscriptions.save(scope, &subscription).await?;
@@ -972,9 +970,6 @@ impl WebhookDispatcher {
         }
         self.subscriptions.save(scope, &subscription).await?;
         self.events.publish(scope, &events_to_publish).await?;
-        self.notifications
-            .payment_failed(existing.tenant_id())
-            .await?;
         Ok(ApplyOutcome::Applied)
     }
 

@@ -67,6 +67,7 @@ pub struct InviteMember {
     clock: Arc<dyn Clock>,
     ttl_days: i64,
     protected_role_key: String,
+    app_base_url: String,
 }
 
 impl InviteMember {
@@ -81,6 +82,7 @@ impl InviteMember {
         ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
         ttl_days: i64,
+        app_base_url: impl Into<String>,
     ) -> Self {
         Self {
             tx_manager,
@@ -93,6 +95,7 @@ impl InviteMember {
             clock,
             ttl_days,
             protected_role_key: "tenant_owner".to_string(),
+            app_base_url: app_base_url.into(),
         }
     }
 
@@ -150,10 +153,14 @@ impl InviteMember {
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;
 
-        let invite_url = format!("https://invalid.local/invitations/{}", token.as_str());
+        let invite_url = format!(
+            "{}/invitations/{}",
+            self.app_base_url.trim_end_matches('/'),
+            token.as_str()
+        );
         let _ = self
             .notifications
-            .send_invitation(tenant_id, &email, "tenant", &invite_url)
+            .send_invitation(tenant_id, invitation.id(), &email, "tenant", &invite_url)
             .await;
         info!(tenant_id = %tenant_id, email = %email, "invitation sent");
         Ok((
@@ -316,6 +323,7 @@ pub struct ResendInvitation {
     notifications: Arc<dyn Notifications>,
     clock: Arc<dyn Clock>,
     ttl_days: i64,
+    app_base_url: String,
 }
 
 impl ResendInvitation {
@@ -326,6 +334,7 @@ impl ResendInvitation {
         notifications: Arc<dyn Notifications>,
         clock: Arc<dyn Clock>,
         ttl_days: i64,
+        app_base_url: impl Into<String>,
     ) -> Self {
         Self {
             tx_manager,
@@ -334,6 +343,7 @@ impl ResendInvitation {
             notifications,
             clock,
             ttl_days,
+            app_base_url: app_base_url.into(),
         }
     }
 
@@ -365,10 +375,20 @@ impl ResendInvitation {
         self.events.publish_scoped(&mut scope, &events).await?;
         scope.commit().await.map_err(storage)?;
 
-        let invite_url = format!("https://invalid.local/invitations/{}", token.as_str());
+        let invite_url = format!(
+            "{}/invitations/{}",
+            self.app_base_url.trim_end_matches('/'),
+            token.as_str()
+        );
         let _ = self
             .notifications
-            .send_invitation(tenant_id, invitation.email(), "tenant", &invite_url)
+            .send_invitation(
+                tenant_id,
+                invitation.id(),
+                invitation.email(),
+                "tenant",
+                &invite_url,
+            )
             .await;
         Ok(InvitationView {
             invitation_id: invitation.id().to_string(),

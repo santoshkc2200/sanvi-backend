@@ -10,7 +10,7 @@ pub mod dns_provider;
 pub mod events;
 pub mod http;
 pub mod metrics;
-pub mod notifications;
+pub mod notification_intent;
 pub mod privacy_provider;
 pub mod prober;
 pub mod registrar;
@@ -24,7 +24,7 @@ pub use dns_checker::DohDnsVerifier;
 pub use dns_provider::SqlxDnsProvider;
 pub use events::{OutboxEventPublisher, SystemClock, domains_event_handler};
 pub use metrics::DomainsMetrics;
-pub use notifications::LogNotifications;
+pub use notification_intent::notification_intent;
 pub use prober::HttpProbeAdapter;
 pub use registrar::SandboxRegistrar;
 pub use repos::{

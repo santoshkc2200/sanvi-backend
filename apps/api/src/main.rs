@@ -157,6 +157,20 @@ async fn main() -> ExitCode {
         ))
     });
 
+    // Delivery for the two credential-bearing (Lane B) senders: invitations
+    // and DSR verification/export mail. Everything else is delivered by the
+    // worker's outbox consumers. An empty base_url leaves this `None` and
+    // those adapters fall back to logging.
+    let notification_gateway: Option<Arc<dyn sanvi_notifications::NotificationGatewayPort>> =
+        if config.features.notifications && !config.notification.base_url.is_empty() {
+            Some(Arc::new(sanvi_notifications::HttpNotificationGateway::new(
+                config.notification.clone(),
+            )))
+        } else {
+            tracing::info!("notification service not configured; Lane B mail is logged only");
+            None
+        };
+
     // The role catalog bridges identity → access in-process; it needs only
     // a TxManager and the role repository, so there is no wiring cycle.
     let catalog_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
@@ -187,6 +201,7 @@ async fn main() -> ExitCode {
             role_catalog,
             tenant_catalog,
             notification_localizer: notification_localizer.clone(),
+            notification_gateway: notification_gateway.clone(),
         },
     );
 
@@ -367,6 +382,7 @@ async fn main() -> ExitCode {
                 sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
             ),
             Arc::new(sanvi_media::adapters::MediaPrivacyProvider::new()),
+            Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
         ];
         Some(build_privacy_state(
             pool.clone(),
@@ -375,6 +391,7 @@ async fn main() -> ExitCode {
             privacy_providers,
             audit.writer.clone(),
             notification_localizer.clone(),
+            notification_gateway.clone(),
         ))
     } else {
         None

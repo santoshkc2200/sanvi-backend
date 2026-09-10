@@ -25,8 +25,8 @@ pub use order::{DomainOrder, DomainOrderId, DomainOrderTag, OrderStatus, Registr
 pub use ports::{
     CertificateAuthorityPort, CertificateRepository, Clock, CustomDomainRepository, DnsCheckResult,
     DnsProviderPort, DnsRecordRepository, DnsVerifierPort, DomainFeatureGate,
-    DomainOrderRepository, EventPublisher, GuideTranslator, LiveHostRef, Notifications,
-    ProbeResult, PurchaseCharger, StorefrontProbePort, TenantState,
+    DomainOrderRepository, EventPublisher, GuideTranslator, LiveHostRef, ProbeResult,
+    PurchaseCharger, StorefrontProbePort, TenantState,
 };
 pub use records::{DnsRecord, DnsRecordId, DnsRecordTag, DnsRecordType};
 pub use registrar::{

@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use sanvi_kernel::events::EventEnvelope;
 
-use crate::domain::model::{CampaignId, ConnectionId, ConversionId};
+use crate::domain::model::{
+    AlertCondition, BudgetAlertId, BudgetPeriod, CampaignId, ConnectionId, ConversionId,
+};
 
 /// Event names registered for the shared transactional outbox.
 pub const EVENT_TYPES: &[&str] = &[
@@ -60,6 +62,22 @@ pub enum AdEvent {
         campaign_id: Option<CampaignId>,
         #[serde(default)]
         threshold: u32,
+        #[serde(default)]
+        alert_id: Option<BudgetAlertId>,
+        #[serde(default)]
+        scope_name: Option<String>,
+        #[serde(default)]
+        spend_minor: Option<i64>,
+        #[serde(default)]
+        currency: Option<String>,
+        #[serde(default)]
+        cap_minor: Option<i64>,
+        #[serde(default)]
+        period: Option<BudgetPeriod>,
+        #[serde(default)]
+        action_taken: Option<String>,
+        #[serde(default)]
+        condition: Option<AlertCondition>,
     },
     MetricsIngested {
         connection_id: ConnectionId,
@@ -171,6 +189,14 @@ mod tests {
             AdEvent::SpendThresholdReached {
                 campaign_id: Some(id),
                 threshold: 80,
+                alert_id: None,
+                scope_name: Some("test-campaign".to_string()),
+                spend_minor: Some(8000),
+                currency: Some("USD".to_string()),
+                cap_minor: Some(10000),
+                period: Some(BudgetPeriod::Monthly),
+                action_taken: None,
+                condition: Some(AlertCondition::Threshold80),
             },
             AdEvent::MetricsIngested {
                 connection_id: ConnectionId::try_from(1_000_003_i64).unwrap(),

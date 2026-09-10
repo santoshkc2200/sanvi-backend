@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 
 use crate::application::storage;
 use crate::domain::{
-    BillingError, Clock, CollectionState, EntitlementSyncer, EventPublisher, Notifications,
+    BillingError, Clock, CollectionState, EntitlementSyncer, EventPublisher,
     SubscriptionRepository, SubscriptionStatus, TenantLifecycle,
 };
 
@@ -34,7 +34,6 @@ pub struct DunningSweep {
     subscriptions: Arc<dyn SubscriptionRepository>,
     syncer: Arc<dyn EntitlementSyncer>,
     lifecycle: Arc<dyn TenantLifecycle>,
-    notifications: Arc<dyn Notifications>,
     events: Arc<dyn EventPublisher>,
     clock: Arc<dyn Clock>,
     grace_days: u32,
@@ -48,7 +47,6 @@ impl DunningSweep {
         subscriptions: Arc<dyn SubscriptionRepository>,
         syncer: Arc<dyn EntitlementSyncer>,
         lifecycle: Arc<dyn TenantLifecycle>,
-        notifications: Arc<dyn Notifications>,
         events: Arc<dyn EventPublisher>,
         clock: Arc<dyn Clock>,
         grace_days: u32,
@@ -59,7 +57,6 @@ impl DunningSweep {
             subscriptions,
             syncer,
             lifecycle,
-            notifications,
             events,
             clock,
             grace_days,
@@ -146,7 +143,6 @@ impl DunningSweep {
                 warn!(tenant_id = %tenant_id, error = %err, "grace expired but tenant suspension failed; next sweep retries");
                 continue;
             }
-            self.notifications.grace_expired(tenant_id).await?;
             expired += 1;
             info!(tenant_id = %tenant_id, "dunning grace expired; tenant suspended");
         }
@@ -196,9 +192,6 @@ impl DunningSweep {
                     .await?;
                 scope.commit().await.map_err(storage)?;
             }
-            self.notifications
-                .trial_ending(tenant_id, trial_end)
-                .await?;
             notified += 1;
         }
         Ok(notified)
