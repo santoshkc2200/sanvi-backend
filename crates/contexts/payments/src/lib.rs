@@ -1,12 +1,10 @@
-#![allow(warnings)]
 #![allow(
     clippy::too_many_arguments,
     clippy::field_reassign_with_default,
     clippy::collapsible_if,
     clippy::useless_vec,
     clippy::unnecessary_sort_by,
-    clippy::map_identity,
-    clippy::collapsible_if
+    clippy::map_identity
 )]
 //! The `payments` context: tenant payment providers (phase 09).
 //!

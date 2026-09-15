@@ -51,7 +51,7 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     )
     .service(
         web::resource("/payments/connections/{id}")
-            .app_data(PermissionMap::new(vec![(Method::GET, read.clone()), (Method::DELETE, manage)]))
+            .app_data(PermissionMap::new(vec![(Method::GET, read), (Method::DELETE, manage)]))
             .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
             .route(web::get().to(get_payment_connection))
             // 09.7: disconnect — guarded, idempotent, local-only.
@@ -82,7 +82,7 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/payments/tax-settings")
             .app_data(PermissionMap::new(vec![
-                (Method::GET, read.clone()),
+                (Method::GET, read),
                 (Method::PUT, manage),
             ]))
             .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))

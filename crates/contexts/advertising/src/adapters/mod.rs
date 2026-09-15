@@ -20,9 +20,13 @@ pub mod stubs;
 pub mod token_vault;
 pub mod vendor_role;
 
-pub use budget_repo::{SqlxBudgetAlertRepository, SqlxBudgetCapRepository};
+pub use budget_repo::{
+    SqlxBudgetAlertRepository, SqlxBudgetCapRepository, SqlxGuardrailSuspensionLedger,
+};
 pub use events::{OutboxEventPublisher, SystemIdGenerator};
-pub use fx_rate::UnavailableFxRate;
+pub use fx_rate::{
+    EcbFxRate, PersistedFxRates, SqlxFxSnapshotStore, UnavailableFxRate, build_fx_rates,
+};
 pub use google::{GoogleAdsAdapter, GoogleRefreshTokenGrant};
 pub use meta::{MetaAdsAdapter, MetaRefreshTokenGrant};
 pub use metrics::AdvertisingMetrics;

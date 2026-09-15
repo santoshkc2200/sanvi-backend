@@ -38,8 +38,11 @@ fail that test for reasons of resourcing rather than of engineering.
 ## Needs production infrastructure
 
 The repositories currently target local development and `docker-compose`. There
-is no IaC directory, no cloud account referenced anywhere in the tree, no CDN,
-and no managed database.
+is no cloud IaC — no Terraform, no cloud account referenced anywhere in the
+tree, no CDN, and no managed database. What infrastructure code exists is the
+`Dockerfile` and the `docker-compose*.yml` files; the trivy job already scans
+those for vulnerabilities and secrets, and their misconfiguration scanning is
+the parked item below.
 
 | Item | Was | Unblocked by |
 | --- | --- | --- |
@@ -48,7 +51,7 @@ and no managed database.
 | External status probes from outside the perimeter | TASK-025 | A host outside the perimeter. `/health` and `/ready` are built now, because they are the thing a probe would call. |
 | Staged canary rollout with a percentage ramp and automatic halt | TASK-030, FR-1137 | An orchestrator that can route a percentage of traffic. Replaced meanwhile by a rehearsed single-host rolling restart and revert under load. |
 | Provenance attestation on release artifacts | TASK-024 | A release pipeline that produces signed artifacts. The SBOM is generated today and is published with the tag. |
-| IaC scanning | TASK-024, NFR-1108 | Any IaC to scan. |
+| Misconfiguration scanning for the tracked container IaC (`Dockerfile`, `docker-compose*.yml`) | TASK-024, NFR-1108 | Triaging what trivy's misconfig rules flag on the existing files. Their vulnerabilities and secrets are scanned already; only the misconfig ruleset is parked. |
 | CDN image transforms and edge cache configuration | frontend TASK-022 | A CDN. |
 
 ## Needs real traffic

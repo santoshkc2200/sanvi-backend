@@ -82,16 +82,28 @@ per test and per run. A hard-coded key name is shared with every other test
 using it and with every previous run, which shows up as a count assertion
 finding two of something it created one of.
 
-### macOS: the first run after a build is slow
+### macOS prerequisite: enable developer mode before a cold run
 
 On macOS, the first execution of each freshly linked binary is held up while
 Gatekeeper scans it, and the scans serialise: for this workspace's ~50 test
-binaries that is several minutes before the first test runs, with `syspolicyd`
-and `XprotectService` busy and every test process parked in `dyld`. Later runs
-against the same binaries start instantly.
+binaries that is several minutes before the first test runs — measured at
+~15 of a cold run's 16 minutes (`docs/phase-11-hardening-ga/
+test-performance-baseline.md`). Later runs against the same binaries start
+instantly.
 
-Add your terminal to **System Settings → Privacy & Security → Developer
-Tools** to exempt the processes it spawns from that scan.
+Exempt the host before a cold run:
+
+```
+sudo spctl developer-mode enable-terminal
+```
+
+then System Settings → Privacy & Security → **Developer Tools**, enabling the
+terminal, IDE, or agent host you run the suite from. The exemption is per
+parent process, so every new host needs it again.
+
+`scripts/test.sh` detects the missing exemption and prints the fix as a
+warning before the run, so a slow cold run is diagnosable at the host that
+runs it rather than documented only here.
 
 ## Commits & PRs
 

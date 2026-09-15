@@ -127,30 +127,26 @@ paths:
     get:
       operationId: get_budget_alerts
       parameters:
-      - in: path
+      - in: query
         name: campaign_id
-        required: true
+        required: false
         schema:
           examples:
           - '873698342314721281'
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
-      - in: path
+      - in: query
         name: unacknowledged_only
-        required: true
+        required: false
         schema:
-          type:
-          - boolean
-          - 'null'
-      - in: path
+          type: boolean
+      - in: query
         name: limit
-        required: true
+        required: false
         schema:
           format: int64
-          type:
-          - integer
-          - 'null'
+          type: integer
       responses:
         '200':
           content:
@@ -217,6 +213,15 @@ paths:
       - advertising
     put:
       operationId: put_budget_cap
+      parameters:
+      - description: 'Conditional. Required when updating an existing cap — a version-less update is rejected with 409 (`reason: cap_version_required`). Omitting it is valid only for creates (no cap exists yet for this scope and period) and for dry runs. The version is a quoted entity tag (e.g. "17") or the bare integer; `If-Match: *` is not accepted. A stale value returns 409 (`reason: stale_revision`).'
+        in: header
+        name: If-Match
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       requestBody:
         content:
           application/json:
@@ -229,7 +234,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PutBudgetCapResponse'
-          description: Budget cap created or updated, or dry-run simulation result
+          description: Budget cap created or updated (an applied write carries an `ETag` header with the new version), or dry-run simulation result
         '403':
           content:
             application/json:
@@ -241,7 +246,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: New cap is below current period spend and confirmation is required
+          description: 'Cap conflict, distinguished by the problem `reason` member: `cap_version_required` (update without If-Match), `stale_revision` (lost version race), `cap_below_current_spend` (lowering below period spend without confirmation)'
       tags:
       - advertising
   /api/v1/tenant/ads/campaigns:
@@ -759,20 +764,18 @@ paths:
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
-      - in: path
+      - in: query
         name: period
-        required: true
+        required: false
         schema:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/BudgetPeriod'
+          $ref: '#/components/schemas/BudgetPeriod'
       responses:
         '200':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BudgetCap'
-          description: Campaign budget cap
+          description: Campaign budget cap (carries an `ETag` header with the cap version)
         '403':
           content:
             application/json:
@@ -800,6 +803,14 @@ paths:
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
+      - description: 'Conditional. Required when updating an existing cap — a version-less update is rejected with 409 (`reason: cap_version_required`). Omitting it is valid only for creates (no cap exists yet for this scope and period) and for dry runs. The version is a quoted entity tag (e.g. "17") or the bare integer; `If-Match: *` is not accepted. A stale value returns 409 (`reason: stale_revision`).'
+        in: header
+        name: If-Match
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       requestBody:
         content:
           application/json:
@@ -812,7 +823,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PutBudgetCapResponse'
-          description: Campaign budget cap created/updated or dry run result
+          description: Campaign budget cap created/updated (an applied write carries an `ETag` header with the new version) or dry run result
         '403':
           content:
             application/json:
@@ -824,7 +835,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: New cap is below current period spend and confirmation is required
+          description: 'Cap conflict, distinguished by the problem `reason` member: `cap_version_required` (update without If-Match), `stale_revision` (lost version race), `cap_below_current_spend` (lowering below period spend without confirmation)'
       tags:
       - advertising
   /api/v1/tenant/ads/campaigns/{campaign_id}/changes:
@@ -1804,13 +1815,11 @@ paths:
     get:
       operationId: get_spend_status
       parameters:
-      - in: path
+      - in: query
         name: period
-        required: true
+        required: false
         schema:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/BudgetPeriod'
+          $ref: '#/components/schemas/BudgetPeriod'
       responses:
         '200':
           content:

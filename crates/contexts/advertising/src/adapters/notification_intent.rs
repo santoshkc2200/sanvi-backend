@@ -13,6 +13,21 @@ pub fn notification_intent(envelope: &EventEnvelope) -> Option<NotificationInten
         roles: ADVERTISING_ROLES,
     };
 
+    if envelope.event_type.as_str() == "advertising.budget_guardrails_suspended" {
+        let payload = envelope.payload.get("payload").unwrap_or(&envelope.payload);
+        let tenant_name = payload
+            .get("tenant_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        return Some(NotificationIntent {
+            audience,
+            purpose: "budget_guardrails_rollback",
+            subject_key: "emails.budget_guardrails_rollback.subject".to_string(),
+            body_key: "emails.budget_guardrails_rollback.body".to_string(),
+            args: vec![("tenant".to_string(), IntentArg::from(tenant_name))],
+        });
+    }
+
     if envelope.event_type.as_str() != "advertising.spend_threshold_reached" {
         return None;
     }
@@ -285,6 +300,28 @@ mod tests {
         assert_eq!(intent.purpose, "budget_spend_anomaly");
         assert_eq!(intent.subject_key, "emails.budget_spend_anomaly.subject");
         assert_eq!(intent.body_key, "emails.budget_spend_anomaly.body");
+    }
+
+    #[test]
+    fn contract_maps_guardrails_suspended_to_rollback_notice() {
+        let tenant_id = TenantId::from_snowflake(SnowflakeId::try_from(100).unwrap());
+        let event = AdEvent::BudgetGuardrailsSuspended {
+            tenant_name: "acme".to_string(),
+            reason: "feature_disabled".to_string(),
+        };
+        let envelope = test_envelope(event, tenant_id);
+        let intent = notification_intent(&envelope).expect("intent mapped");
+
+        assert_eq!(intent.purpose, "budget_guardrails_rollback");
+        assert_eq!(
+            intent.subject_key,
+            "emails.budget_guardrails_rollback.subject"
+        );
+        assert_eq!(intent.body_key, "emails.budget_guardrails_rollback.body");
+        assert_eq!(
+            intent.args,
+            vec![("tenant".to_string(), IntentArg::from("acme".to_string()))]
+        );
     }
 
     #[test]

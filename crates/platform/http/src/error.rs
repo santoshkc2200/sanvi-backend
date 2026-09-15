@@ -59,6 +59,14 @@ pub enum ApiError {
     #[error("{detail}")]
     Conflict { detail: String },
 
+    /// A conflict carrying a machine-readable `reason`, surfaced as
+    /// `ProblemDetail.reason`, so a client can distinguish conflicts of the
+    /// same status without parsing `detail` — cap version races, for
+    /// example, where missing-precondition and lost-race need different
+    /// recovery. The status and `type` stay the plain conflict class.
+    #[error("{detail}")]
+    ConflictReasoned { detail: String, reason: String },
+
     #[error("resource is gone: {detail}")]
     Gone { detail: String },
 
@@ -89,7 +97,7 @@ impl ApiError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
-            Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::Conflict { .. } | Self::ConflictReasoned { .. } => StatusCode::CONFLICT,
             Self::Gone { .. } => StatusCode::GONE,
             Self::BadGateway { .. } => StatusCode::BAD_GATEWAY,
             Self::TenantSuspended => StatusCode::LOCKED,
@@ -107,7 +115,7 @@ impl ApiError {
             Self::Unauthorized => "unauthorized",
             Self::Forbidden { .. } => "forbidden",
             Self::NotFound { .. } => "not-found",
-            Self::Conflict { .. } => "conflict",
+            Self::Conflict { .. } | Self::ConflictReasoned { .. } => "conflict",
             Self::Gone { .. } => "gone",
             Self::BadGateway { .. } => "bad-gateway",
             Self::TenantSuspended => "tenant-suspended",
@@ -124,7 +132,7 @@ impl ApiError {
             Self::Unauthorized => "Unauthorized",
             Self::Forbidden { .. } => "Forbidden",
             Self::NotFound { .. } => "Not Found",
-            Self::Conflict { .. } => "Conflict",
+            Self::Conflict { .. } | Self::ConflictReasoned { .. } => "Conflict",
             Self::Gone { .. } => "Gone",
             Self::BadGateway { .. } => "Bad Gateway",
             Self::TenantSuspended => "Tenant Suspended",
@@ -143,7 +151,10 @@ impl ApiError {
             detail: self.to_string(),
             instance: None,
             trace_id: None,
-            reason: None,
+            reason: match self {
+                Self::ConflictReasoned { reason, .. } => Some(reason.clone()),
+                _ => None,
+            },
             extensions: None,
         }
     }

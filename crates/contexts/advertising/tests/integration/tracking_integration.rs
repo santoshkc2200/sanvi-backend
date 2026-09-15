@@ -45,7 +45,8 @@ use sanvi_advertising::domain::{
     AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, AudienceId,
     AudienceStatus, AudienceSyncPort, ClickIds, ConnectionId, ConversionEventRepository,
     ConversionId, ConversionSinkPort, Money, OAuthStateManager, PaymentLookup, PaymentLookupPort,
-    PlatformKey, SecretRef, TokenVault, UploadState, VendorRole, VendorRolePort,
+    PlatformKey, SecretRef, TenantTimezoneSource, TokenVault, UploadState, VendorRole,
+    VendorRolePort,
 };
 use sanvi_kernel::TenantId;
 use sanvi_persistence::{DatabaseConfig, ScopedTx, TxManager, build_pool};
@@ -95,6 +96,22 @@ impl FakeDirectiveResolver {
     ) -> Self {
         self.answers.insert(purpose, (state, source));
         self
+    }
+}
+
+/// Fixed tenant timezone for the tracking harness (mirrors the seeded
+/// `Asia/Tokyo` connections).
+#[derive(Debug, Clone, Copy, Default)]
+struct HarnessTimezones;
+
+#[async_trait]
+impl TenantTimezoneSource for HarnessTimezones {
+    async fn timezone(
+        &self,
+        _scope: &mut ScopedTx<'_>,
+        _tenant_id: TenantId,
+    ) -> Result<String, AdvertisingError> {
+        Ok("Asia/Tokyo".to_string())
     }
 }
 
@@ -1180,6 +1197,7 @@ fn create_test_advertising_state(
                 campaign_repo.clone(),
                 connections.clone(),
                 Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new()),
+                Arc::new(HarnessTimezones),
                 7,
             ));
             let pause = Arc::new(sanvi_advertising::application::PauseCampaign::new(
@@ -1195,7 +1213,6 @@ fn create_test_advertising_state(
                 caps_repo.clone(),
                 Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new()),
                 campaign_repo.clone(),
-                connections.clone(),
                 pause,
                 status_service.clone(),
                 events.clone(),
@@ -1233,6 +1250,7 @@ fn create_test_advertising_state(
             campaign_repo.clone(),
             connections.clone(),
             Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new()),
+            Arc::new(HarnessTimezones),
             7,
         )),
         get_platform_ads_health: Arc::new(

@@ -126,6 +126,14 @@ id-policy:
 id-policy-self-test:
     ./scripts/check-id-policy.sh --self-test
 
+# Every member that ships tests/ is run by a job in pr.yml, proven by a
+# self-test that drops one and expects failure. TASK-031.
+ci-test-coverage:
+    ./scripts/check-ci-test-coverage.sh
+
+ci-test-coverage-self-test:
+    ./scripts/check-ci-test-coverage.sh --self-test
+
 # `just test` and `just test-quiet` need nothing from this recipe -- they run
 # the same script themselves and eval its output in their own shell.
 #
@@ -213,7 +221,7 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants ads-invariants id-policy test openapi i18n
+ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test openapi i18n
 
 # `ci` with the low-noise variants of the two chattiest gates.
-ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy test-quiet openapi i18n
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi i18n

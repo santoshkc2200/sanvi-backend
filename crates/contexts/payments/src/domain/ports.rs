@@ -14,14 +14,12 @@ use sanvi_persistence::{PlatformScope, ScopedTx};
 use super::capability::{CapabilitySet, RequirementSummary};
 use super::checkout::{Checkout, CheckoutId};
 use super::connection::{ConnectionId, ProviderConnection};
-use super::dispute::{DisputeId, DisputeRecord, DisputeStatus};
+use super::dispute::DisputeId;
 use super::error::PaymentsError;
 use super::fees::FeeConfiguration;
 use super::money::{Currency, Money};
-use super::payment::{
-    PaymentId, PaymentRecord, PaymentStatus, RefundId, RefundRecord, RefundStatus,
-};
-use super::payout::{PayoutId, PayoutRecord};
+use super::payment::{PaymentId, RefundId, RefundRecord, RefundStatus};
+use super::payout::PayoutId;
 use super::provider::{ConnectionStatus, CountryCode, ProviderKind};
 
 /// Generator for payments entity identifiers.
@@ -493,10 +491,6 @@ pub trait ConnectionLifecycleStore: Send + Sync {
         scope: &mut PlatformScope<'_>,
     ) -> Result<Vec<(String, i64)>, PaymentsError>;
 }
-
-/// Tenant-admin notifications on connection-lifecycle changes, through the
-/// phase-05/06 notification path (locale-resolved rendering in the worker;
-/// a logging implementation everywhere else). Failures are logged by the
 
 // ---------------------------------------------------------------------------
 // 09.4: checkout persistence, the phase-08 domain allow-list and the

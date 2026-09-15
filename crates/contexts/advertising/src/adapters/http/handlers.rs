@@ -277,9 +277,14 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
         AdvertisingError::BudgetAlertNotFound => ApiError::NotFound {
             resource: "budget_alert".to_string(),
         },
-        AdvertisingError::CapBelowCurrentSpend => ApiError::Conflict {
+        AdvertisingError::CapBelowCurrentSpend => ApiError::ConflictReasoned {
             detail: "new budget cap is below current period spend and requires confirmation"
                 .to_string(),
+            reason: "cap_below_current_spend".to_string(),
+        },
+        AdvertisingError::CapVersionRequired => ApiError::ConflictReasoned {
+            detail: "updating an existing budget cap requires an If-Match header carrying the cap's current version; omit If-Match only when creating a cap where none exists".to_string(),
+            reason: "cap_version_required".to_string(),
         },
         // Normally intercepted by `campaign_validation_problem` so the
         // response carries field-addressed violations; the bare mapping
@@ -309,6 +314,24 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
                 detail: "advertising service temporarily unavailable".to_string(),
             }
         }
+    }
+}
+
+/// Error mapping for the budget-cap write endpoints. The generic
+/// [`api_error`] renders a lost `StaleRevision` race as campaign drift, but
+/// a client that lost a cap-write race must be told to reload the cap, not
+/// to resolve campaign drift — so the cap paths re-map that one variant (the
+/// other two cap rejections carry their stable `error_kind()` as the
+/// problem's machine-readable `reason` from the generic map already, which
+/// is what lets a client tell missing-precondition, lost-race, and
+/// below-current-spend apart without parsing `detail`).
+pub(super) fn cap_api_error(error: AdvertisingError) -> ApiError {
+    match error {
+        AdvertisingError::StaleRevision => ApiError::ConflictReasoned {
+            detail: "budget cap changed since it was read; reload the cap and retry with the current version".to_string(),
+            reason: "stale_revision".to_string(),
+        },
+        other => api_error(other),
     }
 }
 
@@ -2456,7 +2479,7 @@ pub struct PutBudgetCapRequest {
 }
 
 impl PutBudgetCapRequest {
-    pub fn into_command(self) -> PutBudgetCapCommand {
+    pub fn into_command(self, expected_version: Option<i64>) -> PutBudgetCapCommand {
         PutBudgetCapCommand {
             period: self.period,
             amount: self.amount,
@@ -2466,16 +2489,70 @@ impl PutBudgetCapRequest {
             auto_resume_on_rollover: self.auto_resume_on_rollover.unwrap_or(false),
             confirm_below_current_spend: self.confirm_below_current_spend.unwrap_or(false),
             dry_run: self.dry_run.unwrap_or(false),
+            expected_version,
         }
     }
 }
 
+/// Optimistic-locking guard for budget-cap writes. The header stays optional
+/// because creates and dry runs may omit `If-Match`, but updating an
+/// existing cap without it is rejected (`CapVersionRequired` → 409, enforced
+/// in `PutBudgetCap`); a stale version surfaces as 409 via `StaleRevision`.
+/// The version is read in RFC 7232 entity-tag form — `If-Match: "17"` — or
+/// as the bare integer earlier clients sent; both reach the use case as
+/// `17`. `If-Match: *` is refused with a 400: this endpoint creates or
+/// updates, so "any existing entity" cannot say which, and a blind
+/// create-over-update is exactly what the precondition exists to prevent.
+fn optional_if_match_version(req: &HttpRequest) -> Result<Option<i64>, ApiError> {
+    let raw = req
+        .headers()
+        .get("If-Match")
+        .and_then(|value| value.to_str().ok());
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw == "*" {
+        return Err(ApiError::BadRequest {
+            detail: "If-Match: * is not supported for budget caps; send the version you read, as a quoted entity tag (e.g. \"17\")".to_string(),
+        });
+    }
+    let bad = || {
+        ApiError::BadRequest {
+        detail: "If-Match must be the cap's version as a quoted entity tag (e.g. \"17\") or a bare integer".to_string(),
+    }
+    };
+    let version = if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    };
+    version.parse().map(Some).map_err(|_| bad())
+}
+
+/// A cap write that applied carries the new version as a strong ETag, so the
+/// client has the exact value to echo in the next write's `If-Match`. Dry
+/// runs changed nothing and carry none.
+fn cap_response(result: PutBudgetCapResponse) -> Result<HttpResponse, ApiError> {
+    match &result {
+        PutBudgetCapResponse::Applied(cap) => Ok(HttpResponse::Ok()
+            .insert_header((
+                actix_web::http::header::ETAG,
+                format!("\"{}\"", cap.version),
+            ))
+            .json(result)),
+        PutBudgetCapResponse::DryRun(_) => Ok(HttpResponse::Ok().json(result)),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct GetCampaignBudgetCapQuery {
     pub period: Option<BudgetPeriod>,
 }
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListBudgetAlertsQuery {
     #[param(value_type = Option<String>)]
     pub campaign_id: Option<CampaignId>,
@@ -2484,6 +2561,7 @@ pub struct ListBudgetAlertsQuery {
 }
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct SpendStatusQuery {
     pub period: Option<BudgetPeriod>,
 }
@@ -2502,6 +2580,7 @@ pub async fn get_budget_caps(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     _permission: RequiredPermission,
+    _feature: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let caps = state
         .get_budget_caps
@@ -2516,25 +2595,35 @@ pub async fn get_budget_caps(
     path = "/api/v1/tenant/ads/budget-caps",
     tag = "advertising",
     operation_id = "put_budget_cap",
+    params(
+        ("If-Match" = Option<String>, Header, description = "Conditional. Required when updating an existing cap — a version-less update is rejected with 409 (`reason: cap_version_required`). Omitting it is valid only for creates (no cap exists yet for this scope and period) and for dry runs. The version is a quoted entity tag (e.g. \"17\") or the bare integer; `If-Match: *` is not accepted. A stale value returns 409 (`reason: stale_revision`).")
+    ),
     request_body = PutBudgetCapRequest,
     responses(
-        (status = 200, description = "Budget cap created or updated, or dry-run simulation result", body = PutBudgetCapResponse),
+        (status = 200, description = "Budget cap created or updated (an applied write carries an `ETag` header with the new version), or dry-run simulation result", body = PutBudgetCapResponse),
         (status = 403, description = "Missing advertising.budget.manage permission", body = ProblemDetail),
-        (status = 409, description = "New cap is below current period spend and confirmation is required", body = ProblemDetail)
+        (status = 409, description = "Cap conflict, distinguished by the problem `reason` member: `cap_version_required` (update without If-Match), `stale_revision` (lost version race), `cap_below_current_spend` (lowering below period spend without confirmation)", body = ProblemDetail)
     )
 )]
 pub async fn put_budget_cap(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     _permission: RequiredPermission,
+    _feature: RequiredAnyFeature,
+    req: HttpRequest,
     body: web::Json<PutBudgetCapRequest>,
 ) -> Result<HttpResponse, ApiError> {
+    let expected_version = optional_if_match_version(&req)?;
     let result = state
         .put_budget_cap
-        .execute(tenant.0.tenant_id, None, body.into_inner().into_command())
+        .execute(
+            tenant.0.tenant_id,
+            None,
+            body.into_inner().into_command(expected_version),
+        )
         .await
-        .map_err(api_error)?;
-    Ok(HttpResponse::Ok().json(result))
+        .map_err(cap_api_error)?;
+    cap_response(result)
 }
 
 #[utoipa::path(
@@ -2547,7 +2636,7 @@ pub async fn put_budget_cap(
         GetCampaignBudgetCapQuery
     ),
     responses(
-        (status = 200, description = "Campaign budget cap", body = BudgetCap),
+        (status = 200, description = "Campaign budget cap (carries an `ETag` header with the cap version)", body = BudgetCap),
         (status = 404, description = "No budget cap found for this campaign and period", body = ProblemDetail),
         (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
     )
@@ -2558,6 +2647,7 @@ pub async fn get_campaign_budget_cap(
     path: web::Path<CampaignId>,
     query: web::Query<GetCampaignBudgetCapQuery>,
     _permission: RequiredPermission,
+    _feature: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let campaign_id = path.into_inner();
     let period = query.period.unwrap_or(BudgetPeriod::Monthly);
@@ -2566,7 +2656,12 @@ pub async fn get_campaign_budget_cap(
         .execute(tenant.0.tenant_id, campaign_id, period)
         .await
         .map_err(api_error)?;
-    Ok(HttpResponse::Ok().json(cap))
+    Ok(HttpResponse::Ok()
+        .insert_header((
+            actix_web::http::header::ETAG,
+            format!("\"{}\"", cap.version),
+        ))
+        .json(cap))
 }
 
 #[utoipa::path(
@@ -2575,13 +2670,14 @@ pub async fn get_campaign_budget_cap(
     tag = "advertising",
     operation_id = "put_campaign_budget_cap",
     params(
-        ("campaign_id" = String, Path, description = "Target campaign ID")
+        ("campaign_id" = String, Path, description = "Target campaign ID"),
+        ("If-Match" = Option<String>, Header, description = "Conditional. Required when updating an existing cap — a version-less update is rejected with 409 (`reason: cap_version_required`). Omitting it is valid only for creates (no cap exists yet for this scope and period) and for dry runs. The version is a quoted entity tag (e.g. \"17\") or the bare integer; `If-Match: *` is not accepted. A stale value returns 409 (`reason: stale_revision`).")
     ),
     request_body = PutBudgetCapRequest,
     responses(
-        (status = 200, description = "Campaign budget cap created/updated or dry run result", body = PutBudgetCapResponse),
+        (status = 200, description = "Campaign budget cap created/updated (an applied write carries an `ETag` header with the new version) or dry run result", body = PutBudgetCapResponse),
         (status = 403, description = "Missing advertising.budget.manage permission", body = ProblemDetail),
-        (status = 409, description = "New cap is below current period spend and confirmation is required", body = ProblemDetail)
+        (status = 409, description = "Cap conflict, distinguished by the problem `reason` member: `cap_version_required` (update without If-Match), `stale_revision` (lost version race), `cap_below_current_spend` (lowering below period spend without confirmation)", body = ProblemDetail)
     )
 )]
 pub async fn put_campaign_budget_cap(
@@ -2589,19 +2685,22 @@ pub async fn put_campaign_budget_cap(
     tenant: CurrentTenant,
     path: web::Path<CampaignId>,
     _permission: RequiredPermission,
+    _feature: RequiredAnyFeature,
+    req: HttpRequest,
     body: web::Json<PutBudgetCapRequest>,
 ) -> Result<HttpResponse, ApiError> {
     let campaign_id = path.into_inner();
+    let expected_version = optional_if_match_version(&req)?;
     let result = state
         .put_budget_cap
         .execute(
             tenant.0.tenant_id,
             Some(campaign_id),
-            body.into_inner().into_command(),
+            body.into_inner().into_command(expected_version),
         )
         .await
-        .map_err(api_error)?;
-    Ok(HttpResponse::Ok().json(result))
+        .map_err(cap_api_error)?;
+    cap_response(result)
 }
 
 #[utoipa::path(
@@ -2622,6 +2721,7 @@ pub async fn get_budget_alerts(
     tenant: CurrentTenant,
     query: web::Query<ListBudgetAlertsQuery>,
     _permission: RequiredPermission,
+    _feature: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let alerts = state
         .list_budget_alerts
@@ -2656,6 +2756,7 @@ pub async fn acknowledge_budget_alert(
     subject: CurrentSubject,
     path: web::Path<BudgetAlertId>,
     _permission: RequiredPermission,
+    _feature: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let alert_id = path.into_inner();
     let user_id = subject.0.user_id;
@@ -2685,6 +2786,7 @@ pub async fn get_spend_status(
     tenant: CurrentTenant,
     query: web::Query<SpendStatusQuery>,
     _permission: RequiredPermission,
+    _feature: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
     let report = state
         .get_spend_status
@@ -2714,4 +2816,73 @@ pub async fn get_platform_ads_health(
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(report))
+}
+
+/// The four `If-Match` shapes the budget-cap writes accept or refuse — the
+/// only tests driving the header anywhere in the repo, so each branch of
+/// [`optional_if_match_version`] is pinned here.
+#[cfg(test)]
+mod if_match_tests {
+    use super::*;
+    use actix_web::http::header::IF_MATCH;
+    use actix_web::test::TestRequest;
+
+    fn request_with_if_match(value: &str) -> HttpRequest {
+        TestRequest::default()
+            .insert_header((IF_MATCH, value))
+            .to_http_request()
+    }
+
+    #[test]
+    fn a_missing_header_is_none() {
+        let req = TestRequest::default().to_http_request();
+        assert_eq!(optional_if_match_version(&req).unwrap(), None);
+    }
+
+    #[test]
+    fn a_quoted_entity_tag_yields_the_version() {
+        let req = request_with_if_match("\"17\"");
+        assert_eq!(optional_if_match_version(&req).unwrap(), Some(17));
+    }
+
+    #[test]
+    fn a_bare_integer_yields_the_version() {
+        let req = request_with_if_match("17");
+        assert_eq!(optional_if_match_version(&req).unwrap(), Some(17));
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_trimmed() {
+        let req = request_with_if_match(" \"17\" ");
+        assert_eq!(optional_if_match_version(&req).unwrap(), Some(17));
+    }
+
+    #[test]
+    fn the_wildcard_is_refused_as_a_bad_request() {
+        let req = request_with_if_match("*");
+        match optional_if_match_version(&req) {
+            Err(ApiError::BadRequest { detail }) => {
+                assert!(detail.contains("not supported"), "detail: {detail}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_non_numeric_entity_tag_is_refused() {
+        let req = request_with_if_match("\"abc\"");
+        assert_eq!(
+            optional_if_match_version(&req).unwrap_err().status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn an_empty_entity_tag_is_refused() {
+        let req = request_with_if_match("\"\"");
+        assert!(matches!(
+            optional_if_match_version(&req),
+            Err(ApiError::BadRequest { .. })
+        ));
+    }
 }

@@ -141,6 +141,7 @@ mod tests {
     use super::*;
 
     fn temp_root() -> PathBuf {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir — uuid-unique test fixture, not a security operation
         std::env::temp_dir().join(format!("sanvi-theming-test-{}", uuid::Uuid::now_v7()))
     }
 

@@ -446,7 +446,7 @@ impl IssueRefund {
         command: &RefundCommand,
         payment: &crate::domain::PaymentRecord,
         connection: &crate::domain::ProviderConnection,
-        mut refund: RefundRecord,
+        refund: RefundRecord,
     ) -> Result<RefundRecord, PaymentsError> {
         let external_refund_id = refund
             .external_refund_id
@@ -599,7 +599,7 @@ impl IssueRefund {
 /// resolved to when the key was first spent.
 fn payload_matches(existing: &RefundRecord, requested: &Option<Money>, reason: &str) -> bool {
     existing.reason.as_deref() == Some(reason)
-        && requested.as_ref().map_or(true, |m| *m == existing.amount)
+        && requested.as_ref().is_none_or(|m| *m == existing.amount)
 }
 
 #[cfg(test)]

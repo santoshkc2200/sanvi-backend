@@ -119,6 +119,21 @@ impl Money {
             currency,
         })
     }
+
+    /// Minor-unit exponent for an ISO-4217 code: 0 for zero-decimal
+    /// currencies (JPY, KRW, …), 3 for three-decimal ones (BHD, KWD, …), 2
+    /// for everything else. FX rates convert *major* units, so any
+    /// minor-unit conversion must divide out the source exponent and multiply
+    /// in the target's — multiplying minor units by the bare rate is 100×
+    /// off across a 2↔0 boundary.
+    pub fn exponent(currency: &str) -> u32 {
+        match currency.trim().to_ascii_uppercase().as_str() {
+            "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF"
+            | "UGX" | "UYI" | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 0,
+            "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 3,
+            _ => 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

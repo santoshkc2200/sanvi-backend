@@ -55,6 +55,8 @@ pub enum AdvertisingError {
     BudgetAlertNotFound,
     #[error("new budget cap is below current period spend and requires confirmation")]
     CapBelowCurrentSpend,
+    #[error("budget cap update requires the current version (If-Match); refresh and resubmit")]
+    CapVersionRequired,
     #[error("advertising token encryption is not configured")]
     EncryptionUnconfigured,
     #[error("advertising token encryption failure: {0}")]
@@ -96,6 +98,7 @@ impl AdvertisingError {
             Self::BudgetCapNotFound => "budget_cap_not_found",
             Self::BudgetAlertNotFound => "budget_alert_not_found",
             Self::CapBelowCurrentSpend => "cap_below_current_spend",
+            Self::CapVersionRequired => "cap_version_required",
             Self::EncryptionUnconfigured => "encryption_unconfigured",
             Self::EncryptionFailure(_) => "encryption_failure",
             Self::IdGeneration(_) => "id_generation",
@@ -626,7 +629,9 @@ pub trait AudienceRepository: Send + Sync {
 }
 
 /// A daily FX snapshot for display-only conversion (TASK-016, slice 10.7).
-/// `rate` converts one unit of `base` into `quote`. Never persisted onto a
+/// `rate` converts one unit of `base` into `quote`; `date` is the snapshot
+/// actually used, which for a business-day feed can be earlier than the
+/// date requested (previous-close convention). Never persisted onto a
 /// stored metric — the query layer applies it fresh on every read.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FxRate {
@@ -637,6 +642,11 @@ pub struct FxRate {
 /// Display-time currency conversion. Absence of a rate is a normal, expected
 /// outcome (no snapshot for that pair/date yet) — callers render the
 /// source-currency amount without a `rendered_*` view rather than fail.
+///
+/// Callers with an *audited* date — a cap's pinned `fx_rate_date`, which the
+/// persistence layer stores verbatim — must verify `FxRate::date` equals the
+/// requested day and treat a mismatch as unavailable: a silently substituted
+/// snapshot would make the persisted basis unreproducible.
 #[async_trait]
 pub trait FxRatePort: Send + Sync {
     async fn rate(
@@ -645,6 +655,24 @@ pub trait FxRatePort: Send + Sync {
         quote: &str,
         date: chrono::NaiveDate,
     ) -> Result<Option<FxRate>, AdvertisingError>;
+
+    /// Whether the provider carries a snapshot dated *exactly* `date` — the
+    /// pair-independent existence check that validates a pinned basis at
+    /// save time, before any spend row names the pairs it will need.
+    /// Previous-close substitution does not count: a weekend, future, or
+    /// out-of-retention date can never resolve exactly.
+    async fn has_snapshot(&self, date: chrono::NaiveDate) -> Result<bool, AdvertisingError>;
+
+    /// The provider's complete published snapshot for *exactly* `date`:
+    /// every currency it quotes that day, as units per EUR (EUR itself as
+    /// `1.0`). Day-shaped rather than pair-shaped, because persisting one
+    /// answer covers every pair the day can ever be asked for — including
+    /// currencies that only appear in scope after the provider's retention
+    /// window has moved past the date.
+    async fn published_day(
+        &self,
+        date: chrono::NaiveDate,
+    ) -> Result<Option<Vec<(String, f64)>>, AdvertisingError>;
 }
 
 #[async_trait]
@@ -679,6 +707,7 @@ pub trait BudgetCapRepository: Send + Sync {
         &self,
         scope: &mut ScopedTx<'_>,
         cap: &BudgetCap,
+        expected_version: Option<i64>,
     ) -> Result<BudgetCap, AdvertisingError>;
 }
 
@@ -723,4 +752,81 @@ pub trait BudgetAlertRepository: Send + Sync {
         user_id: sanvi_kernel::UserId,
         acknowledged_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<BudgetAlert>, AdvertisingError>;
+}
+
+/// The tenant's own calendar timezone (TASK-017: budget periods are calendar
+/// periods in the *tenant* timezone, never UTC and never an ad account's
+/// timezone).
+///
+/// Implemented by the composition root from the localization context's tenant
+/// settings — the advertising context must not import another context's
+/// domain (see `scripts/check-layering.sh`), so the port, not the read,
+/// lives here. A tenant without saved settings resolves to `"UTC"`, matching
+/// `TenantLocaleSettings::default_for`.
+#[async_trait]
+pub trait TenantTimezoneSource: Send + Sync {
+    async fn timezone(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+    ) -> Result<String, AdvertisingError>;
+}
+
+/// Whether the tenant may currently have its caps enforced (the
+/// `advertising.budget_guardrails` rollout entitlement).
+///
+/// Implemented by the composition root from the access context's entitlement
+/// resolution. Failing implementations must fail closed (report `false`):
+/// an uncertain gate must skip auto-pauses, never fire them.
+#[async_trait]
+pub trait BudgetGuardrailEntitlement: Send + Sync {
+    async fn is_enabled(&self, tenant_id: TenantId) -> Result<bool, AdvertisingError>;
+}
+
+/// Durable state machine behind suspension (rollback) notices.
+///
+/// Remembers, per tenant, the last enforcement state the sweep observed —
+/// `serving` or `suspended` with its reason — so a suspension notice goes
+/// out once per *observed* serving→suspended transition: across worker
+/// restarts and replicas, re-armed when enforcement serves the tenant again,
+/// and re-armed by a reason change while suspended. A tenant observed
+/// suspended with no recorded serving history (fresh deploy with the flag
+/// off, or a tenant that never held the entitlement) is recorded as
+/// suspended but publishes nothing: there was no transition to announce.
+/// The claim runs inside the caller's transaction so the recorded notice
+/// commits (or rolls back) together with the event publish it gates.
+#[async_trait]
+pub trait GuardrailSuspensionLedger: Send + Sync {
+    /// Atomically claims the right to publish the suspension notice for
+    /// `reason`. Answers `true` exactly on a transition the gate actually
+    /// observed: the tenant's recorded state is `serving` (enforcement was
+    /// seen working and has now stopped), or the tenant is already suspended
+    /// with a *different* reason that was itself notified. Answers `false` —
+    /// recording the suspended state but publishing nothing — when the
+    /// tenant was never seen serving (first observation), already carries
+    /// this reason, or carries an unnotified suspension under another
+    /// reason.
+    async fn claim_notice(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        reason: &str,
+    ) -> Result<bool, AdvertisingError>;
+
+    /// Records that enforcement is serving every listed tenant, so a later
+    /// suspension is a genuine, notifiable transition. Runs in one audited
+    /// platform-scope transaction for the whole sweep (the tenant-isolation
+    /// policy admits platform-scope writes); tenants already recorded as
+    /// serving are not rewritten.
+    async fn mark_serving(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+    ) -> Result<(), AdvertisingError>;
+}
+
+/// A human-readable tenant label for customer-facing rollback notices.
+#[async_trait]
+pub trait TenantDirectory: Send + Sync {
+    async fn display_name(&self, tenant_id: TenantId) -> Result<String, AdvertisingError>;
 }

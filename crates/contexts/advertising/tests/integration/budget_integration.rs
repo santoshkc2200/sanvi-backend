@@ -2,28 +2,49 @@
 
 use std::sync::Arc;
 
-use chrono::{Duration, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use sanvi_advertising::adapters::{
-    AdvertisingMetrics, FakeAdPlatform, OutboxEventPublisher, SqlxAdvertisingConnectionRepository,
-    SqlxBudgetAlertRepository, SqlxBudgetCapRepository, SqlxCampaignRepository,
+    AdvertisingMetrics, FakeAdPlatform, OutboxEventPublisher, PersistedFxRates,
+    SqlxAdvertisingConnectionRepository, SqlxBudgetAlertRepository, SqlxBudgetCapRepository,
+    SqlxCampaignRepository, SqlxFxSnapshotStore, SqlxGuardrailSuspensionLedger,
     SqlxMetricsRepository, SystemIdGenerator, UnavailableFxRate,
 };
 use sanvi_advertising::application::{
-    AcknowledgeBudgetAlert, BudgetRolloverSweep, GetBudgetCaps, GetCampaignBudgetCap,
-    GetSpendStatus, ListBudgetAlerts, PauseCampaign, PutBudgetCap, PutBudgetCapCommand,
-    SpendAnomalyDetector, ThresholdEvaluator,
+    AcknowledgeBudgetAlert, BudgetRolloverSweep, EnforcementGate, GetBudgetCaps,
+    GetCampaignBudgetCap, GetSpendStatus, ListBudgetAlerts, PauseCampaign, PutBudgetCap,
+    PutBudgetCapCommand, SpendAnomalyDetector, SuspensionReason, ThresholdEvaluator,
 };
 use sanvi_advertising::domain::model::{
-    AlertCondition, BudgetPeriod, CampaignId, CampaignStatus, DataFreshness, Money,
+    AlertCondition, BudgetCap, BudgetCapId, BudgetPeriod, CampaignId, CampaignStatus,
+    DataFreshness, Money,
 };
 use sanvi_advertising::domain::{
-    AdvertisingConnectionRepository, AdvertisingError, BudgetAlertRepository, CampaignRepository,
-    FxRatePort, IdGenerator, MetricsDailyRow, MetricsRepository, PlatformKey,
+    AdvertisingConnectionRepository, AdvertisingError, BudgetAlertRepository,
+    BudgetGuardrailEntitlement, CampaignRepository, FxRate, FxRatePort, GuardrailSuspensionLedger,
+    IdGenerator, MetricsDailyRow, MetricsRepository, PlatformKey, TenantDirectory,
+    TenantTimezoneSource,
 };
 use sanvi_kernel::{TenantId, UserId};
-use sanvi_persistence::{Migrator, TxManager};
+use sanvi_persistence::{Migrator, ScopedTx, TxManager};
 
 const ADVERTISING_BUDGET_MIGRATION: i64 = 20_260_831_000_000;
+
+/// Fixed tenant timezone for the harness: mirrors the seeded `Asia/Tokyo`
+/// connections so period boundaries behave exactly as the pre-timezone
+/// tests assumed.
+#[derive(Debug, Clone, Copy, Default)]
+struct HarnessTimezones;
+
+#[async_trait::async_trait]
+impl TenantTimezoneSource for HarnessTimezones {
+    async fn timezone(
+        &self,
+        _scope: &mut ScopedTx<'_>,
+        _tenant_id: TenantId,
+    ) -> Result<String, AdvertisingError> {
+        Ok("Asia/Tokyo".to_string())
+    }
+}
 
 fn migrations_dir() -> std::path::PathBuf {
     std::env::var("CARGO_MANIFEST_DIR")
@@ -205,6 +226,7 @@ impl TestHarness {
             campaigns_repo.clone(),
             connections_repo.clone(),
             fx_rates.clone(),
+            Arc::new(HarnessTimezones),
             7,
         ));
 
@@ -222,7 +244,6 @@ impl TestHarness {
             caps_repo.clone(),
             alerts_repo.clone(),
             campaigns_repo.clone(),
-            connections_repo.clone(),
             pause_campaign.clone(),
             status_query.clone(),
             events.clone(),
@@ -242,7 +263,11 @@ impl TestHarness {
         let get_camp_cap = Arc::new(GetCampaignBudgetCap::new(tx.clone(), caps_repo.clone()));
         let list_alerts = Arc::new(ListBudgetAlerts::new(tx.clone(), alerts_repo.clone()));
         let ack_alert = Arc::new(AcknowledgeBudgetAlert::new(tx.clone(), alerts_repo.clone()));
-        let rollover_sweep = Arc::new(BudgetRolloverSweep::new(tx.clone(), caps_repo.clone()));
+        let rollover_sweep = Arc::new(BudgetRolloverSweep::new(
+            tx.clone(),
+            caps_repo.clone(),
+            Arc::new(HarnessTimezones),
+        ));
 
         (
             Self {
@@ -285,6 +310,7 @@ async fn test_budget_cap_crud_and_optimistic_locking() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: None,
     };
     let res = harness.put_cap.execute(tenant_id, None, cmd).await.unwrap();
     let tenant_cap = match res {
@@ -305,6 +331,7 @@ async fn test_budget_cap_crud_and_optimistic_locking() {
         auto_resume_on_rollover: true,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: Some(tenant_cap.version),
     };
     let res2 = harness
         .put_cap
@@ -320,6 +347,69 @@ async fn test_budget_cap_crud_and_optimistic_locking() {
     assert!(!updated_cap.auto_pause);
     assert!(updated_cap.auto_resume_on_rollover);
 
+    // 2b. A blind update (no version) of the existing cap is rejected rather
+    // than last-writer-wins.
+    let blind_cmd = PutBudgetCapCommand {
+        period: BudgetPeriod::Daily,
+        amount: Money::new(130_000, "JPY").unwrap(),
+        declared_fx_basis: None,
+        fx_rate_date: None,
+        auto_pause: false,
+        auto_resume_on_rollover: true,
+        confirm_below_current_spend: false,
+        dry_run: false,
+        expected_version: None,
+    };
+    let blind_err = harness
+        .put_cap
+        .execute(tenant_id, None, blind_cmd)
+        .await
+        .unwrap_err();
+    assert!(matches!(blind_err, AdvertisingError::CapVersionRequired));
+
+    // 2c. A stale version races the winner and loses atomically.
+    let stale_cmd = PutBudgetCapCommand {
+        period: BudgetPeriod::Daily,
+        amount: Money::new(130_000, "JPY").unwrap(),
+        declared_fx_basis: None,
+        fx_rate_date: None,
+        auto_pause: false,
+        auto_resume_on_rollover: true,
+        confirm_below_current_spend: false,
+        dry_run: false,
+        expected_version: Some(tenant_cap.version),
+    };
+    let stale_err = harness
+        .put_cap
+        .execute(tenant_id, None, stale_cmd)
+        .await
+        .unwrap_err();
+    assert!(matches!(stale_err, AdvertisingError::StaleRevision));
+
+    // 2d. The current version still wins.
+    let current_cmd = PutBudgetCapCommand {
+        period: BudgetPeriod::Daily,
+        amount: Money::new(130_000, "JPY").unwrap(),
+        declared_fx_basis: None,
+        fx_rate_date: None,
+        auto_pause: false,
+        auto_resume_on_rollover: true,
+        confirm_below_current_spend: false,
+        dry_run: false,
+        expected_version: Some(updated_cap.version),
+    };
+    let res3 = harness
+        .put_cap
+        .execute(tenant_id, None, current_cmd)
+        .await
+        .unwrap();
+    match res3 {
+        sanvi_advertising::application::PutBudgetCapResponse::Applied(c) => {
+            assert_eq!(c.version, 3)
+        }
+        _ => panic!("expected applied"),
+    }
+
     // 3. Put Campaign-level Cap
     let camp_cmd = PutBudgetCapCommand {
         period: BudgetPeriod::Daily,
@@ -330,6 +420,7 @@ async fn test_budget_cap_crud_and_optimistic_locking() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: None,
     };
     let res_camp = harness
         .put_cap
@@ -396,6 +487,7 @@ async fn test_cap_below_current_spend_confirmation() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: None,
     };
     let err = harness
         .put_cap
@@ -414,6 +506,7 @@ async fn test_cap_below_current_spend_confirmation() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: true,
         dry_run: false,
+        expected_version: None,
     };
     let res = harness
         .put_cap
@@ -466,6 +559,7 @@ async fn test_dry_run_simulation() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: false,
         dry_run: true,
+        expected_version: None,
     };
     let res = harness
         .put_cap
@@ -503,6 +597,7 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: None,
     };
     harness
         .put_cap
@@ -618,6 +713,109 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
     assert!(pause_change.metadata.is_some());
 }
 
+/// Regression: a breached cap is re-evaluated on every worker sweep, so the
+/// auto-pause must be idempotent. Re-issuing the pause for a campaign that
+/// is already `Paused` repeats the provider API call, bumps the revision,
+/// and appends duplicate events and change-log entries on every sweep.
+#[tokio::test]
+async fn test_repeat_sweep_does_not_repause_an_already_paused_campaign() {
+    let (harness, tenant_id) = TestHarness::new().await;
+    let (conn_id, camp_id) =
+        seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
+    let today = Utc::now().date_naive();
+
+    // Daily auto-pause cap saved before any spend exists, so the immediate
+    // post-save evaluation is a no-op and the first sweep below does the pause.
+    let cmd = PutBudgetCapCommand {
+        period: BudgetPeriod::Daily,
+        amount: Money::new(100_000, "JPY").unwrap(),
+        declared_fx_basis: None,
+        fx_rate_date: None,
+        auto_pause: true,
+        auto_resume_on_rollover: false,
+        confirm_below_current_spend: false,
+        dry_run: false,
+        expected_version: None,
+    };
+    harness
+        .put_cap
+        .execute(tenant_id, Some(camp_id), cmd)
+        .await
+        .unwrap();
+
+    // Settled spend of 130,000 JPY against the 100,000 cap: a SettledBreach.
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    harness
+        .metrics_repo
+        .upsert_daily(
+            &mut scope,
+            &[MetricsDailyRow {
+                tenant_id,
+                connection_id: conn_id,
+                platform: PlatformKey::parse("google_ads").unwrap(),
+                campaign_id: camp_id,
+                date: today,
+                impressions: 1000,
+                clicks: 100,
+                spend: Money::new(130_000, "JPY").unwrap(),
+                conversions: 5.0,
+                conversion_value: Money::new(100_000, "JPY").unwrap(),
+            }],
+        )
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    harness.evaluator.evaluate_tenant(tenant_id).await.unwrap();
+
+    // First sweep: the campaign is paused exactly once.
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let first = harness
+        .campaigns_repo
+        .find(&mut scope, tenant_id, camp_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.intent.status, CampaignStatus::Paused);
+    let first_revision = first.revision;
+    let first_changes = harness
+        .campaigns_repo
+        .list_changes(&mut scope, tenant_id, camp_id, 10)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert!(!first_changes.is_empty());
+
+    // The cap is still breached on the next sweep: the pause must be a
+    // no-op — same revision, no duplicate change-log rows.
+    harness.evaluator.evaluate_tenant(tenant_id).await.unwrap();
+
+    let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let second = harness
+        .campaigns_repo
+        .find(&mut scope, tenant_id, camp_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.intent.status, CampaignStatus::Paused);
+    assert_eq!(second.revision, first_revision);
+    let second_changes = harness
+        .campaigns_repo
+        .list_changes(&mut scope, tenant_id, camp_id, 10)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+    assert_eq!(second_changes.len(), first_changes.len());
+
+    // And the breach alert stays deduplicated to one record.
+    let alerts = harness
+        .list_alerts
+        .execute(tenant_id, Some(camp_id), false, None)
+        .await
+        .unwrap();
+    assert_eq!(alerts.iter().filter(|a| a.threshold == 100).count(), 1);
+}
+
 #[tokio::test]
 async fn test_stale_data_guard_no_pause_on_stale_connections() {
     let (harness, tenant_id) = TestHarness::new().await;
@@ -673,6 +871,7 @@ async fn test_stale_data_guard_no_pause_on_stale_connections() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: true,
         dry_run: false,
+        expected_version: None,
     };
     harness
         .put_cap
@@ -765,6 +964,7 @@ async fn test_stale_alert_does_not_suppress_later_settled_pause() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: true,
         dry_run: false,
+        expected_version: None,
     };
     harness
         .put_cap
@@ -878,6 +1078,7 @@ async fn test_daily_cap_pauses_at_one_hundred_percent() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: true,
         dry_run: false,
+        expected_version: None,
     };
     harness
         .put_cap
@@ -935,6 +1136,7 @@ async fn test_spend_status_and_run_rate_projection() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: None,
     };
     harness
         .put_cap
@@ -1019,6 +1221,7 @@ async fn test_rollover_sweep_never_auto_resumes() {
         auto_resume_on_rollover: false,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: None,
     };
     harness
         .put_cap
@@ -1051,6 +1254,7 @@ async fn test_rollover_sweep_never_auto_resumes() {
     scope.commit().await.unwrap();
 
     // Case 2: cap with auto_resume_on_rollover = true → sweep STILL returns 0 (FR-1013)
+    // (version 2: Case 1 created version 1 above, so the precondition names it)
     let cmd_with_resume = PutBudgetCapCommand {
         period: BudgetPeriod::Daily,
         amount: Money::new(100_000, "JPY").unwrap(),
@@ -1060,6 +1264,7 @@ async fn test_rollover_sweep_never_auto_resumes() {
         auto_resume_on_rollover: true,
         confirm_below_current_spend: false,
         dry_run: false,
+        expected_version: Some(1),
     };
     harness
         .put_cap
@@ -1338,4 +1543,623 @@ async fn test_spend_anomaly_detector_persists_budget_alert_row_and_events() {
         1,
         "deduplication must prevent duplicate alerts on same day"
     );
+}
+
+// --- Suspension-notice dedupe (durable, per enabled→suspended transition) ---
+
+struct FixedEntitlement(bool);
+
+#[async_trait::async_trait]
+impl BudgetGuardrailEntitlement for FixedEntitlement {
+    async fn is_enabled(&self, _tenant_id: TenantId) -> Result<bool, AdvertisingError> {
+        Ok(self.0)
+    }
+}
+
+struct FixedDirectory;
+
+#[async_trait::async_trait]
+impl TenantDirectory for FixedDirectory {
+    async fn display_name(&self, _tenant_id: TenantId) -> Result<String, AdvertisingError> {
+        Ok("Acme Corporation".to_string())
+    }
+}
+
+async fn count_suspension_events(pool: &sanvi_persistence::PgPool, tenant_id: TenantId) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM platform.outbox
+         WHERE event_type = 'advertising.budget_guardrails_suspended' AND aggregate_id = $1",
+    )
+    .bind(tenant_id.as_i64())
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn test_suspension_notice_claim_is_true_only_on_a_transition() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "guardrail-suspension-ledger").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let ledger = SqlxGuardrailSuspensionLedger::new();
+
+    {
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+        // A tenant never observed serving is recorded as suspended but claims
+        // nothing: a fresh deploy with the flag off is not a rollback.
+        assert!(
+            !ledger
+                .claim_notice(&mut scope, tenant_id, "entitlement_off")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !ledger
+                .claim_notice(&mut scope, tenant_id, "entitlement_off")
+                .await
+                .unwrap()
+        );
+        // A reason change on an *unnotified* suspension is still no
+        // transition: nothing was ever announced to re-announce.
+        assert!(
+            !ledger
+                .claim_notice(&mut scope, tenant_id, "feature_disabled")
+                .await
+                .unwrap()
+        );
+        scope.commit().await.unwrap();
+    }
+
+    // Enforcement observed serving the tenant arms the transition.
+    {
+        let mut scope = tx.begin_unscoped("test", "test").await.unwrap();
+        ledger.mark_serving(&mut scope, &[tenant_id]).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+    {
+        let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
+        // A suspension after observed serving claims.
+        assert!(
+            ledger
+                .claim_notice(&mut scope, tenant_id, "entitlement_off")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !ledger
+                .claim_notice(&mut scope, tenant_id, "entitlement_off")
+                .await
+                .unwrap()
+        );
+        // A reason change on a *notified* suspension re-arms.
+        assert!(
+            ledger
+                .claim_notice(&mut scope, tenant_id, "feature_disabled")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !ledger
+                .claim_notice(&mut scope, tenant_id, "feature_disabled")
+                .await
+                .unwrap()
+        );
+        scope.rollback().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_enforcement_gate_notifies_once_per_suspension_transition() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "guardrail-suspension-gate").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let events = Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
+
+    let gate = EnforcementGate::new(
+        tx.clone(),
+        Arc::new(FixedEntitlement(true)),
+        Arc::new(FixedDirectory),
+        events,
+        Arc::new(SqlxGuardrailSuspensionLedger::new()),
+    );
+
+    // A tenant never observed serving is recorded as suspended but is not
+    // emailed: a fresh deploy with the flag off (or an entitlement that was
+    // never granted) is not a rollback of anything.
+    gate.notify_suspended(&[tenant_id], SuspensionReason::EntitlementOff)
+        .await;
+    assert_eq!(count_suspension_events(&pool, tenant_id).await, 0);
+
+    // partition() observes enforcement serving the tenant (the cap is
+    // evaluable) and records that, arming the transition.
+    let cap = BudgetCap {
+        id: BudgetCapId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap()),
+        tenant_id,
+        campaign_id: None,
+        period: BudgetPeriod::Monthly,
+        amount: Money::new(50_000, "JPY").unwrap(),
+        effective_currency: "JPY".to_string(),
+        declared_fx_basis: None,
+        fx_rate_date: None,
+        auto_pause: false,
+        auto_resume_on_rollover: false,
+        version: 1,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let (evaluable, suspended) = gate.partition(std::slice::from_ref(&cap)).await;
+    assert_eq!(evaluable.len(), 1);
+    assert!(suspended.is_empty());
+
+    // Now a suspension is a real enabled→suspended transition: one notice.
+    gate.notify_suspended(&[tenant_id], SuspensionReason::EntitlementOff)
+        .await;
+    assert_eq!(count_suspension_events(&pool, tenant_id).await, 1);
+    // The sweep tick that repeats it does not notify again.
+    gate.notify_suspended(&[tenant_id], SuspensionReason::EntitlementOff)
+        .await;
+    assert_eq!(count_suspension_events(&pool, tenant_id).await, 1);
+
+    // A different suspension reason is a new transition and notifies again.
+    gate.notify_suspended(&[tenant_id], SuspensionReason::FeatureDisabled)
+        .await;
+    assert_eq!(count_suspension_events(&pool, tenant_id).await, 2);
+
+    // partition() observes the tenant serving again and re-arms the notice,
+    // so the next suspension publishes afresh. The re-arm survives worker
+    // restarts (it lives in the table, not in process memory).
+    let (evaluable, suspended) = gate.partition(&[cap]).await;
+    assert_eq!(evaluable.len(), 1);
+    assert!(suspended.is_empty());
+
+    gate.notify_suspended(&[tenant_id], SuspensionReason::EntitlementOff)
+        .await;
+    assert_eq!(count_suspension_events(&pool, tenant_id).await, 3);
+}
+
+/// FX fake whose feed window has moved on: every lookup answers the *same*
+/// snapshot date regardless of the day requested — the daily-feed shape in
+/// which an older day's snapshot no longer exists.
+struct StaleWindowFx {
+    snapshot_date: std::sync::Mutex<NaiveDate>,
+    rate: f64,
+}
+
+#[async_trait::async_trait]
+impl FxRatePort for StaleWindowFx {
+    async fn rate(
+        &self,
+        _base: &str,
+        _quote: &str,
+        _date: NaiveDate,
+    ) -> Result<Option<FxRate>, AdvertisingError> {
+        Ok(Some(FxRate {
+            rate: self.rate,
+            date: *self.snapshot_date.lock().unwrap(),
+        }))
+    }
+
+    async fn has_snapshot(&self, date: NaiveDate) -> Result<bool, AdvertisingError> {
+        Ok(date == *self.snapshot_date.lock().unwrap())
+    }
+
+    async fn published_day(
+        &self,
+        date: NaiveDate,
+    ) -> Result<Option<Vec<(String, f64)>>, AdvertisingError> {
+        if date != *self.snapshot_date.lock().unwrap() {
+            return Ok(None);
+        }
+        Ok(Some(vec![
+            ("EUR".to_string(), 1.0),
+            ("USD".to_string(), 1.08),
+            ("JPY".to_string(), 169.42),
+        ]))
+    }
+}
+
+#[tokio::test]
+async fn test_pinned_fx_basis_requires_the_exact_snapshot() {
+    let (harness, tenant_id) = TestHarness::new().await;
+    let (conn_id, camp_id) =
+        seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
+    let today = Utc::now().date_naive();
+
+    // 1,000 USD of spend today; the cap's currency is JPY. 1,000 USD minor
+    // is 10.00 major; at 150 JPY/USD that is 1,500 JPY (minor = major here).
+    {
+        let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+        harness
+            .metrics_repo
+            .upsert_daily(
+                &mut scope,
+                &[MetricsDailyRow {
+                    tenant_id,
+                    connection_id: conn_id,
+                    platform: PlatformKey::parse("google_ads").unwrap(),
+                    campaign_id: camp_id,
+                    date: today,
+                    impressions: 1_000,
+                    clicks: 100,
+                    spend: Money::new(1_000, "USD").unwrap(),
+                    conversions: 1.0,
+                    conversion_value: Money::new(2_000, "USD").unwrap(),
+                }],
+            )
+            .await
+            .unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    let fx = Arc::new(StaleWindowFx {
+        snapshot_date: std::sync::Mutex::new(today),
+        rate: 150.0,
+    });
+    let status_query = Arc::new(GetSpendStatus::new(
+        harness.tx.clone(),
+        harness.metrics_repo.clone(),
+        Arc::new(SqlxBudgetCapRepository::new()),
+        harness.campaigns_repo.clone(),
+        harness.connections_repo.clone(),
+        fx.clone(),
+        Arc::new(HarnessTimezones),
+        7,
+    ));
+    // The harness's own put_cap validates through `UnavailableFxRate`; this
+    // one shares the fake so the write path sees the same feed the reads do.
+    let put_cap = Arc::new(PutBudgetCap::new(
+        harness.tx.clone(),
+        Arc::new(SqlxBudgetCapRepository::new()),
+        harness.ids.clone(),
+        status_query.clone(),
+        harness.evaluator.clone(),
+    ));
+
+    // A pinned basis the feed can answer exactly: the row converts at write
+    // time and at read time.
+    let cap = match put_cap
+        .execute(
+            tenant_id,
+            Some(camp_id),
+            PutBudgetCapCommand {
+                period: BudgetPeriod::Daily,
+                amount: Money::new(10_000_000, "JPY").unwrap(),
+                declared_fx_basis: Some("explicit:JPY".to_string()),
+                fx_rate_date: Some(today),
+                auto_pause: false,
+                auto_resume_on_rollover: false,
+                confirm_below_current_spend: false,
+                dry_run: false,
+                expected_version: None,
+            },
+        )
+        .await
+        .unwrap()
+    {
+        sanvi_advertising::application::PutBudgetCapResponse::Applied(cap) => cap,
+        sanvi_advertising::application::PutBudgetCapResponse::DryRun(_) => {
+            panic!("expected an applied cap")
+        }
+    };
+
+    let report = status_query
+        .execute(tenant_id, Some(BudgetPeriod::Daily))
+        .await
+        .unwrap();
+    let item = report
+        .items
+        .iter()
+        .find(|item| item.campaign_id == Some(camp_id))
+        .unwrap();
+    assert_eq!(item.spend_to_date.amount_minor, 1_500);
+    assert!(item.unconvertible_spend_currencies.is_empty());
+
+    // The feed window moves on and the pinned date no longer resolves to its
+    // own snapshot. The spend *degrades to unconvertible* — the total does
+    // not silently re-rate against a different day's snapshot.
+    *fx.snapshot_date.lock().unwrap() = today + Duration::days(1);
+    let report = status_query
+        .execute(tenant_id, Some(BudgetPeriod::Daily))
+        .await
+        .unwrap();
+    let item = report
+        .items
+        .iter()
+        .find(|item| item.campaign_id == Some(camp_id))
+        .unwrap();
+    assert_eq!(item.spend_to_date.amount_minor, 0);
+    assert_eq!(item.unconvertible_spend_currencies, vec!["USD".to_string()]);
+
+    // The write path refuses for the same reason: a cap saved against a
+    // basis it cannot reproduce would be unenforceable.
+    let err = put_cap
+        .execute(
+            tenant_id,
+            Some(camp_id),
+            PutBudgetCapCommand {
+                period: BudgetPeriod::Daily,
+                amount: Money::new(10_000_000, "JPY").unwrap(),
+                declared_fx_basis: Some("explicit:JPY".to_string()),
+                fx_rate_date: Some(today),
+                auto_pause: false,
+                auto_resume_on_rollover: false,
+                confirm_below_current_spend: false,
+                dry_run: false,
+                expected_version: Some(cap.version),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AdvertisingError::InvalidInput(_)));
+
+    // Without a pinned date the previous-close convention applies: the
+    // substituted snapshot is accepted and the row converts.
+    put_cap
+        .execute(
+            tenant_id,
+            None,
+            PutBudgetCapCommand {
+                period: BudgetPeriod::Daily,
+                amount: Money::new(10_000_000, "JPY").unwrap(),
+                declared_fx_basis: Some("explicit:JPY".to_string()),
+                fx_rate_date: None,
+                auto_pause: false,
+                auto_resume_on_rollover: false,
+                confirm_below_current_spend: false,
+                dry_run: false,
+                expected_version: None,
+            },
+        )
+        .await
+        .unwrap();
+    let report = status_query
+        .execute(tenant_id, Some(BudgetPeriod::Daily))
+        .await
+        .unwrap();
+    let item = report
+        .items
+        .iter()
+        .find(|item| item.scope == "tenant")
+        .unwrap();
+    assert_eq!(item.spend_to_date.amount_minor, 1_500);
+    assert!(item.unconvertible_spend_currencies.is_empty());
+}
+
+/// FX provider that "retires": once the retention window moves past its one
+/// snapshot, it stops answering entirely — the ECB daily/history feed shape.
+struct RetiringFx {
+    snapshot_date: NaiveDate,
+    rate: std::sync::Mutex<f64>,
+    retired: std::sync::Mutex<bool>,
+}
+
+impl RetiringFx {
+    fn retire(&self) {
+        *self.retired.lock().unwrap() = true;
+    }
+}
+
+#[async_trait::async_trait]
+impl FxRatePort for RetiringFx {
+    async fn rate(
+        &self,
+        _base: &str,
+        _quote: &str,
+        _date: NaiveDate,
+    ) -> Result<Option<FxRate>, AdvertisingError> {
+        if *self.retired.lock().unwrap() {
+            return Ok(None);
+        }
+        Ok(Some(FxRate {
+            rate: *self.rate.lock().unwrap(),
+            date: self.snapshot_date,
+        }))
+    }
+
+    async fn has_snapshot(&self, date: NaiveDate) -> Result<bool, AdvertisingError> {
+        Ok(!*self.retired.lock().unwrap() && date == self.snapshot_date)
+    }
+
+    async fn published_day(
+        &self,
+        date: NaiveDate,
+    ) -> Result<Option<Vec<(String, f64)>>, AdvertisingError> {
+        if *self.retired.lock().unwrap() || date != self.snapshot_date {
+            return Ok(None);
+        }
+        Ok(Some(vec![
+            ("EUR".to_string(), 1.0),
+            ("USD".to_string(), 1.0),
+            ("GBP".to_string(), 0.5),
+            ("JPY".to_string(), 150.0),
+        ]))
+    }
+}
+
+#[tokio::test]
+async fn test_resolved_fx_snapshots_survive_provider_retention() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let provider = Arc::new(RetiringFx {
+        snapshot_date: NaiveDate::from_ymd_opt(2026, 9, 10).unwrap(),
+        rate: std::sync::Mutex::new(150.0),
+        retired: std::sync::Mutex::new(false),
+    });
+    let fx = PersistedFxRates::new(provider.clone(), SqlxFxSnapshotStore::new(tx));
+
+    // A resolution while the provider still serves: recorded durably.
+    let resolved = fx
+        .rate("USD", "JPY", NaiveDate::from_ymd_opt(2026, 9, 10).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.rate, 150.0);
+
+    // The provider's retention moves past the pinned date.
+    provider.retire();
+
+    // The pinned date still resolves — from the durable snapshot, at the
+    // same value, so enforcement does not silently stop.
+    let after = fx
+        .rate("USD", "JPY", NaiveDate::from_ymd_opt(2026, 9, 10).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after, resolved);
+
+    // A currency that only appears in scope *after* the provider's retention
+    // moved on still resolves: the complete published day was persisted with
+    // the pin, so the pair derives from stored reference rates (JPY 150 per
+    // EUR ÷ GBP 0.5 per EUR = 300).
+    let late_pair = fx
+        .rate("GBP", "JPY", NaiveDate::from_ymd_opt(2026, 9, 10).unwrap())
+        .await
+        .unwrap()
+        .expect("the stored day quotes every currency it published");
+    assert!((late_pair.rate - 300.0).abs() < 1e-9);
+
+    // A pair the stored day genuinely does not quote degrades to
+    // unavailable rather than being invented.
+    assert!(
+        fx.rate("CHF", "JPY", NaiveDate::from_ymd_opt(2026, 9, 10).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Existence survives retirement too, so pinned caps remain saveable.
+    assert!(
+        fx.has_snapshot(NaiveDate::from_ymd_opt(2026, 9, 10).unwrap())
+            .await
+            .unwrap()
+    );
+
+    // The store is immutable: re-resolving at a different rate cannot
+    // rewrite a recorded snapshot.
+    provider.retired.lock().unwrap().clone_from(&false);
+    *provider.rate.lock().unwrap() = 999.0;
+    let again = fx
+        .rate("USD", "JPY", NaiveDate::from_ymd_opt(2026, 9, 10).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.rate, 150.0);
+}
+
+/// A provider that publishes exactly one snapshot date.
+struct FixedSnapshotsFx {
+    published: NaiveDate,
+}
+
+#[async_trait::async_trait]
+impl FxRatePort for FixedSnapshotsFx {
+    async fn rate(
+        &self,
+        _base: &str,
+        _quote: &str,
+        _date: NaiveDate,
+    ) -> Result<Option<FxRate>, AdvertisingError> {
+        Ok(Some(FxRate {
+            rate: 150.0,
+            date: self.published,
+        }))
+    }
+
+    async fn has_snapshot(&self, date: NaiveDate) -> Result<bool, AdvertisingError> {
+        Ok(date == self.published)
+    }
+
+    async fn published_day(
+        &self,
+        date: NaiveDate,
+    ) -> Result<Option<Vec<(String, f64)>>, AdvertisingError> {
+        if date != self.published {
+            return Ok(None);
+        }
+        Ok(Some(vec![
+            ("EUR".to_string(), 1.0),
+            ("USD".to_string(), 1.08),
+            ("GBP".to_string(), 0.85310),
+            ("JPY".to_string(), 169.42),
+        ]))
+    }
+}
+
+#[tokio::test]
+async fn test_pinned_basis_date_is_validated_independently_of_rows() {
+    let (harness, tenant_id) = TestHarness::new().await;
+    let (_, camp_id) =
+        seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
+    // No metrics rows at all: the scope is empty, which is exactly the state
+    // the row-driven validation cannot cover.
+
+    let published = Utc::now().date_naive() - Duration::days(2);
+    let fx = Arc::new(FixedSnapshotsFx { published });
+    let status_query = Arc::new(GetSpendStatus::new(
+        harness.tx.clone(),
+        harness.metrics_repo.clone(),
+        Arc::new(SqlxBudgetCapRepository::new()),
+        harness.campaigns_repo.clone(),
+        harness.connections_repo.clone(),
+        fx,
+        Arc::new(HarnessTimezones),
+        7,
+    ));
+    let put_cap = Arc::new(PutBudgetCap::new(
+        harness.tx.clone(),
+        Arc::new(SqlxBudgetCapRepository::new()),
+        harness.ids.clone(),
+        status_query.clone(),
+        harness.evaluator.clone(),
+    ));
+
+    // A weekend, future, or out-of-retention pin (here: unpublished) is
+    // refused even though the scope has no cross-currency spend today.
+    let err = put_cap
+        .execute(
+            tenant_id,
+            Some(camp_id),
+            PutBudgetCapCommand {
+                period: BudgetPeriod::Daily,
+                amount: Money::new(10_000_000, "JPY").unwrap(),
+                declared_fx_basis: Some("explicit:JPY".to_string()),
+                fx_rate_date: Some(published + Duration::days(1)),
+                auto_pause: false,
+                auto_resume_on_rollover: false,
+                confirm_below_current_spend: false,
+                dry_run: false,
+                expected_version: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AdvertisingError::InvalidInput(_)));
+
+    // A pin the feed actually published saves fine on the empty scope.
+    let res = put_cap
+        .execute(
+            tenant_id,
+            Some(camp_id),
+            PutBudgetCapCommand {
+                period: BudgetPeriod::Daily,
+                amount: Money::new(10_000_000, "JPY").unwrap(),
+                declared_fx_basis: Some("explicit:JPY".to_string()),
+                fx_rate_date: Some(published),
+                auto_pause: false,
+                auto_resume_on_rollover: false,
+                confirm_below_current_spend: false,
+                dry_run: false,
+                expected_version: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        res,
+        sanvi_advertising::application::PutBudgetCapResponse::Applied(_)
+    ));
 }
