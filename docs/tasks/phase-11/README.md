@@ -45,7 +45,7 @@ early, because phase 10's remaining work then arrives already covered.
 
 | Task | Slice | Size | Scope | Needs phase 10? |
 |---|---|---|---|---|
-| [TASK-031](TASK-031-11-a-ci-coverage-repair-and-gate-truth.md) | 11.a | S | six crates' integration tests never run in CI; SAST added; stale baseline claims corrected; Gatekeeper prerequisite detected | no |
+| [TASK-031](TASK-031-11-a-ci-coverage-repair-and-gate-truth.md) | 11.a | S | CI crate lists derived from the workspace, `ci-test-coverage` gate (+ self-test) failing on any member with tests/ that no job runs; SAST added; stale baseline claims corrected; Gatekeeper prerequisite detected | no |
 | [TASK-019](TASK-019-11-0-production-shaped-baseline-measurement.md) | 11.0 | M | `seed-scale`, k6 harness, `benchmarks/`, `perf-compare`, `GET /system/build`, GA checklist | no |
 | [TASK-020](TASK-020-11-1-observability-completion-slos-alerting.md) | 11.1 | L | span coverage matrix + gate, log PII scanner, `trace_id`, alert rules, runbook cross-reference | no |
 | [TASK-024](TASK-024-11-5-threat-model-blocking-scanners-isolation-swee.md) | 11.5 | L | threat model, generated route/permission matrix + gate, RLS matrix incl. child partitions, IDOR sweep, abuse controls, security headers | no |

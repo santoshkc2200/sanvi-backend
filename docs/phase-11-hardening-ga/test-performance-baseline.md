@@ -69,21 +69,31 @@ statically before and after the `tests/integration/` restructure — **868 acros
 
 ## Still open
 
-- `target/debug/deps` holds **327,615 files** and **5,430 executables**,
-  including many stale copies of the same binary (7 `sanvi_worker`, 4
-  `sanvi_api`, 4 `http_contract`) at 28-104 MB each. Cargo stats this tree on
-  every invocation. `just clean-stale` exists and is not being run.
-- `.github/workflows/pr.yml` runs two test jobs, and between them six crates
-  are tested by neither. The unit job excludes `sanvi-persistence`,
-  `sanvi-messaging` and `sanvi-tenancy` because they need Docker — those three
-  *are* covered, by the integration job at `pr.yml:179`. What that job does not
-  cover is everything absent from its hand-written crate list:
-  `sanvi-access`, `sanvi-advertising`, `sanvi-audit`, `sanvi-identity`,
-  `sanvi-platform-admin` and `sanvi-theming` all ship a `tests/` directory that
-  no CI job runs. A job that runs no tests still passes, so nothing reported it.
-  Fixed in
-  [TASK-031](../tasks/phase-11/TASK-031-11-a-ci-coverage-repair-and-gate-truth.md),
-  which derives the list from the workspace rather than maintaining it by hand.
-
-  *(An earlier revision of this document claimed the three Docker-dependent
-  crates were untested. That was wrong; the integration job covers them.)*
+- `target/debug/deps` held **327,615 files** and **5,430 executables** at the
+  2026-08-27 measurement. `just clean-stale` was run on 2026-09-15 (branch
+  `feat/task-031-ci-coverage-repair`, `cargo sweep --time 14`): it removed
+  nothing, because every artifact in the tree is under 14 days old, and
+  `target/debug/deps` now holds **65,532 files** and **122 executables** —
+  the 327,615 figure no longer describes this tree. The recipe stays;
+  the next stale window will have something to collect.
+- The PR workflow's two test jobs do cover the workspace — but that is an
+  accident of duplication, not a mechanism. The unit job runs
+  `--workspace` minus `sanvi-persistence`, `sanvi-messaging` and
+  `sanvi-tenancy`, so it runs every member's tests *including* the
+  integration tests of everything not in that exclude list: `cargo nextest
+  list` with the unit job's exact arguments selects `sanvi-access::
+  integration`, `sanvi-advertising::integration`,
+  `sanvi-audit::audit_integration`, `sanvi-identity::integration`,
+  `sanvi-platform-admin::impersonation` and `sanvi-theming::
+  theming_integration`. An earlier revision of this section claimed those six
+  were tested by no CI job; that was wrong, and so was the revision before
+  it, which claimed the same of the three Docker-dependent crates. What was
+  genuinely missing was anything that would have *detected* either mistake:
+  the integration job's eight-crate `-p` list was maintained by hand,
+  overlapped the unit job in five crates, and named only three of the fifteen
+  members whose tests need Docker. Fixed in
+  [TASK-031](../tasks/phase-11/TASK-031-11-a-ci-coverage-repair-and-gate-truth.md):
+  the integration job derives its crate list from the workspace
+  (`scripts/check-ci-test-coverage.sh --integration-packages`), and the
+  `ci-test-coverage` gate fails any PR where a member that ships `tests/` is
+  not run by a job — with a self-test proving it fails when one is dropped.

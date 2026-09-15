@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn builds_a_reproducible_artifact() {
         let dir =
-            std::env::temp_dir().join(format!("sanvi-theme-artifact-{}", uuid::Uuid::now_v7()));
+            std::env::temp_dir().join(format!("sanvi-theme-artifact-{}", uuid::Uuid::now_v7())); // nosemgrep: rust.lang.security.temp-dir.temp-dir — uuid-unique test fixture, not a security operation
         std::fs::create_dir_all(dir.join("tokens")).unwrap();
         std::fs::write(dir.join("theme.json"), r#"{"id":"base"}"#).unwrap();
         std::fs::write(dir.join("tokens/light.json"), "{}").unwrap();

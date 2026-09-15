@@ -176,7 +176,46 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --profile ci -p sanvi-persistence -p sanvi-messaging -p sanvi-tenancy -p sanvi-billing -p sanvi-privacy -p sanvi-localization -p sanvi-domains -p sanvi-payments
+      # The crate list is derived from the workspace at run time (TASK-031):
+      # every member whose tests use the Docker-backed harness. The list this
+      # replaces was maintained by hand, and a hand-written list is the defect
+      # itself — a crate missing from it was tested by nothing, and a job that
+      # runs no tests still passes. `ci-test-coverage` fails the PR if any
+      # member with a tests/ directory is left uncovered by both jobs.
+      - name: derive the Docker-dependent crate list
+        id: integration_packages
+        run: echo "args=$(./scripts/check-ci-test-coverage.sh --integration-packages)" >> "$GITHUB_OUTPUT"
+      - run: cargo nextest run --profile ci ${{ steps.integration_packages.outputs.args }}
+
+  ci-test-coverage:
+    name: CI test coverage (+ self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
+      - run: ./scripts/check-ci-test-coverage.sh
+      - run: ./scripts/check-ci-test-coverage.sh --self-test
+
+  sast:
+    name: SAST (clippy security groups + semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
+      - uses: Swatinem/rust-cache@v2
+      # The general clippy job denies all warnings; this job exists so the
+      # security lint groups are named and enforced as a set (TASK-031).
+      # Semgrep adds pattern-level Rust security rules the compiler does not
+      # have. No IaC scanner: there is no IaC in this repository (recorded in
+      # docs/release/needs-humans.md).
+      - name: clippy security lint groups
+        run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
+      - name: semgrep (Rust ruleset, version pinned)
+        run: |
+          python -m pip install --quiet "semgrep==1.176.1"
+          semgrep scan --config p/rust --error --metrics=off
 
   openapi:
     name: OpenAPI contract drift

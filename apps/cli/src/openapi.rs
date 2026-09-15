@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn check_context_passes_when_specs_match_and_fails_on_drift() {
-        let dir = std::env::temp_dir().join(format!("sanvi-openapi-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sanvi-openapi-test-{}", std::process::id())); // nosemgrep: rust.lang.security.temp-dir.temp-dir — pid-unique test fixture, not a security operation
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("system.yaml");
 
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn check_context_rejects_invalid_yaml() {
-        let dir = std::env::temp_dir().join(format!("sanvi-openapi-bad-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sanvi-openapi-bad-{}", std::process::id())); // nosemgrep: rust.lang.security.temp-dir.temp-dir — pid-unique test fixture, not a security operation
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("system.yaml");
         std::fs::write(&path, "not: [valid").unwrap();

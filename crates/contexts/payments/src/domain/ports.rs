@@ -494,10 +494,6 @@ pub trait ConnectionLifecycleStore: Send + Sync {
     ) -> Result<Vec<(String, i64)>, PaymentsError>;
 }
 
-/// Tenant-admin notifications on connection-lifecycle changes, through the
-/// phase-05/06 notification path (locale-resolved rendering in the worker;
-/// a logging implementation everywhere else). Failures are logged by the
-
 // ---------------------------------------------------------------------------
 // 09.4: checkout persistence, the phase-08 domain allow-list and the
 // checkout throttle.

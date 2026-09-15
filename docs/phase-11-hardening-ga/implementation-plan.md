@@ -93,17 +93,21 @@ A run that regresses more than the per-metric threshold against the stored basel
 
 ### 1. CI coverage repair (TASK-031)
 
-The gates that already exist do not cover what they appear to. Six context crates —
-`sanvi-access`, `sanvi-advertising`, `sanvi-audit`, `sanvi-identity`, `sanvi-platform-admin`,
-`sanvi-theming` — ship a `tests/` directory that **no CI job runs**: the unit job excludes the
-Docker-dependent crates and the integration job enumerates only eight crates by name. Nothing detects
-the omission, because a job that runs no tests still passes.
+The gates that already exist do not cover what they appear to. `pr.yml` has two test jobs: the unit
+job runs `--workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude
+sanvi-tenancy`, and the integration job enumerates eight crates by hand. An earlier revision of this
+section claimed six context crates (`sanvi-access`, `sanvi-advertising`, `sanvi-audit`,
+`sanvi-identity`, `sanvi-platform-admin`, `sanvi-theming`) ship a `tests/` directory that no CI job
+runs; measurement showed the unit job's `--workspace` selects their integration targets after all
+— but only by an accident nobody could see, because nothing checked what the jobs actually cover,
+and a job that runs no tests still passes.
 
 Enumeration by hand is the defect. The integration job derives its crate list from the workspace, and
-a crate with an integration target that CI does not run fails a check. The same task fixes the stale
-claims in `test-performance-baseline.md`, adds the missing SAST scanner to the otherwise complete
-blocking set, and makes the Gatekeeper exemption a detected prerequisite rather than a paragraph in
-`CONTRIBUTING.md` that silently regresses.
+a crate with an integration target that CI does not run fails a check with a self-test proving it
+fails on a dropped crate. The same task fixes the stale claims in `test-performance-baseline.md`,
+adds the missing SAST scanner to the otherwise complete blocking set, and makes the Gatekeeper
+exemption a detected prerequisite rather than a paragraph in `CONTRIBUTING.md` that silently
+regresses.
 
 ### 2. Measurement harness and production-shaped data (TASK-019)
 
