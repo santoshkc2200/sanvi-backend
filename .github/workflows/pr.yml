@@ -182,9 +182,17 @@ jobs:
       # itself — a crate missing from it was tested by nothing, and a job that
       # runs no tests still passes. `ci-test-coverage` fails the PR if any
       # member with a tests/ directory is left uncovered by both jobs.
+      # The empty guard is load-bearing: a failed derivation must fail the
+      # step, not leave `args` empty for nextest to run unscoped.
       - name: derive the Docker-dependent crate list
         id: integration_packages
-        run: echo "args=$(./scripts/check-ci-test-coverage.sh --integration-packages)" >> "$GITHUB_OUTPUT"
+        run: |
+          args="$(./scripts/check-ci-test-coverage.sh --integration-packages)"
+          if [[ -z "$args" ]]; then
+            echo "no packages derived; refusing to run nextest without an explicit crate list" >&2
+            exit 1
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
       - run: cargo nextest run --profile ci ${{ steps.integration_packages.outputs.args }}
 
   ci-test-coverage:
@@ -205,17 +213,22 @@ jobs:
       - name: install pinned toolchain (rust-toolchain.toml)
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
-      # The general clippy job denies all warnings; this job exists so the
-      # security lint groups are named and enforced as a set (TASK-031).
-      # Semgrep adds pattern-level Rust security rules the compiler does not
-      # have. No IaC scanner: there is no IaC in this repository (recorded in
-      # docs/release/needs-humans.md).
+      # The general clippy job denies all warnings but is blind to any crate
+      # carrying a blanket `#[allow(...)]` attribute; group-level denies on
+      # the command line pierce crate-level allows. That is this step's
+      # signal, not duplication: on introduction it found two real defects in
+      # sanvi-payments that the -D warnings job could not see. The artifacts
+      # are shared with the main clippy job, so the cost is a re-lint, not a
+      # second build.
       - name: clippy security lint groups
         run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
-      - name: semgrep (Rust ruleset, version pinned)
+      # Rules are the vendored snapshot in .semgrep/rust.yaml, not a
+      # registry fetch: an upstream rule change must not redden unrelated
+      # PRs, and a scan must be reproducible from the tree.
+      - name: semgrep (vendored Rust ruleset)
         run: |
           python -m pip install --quiet "semgrep==1.176.1"
-          semgrep scan --config p/rust --error --metrics=off
+          semgrep scan --config .semgrep/rust.yaml --error --metrics=off
 
   openapi:
     name: OpenAPI contract drift

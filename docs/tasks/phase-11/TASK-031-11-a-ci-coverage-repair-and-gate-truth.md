@@ -126,14 +126,21 @@ out-of-bounds index, reverted in the same PR), then passes on the clean tree.
 
 > **Recorded 2026-09-15:** the clippy half failed on the planted `unsafe` block with a constant
 > out-of-bounds index (`clippy::out_of_bounds_indexing`, correctness group); the canary was
-> removed and the clean workspace passes the exact command. semgrep (`p/rust`, pinned 1.176.1)
-> found 4 blocking `temp-dir` findings on the clean tree — all `#[cfg(test)]` fixtures named
-> uniquely per run (uuid v7 / pid), not security operations — annotated with `nosemgrep` on the
-> matching lines; the scan then passed with 0 findings. Blocking the security groups explicitly
-> also surfaced two real, committed findings the existing `-D warnings` job cannot see (the
-> `sanvi-payments` crate carries a blanket `#![allow(warnings)]`, which command-line group denies
-> pierce): a duplicated attribute and an orphaned, mid-sentence doc comment attaching itself to
-> `CheckoutRepository`. Both fixed in this task.
+> removed and the clean workspace passes the exact command. semgrep (pinned 1.176.1) found 4
+> blocking `temp-dir` findings on the clean tree — all `#[cfg(test)]` fixtures named uniquely per
+> run (uuid v7 / pid), not security operations — annotated with `nosemgrep` on the matching lines;
+> the scan then passed with 0 findings. Blocking the security groups explicitly also surfaced two
+> real, committed findings the existing `-D warnings` job cannot see (the `sanvi-payments` crate
+> carries a blanket `#![allow(warnings)]`, which command-line group denies pierce): a duplicated
+> attribute and an orphaned, mid-sentence doc comment attaching itself to `CheckoutRepository`.
+> Both fixed in this task.
+>
+> **Review fixes (same day):** the semgrep ruleset is the vendored snapshot
+> `.semgrep/rust.yaml` (fetched from `p/rust` with 1.176.1, proven to produce the same 0-finding
+> result) rather than a run-time registry fetch, so an upstream rule change cannot redden
+> unrelated PRs. The "no IaC" justification was wrong — the repository tracks a `Dockerfile` and
+> `docker-compose*.yml`; what is parked is their *misconfiguration* scanning (vulnerabilities and
+> secrets are already scanned by trivy), and `needs-humans.md` now says so.
 
 ### Step 5: Make the Gatekeeper exemption a detected prerequisite
 
@@ -201,6 +208,16 @@ three.
   derivation marker (`steps.integration_packages.outputs.args`) with the same list
   `--integration-packages` computes, so it audits what the workflow will actually execute, not what
   it literally says.
+- **Review fixes (2026-09-15, second round).** (1) The self-test's drop fixture can only edit the
+  workflow text, but the derivation is recomputed from the filesystem, so a Docker-dependent victim
+  would be re-covered and the self-test would misfire — the fixture now picks a member covered by
+  the unit job alone (today `sanvi-http`), and fails with a clear explanation if none exists.
+  (2) The coverage gate grew a second rule: a member excluded from a `--workspace` job that no
+  other job names with `-p` fails the PR even without a `tests/` directory (the inline
+  `#[cfg(test)]` hole), self-tested with a no-tests member. (3) The workflow's derivation step now
+  fails on an empty result instead of letting nextest run unscoped, and the gate script refuses to
+  run without `cargo`, `jq`, and `rg`. (4) The clippy-groups step is documented as the
+  allow-pierce signal it proved to be, not a duplicate of `-D warnings`.
 
 ## Definition of done
 

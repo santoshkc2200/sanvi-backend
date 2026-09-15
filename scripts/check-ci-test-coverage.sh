@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# TASK-031 (phase 11.a) gate: every workspace member that ships tests is run
-# by a CI job. The integration job's crate list was maintained by hand, and a
+# TASK-031 (phase 11.a) gate: every workspace member's tests are run by a CI
+# job. The integration job's crate list was maintained by hand, and a
 # hand-maintained list is the defect — a crate missing from it is tested by
 # nothing, and a job that runs no tests still passes. This check derives both
 # sides from the ground truth: members with a tests/ directory from the
 # workspace, and the crates each `cargo nextest run` invocation in pr.yml
-# actually selects. It exits non-zero naming any crate in the first set that
-# no invocation covers.
+# actually selects. Two rules fail the PR:
+#   1. a member that ships tests/ which no invocation covers;
+#   2. a member excluded from a --workspace invocation that no other
+#      invocation names — the way a crate with only inline #[cfg(test)] tests
+#      (no tests/ directory) silently stops running.
 #
 # Usage:
 #   scripts/check-ci-test-coverage.sh                      # the gate
 #   scripts/check-ci-test-coverage.sh --self-test          # proves it fails
-#                                                          # on a dropped crate
+#                                                          # on both rules
 #   scripts/check-ci-test-coverage.sh --integration-packages
 #                                   # prints `-p X -p Y ...` for every member
 #                                   # whose tests use the Docker-backed
@@ -22,6 +25,15 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 workflow="$root/.github/workflows/pr.yml"
+
+# Fail closed on a missing tool rather than degrading into a check that
+# parses nothing and passes.
+for tool in cargo jq rg; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "this check requires $tool; install it before running" >&2
+        exit 1
+    fi
+done
 
 # name<TAB>manifest_path for every workspace member.
 workspace_members() {
@@ -40,17 +52,26 @@ members_with_tests() {
     return 0
 }
 
-# `-p X -p Y ...` for every member whose tests reference sanvi_testsupport —
-# the Docker-backed harness — i.e. exactly the set the integration job needs.
-docker_dependent_args() {
-    local members_tsv name manifest dir args=""
+# Members whose tests reference sanvi_testsupport — the Docker-backed harness
+# (Postgres/Redis) — i.e. exactly the set the integration job must run. One
+# name per line.
+docker_dependent_names() {
+    local members_tsv name manifest dir
     members_tsv="$(workspace_members)"
     while IFS=$'\t' read -r name manifest; do
         dir="$(dirname "$manifest")/tests"
         if [[ -d "$dir" ]] && rg -q 'sanvi_testsupport' "$dir"; then
-            args+="-p $name "
+            printf '%s\n' "$name"
         fi
     done <<<"$members_tsv"
+    return 0
+}
+
+docker_dependent_args() {
+    local args="" name
+    while IFS= read -r name; do
+        args+="-p $name "
+    done < <(docker_dependent_names)
     if [[ -z "$args" ]]; then
         echo "no member's tests use the Docker-backed harness" >&2
         return 1
@@ -58,12 +79,14 @@ docker_dependent_args() {
     printf '%s\n' "${args% }"
 }
 
-# Emit every crate the `cargo nextest run` invocations in $1 select. `--workspace`
-# selects all members minus each `--exclude`; `-p`/`--package` select explicitly.
+# Parse the `cargo nextest run` invocations in $1 and set globals:
+#   NEXT_COVERED  — every crate any invocation selects
+#   NEXT_EXPLICIT — every crate explicitly named with -p/--package
+#   NEXT_EXCLUDED — every crate --exclude'd from a --workspace invocation
 # An invocation whose package list is derived in the workflow from
-# `--integration-packages` is expanded with the same list this script computes,
-# so the gate and the workflow cannot disagree.
-covered_crates() {
+# `--integration-packages` is expanded with the same list this script
+# computes, so the gate and the workflow cannot disagree.
+parse_nextest_invocations() {
     local wf="$1" members_tsv="$2"
     local invocations all_names line tok pending name workspace
     invocations="$(rg 'cargo nextest run' "$wf" || true)"
@@ -72,10 +95,13 @@ covered_crates() {
         return 2
     fi
     all_names="$(printf '%s\n' "$members_tsv" | cut -f1)"
+    NEXT_COVERED=""
+    NEXT_EXPLICIT=""
+    NEXT_EXCLUDED=""
     local -a explicit excluded
     while IFS= read -r line; do
         if [[ "$line" == *'integration_packages.outputs.args'* ]]; then
-            line="$line $(docker_dependent_args)"
+            line="$line $(docker_dependent_args)" || return 2
         fi
         explicit=()
         excluded=()
@@ -100,6 +126,12 @@ covered_crates() {
                     ;;
             esac
         done
+        for name in "${explicit[@]+"${explicit[@]}"}"; do
+            NEXT_EXPLICIT+="$name"$'\n'
+        done
+        for name in "${excluded[@]+"${excluded[@]}"}"; do
+            NEXT_EXCLUDED+="$name"$'\n'
+        done
         if [[ "$workspace" == 1 ]]; then
             local skip e
             while IFS= read -r name; do
@@ -111,35 +143,46 @@ covered_crates() {
                     fi
                 done
                 if [[ "$skip" == 0 ]]; then
-                    printf '%s\n' "$name"
+                    NEXT_COVERED+="$name"$'\n'
                 fi
             done <<<"$all_names"
         fi
         for name in "${explicit[@]+"${explicit[@]}"}"; do
-            printf '%s\n' "$name"
+            NEXT_COVERED+="$name"$'\n'
         done
     done <<<"$invocations"
     return 0
 }
 
-# Print the uncovered names; rc 0 = covered, 1 = uncovered, 2 = workflow has no
-# nextest invocation at all.
+# Print uncovered names prefixed by the rule they broke ("untested" for rule
+# 1, "excluded-everywhere" for rule 2); rc 0 = covered, 1 = uncovered, 2 =
+# structural (no invocations found).
 coverage_report() {
-    local wf="$1" members_tsv="$2" with_tests covered uncovered
+    local wf="$1" members_tsv="$2" with_tests covered uncovered ex
     with_tests="$(printf '%s\n' "$members_tsv" | members_with_tests | sort -u)"
-    covered="$(covered_crates "$wf" "$members_tsv" | sort -u)" || return 2
-    if [[ -z "$with_tests" ]]; then
+    parse_nextest_invocations "$wf" "$members_tsv" || return 2
+    covered="$(printf '%s\n' "$NEXT_COVERED" | sort -u)"
+    if [[ -z "$covered" ]]; then
+        if [[ -n "$with_tests" ]]; then
+            printf 'untested\n%s\n' "$with_tests"
+            return 1
+        fi
         return 0
     fi
-    if [[ -z "$covered" ]]; then
-        printf '%s\n' "$with_tests"
-        return 1
+    if [[ -n "$with_tests" ]]; then
+        uncovered="$(printf '%s\n' "$with_tests" | grep -FxvF -f <(printf '%s\n' "$covered") || true)"
+        if [[ -n "$uncovered" ]]; then
+            printf 'untested\n%s\n' "$uncovered"
+            return 1
+        fi
     fi
-    uncovered="$(printf '%s\n' "$with_tests" | grep -FxvF -f <(printf '%s\n' "$covered") || true)"
-    if [[ -n "$uncovered" ]]; then
-        printf '%s\n' "$uncovered"
-        return 1
-    fi
+    while IFS= read -r ex; do
+        [[ -z "$ex" ]] && continue
+        if [[ -z "$NEXT_EXPLICIT" ]] || ! grep -Fxq "$ex" <<<"$NEXT_EXPLICIT"; then
+            printf 'excluded-everywhere\n%s\n' "$ex"
+            return 1
+        fi
+    done <<<"$NEXT_EXCLUDED"
     return 0
 }
 
@@ -147,6 +190,7 @@ if [[ "${1:-check}" == "--self-test" ]]; then
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     members_tsv="$(workspace_members)"
+    docker_names="$(docker_dependent_names)"
 
     if ! coverage_report "$workflow" "$members_tsv" >/dev/null 2>&1; then
         echo "self-test failed: the real workflow was reported as not covering the workspace" >&2
@@ -154,27 +198,54 @@ if [[ "${1:-check}" == "--self-test" ]]; then
         exit 1
     fi
 
-    # Drop the first member that ships tests and is not excluded from the unit
-    # job from coverage in a temporary copy: removed from any -p list and added
-    # to the unit job's --exclude set. The check must fail naming it.
-    with_tests_list="$(printf '%s\n' "$members_tsv" | members_with_tests)"
+    # Rule 1: drop the first member that ships tests/, is not excluded from
+    # the unit job, and does not use the Docker harness, from a temporary
+    # workflow copy (it can appear in no -p list by construction, so the
+    # derivation cannot re-cover it). The check must fail naming it.
     victim=""
     while IFS= read -r n; do
-        if ! grep -q -- "--exclude $n\$" "$workflow" && ! grep -q -- "--exclude $n " "$workflow"; then
+        if ! grep -q -- "--exclude $n\$" "$workflow" && ! grep -q -- "--exclude $n " "$workflow" \
+            && ! grep -Fxq "$n" <<<"$docker_names"; then
             victim="$n"
             break
         fi
-    done <<<"$with_tests_list"
+    done <<<"$(printf '%s\n' "$members_tsv" | members_with_tests)"
     if [[ -z "$victim" ]]; then
-        echo "self-test failed: no crate available to drop from the fixture" >&2
+        echo "self-test failed: no droppable fixture member — every member with tests/ is either" >&2
+        echo "unit-excluded or Docker-dependent (derived), so a workflow-only edit cannot drop one." >&2
+        echo "The fixture needs a member whose coverage comes from the unit job alone." >&2
         exit 1
     fi
-    sed -e "s/-p $victim / /g" \
-        -e "s/--exclude sanvi-persistence/--exclude sanvi-persistence --exclude $victim/" \
+    sed -e "s/--exclude sanvi-persistence/--exclude sanvi-persistence --exclude $victim/" \
         "$workflow" >"$tmp/dropped.yml"
     out="$(coverage_report "$tmp/dropped.yml" "$members_tsv" 2>&1 || true)"
-    if ! grep -Fxq "$victim" <<<"$out"; then
-        echo "self-test failed: a dropped crate was not reported as uncovered" >&2
+    if ! grep -q "^untested$" <<<"$out" || ! grep -Fxq "$victim" <<<"$out"; then
+        echo "self-test failed: a dropped crate was not reported as untested" >&2
+        printf '%s\n' "$out" >&2
+        exit 1
+    fi
+
+    # Rule 2: exclude a member with no tests/ directory (so rule 1 cannot
+    # fire) from the unit job; nothing else names it, so its inline tests
+    # would run nowhere. The check must fail naming it.
+    ghost=""
+    while IFS= read -r n; do
+        if ! grep -q -- "--exclude $n\$" "$workflow" && ! grep -q -- "--exclude $n " "$workflow" \
+            && ! grep -Fxq "$n" <<<"$(printf '%s\n' "$members_tsv" | members_with_tests)" \
+            && ! grep -Fxq "$n" <<<"$docker_names"; then
+            ghost="$n"
+            break
+        fi
+    done <<<"$(printf '%s\n' "$members_tsv" | cut -f1)"
+    if [[ -z "$ghost" ]]; then
+        echo "self-test failed: no fixture member without tests/ available to exclude" >&2
+        exit 1
+    fi
+    sed -e "s/--exclude sanvi-persistence/--exclude sanvi-persistence --exclude $ghost/" \
+        "$workflow" >"$tmp/ghost.yml"
+    out="$(coverage_report "$tmp/ghost.yml" "$members_tsv" 2>&1 || true)"
+    if ! grep -q "^excluded-everywhere$" <<<"$out" || ! grep -Fxq "$ghost" <<<"$out"; then
+        echo "self-test failed: an excluded-everywhere crate was not reported" >&2
         printf '%s\n' "$out" >&2
         exit 1
     fi
@@ -186,7 +257,7 @@ if [[ "${1:-check}" == "--self-test" ]]; then
         exit 1
     fi
 
-    echo "ci test coverage self-test: OK (fails on dropped crate '$victim' and on a nextest-less workflow)"
+    echo "ci test coverage self-test: OK (fails on dropped crate '$victim', on excluded-everywhere crate '$ghost', and on a nextest-less workflow)"
     exit 0
 fi
 
@@ -209,8 +280,14 @@ if [[ "$rc" == 2 ]]; then
     exit 1
 fi
 if [[ "$rc" == 1 ]]; then
-    echo "ci test coverage failed: crates shipping tests/ that no job in $workflow runs:" >&2
-    printf '%s\n' "$out" >&2
+    reason="${out%%$'\n'*}"
+    names="${out#*$'\n'}"
+    if [[ "$reason" == "excluded-everywhere" ]]; then
+        echo "ci test coverage failed: members excluded from a --workspace job that no other job names with -p (their tests, including inline #[cfg(test)], run nowhere):" >&2
+    else
+        echo "ci test coverage failed: crates shipping tests/ that no job in $workflow runs:" >&2
+    fi
+    printf '%s\n' "$names" >&2
     cat >&2 <<'EOF'
 Add them to the job that can run what their tests need: the unit job for
 plain tests, the integration job (via --integration-packages) for tests on
