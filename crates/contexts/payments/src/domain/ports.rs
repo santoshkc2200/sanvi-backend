@@ -14,14 +14,12 @@ use sanvi_persistence::{PlatformScope, ScopedTx};
 use super::capability::{CapabilitySet, RequirementSummary};
 use super::checkout::{Checkout, CheckoutId};
 use super::connection::{ConnectionId, ProviderConnection};
-use super::dispute::{DisputeId, DisputeRecord, DisputeStatus};
+use super::dispute::DisputeId;
 use super::error::PaymentsError;
 use super::fees::FeeConfiguration;
 use super::money::{Currency, Money};
-use super::payment::{
-    PaymentId, PaymentRecord, PaymentStatus, RefundId, RefundRecord, RefundStatus,
-};
-use super::payout::{PayoutId, PayoutRecord};
+use super::payment::{PaymentId, RefundId, RefundRecord, RefundStatus};
+use super::payout::PayoutId;
 use super::provider::{ConnectionStatus, CountryCode, ProviderKind};
 
 /// Generator for payments entity identifiers.

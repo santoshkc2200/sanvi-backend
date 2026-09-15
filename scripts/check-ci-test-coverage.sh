@@ -198,10 +198,14 @@ if [[ "${1:-check}" == "--self-test" ]]; then
         exit 1
     fi
 
-    # Rule 1: drop the first member that ships tests/, is not excluded from
-    # the unit job, and does not use the Docker harness, from a temporary
-    # workflow copy (it can appear in no -p list by construction, so the
-    # derivation cannot re-cover it). The check must fail naming it.
+    # Rule 1: drop a member that ships tests/, is not excluded from the unit
+    # job, and does not use the Docker harness, from a temporary workflow
+    # copy (it can appear in no -p list by construction, so the derivation
+    # cannot re-cover it). The check must fail naming it. When every real
+    # member is unit-excluded or Docker-dependent — a shape the repo may
+    # legitimately grow into — synthesize the fixture instead: a temp member
+    # whose only possible coverage would come from the unit job, so the
+    # self-test keeps working when the last qualifying real member is gone.
     victim=""
     while IFS= read -r n; do
         if ! grep -q -- "--exclude $n\$" "$workflow" && ! grep -q -- "--exclude $n " "$workflow" \
@@ -210,15 +214,16 @@ if [[ "${1:-check}" == "--self-test" ]]; then
             break
         fi
     done <<<"$(printf '%s\n' "$members_tsv" | members_with_tests)"
+    fixture_tsv="$members_tsv"
     if [[ -z "$victim" ]]; then
-        echo "self-test failed: no droppable fixture member — every member with tests/ is either" >&2
-        echo "unit-excluded or Docker-dependent (derived), so a workflow-only edit cannot drop one." >&2
-        echo "The fixture needs a member whose coverage comes from the unit job alone." >&2
-        exit 1
+        victim="sanvi-coverage-selftest-fixture"
+        mkdir -p "$tmp/$victim/tests"
+        : >"$tmp/$victim/Cargo.toml"
+        fixture_tsv="$(printf '%s\n%s\t%s\n' "$members_tsv" "$victim" "$tmp/$victim/Cargo.toml")"
     fi
     sed -e "s/--exclude sanvi-persistence/--exclude sanvi-persistence --exclude $victim/" \
         "$workflow" >"$tmp/dropped.yml"
-    out="$(coverage_report "$tmp/dropped.yml" "$members_tsv" 2>&1 || true)"
+    out="$(coverage_report "$tmp/dropped.yml" "$fixture_tsv" 2>&1 || true)"
     if ! grep -q "^untested$" <<<"$out" || ! grep -Fxq "$victim" <<<"$out"; then
         echo "self-test failed: a dropped crate was not reported as untested" >&2
         printf '%s\n' "$out" >&2

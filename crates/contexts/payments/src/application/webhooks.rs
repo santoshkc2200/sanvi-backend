@@ -962,7 +962,7 @@ fn is_tax_event(event_type: &str) -> bool {
 use crate::domain::checkout::{Checkout, CheckoutId};
 use crate::domain::events::EventAmount;
 use crate::domain::money::Money;
-use crate::domain::payment::{PaymentFailure, PaymentId, PaymentRecord, PaymentStatus};
+use crate::domain::payment::{PaymentFailure, PaymentRecord, PaymentStatus};
 use crate::domain::ports::{CheckoutLifecycleStore, IdGenerator};
 use sanvi_kernel::TenantId;
 use sanvi_persistence::PlatformScope;

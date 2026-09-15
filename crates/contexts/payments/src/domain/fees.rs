@@ -22,7 +22,7 @@ use crate::domain::money::Money;
 
 /// The per-tenant fee configuration as stored by the platform-admin
 /// context. `Default` is the shipped state: disabled everywhere.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeeConfiguration {
     /// Basis points of the charge total (100 bps = 1%). Absent = no
     /// percentage component.
@@ -34,17 +34,6 @@ pub struct FeeConfiguration {
     /// The floor on the computed fee, in the charge currency's minor
     /// units. Currency-aware by interpretation; see the module docs.
     pub minimum_minor: i64,
-}
-
-impl Default for FeeConfiguration {
-    fn default() -> Self {
-        Self {
-            basis_points: None,
-            fixed_minor: None,
-            fixed_currency: None,
-            minimum_minor: 0,
-        }
-    }
 }
 
 impl FeeConfiguration {

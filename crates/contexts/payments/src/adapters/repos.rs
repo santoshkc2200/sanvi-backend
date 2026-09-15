@@ -993,8 +993,7 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
 // ---------------------------------------------------------------------------
 
 use crate::domain::dispute::{DisputeId, DisputeRecord, DisputeStatus};
-use crate::domain::money::Currency;
-use crate::domain::payment::{RefundId, RefundRecord, RefundStatus};
+use crate::domain::payment::{RefundId, RefundStatus};
 use crate::domain::ports::{
     DisputeFilter, DisputePage, DisputeRepository, PaymentFilter, PaymentPage, PaymentRepository,
     RefundRepository,
@@ -1084,7 +1083,6 @@ struct RefundRow {
     created_by: Option<i64>,
     idempotency_key: Option<Uuid>,
     created_at: DateTime<Utc>,
-    updated_at: Option<DateTime<Utc>>,
 }
 
 impl TryFrom<RefundRow> for crate::domain::payment::RefundRecord {
@@ -1856,6 +1854,7 @@ fn row_to_payout(row: PayoutRow) -> Result<crate::domain::payout::PayoutRecord, 
 
 /// The payout projection (`payments.payouts`). Webhook handlers write
 /// under platform scope; tenant reads go through RLS-scoped transactions.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SqlxPayoutRepository;
 
 impl SqlxPayoutRepository {
@@ -2011,6 +2010,7 @@ fn tax_warning_json(warning: &Option<crate::domain::tax::TaxWarning>) -> Option<
 }
 
 /// Per-tenant automatic-tax settings (`payments.tax_settings`).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SqlxTaxSettingsRepository;
 
 impl SqlxTaxSettingsRepository {

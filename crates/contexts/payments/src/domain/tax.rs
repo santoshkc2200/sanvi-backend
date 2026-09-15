@@ -229,7 +229,7 @@ mod tests {
 
         assert!(record.enabled, "compliance drift never silently disables");
         assert!(record.warning.is_some());
-        assert_eq!(lapsed.lapsed(), true);
+        assert!(lapsed.lapsed());
     }
 
     #[test]

@@ -1,4 +1,3 @@
-#![allow(warnings)]
 #![allow(
     clippy::too_many_arguments,
     clippy::field_reassign_with_default,

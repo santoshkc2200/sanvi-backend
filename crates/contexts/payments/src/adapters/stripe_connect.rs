@@ -558,12 +558,6 @@ impl StripeConnectProvider {
     }
 }
 
-/// Not-yet-shipped port surface (09.5–09.7): honest refusals, never fake
-/// success.
-fn not_yet(ships_in: &str) -> PaymentsError {
-    PaymentsError::ProviderUnavailable(format!("stripe connect {ships_in}"))
-}
-
 /// The blocked-combination guard for outbound charge requests:
 /// `application_fee_amount` is legal **only** as a direct-charge fee on
 /// the payment intent, and must never coexist with a transfer shape

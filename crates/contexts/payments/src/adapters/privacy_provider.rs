@@ -4,8 +4,6 @@
 //! while the tenant-provided `customer_ref` is personal context and is
 //! removed for the matching end-user subject during erasure.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use sanvi_kernel::TenantId;
 use serde_json::Value;
@@ -285,6 +283,8 @@ impl PersonalDataProvider for PaymentsPrivacyProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[tokio::test]
