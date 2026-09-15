@@ -71,6 +71,19 @@ pub struct AdvertisingConfig {
     /// presented as current.
     #[serde(default = "default_metrics_freshness_stalled_after_hours")]
     pub metrics_freshness_stalled_after_hours: f64,
+    /// FX rate provider for cross-currency cap math: `"none"` or `"ecb"`.
+    /// `"none"` keeps `UnavailableFxRate` semantics — every cross-currency
+    /// cap is refused until an operator configures a provider. `"ecb"`
+    /// serves the ECB euro reference rates (free, no key), cached 24 h and
+    /// degraded to unavailable on fetch failure.
+    #[serde(default = "default_fx_provider")]
+    pub fx_provider: String,
+    /// ECB daily feed URL (override point for tests).
+    #[serde(default = "default_fx_ecb_url")]
+    pub fx_ecb_url: String,
+    /// HTTP timeout for FX feed fetches.
+    #[serde(default = "default_fx_timeout_secs")]
+    pub fx_timeout_secs: u64,
 }
 
 const fn default_quota_platform_wide_permits() -> usize {
@@ -99,6 +112,18 @@ const fn default_metrics_freshness_stalled_after_hours() -> f64 {
 
 fn default_token_kek_id() -> String {
     "kek-1".to_string()
+}
+
+fn default_fx_provider() -> String {
+    "ecb".to_string()
+}
+
+fn default_fx_ecb_url() -> String {
+    "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml".to_string()
+}
+
+const fn default_fx_timeout_secs() -> u64 {
+    5
 }
 
 impl std::fmt::Debug for AdvertisingConfig {
@@ -137,6 +162,9 @@ impl std::fmt::Debug for AdvertisingConfig {
                 "metrics_freshness_stalled_after_hours",
                 &self.metrics_freshness_stalled_after_hours,
             )
+            .field("fx_provider", &self.fx_provider)
+            .field("fx_ecb_url", &self.fx_ecb_url)
+            .field("fx_timeout_secs", &self.fx_timeout_secs)
             .finish()
     }
 }
@@ -165,6 +193,9 @@ impl Default for AdvertisingConfig {
             metrics_restatement_days: default_metrics_restatement_days(),
             metrics_ingestion_backfill_days: default_metrics_ingestion_backfill_days(),
             metrics_freshness_stalled_after_hours: default_metrics_freshness_stalled_after_hours(),
+            fx_provider: default_fx_provider(),
+            fx_ecb_url: default_fx_ecb_url(),
+            fx_timeout_secs: default_fx_timeout_secs(),
         }
     }
 }
@@ -235,6 +266,20 @@ impl AdvertisingConfig {
         }
         if self.metrics_freshness_stalled_after_hours <= 0.0 {
             anyhow::bail!("advertising metrics_freshness_stalled_after_hours must be positive");
+        }
+        match self.fx_provider.trim().to_ascii_lowercase().as_str() {
+            "none" | "ecb" => {}
+            other => {
+                anyhow::bail!("advertising fx_provider must be \"none\" or \"ecb\", got {other:?}");
+            }
+        }
+        if self.fx_provider.trim().eq_ignore_ascii_case("ecb") {
+            if self.fx_ecb_url.trim().is_empty() {
+                anyhow::bail!("advertising fx_ecb_url must not be empty when fx_provider is ecb");
+            }
+            if self.fx_timeout_secs == 0 {
+                anyhow::bail!("advertising fx_timeout_secs must be positive");
+            }
         }
         Ok(())
     }
@@ -336,6 +381,9 @@ mod tests {
         assert_eq!(config.token_kek, "");
         assert_eq!(config.token_kek_id, "kek-1");
         assert!(!config.real_platform_adapters);
+        assert_eq!(config.fx_provider, "ecb");
+        assert!(!config.fx_ecb_url.is_empty());
+        assert!(config.fx_timeout_secs > 0);
     }
 
     #[test]

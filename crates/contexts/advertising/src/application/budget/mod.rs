@@ -2,6 +2,7 @@
 
 pub mod alerts;
 pub mod caps;
+pub mod enforcement;
 pub mod evaluator;
 pub mod rollover;
 pub mod status;
@@ -11,6 +12,7 @@ pub use caps::{
     DryRunEvaluationResult, GetBudgetCaps, GetCampaignBudgetCap, PutBudgetCap, PutBudgetCapCommand,
     PutBudgetCapResponse,
 };
+pub use enforcement::{EnforcementGate, SuspensionReason};
 pub use evaluator::{SpendAnomalyDetector, ThresholdEvaluator};
 pub use rollover::BudgetRolloverSweep;
 pub use status::{CalculatedSpendDetails, GetSpendStatus, SpendStatusReport};

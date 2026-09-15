@@ -212,6 +212,7 @@ fn error_code(error: &AdvertisingError) -> &'static str {
         AdvertisingError::BudgetCapNotFound => "budget_cap_not_found",
         AdvertisingError::BudgetAlertNotFound => "budget_alert_not_found",
         AdvertisingError::CapBelowCurrentSpend => "cap_below_current_spend",
+        AdvertisingError::CapVersionRequired => "cap_version_required",
         AdvertisingError::EncryptionUnconfigured => "encryption_unconfigured",
         AdvertisingError::EncryptionFailure(_) => "encryption_failure",
         AdvertisingError::IdGeneration(_) => "id_generation",

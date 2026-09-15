@@ -354,6 +354,14 @@ pub const FEATURE_SEEDS: &[FeatureSeed] = &[
         visibility: Visibility::Public,
     },
     FeatureSeed {
+        key: "advertising.budget_guardrails",
+        name: "Budget Guardrails",
+        kind: FeatureKind::Boolean,
+        default_enabled: false,
+        default_limit: None,
+        visibility: Visibility::Public,
+    },
+    FeatureSeed {
         key: "advertising.campaign_limit",
         name: "Campaign Limit",
         kind: FeatureKind::Quota,

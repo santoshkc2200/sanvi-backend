@@ -426,6 +426,12 @@ google_ads_api_version = "v22"
 meta_api_version = "v24.0"
 quota_platform_wide_permits = 20
 quota_per_connection_permits = 3
+# Cross-currency cap math: "ecb" serves the ECB euro reference rates (free,
+# no key, cached 24h); "none" refuses every cross-currency cap until a
+# provider is configured.
+fx_provider = "ecb"
+fx_ecb_url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
+fx_timeout_secs = 5
 
 [media]
 # Both values are environment-only (SANVI__MEDIA__BASE_URL,

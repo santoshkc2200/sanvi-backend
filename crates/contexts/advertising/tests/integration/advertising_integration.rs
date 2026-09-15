@@ -4111,6 +4111,24 @@ async fn test_scheduled_token_refresh_sweep_success_and_revocation() {
 
     // A missing stored credential is the one failure that disconnects, pauses
     // dependent jobs, and marks the tenant notified.
+    // Backdate the sync first: the sweeps below use a zero-second staleness
+    // threshold, whose due predicate compares the host-clock timestamp the
+    // last refresh wrote against the database's own `now()`. A row refreshed
+    // milliseconds ago is not reliably due yet, so the sweep can race the
+    // DB clock and see nothing to check.
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    let mut due_again = connections_repo
+        .find_by_id(&mut scope, tenant_id, conn.id())
+        .await
+        .unwrap()
+        .unwrap();
+    due_again.record_refresh_success(None, Utc::now() - Duration::seconds(5));
+    connections_repo
+        .update(&mut scope, &due_again)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
     let providers_missing: std::collections::HashMap<
         sanvi_advertising::PlatformKey,
         Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
@@ -4145,8 +4163,9 @@ async fn test_scheduled_token_refresh_sweep_success_and_revocation() {
 
     // An outage must NOT disconnect: the grant cannot tell invalid_grant from
     // a 503 yet, so only the unambiguous signal above may pause a tenant.
+    // Backdate the sync for the same zero-threshold clock race as above.
     let mut recovered = after;
-    recovered.record_refresh_success(None, Utc::now());
+    recovered.record_refresh_success(None, Utc::now() - Duration::seconds(5));
     let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
     connections_repo
         .update(&mut scope, &recovered)

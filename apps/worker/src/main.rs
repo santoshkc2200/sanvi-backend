@@ -26,13 +26,13 @@ use sanvi_access::{
     AccessConfig,
     adapters::{
         HttpKetoClient, OutboxEventPublisher as AccessEventPublisher, RedisEntitlementCache,
-        SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleCatalog, SqlxRoleRepository,
-        sync::entitlement_sync_handler,
+        SqlxEntitlementRepository, SqlxFeatureRepository, SqlxQuotaUsageStore, SqlxRoleCatalog,
+        SqlxRoleRepository, SystemClock as AccessSystemClock, sync::entitlement_sync_handler,
     },
-    application::ExpireEntitlements,
+    application::{EntitlementFeatureGate, EntitlementResolver, ExpireEntitlements},
     domain::{
-        Clock, EntitlementCache, EntitlementRepository, EventPublisher, PermissionStore,
-        QuotaUsageStore, RoleRepository,
+        Clock, EntitlementCache, EntitlementRepository, EventPublisher, FeatureKey,
+        PermissionStore, QuotaUsageStore, RoleRepository,
     },
 };
 use sanvi_advertising::{
@@ -267,6 +267,100 @@ impl CopyRenderer for WorkerCopyRenderer {
             subject,
             text_body,
         })
+    }
+}
+
+/// The worker's tenant-timezone source for budget periods (advertising
+/// port): the tenant's locale settings from the localization context.
+/// Advertising must not import another context's domain, so the port is
+/// implemented here at the composition root. Unset settings resolve to
+/// `"UTC"`, matching `TenantLocaleSettings::default_for`.
+struct WorkerTenantTimezone;
+
+#[async_trait::async_trait]
+impl sanvi_advertising::domain::TenantTimezoneSource for WorkerTenantTimezone {
+    async fn timezone(
+        &self,
+        scope: &mut sanvi_persistence::ScopedTx<'_>,
+        tenant_id: TenantId,
+    ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
+        use sanvi_localization::domain::TenantLocaleRepository as _;
+        let repo = sanvi_localization::adapters::SqlxTenantLocaleRepository::new();
+        let settings = repo
+            .get(scope, tenant_id)
+            .await
+            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
+        Ok(settings
+            .map(|s| s.timezone)
+            .unwrap_or_else(|| "UTC".to_string()))
+    }
+}
+
+/// The worker's per-tenant budget-guardrails entitlement check (advertising
+/// port) through the access context's cached resolver — the same resolution
+/// the HTTP feature gate performs, so the sweep and the routes agree on who
+/// is rolled out. Every error fails closed (`false`): an uncertain gate
+/// skips evaluation, never auto-pauses.
+struct WorkerBudgetEntitlement {
+    gate: Arc<sanvi_access::application::EntitlementFeatureGate>,
+    feature: sanvi_access::domain::FeatureKey,
+}
+
+#[async_trait::async_trait]
+impl sanvi_advertising::domain::BudgetGuardrailEntitlement for WorkerBudgetEntitlement {
+    async fn is_enabled(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<bool, sanvi_advertising::domain::AdvertisingError> {
+        use sanvi_access::domain::FeatureGate as _;
+        match self.gate.is_enabled(tenant_id, &self.feature).await {
+            Ok(enabled) => Ok(enabled),
+            Err(sanvi_access::domain::AccessError::FeatureNotFound { key }) => {
+                tracing::warn!(
+                    %tenant_id,
+                    %key,
+                    "budget guardrails feature missing from catalog; failing closed"
+                );
+                Ok(false)
+            }
+            Err(err) => Err(sanvi_advertising::domain::AdvertisingError::Storage(
+                err.to_string(),
+            )),
+        }
+    }
+}
+
+/// Customer-facing tenant labels for rollback notices (advertising port).
+/// Falls back to the tenant id when the directory read fails rather than
+/// dropping the notice.
+struct WorkerTenantDirectory {
+    tx_manager: sanvi_persistence::TxManager,
+    tenants: Arc<dyn sanvi_tenancy::domain::TenantRepository>,
+}
+
+#[async_trait::async_trait]
+impl sanvi_advertising::domain::TenantDirectory for WorkerTenantDirectory {
+    async fn display_name(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("budget_rollback_directory", "tenancy")
+            .await
+            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
+        let tenant = self
+            .tenants
+            .find_by_id(&mut scope, tenant_id)
+            .await
+            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
+        Ok(tenant
+            .map(|t| t.display_name().to_string())
+            .unwrap_or_else(|| tenant_id.to_string()))
     }
 }
 
@@ -575,6 +669,14 @@ pub struct FeaturesConfig {
     /// off must stop *all* outbound mail from this process.
     #[serde(default = "default_true")]
     pub notifications: bool,
+    /// Mirrors the api's `features.advertising` rollout flag (same
+    /// `[features]` section, same default-off semantics). The budget
+    /// guardrail evaluation, anomaly sweep, and rollover sweep below are the
+    /// only jobs gated here: with the flag off the scheduler still runs, but
+    /// every budget tick is a no-op — disabling the rollout stops alerts and
+    /// destructive auto-pauses, which permission checks alone cannot do.
+    #[serde(default)]
+    pub advertising: bool,
 }
 
 /// Why this process is not sending notifications, if it is not.
@@ -596,6 +698,7 @@ impl Default for FeaturesConfig {
     fn default() -> Self {
         Self {
             notifications: default_true(),
+            advertising: false,
         }
     }
 }
@@ -896,6 +999,33 @@ async fn main() -> ExitCode {
     let entitlement_cache: Arc<dyn EntitlementCache> = Arc::new(RedisEntitlementCache::new(
         redis.clone(),
         config.access.entitlement_cache_ttl_secs,
+    ));
+
+    // Budget-guardrails rollout gate: the same cached entitlement resolution
+    // the HTTP feature gate performs, so the sweep and the routes agree on
+    // which tenants are rolled out. Built here (not in the advertising
+    // context) because advertising must not import access's domain.
+    let budget_guardrails_feature: FeatureKey =
+        match FeatureKey::parse("advertising.budget_guardrails") {
+            Ok(key) => key,
+            Err(err) => {
+                eprintln!("invalid budget guardrails feature key: {err}");
+                return ExitCode::from(2);
+            }
+        };
+    let budget_entitlement_gate = Arc::new(EntitlementFeatureGate::new(
+        Arc::new(EntitlementResolver::new(
+            access_tx.clone(),
+            Arc::new(SqlxFeatureRepository::new()),
+            entitlements.clone(),
+            entitlement_cache.clone(),
+            Arc::new(AccessSystemClock),
+            config.access.entitlement_cache_ttl_secs,
+        )),
+        access_tx.clone(),
+        quota.clone(),
+        access_events.clone(),
+        Arc::new(AccessSystemClock),
     ));
 
     let entitlement_consumer = StreamConsumer::new(pool.clone(), streams.clone());
@@ -1698,7 +1828,9 @@ async fn main() -> ExitCode {
     let advertising_budget_alerts: Arc<dyn sanvi_advertising::domain::BudgetAlertRepository> =
         Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new());
     let advertising_fx_rates: Arc<dyn sanvi_advertising::domain::FxRatePort> =
-        Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new());
+        sanvi_advertising::adapters::build_fx_rates(&config.advertising, tx_manager.clone());
+    let advertising_timezones: Arc<dyn sanvi_advertising::domain::TenantTimezoneSource> =
+        Arc::new(WorkerTenantTimezone);
     let advertising_spend_status = Arc::new(sanvi_advertising::application::GetSpendStatus::new(
         tx_manager.clone(),
         advertising_metrics_repo.clone(),
@@ -1706,6 +1838,7 @@ async fn main() -> ExitCode {
         advertising_campaigns.clone(),
         advertising_connections.clone(),
         advertising_fx_rates,
+        advertising_timezones.clone(),
         config.advertising.metrics_restatement_days,
     ));
     let advertising_pause_campaign = Arc::new(sanvi_advertising::application::PauseCampaign::new(
@@ -1724,7 +1857,6 @@ async fn main() -> ExitCode {
             advertising_budget_caps.clone(),
             advertising_budget_alerts.clone(),
             advertising_campaigns.clone(),
-            advertising_connections.clone(),
             advertising_pause_campaign,
             advertising_spend_status,
             advertising_events.clone(),
@@ -1737,7 +1869,7 @@ async fn main() -> ExitCode {
             advertising_budget_alerts,
             advertising_metrics_repo,
             advertising_campaigns.clone(),
-            advertising_events,
+            advertising_events.clone(),
             advertising_ids,
             config.advertising.metrics_restatement_days,
         ));
@@ -1745,6 +1877,28 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_advertising::application::BudgetRolloverSweep::new(
             tx_manager.clone(),
             advertising_budget_caps,
+            advertising_timezones,
+        ));
+    // Per-tenant rollout gate + rollback notices (TASK-017 follow-up): route
+    // gating cannot protect background jobs, so the sweep partitions caps by
+    // entitlement itself and emails every tenant whose retained caps stopped
+    // being evaluated.
+    let advertising_enforcement_gate =
+        Arc::new(sanvi_advertising::application::EnforcementGate::new(
+            tx_manager.clone(),
+            Arc::new(WorkerBudgetEntitlement {
+                gate: budget_entitlement_gate,
+                feature: budget_guardrails_feature,
+            }),
+            Arc::new(WorkerTenantDirectory {
+                tx_manager: tx_manager.clone(),
+                tenants: tenants.clone(),
+            }),
+            advertising_events.clone(),
+            // Durable suspension-notice dedupe: one notice per
+            // enabled→suspended transition, surviving restarts and shared
+            // across replicas.
+            Arc::new(sanvi_advertising::adapters::SqlxGuardrailSuspensionLedger::new()),
         ));
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
@@ -1754,9 +1908,12 @@ async fn main() -> ExitCode {
             {
                 let evaluator = advertising_threshold_evaluator.clone();
                 let anomaly_detector = advertising_spend_anomaly_detector.clone();
+                let gate = advertising_enforcement_gate.clone();
+                let enabled = config.features.advertising;
                 move || {
                     let evaluator = evaluator.clone();
                     let anomaly_detector = anomaly_detector.clone();
+                    let gate = gate.clone();
                     Box::pin(async move {
                         // Read the caps in a short transaction that commits before
                         // evaluation starts: each cap opens its own tenant-scoped
@@ -1766,13 +1923,37 @@ async fn main() -> ExitCode {
                             .list_active_caps()
                             .await
                             .map_err(|e| anyhow::anyhow!(e))?;
-                        if let Err(e) = evaluator.evaluate_caps(&caps).await {
+                        use sanvi_advertising::application::SuspensionReason;
+
+                        // Global rollback: no evaluation at all. Tenants whose
+                        // caps were previously evaluated get the suspension
+                        // notice (the ledger suppresses anyone never observed
+                        // serving — a fresh deploy with the flag off is not a
+                        // rollback); the rollback path includes it by spec.
+                        if !enabled {
+                            let mut tenants: Vec<_> = caps.iter().map(|c| c.tenant_id).collect();
+                            tenants.sort_unstable();
+                            tenants.dedup();
+                            gate.notify_suspended(&tenants, SuspensionReason::FeatureDisabled)
+                                .await;
+                            return Ok(());
+                        }
+
+                        // Per-tenant rollout: route gating cannot protect
+                        // background jobs, so non-entitled tenants are
+                        // partitioned out here — their caps are never
+                        // evaluated and never pause — and notified.
+                        let (evaluable, suspended) = gate.partition(&caps).await;
+                        gate.notify_suspended(&suspended, SuspensionReason::EntitlementOff)
+                            .await;
+                        if let Err(e) = evaluator.evaluate_caps(&evaluable).await {
                             tracing::error!(error = %e, "Budget guardrail sweep failed");
                         }
 
-                        // Spend anomaly detection runs for every tenant that has an
-                        // active cap, reusing the cap listing rather than re-querying.
-                        let mut tenants: Vec<_> = caps.iter().map(|c| c.tenant_id).collect();
+                        // Spend anomaly detection runs for every entitled
+                        // tenant that has an active cap, reusing the cap
+                        // listing rather than re-querying.
+                        let mut tenants: Vec<_> = evaluable.iter().map(|c| c.tenant_id).collect();
                         tenants.sort_unstable();
                         tenants.dedup();
                         for tenant_id in tenants {
@@ -1797,9 +1978,13 @@ async fn main() -> ExitCode {
             Duration::from_secs(config.scheduler.advertising_budget_rollover_interval_secs),
             {
                 let rollover = advertising_rollover_sweep.clone();
+                let enabled = config.features.advertising;
                 move || {
                     let rollover = rollover.clone();
                     Box::pin(async move {
+                        if !enabled {
+                            return Ok(());
+                        }
                         // Each sweep is a no-op unless the period actually rolled
                         // over since the last tick; the job interval is far shorter
                         // than either period.
@@ -2906,6 +3091,7 @@ mod config_tests {
 
         config.features = FeaturesConfig {
             notifications: false,
+            advertising: false,
         };
         // Both the Lane A consumers and the Lane B export mail read this one
         // decision, so the flag is a real rollback switch for the worker and

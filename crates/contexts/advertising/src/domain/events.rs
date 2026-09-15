@@ -21,6 +21,7 @@ pub const EVENT_TYPES: &[&str] = &[
     "advertising.conversion_upload_failed",
     "advertising.spend_threshold_reached",
     "advertising.metrics_ingested",
+    "advertising.budget_guardrails_suspended",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +83,15 @@ pub enum AdEvent {
     MetricsIngested {
         connection_id: ConnectionId,
     },
+    /// Budget enforcement stopped guarding this tenant's caps (global
+    /// rollback or revoked `advertising.budget_guardrails` entitlement).
+    /// Caps and alert history are retained; monitoring and auto-pause are
+    /// inactive. Drives the rollback notice email — a guardrail that
+    /// silently stops guarding is worse than one that never existed.
+    BudgetGuardrailsSuspended {
+        tenant_name: String,
+        reason: String,
+    },
 }
 
 impl AdEvent {
@@ -99,6 +109,7 @@ impl AdEvent {
             Self::ConversionUploadFailed { .. } => EVENT_TYPES[9],
             Self::SpendThresholdReached { .. } => EVENT_TYPES[10],
             Self::MetricsIngested { .. } => EVENT_TYPES[11],
+            Self::BudgetGuardrailsSuspended { .. } => EVENT_TYPES[12],
         }
     }
 
@@ -120,6 +131,11 @@ impl AdEvent {
                 Some(id) => ("advertising.campaign", id.as_snowflake()),
                 None => ("advertising.tenant", tenant_id.as_snowflake()),
             },
+            // Tenant-scoped by construction: the suspension notice is about
+            // the tenant's enforcement, not one campaign.
+            Self::BudgetGuardrailsSuspended { .. } => {
+                ("advertising.tenant", tenant_id.as_snowflake())
+            }
             Self::ConversionRecorded { event_id }
             | Self::ConversionUploaded { event_id }
             | Self::ConversionUploadFailed { event_id, .. } => {
@@ -200,6 +216,10 @@ mod tests {
             },
             AdEvent::MetricsIngested {
                 connection_id: ConnectionId::try_from(1_000_003_i64).unwrap(),
+            },
+            AdEvent::BudgetGuardrailsSuspended {
+                tenant_name: "acme".to_string(),
+                reason: "feature_disabled".to_string(),
             },
         ];
         assert_eq!(events.len(), EVENT_TYPES.len());

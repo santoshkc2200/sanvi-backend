@@ -2864,6 +2864,40 @@ pub fn build_payments_state(
 /// (phase 05): the directive gate (TASK-014) is the phase's core
 /// invariant, and advertising holds no directive or sub-processor state of
 /// its own to consult instead.
+///
+/// Tenant timezones likewise live in the localization context: budget periods
+/// are calendar periods in the tenant timezone (TASK-017), and advertising
+/// must not import another context's domain, so this adapter implements the
+/// advertising port from the localization repository here at the composition
+/// root.
+#[derive(Debug, Clone, Copy, Default)]
+struct LocalizationTenantTimezone;
+
+impl LocalizationTenantTimezone {
+    const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl sanvi_advertising::domain::TenantTimezoneSource for LocalizationTenantTimezone {
+    async fn timezone(
+        &self,
+        scope: &mut sanvi_persistence::ScopedTx<'_>,
+        tenant_id: sanvi_kernel::TenantId,
+    ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
+        use sanvi_localization::domain::TenantLocaleRepository as _;
+        let repo = SqlxTenantLocaleRepository::new();
+        let settings = repo
+            .get(scope, tenant_id)
+            .await
+            .map_err(|e| sanvi_advertising::domain::AdvertisingError::Storage(e.to_string()))?;
+        Ok(settings
+            .map(|s| s.timezone)
+            .unwrap_or_else(|| "UTC".to_string()))
+    }
+}
+
 pub async fn build_advertising_state(
     pool: sanvi_persistence::PgPool,
     ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
@@ -3030,7 +3064,9 @@ pub async fn build_advertising_state(
         std::sync::Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new());
     let budget_alerts_repo =
         std::sync::Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new());
-    let fx_rates = std::sync::Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new());
+    let fx_rates = sanvi_advertising::adapters::build_fx_rates(config, tx.clone());
+    let tenant_timezones: std::sync::Arc<dyn sanvi_advertising::domain::TenantTimezoneSource> =
+        std::sync::Arc::new(LocalizationTenantTimezone::new());
     let metrics_repo =
         std::sync::Arc::new(sanvi_advertising::adapters::SqlxMetricsRepository::new());
     let pause_campaign_service =
@@ -3050,6 +3086,7 @@ pub async fn build_advertising_state(
             campaigns.clone(),
             connections.clone(),
             fx_rates,
+            tenant_timezones.clone(),
             config.metrics_restatement_days,
         ));
     let evaluator = std::sync::Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
@@ -3057,7 +3094,6 @@ pub async fn build_advertising_state(
         budget_caps_repo.clone(),
         budget_alerts_repo.clone(),
         campaigns.clone(),
-        connections.clone(),
         pause_campaign_service.clone(),
         spend_status_service.clone(),
         events.clone(),

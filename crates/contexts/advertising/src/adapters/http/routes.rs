@@ -17,6 +17,16 @@ use super::handlers::{
 /// platform entries remain gated by their own entitlement in later slices.
 pub const ADVERTISING_ENTITLEMENTS: &[&str] = &["advertising.google_ads", "advertising.meta_ads"];
 
+/// Rollback switch for budget enforcement (TASK-017 follow-up). Every budget
+/// route — caps, alerts, spend status — requires this entitlement *in
+/// addition* to its permission: disabling it hides the endpoints (and the UI,
+/// which reads the same entitlement) while previously stored caps stay inert
+/// rows rather than live guardrails. The worker sweep honours the matching
+/// global `features.advertising` flag; per-tenant enforcement gating inside
+/// the sweep would need entitlement reads the evaluator does not own, so the
+/// route gate plus the global sweep gate together are the rollback story.
+pub const BUDGET_GUARDRAILS_ENTITLEMENTS: &[&str] = &["advertising.budget_guardrails"];
+
 pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
     let read = require_permission!("advertising.read", tenant);
     let write = require_permission!("advertising.campaign.write", tenant);
@@ -169,6 +179,7 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(get_ads_metrics_freshness)),
     );
     let budget_manage = require_permission!("advertising.budget.manage", tenant);
+    let budget_gate = || sanvi_http::RequiredAnyFeature::declared(BUDGET_GUARDRAILS_ENTITLEMENTS);
 
     cfg.service(
         web::resource("/ads/budget-caps")
@@ -176,6 +187,7 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
                 (Method::GET, read),
                 (Method::PUT, budget_manage),
             ]))
+            .app_data(budget_gate())
             .route(web::get().to(get_budget_caps))
             .route(web::put().to(put_budget_cap)),
     );
@@ -185,22 +197,26 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
                 (Method::GET, read),
                 (Method::PUT, budget_manage),
             ]))
+            .app_data(budget_gate())
             .route(web::get().to(get_campaign_budget_cap))
             .route(web::put().to(put_campaign_budget_cap)),
     );
     cfg.service(
         web::resource("/ads/budget-alerts")
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(budget_gate())
             .route(web::get().to(get_budget_alerts)),
     );
     cfg.service(
         web::resource("/ads/budget-alerts/{alert_id}/acknowledge")
             .app_data(PermissionMap::new(vec![(Method::POST, budget_manage)]))
+            .app_data(budget_gate())
             .route(web::post().to(acknowledge_budget_alert)),
     );
     cfg.service(
         web::resource("/ads/spend-status")
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(budget_gate())
             .route(web::get().to(get_spend_status)),
     );
 }
@@ -544,37 +560,37 @@ pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
     (
         "/api/v1/tenant/ads/budget-caps",
         Method::GET,
-        ADVERTISING_ENTITLEMENTS,
+        BUDGET_GUARDRAILS_ENTITLEMENTS,
     ),
     (
         "/api/v1/tenant/ads/budget-caps",
         Method::PUT,
-        ADVERTISING_ENTITLEMENTS,
+        BUDGET_GUARDRAILS_ENTITLEMENTS,
     ),
     (
         "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
         Method::GET,
-        ADVERTISING_ENTITLEMENTS,
+        BUDGET_GUARDRAILS_ENTITLEMENTS,
     ),
     (
         "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
         Method::PUT,
-        ADVERTISING_ENTITLEMENTS,
+        BUDGET_GUARDRAILS_ENTITLEMENTS,
     ),
     (
         "/api/v1/tenant/ads/budget-alerts",
         Method::GET,
-        ADVERTISING_ENTITLEMENTS,
+        BUDGET_GUARDRAILS_ENTITLEMENTS,
     ),
     (
         "/api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge",
         Method::POST,
-        ADVERTISING_ENTITLEMENTS,
+        BUDGET_GUARDRAILS_ENTITLEMENTS,
     ),
     (
         "/api/v1/tenant/ads/spend-status",
         Method::GET,
-        ADVERTISING_ENTITLEMENTS,
+        BUDGET_GUARDRAILS_ENTITLEMENTS,
     ),
 ];
 

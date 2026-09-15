@@ -33,21 +33,27 @@ use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 
 use crate::domain::model::BudgetPeriod;
-use crate::domain::{AdvertisingError, BudgetCapRepository};
+use crate::domain::{AdvertisingError, BudgetCapRepository, TenantTimezoneSource};
 
 pub struct BudgetRolloverSweep {
     tx: TxManager,
     caps: Arc<dyn BudgetCapRepository>,
+    timezones: Arc<dyn TenantTimezoneSource>,
     /// Last `period_start` this process recorded per (tenant, period). See the
     /// module docs for why this is in-process rather than persisted.
     last_processed: Mutex<HashMap<(TenantId, BudgetPeriod), NaiveDate>>,
 }
 
 impl BudgetRolloverSweep {
-    pub fn new(tx: TxManager, caps: Arc<dyn BudgetCapRepository>) -> Self {
+    pub fn new(
+        tx: TxManager,
+        caps: Arc<dyn BudgetCapRepository>,
+        timezones: Arc<dyn TenantTimezoneSource>,
+    ) -> Self {
         Self {
             tx,
             caps,
+            timezones,
             last_processed: Mutex::new(HashMap::new()),
         }
     }
@@ -63,7 +69,22 @@ impl BudgetRolloverSweep {
         tenant_id: TenantId,
         period: BudgetPeriod,
     ) -> Result<bool, AdvertisingError> {
-        let period_start = period.period_start(Utc::now().date_naive());
+        let mut scope = self
+            .tx
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        // The boundary is "today" in the tenant's timezone — the same window
+        // spend is summed in — not UTC. A UTC boundary would record a
+        // rollover hours before (or after) the spend window actually turns
+        // over for a non-UTC tenant.
+        let tz_name = self.timezones.timezone(&mut scope, tenant_id).await?;
+        scope
+            .commit()
+            .await
+            .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+        let tz = super::status::parse_tenant_timezone(&tz_name);
+        let period_start = period.period_start(Utc::now().with_timezone(&tz).date_naive());
 
         // Claim the boundary before doing any work, so a concurrent tick cannot
         // process the same period twice. The guard is dropped before any await.

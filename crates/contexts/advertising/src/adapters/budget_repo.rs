@@ -9,7 +9,9 @@ use crate::domain::model::{
     AlertCondition, BudgetAlert, BudgetAlertId, BudgetCap, BudgetCapId, BudgetPeriod, CampaignId,
     DataFreshness, Money,
 };
-use crate::domain::{AdvertisingError, BudgetAlertRepository, BudgetCapRepository};
+use crate::domain::{
+    AdvertisingError, BudgetAlertRepository, BudgetCapRepository, GuardrailSuspensionLedger,
+};
 
 fn storage(error: sqlx::Error) -> AdvertisingError {
     AdvertisingError::Storage(error.to_string())
@@ -211,12 +213,27 @@ impl BudgetCapRepository for SqlxBudgetCapRepository {
         &self,
         scope: &mut ScopedTx<'_>,
         cap: &BudgetCap,
+        expected_version: Option<i64>,
     ) -> Result<BudgetCap, AdvertisingError> {
+        // Optimistic locking, two paths:
+        // - Versioned writes (`Some`): the conflicting-row UPDATE applies
+        //   only if the stored version still matches; a zero-row update is a
+        //   lost race → `StaleRevision` (409).
+        // - Versionless creates (`None`, valid only when no row exists — the
+        //   application layer rejects version-less updates first): a pure
+        //   INSERT that does nothing on conflict, so two concurrent creates
+        //   cannot silently overwrite each other; the loser sees no row and
+        //   gets `StaleRevision` instead of a quiet last-writer-wins.
         let campaign_id_i64 = cap.campaign_id.map(|id| id.as_i64());
+        // A named version takes the guarded compare-and-swap path; a
+        // versionless call is a create and takes the insert-only path, so a
+        // concurrent create conflicts instead of overwriting.
+        let guarded = expected_version.is_some();
         let row = match campaign_id_i64 {
             None => {
-                sqlx::query_as::<_, BudgetCapRow>(
-                    "INSERT INTO advertising.budget_caps
+                if guarded {
+                    sqlx::query_as::<_, BudgetCapRow>(
+                        "INSERT INTO advertising.budget_caps
                        (id, tenant_id, campaign_id, period, amount_minor, currency,
                         declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
                         version, created_at, updated_at)
@@ -230,29 +247,63 @@ impl BudgetCapRepository for SqlxBudgetCapRepository {
                        auto_resume_on_rollover = EXCLUDED.auto_resume_on_rollover,
                        version = advertising.budget_caps.version + 1,
                        updated_at = now()
+                     WHERE advertising.budget_caps.version = $14
                      RETURNING id, tenant_id, campaign_id, period, amount_minor, currency,
                        declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
                        version, created_at, updated_at",
-                )
-                .bind(cap.id.as_i64())
-                .bind(cap.tenant_id.as_i64())
-                .bind(campaign_id_i64)
-                .bind(cap.period.as_str())
-                .bind(cap.amount.amount_minor)
-                .bind(&cap.amount.currency)
-                .bind(&cap.declared_fx_basis)
-                .bind(cap.fx_rate_date)
-                .bind(cap.auto_pause)
-                .bind(cap.auto_resume_on_rollover)
-                .bind(cap.version)
-                .bind(cap.created_at)
-                .bind(cap.updated_at)
-                .fetch_one(&mut **scope.tx_mut().as_inner())
-                .await
-                .map_err(storage)?
+                    )
+                    .bind(cap.id.as_i64())
+                    .bind(cap.tenant_id.as_i64())
+                    .bind(campaign_id_i64)
+                    .bind(cap.period.as_str())
+                    .bind(cap.amount.amount_minor)
+                    .bind(&cap.amount.currency)
+                    .bind(&cap.declared_fx_basis)
+                    .bind(cap.fx_rate_date)
+                    .bind(cap.auto_pause)
+                    .bind(cap.auto_resume_on_rollover)
+                    .bind(cap.version)
+                    .bind(cap.created_at)
+                    .bind(cap.updated_at)
+                    .bind(expected_version)
+                    .fetch_optional(&mut **scope.tx_mut().as_inner())
+                    .await
+                    .map_err(storage)?
+                    .ok_or(AdvertisingError::StaleRevision)?
+                } else {
+                    sqlx::query_as::<_, BudgetCapRow>(
+                        "INSERT INTO advertising.budget_caps
+                       (id, tenant_id, campaign_id, period, amount_minor, currency,
+                        declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
+                        version, created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                     ON CONFLICT (tenant_id, period) WHERE campaign_id IS NULL DO NOTHING
+                     RETURNING id, tenant_id, campaign_id, period, amount_minor, currency,
+                       declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
+                       version, created_at, updated_at",
+                    )
+                    .bind(cap.id.as_i64())
+                    .bind(cap.tenant_id.as_i64())
+                    .bind(campaign_id_i64)
+                    .bind(cap.period.as_str())
+                    .bind(cap.amount.amount_minor)
+                    .bind(&cap.amount.currency)
+                    .bind(&cap.declared_fx_basis)
+                    .bind(cap.fx_rate_date)
+                    .bind(cap.auto_pause)
+                    .bind(cap.auto_resume_on_rollover)
+                    .bind(cap.version)
+                    .bind(cap.created_at)
+                    .bind(cap.updated_at)
+                    .fetch_optional(&mut **scope.tx_mut().as_inner())
+                    .await
+                    .map_err(storage)?
+                    .ok_or(AdvertisingError::StaleRevision)?
+                }
             }
             Some(cid) => {
-                sqlx::query_as::<_, BudgetCapRow>(
+                if guarded {
+                    sqlx::query_as::<_, BudgetCapRow>(
                     "INSERT INTO advertising.budget_caps
                        (id, tenant_id, campaign_id, period, amount_minor, currency,
                         declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
@@ -267,14 +318,15 @@ impl BudgetCapRepository for SqlxBudgetCapRepository {
                        auto_resume_on_rollover = EXCLUDED.auto_resume_on_rollover,
                        version = advertising.budget_caps.version + 1,
                        updated_at = now()
+                     WHERE advertising.budget_caps.version = $14
                      RETURNING id, tenant_id, campaign_id, period, amount_minor, currency,
                        declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
                        version, created_at, updated_at",
                 )
-                .bind(cap.id.as_i64())
+.bind(cap.id.as_i64())
                 .bind(cap.tenant_id.as_i64())
                 .bind(cid)
-                .bind(cap.period.as_str())
+.bind(cap.period.as_str())
                 .bind(cap.amount.amount_minor)
                 .bind(&cap.amount.currency)
                 .bind(&cap.declared_fx_basis)
@@ -284,13 +336,129 @@ impl BudgetCapRepository for SqlxBudgetCapRepository {
                 .bind(cap.version)
                 .bind(cap.created_at)
                 .bind(cap.updated_at)
-                .fetch_one(&mut **scope.tx_mut().as_inner())
+                .bind(expected_version)
+.fetch_optional(&mut **scope.tx_mut().as_inner())
                 .await
                 .map_err(storage)?
+                .ok_or(AdvertisingError::StaleRevision)?
+                } else {
+                    sqlx::query_as::<_, BudgetCapRow>(
+                    "INSERT INTO advertising.budget_caps
+                       (id, tenant_id, campaign_id, period, amount_minor, currency,
+                        declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
+                        version, created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                     ON CONFLICT (tenant_id, campaign_id, period) WHERE campaign_id IS NOT NULL DO NOTHING
+                     RETURNING id, tenant_id, campaign_id, period, amount_minor, currency,
+                       declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
+                       version, created_at, updated_at",
+                )
+.bind(cap.id.as_i64())
+                .bind(cap.tenant_id.as_i64())
+                .bind(cid)
+.bind(cap.period.as_str())
+                .bind(cap.amount.amount_minor)
+                .bind(&cap.amount.currency)
+                .bind(&cap.declared_fx_basis)
+                .bind(cap.fx_rate_date)
+                .bind(cap.auto_pause)
+                .bind(cap.auto_resume_on_rollover)
+                .bind(cap.version)
+                .bind(cap.created_at)
+                .bind(cap.updated_at)
+.fetch_optional(&mut **scope.tx_mut().as_inner())
+                .await
+                .map_err(storage)?
+                .ok_or(AdvertisingError::StaleRevision)?
+                }
             }
         };
 
         row.try_into()
+    }
+}
+
+/// Durable suspension-notice state machine
+/// (`advertising.guardrail_suspensions`).
+///
+/// `claim_notice` is one statement: it inserts the suspended state when the
+/// tenant has no row — and answers `false`, because a first observation is
+/// not a rollback and must not email — and on conflict updates the row only
+/// when the recorded state is `serving` (an observed enabled→suspended
+/// transition) or the recorded reason differs *and that suspension was
+/// actually notified* (a reason change re-arms only a notice the tenant has
+/// seen; a silently recorded suspension stays silent). The
+/// `RETURNING (xmax = 0)` discriminator tells insert (row created, nothing
+/// to announce) from update (transition): Postgres gives a freshly inserted
+/// row a new xmax of 0, while an `ON CONFLICT … DO UPDATE` leaves the
+/// pre-existing row's nonzero xmax. A repeat of the recorded, completed
+/// reason leaves the row untouched and returns no row: the caller publishes
+/// nothing. Running inside the caller's transaction makes the claim atomic
+/// with the event publish it gates, so a crash or a lost race between
+/// replicas can neither double-send nor silently swallow a notice.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SqlxGuardrailSuspensionLedger;
+
+impl SqlxGuardrailSuspensionLedger {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl GuardrailSuspensionLedger for SqlxGuardrailSuspensionLedger {
+    async fn claim_notice(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        reason: &str,
+    ) -> Result<bool, AdvertisingError> {
+        let claimed = sqlx::query_as::<_, (i64, bool)>(
+            "INSERT INTO advertising.guardrail_suspensions (tenant_id, state, reason, suspended_at, notified_at)
+             VALUES ($1, 'suspended', $2, now(), NULL)
+             ON CONFLICT (tenant_id) DO UPDATE SET
+               state = 'suspended',
+               reason = EXCLUDED.reason,
+               suspended_at = EXCLUDED.suspended_at,
+               notified_at = now()
+             WHERE advertising.guardrail_suspensions.state = 'serving'
+                OR (advertising.guardrail_suspensions.reason IS DISTINCT FROM EXCLUDED.reason
+                    AND advertising.guardrail_suspensions.notified_at IS NOT NULL)
+             RETURNING tenant_id, (xmax = 0) AS inserted",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(reason)
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        // `inserted` is true only for a freshly created row: the tenant was
+        // observed suspended with no serving history, which is recorded but
+        // never announced. `false` means an existing row was updated — an
+        // observed transition. `None` means the row was left untouched (a
+        // repeat of the recorded reason).
+        Ok(matches!(claimed, Some((_, false))))
+    }
+
+    async fn mark_serving(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+    ) -> Result<(), AdvertisingError> {
+        if tenant_ids.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<i64> = tenant_ids.iter().map(|t| t.as_i64()).collect();
+        sqlx::query(
+            "INSERT INTO advertising.guardrail_suspensions AS g (tenant_id, state, reason, suspended_at)
+             SELECT id, 'serving', 'none', now() FROM unnest($1::bigint[]) AS t(id)
+             ON CONFLICT (tenant_id) DO UPDATE SET state = 'serving'
+             WHERE g.state IS DISTINCT FROM 'serving'",
+        )
+        .bind(&ids)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
     }
 }
 

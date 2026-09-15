@@ -18,9 +18,9 @@ pub mod tracking;
 pub use access_tokens::VaultAccessTokenProvider;
 pub use budget::{
     AcknowledgeBudgetAlert, BudgetRolloverSweep, CalculatedSpendDetails, DryRunEvaluationResult,
-    GetBudgetCaps, GetCampaignBudgetCap, GetSpendStatus, ListBudgetAlerts, PutBudgetCap,
-    PutBudgetCapCommand, PutBudgetCapResponse, SpendAnomalyDetector, SpendStatusReport,
-    ThresholdEvaluator,
+    EnforcementGate, GetBudgetCaps, GetCampaignBudgetCap, GetSpendStatus, ListBudgetAlerts,
+    PutBudgetCap, PutBudgetCapCommand, PutBudgetCapResponse, SpendAnomalyDetector,
+    SpendStatusReport, SuspensionReason, ThresholdEvaluator,
 };
 pub use campaigns::{
     AdFields, AdGroupFields, AddAd, AddAdGroup, CampaignFields, CreateCampaign, GetCampaign,
