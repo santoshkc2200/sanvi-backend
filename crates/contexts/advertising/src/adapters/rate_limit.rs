@@ -17,9 +17,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use crate::domain::{
-    AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
-    AuthorizationStart, Campaign, ConnectionHandle, ConsentSnapshot, ExchangedAuthorization,
-    HashedIds, MetricPoint, MetricQuery, PlatformAccount, PlatformDescriptor, UploadedConversion,
+    AdPlatformPort, AdReviewObservation, AdvertisingError, AuthorizationExchange,
+    AuthorizationRequest, AuthorizationStart, Campaign, ConnectionHandle, ConsentSnapshot,
+    ExchangedAuthorization, HashedIds, MetricPoint, MetricQuery, PlatformAccount,
+    PlatformDescriptor, UploadedConversion,
 };
 
 /// Ceiling on distinct keys held at once. Connection ids are bounded by
@@ -245,6 +246,17 @@ impl AdPlatformPort for RateLimitedAdapter {
         self.inner.fetch_metrics(connection, request).await
     }
 
+    async fn fetch_review_status(
+        &self,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
+    ) -> Result<Vec<AdReviewObservation>, AdvertisingError> {
+        let _permits = self.limiter.acquire(&connection.id).await;
+        self.inner
+            .fetch_review_status(connection, campaign_id)
+            .await
+    }
+
     async fn upload(
         &self,
         connection: &ConnectionHandle,
@@ -395,6 +407,14 @@ mod tests {
             _connection: &ConnectionHandle,
             _request: &MetricQuery,
         ) -> Result<Vec<MetricPoint>, AdvertisingError> {
+            unimplemented!()
+        }
+
+        async fn fetch_review_status(
+            &self,
+            _connection: &ConnectionHandle,
+            _campaign_id: &str,
+        ) -> Result<Vec<AdReviewObservation>, AdvertisingError> {
             unimplemented!()
         }
 

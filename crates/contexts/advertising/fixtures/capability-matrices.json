@@ -22,10 +22,10 @@
     "display_name": "Meta Ads",
     "entitlement_key": "advertising.meta_ads",
     "capability_matrix": {
-      "matrix_version": "2026-08-24",
+      "matrix_version": "2026-09-16",
       "objectives": ["app_promotion", "awareness", "engagement", "leads", "sales", "traffic"],
-      "budget_types": ["daily", "lifetime"],
-      "minimum_budgets_minor": {"JPY": {"daily": 100, "lifetime": 100}},
+      "budget_types": ["daily", "lifetime", "campaign_budget_optimization"],
+      "minimum_budgets_minor": {"JPY": {"daily": 100, "lifetime": 100, "campaign_budget_optimization": 100}},
       "schedule_granularity": "daily",
       "targeting_dimensions": ["age", "custom_audiences", "gender", "geo", "interests", "languages"],
       "creative_placements": [

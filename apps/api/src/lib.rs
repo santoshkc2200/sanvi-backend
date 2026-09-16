@@ -49,9 +49,9 @@ use sanvi_advertising::{
         AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
         DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, GetFreshness,
         HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives,
-        ListPlatformCatalog, PatchCampaign, PublishCampaign, QueryMetrics, ReconcileCampaign,
-        ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd, UpdateAdGroup,
-        ValidateCampaign,
+        ListPlatformCatalog, PatchCampaign, PollCampaignReviewStatus, PublishCampaign,
+        QueryMetrics, ReconcileCampaign, ResolveCampaignDrift, ResumeCampaign, StartAuthorization,
+        UpdateAd, UpdateAdGroup, ValidateCampaign,
     },
     domain::TokenVault,
     routes as advertising_routes,
@@ -3085,7 +3085,7 @@ pub async fn build_advertising_state(
             budget_caps_repo.clone(),
             campaigns.clone(),
             connections.clone(),
-            fx_rates,
+            fx_rates.clone(),
             tenant_timezones.clone(),
             config.metrics_restatement_days,
         ));
@@ -3213,6 +3213,12 @@ pub async fn build_advertising_state(
             registry.clone(),
             advertising_ids.clone(),
         )),
+        poll_review_status: std::sync::Arc::new(PollCampaignReviewStatus::new(
+            tx.clone(),
+            campaigns.clone(),
+            connections.clone(),
+            registry.clone(),
+        )),
         update_ad: std::sync::Arc::new(UpdateAd::new(
             tx.clone(),
             campaigns,
@@ -3288,6 +3294,7 @@ pub async fn build_advertising_state(
         list_budget_alerts,
         acknowledge_budget_alert,
         get_spend_status: spend_status_service,
+        fx_rates,
         oauth_state,
         // Concurrency caps on the public track beacon: a coarse abuse
         // control (see `tracking_handlers` module doc), not a

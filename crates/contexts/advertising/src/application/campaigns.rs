@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{
     application::PlatformRegistry,
     domain::{
-        Ad, AdEvent, AdGroup, AdvertisingConnection, AdvertisingConnectionRepository,
+        Ad, AdEvent, AdGroup, AdReview, AdvertisingConnection, AdvertisingConnectionRepository,
         AdvertisingError, BidSettings, Budget, Campaign, CampaignChange,
         CampaignReconciliationState, CampaignRepository, ChangeSource, ConnectionHandle,
         ConnectionStatus, Creative, CreativeRepository, DriftState, EventPublisher, Objective,
@@ -1021,9 +1021,11 @@ impl AddAd {
                     let ad_index = group.ads.len();
                     let mut ad = Ad {
                         id: ad_id,
+                        external_id: None,
                         creative: fields.creative,
                         landing_url: fields.landing_url,
                         tracking_template: fields.tracking_template,
+                        review: AdReview::default(),
                     };
                     validate_and_hydrate_ad_creative(
                         scope,
@@ -1120,9 +1122,13 @@ impl UpdateAd {
                     if let Some(creative) = fields.creative {
                         let mut temp_ad = Ad {
                             id: ad.id.clone(),
+                            external_id: ad.external_id.clone(),
                             creative,
                             landing_url: ad.landing_url.clone(),
                             tracking_template: ad.tracking_template.clone(),
+                            // A creative edit re-enters the platform's review;
+                            // the stale verdict must not survive the change.
+                            review: AdReview::default(),
                         };
                         validate_and_hydrate_ad_creative(
                             scope,
@@ -1197,6 +1203,31 @@ impl PublishError {
 impl From<PublishError> for AdvertisingError {
     fn from(err: PublishError) -> Self {
         err.into_inner()
+    }
+}
+
+/// Adopt the platform's own ids for our ads out of the adapter's response
+/// tree into the stored intent. The port's contract (see
+/// `AdPlatformPort::create_campaign`) is that the response keys groups and
+/// ads by the ids the caller sent and carries platform-assigned ids in
+/// `Ad::external_id` — those are the only key review-status observations can
+/// ever be matched on, so an adapter that creates (or has the platform
+/// assign) ids must return them here. Matching is by the ids the caller
+/// sent; a group or ad absent from the response is left untouched, and an
+/// id already recorded is never wiped by an echoing adapter.
+fn adopt_platform_tree_ids(intent: &mut Campaign, remote: &Campaign) {
+    for group in &mut intent.ad_groups {
+        let Some(remote_group) = remote.ad_groups.iter().find(|rg| rg.id == group.id) else {
+            continue;
+        };
+        for ad in &mut group.ads {
+            let Some(remote_ad) = remote_group.ads.iter().find(|ra| ra.id == ad.id) else {
+                continue;
+            };
+            if let Some(external_id) = &remote_ad.external_id {
+                ad.external_id = Some(external_id.clone());
+            }
+        }
     }
 }
 
@@ -1417,10 +1448,21 @@ impl PublishCampaign {
         }
 
         let before = current.intent.clone();
+        // The intent stays the tenant's. `remote` is only an echo of what we
+        // sent — or worse, a read-back that cannot represent every intent
+        // field (a platform with no campaign-budget-optimization marker on
+        // read-back always re-derives a plain daily budget) — so adopting it
+        // wholesale silently rewrote budget semantics and dropped tree
+        // fields. Only what the platform actually decided or assigned is
+        // adopted: the run state, and the platform's own ids for the ads we
+        // sent (the correlation key review-status polling matches on).
+        let mut intent = current.intent.clone();
+        intent.status = remote.status;
+        adopt_platform_tree_ids(&mut intent, &remote);
         let updated = StoredCampaign {
             external_id: Some(external_id),
             revision: current.revision + 1,
-            intent: remote.clone(),
+            intent,
             remote_snapshot: remote,
             publishing_mutation_id: None,
             ..current
@@ -1618,9 +1660,16 @@ impl SetCampaignRunState {
             ),
         };
 
+        // The adapter's pause/resume response is a status echo — a platform
+        // read-back can carry a placeholder name, objective and budget, and
+        // no ad groups at all. Adopting it as the intent once destroyed the
+        // stored tree on every pause; only the run state is the
+        // platform's word to take.
+        let mut intent = stored.intent.clone();
+        intent.status = remote.status;
         let updated = StoredCampaign {
             revision: stored.revision + 1,
-            intent: remote.clone(),
+            intent,
             remote_snapshot: remote,
             ..stored
         };

@@ -12,12 +12,12 @@ use crate::{
     CapabilityMatrix, ConnectionHandle, Objective, PlatformKey,
     application::PlatformRegistry,
     domain::{
-        AdPlatformPort, AdvertisingError, AudienceSyncPort, AudienceSyncReceipt,
-        AuthorizationExchange, AuthorizationRequest, AuthorizationStart, BudgetType, Campaign,
-        CampaignStatus, ConversionEvent, ConversionSinkPort, CreativeAssetSpec, CreativePlacement,
-        ExchangedAuthorization, HashedIdentifier, MetricPoint, MetricQuery, Money, PlatformAccount,
-        PlatformDescriptor, ScheduleGranularity, TargetingDimension, UploadReceipt,
-        UploadedConversion, ValidationViolation,
+        AdPlatformPort, AdReviewObservation, AdReviewState, AdvertisingError, AudienceSyncPort,
+        AudienceSyncReceipt, AuthorizationExchange, AuthorizationRequest, AuthorizationStart,
+        BudgetType, Campaign, CampaignStatus, ConversionEvent, ConversionSinkPort,
+        CreativeAssetSpec, CreativePlacement, ExchangedAuthorization, HashedIdentifier,
+        MetricPoint, MetricQuery, Money, PlatformAccount, PlatformDescriptor, ScheduleGranularity,
+        TargetingDimension, UploadReceipt, UploadedConversion, ValidationViolation,
     },
 };
 
@@ -63,6 +63,7 @@ impl FakeAdPlatform {
                     "topics",
                 ],
                 (30, 30),
+                "2026-08-24",
                 vec![
                     CreativePlacement {
                         key: "feed".to_string(),
@@ -104,7 +105,11 @@ impl FakeAdPlatform {
                     "sales",
                     "traffic",
                 ],
-                &[BudgetType::Daily, BudgetType::Lifetime],
+                &[
+                    BudgetType::Daily,
+                    BudgetType::Lifetime,
+                    BudgetType::CampaignBudgetOptimization,
+                ],
                 &[
                     "age",
                     "custom_audiences",
@@ -114,6 +119,9 @@ impl FakeAdPlatform {
                     "languages",
                 ],
                 (40, 25),
+                // CBO joined the matrix; the version bump is the cache key the
+                // frontend's form engine uses to re-fetch schemas.
+                "2026-09-16",
                 vec![
                     CreativePlacement {
                         key: "feed".to_string(),
@@ -165,6 +173,7 @@ impl FakeAdPlatform {
                 &[BudgetType::Lifetime],
                 &["device"],
                 (18, 12),
+                "2026-08-24",
                 vec![CreativePlacement {
                     key: "feed".to_string(),
                     asset_spec: CreativeAssetSpec {
@@ -183,6 +192,7 @@ impl FakeAdPlatform {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn descriptor(
     key: &str,
     display_name: &str,
@@ -191,6 +201,7 @@ fn descriptor(
     budget_types: &[BudgetType],
     dimensions: &[&str],
     headline_limits: (usize, usize),
+    matrix_version: &str,
     creative_placements: Vec<CreativePlacement>,
 ) -> PlatformDescriptor {
     let (english_headline_limit, japanese_headline_limit) = headline_limits;
@@ -228,7 +239,7 @@ fn descriptor(
         display_name: display_name.to_string(),
         entitlement_key: entitlement_key.to_string(),
         capability_matrix: CapabilityMatrix {
-            matrix_version: "2026-08-24".to_string(),
+            matrix_version: matrix_version.to_string(),
             objectives: objective_set,
             budget_types,
             minimum_budgets_minor: minimums,
@@ -315,13 +326,26 @@ impl AdPlatformPort for FakeAdPlatform {
         campaign: Campaign,
         _mutation_id: uuid::Uuid,
     ) -> Result<Campaign, AdvertisingError> {
+        // This fake's platform assigns each ad an id equal to the id the
+        // caller sent, and hands the tree straight back — exactly the
+        // `create_campaign` contract the real adapters must honour once they
+        // create ads remotely. Publish persists the assignment onto the
+        // intent, which is what lets review polling match by platform id.
+        let mut assigned = campaign.clone();
+        for group in &mut assigned.ad_groups {
+            for ad in &mut group.ads {
+                if ad.external_id.is_none() {
+                    ad.external_id = Some(ad.id.clone());
+                }
+            }
+        }
         self.campaigns
             .lock()
             .map_err(|_| {
                 AdvertisingError::PlatformUnavailable("fake state lock poisoned".to_string())
             })?
-            .insert(campaign.id.clone(), campaign.clone());
-        Ok(campaign)
+            .insert(assigned.id.clone(), assigned.clone());
+        Ok(assigned)
     }
 
     async fn update_campaign(
@@ -471,6 +495,41 @@ impl AdPlatformPort for FakeAdPlatform {
             day_index += 1;
         }
         Ok(points)
+    }
+
+    async fn fetch_review_status(
+        &self,
+        _connection: &ConnectionHandle,
+        campaign_id: &str,
+    ) -> Result<Vec<AdReviewObservation>, AdvertisingError> {
+        let campaigns = self.campaigns.lock().map_err(|_| {
+            AdvertisingError::PlatformUnavailable("fake state lock poisoned".to_string())
+        })?;
+        let Some(campaign) = campaigns.get(campaign_id) else {
+            return Ok(Vec::new());
+        };
+        // A live platform reviews ads asynchronously after publish. The fake
+        // short-circuits that: an Active campaign's ads review clean, anything
+        // else is still pending — deterministic for the contract suite.
+        let state = if campaign.status == CampaignStatus::Active {
+            AdReviewState::Approved
+        } else {
+            AdReviewState::Pending
+        };
+        Ok(campaign
+            .ad_groups
+            .iter()
+            .flat_map(|group| group.ads.iter())
+            .map(|ad| AdReviewObservation {
+                // Ads the platform assigned ids to are listed by that id;
+                // ads created after publish (added through a later update,
+                // never assigned one by this fake) are listed by the id the
+                // caller sent — this fake treats everything as known.
+                ad_external_id: ad.external_id.clone().unwrap_or_else(|| ad.id.clone()),
+                state,
+                reasons: Vec::new(),
+            })
+            .collect())
     }
 
     async fn upload(
@@ -760,6 +819,7 @@ mod tests {
                 },
                 ads: vec![Ad {
                     id: "ad-1".to_string(),
+                    external_id: None,
                     creative: Creative {
                         id: "creative-1".to_string(),
                         placement: "feed".to_string(),
@@ -772,6 +832,7 @@ mod tests {
                     },
                     landing_url: "https://tenant.example/landing".to_string(),
                     tracking_template: None,
+                    review: Default::default(),
                 }],
             }],
             drift: DriftState {
@@ -805,6 +866,44 @@ mod tests {
         assert!(paths.contains(&"objective"));
         assert!(paths.contains(&"budget.kind"));
         assert!(!paths.contains(&"budget.amount.currency"));
+    }
+
+    #[test]
+    fn campaign_budget_optimization_is_meta_only() {
+        let meta_matrix = &FakeAdPlatform::fixtures()[1].capability_matrix;
+        let google_matrix = &FakeAdPlatform::fixtures()[0].capability_matrix;
+
+        assert!(
+            validate_campaign(
+                meta_matrix,
+                &campaign(
+                    "sales",
+                    BudgetType::CampaignBudgetOptimization,
+                    "en",
+                    "valid"
+                )
+            )
+            .is_empty(),
+            "meta declares CBO, so a CBO campaign must validate cleanly"
+        );
+
+        let violations = validate_campaign(
+            google_matrix,
+            &campaign(
+                "sales",
+                BudgetType::CampaignBudgetOptimization,
+                "en",
+                "valid",
+            ),
+        );
+        let paths = violations
+            .iter()
+            .map(|violation: &ValidationViolation| violation.field_path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            paths.contains(&"budget.kind"),
+            "google does not declare CBO, so it must be rejected on the budget.kind path"
+        );
     }
 
     #[test]

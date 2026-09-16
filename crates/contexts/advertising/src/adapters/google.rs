@@ -19,17 +19,17 @@ use uuid::Uuid;
 
 use crate::config::AdvertisingConfig;
 use crate::domain::{
-    AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
-    AuthorizationStart, Budget, BudgetType, Campaign, CampaignStatus, CapabilityMatrix,
-    ConnectionAccessTokenProvider, ConnectionHandle, ConsentSnapshot, CreativeAssetSpec,
-    CreativePlacement, DriftState, ExchangedAuthorization, GrantedAccessToken, HashedIds,
-    MetricPoint, MetricQuery, Money, Objective, PlatformAccount, PlatformDescriptor, PlatformKey,
-    RefreshTokenGrant, ScheduleGranularity, TargetingDimension, UploadedConversion,
+    AdPlatformPort, AdReviewObservation, AdReviewState, AdvertisingError, AuthorizationExchange,
+    AuthorizationRequest, AuthorizationStart, Budget, BudgetType, Campaign, CampaignStatus,
+    CapabilityMatrix, ConnectionAccessTokenProvider, ConnectionHandle, ConsentSnapshot,
+    CreativeAssetSpec, CreativePlacement, DriftState, ExchangedAuthorization, GrantedAccessToken,
+    HashedIds, MetricPoint, MetricQuery, Money, Objective, PlatformAccount, PlatformDescriptor,
+    PlatformKey, RefreshTokenGrant, ScheduleGranularity, TargetingDimension, UploadedConversion,
 };
 
 const DEFAULT_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const DEFAULT_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const DEFAULT_API_BASE: &str = "https://googleads.googleapis.com";
+pub(crate) const DEFAULT_API_BASE: &str = "https://googleads.googleapis.com";
 const GOOGLE_ADS_SCOPE: &str = "https://www.googleapis.com/auth/adwords";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -124,6 +124,8 @@ struct GoogleMutateResult {
 #[derive(Deserialize)]
 struct GoogleSearchResponse {
     #[serde(default)]
+    next_page_token: Option<String>,
+    #[serde(default)]
     results: Vec<GoogleSearchResultRow>,
 }
 
@@ -137,6 +139,36 @@ struct GoogleSearchResultRow {
     metrics: Option<GoogleMetricsRow>,
     #[serde(default)]
     customer: Option<GoogleCustomerRow>,
+    #[serde(default, rename = "adGroupAd")]
+    ad_group_ad: Option<GoogleAdGroupAdRow>,
+}
+
+#[derive(Deserialize)]
+struct GoogleAdGroupAdRow {
+    #[serde(default)]
+    ad: Option<GoogleAdResourceRef>,
+    #[serde(default, rename = "policySummary")]
+    policy_summary: Option<GooglePolicySummaryRow>,
+}
+
+#[derive(Deserialize)]
+struct GoogleAdResourceRef {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GooglePolicySummaryRow {
+    #[serde(default, rename = "approvalStatus")]
+    approval_status: Option<String>,
+    #[serde(default, rename = "policyTopicEntries")]
+    policy_topic_entries: Vec<GooglePolicyTopicEntryRow>,
+}
+
+#[derive(Deserialize)]
+struct GooglePolicyTopicEntryRow {
+    #[serde(default)]
+    topic: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -190,6 +222,21 @@ fn require_customer_id(connection: &ConnectionHandle) -> Result<String, Advertis
     Ok(format_customer_id(&connection.external_account_id))
 }
 
+/// The platform campaign id a GAQL query interpolates into a quoted literal.
+/// Google campaign ids are bare numerals; anything else would break the query
+/// syntax at best and — for a corrupted stored external id — smuggle extra
+/// GAQL in at worst. Rejecting here hands the caller an `InvalidInput` naming
+/// the id instead of an opaque platform error.
+fn require_numeric_campaign_id(campaign_id: &str) -> Result<String, AdvertisingError> {
+    let trimmed = campaign_id.trim();
+    if trimmed.is_empty() || !trimmed.chars().all(|character| character.is_ascii_digit()) {
+        return Err(AdvertisingError::InvalidInput(format!(
+            "google campaign id must be numeric, got {campaign_id:?}"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
 fn format_customer_id(raw_id: &str) -> String {
     let trimmed = raw_id
         .trim()
@@ -228,6 +275,22 @@ fn map_status_from_google(raw: &str) -> CampaignStatus {
         "PAUSED" => CampaignStatus::Paused,
         "REMOVED" => CampaignStatus::Archived,
         _ => CampaignStatus::Paused,
+    }
+}
+
+/// Map Google's `policy_summary.approval_status` onto the domain verdict.
+/// The bool records whether policy topic entries carry decision-relevant
+/// wording: they are the rejection reasons for a disapproval, and the
+/// limiting policies for an approval-with-limits; plain approvals and
+/// in-review states have none worth showing.
+fn map_google_approval_status(raw: &str) -> (AdReviewState, bool) {
+    match raw {
+        "APPROVED" => (AdReviewState::Approved, false),
+        "APPROVED_LIMITED" => (AdReviewState::Approved, true),
+        "DISAPPROVED" => (AdReviewState::Rejected, true),
+        // PENDING_REVIEW / UNDER_REVIEW / UNSPECIFIED / anything new: the
+        // safe verdict is "still pending", never "approved".
+        _ => (AdReviewState::Pending, false),
     }
 }
 
@@ -610,6 +673,7 @@ impl AdPlatformPort for GoogleAdsAdapter {
         connection: &ConnectionHandle,
         campaign_id: &str,
     ) -> Result<Option<Campaign>, AdvertisingError> {
+        let campaign_id = require_numeric_campaign_id(campaign_id)?;
         let access_token = self.access_tokens.access_token(connection).await?;
         let customer_id = require_customer_id(connection)?;
         let url = format!(
@@ -1061,6 +1125,112 @@ impl AdPlatformPort for GoogleAdsAdapter {
         Ok(points)
     }
 
+    async fn fetch_review_status(
+        &self,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
+    ) -> Result<Vec<AdReviewObservation>, AdvertisingError> {
+        let campaign_id = require_numeric_campaign_id(campaign_id)?;
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!(
+            "{}/{}/customers/{customer_id}/googleAds:search",
+            self.api_base_url, self.api_version
+        );
+
+        // Policy topic entries are surfaced verbatim: the tenant must see
+        // Google's own policy wording to fix the ad in Google's own tooling.
+        let gaql = format!(
+            "SELECT ad_group_ad.ad.id, ad_group_ad.status, ad_group_ad.policy_summary.approval_status, ad_group_ad.policy_summary.policy_topic_entries.topic FROM ad_group_ad WHERE campaign.id = '{campaign_id}' AND ad_group_ad.status != 'REMOVED'"
+        );
+
+        let mut observations = Vec::new();
+        // `googleAds:search` pages its results; ignoring `nextPageToken`
+        // would silently truncate the campaign's verdicts to the first page.
+        let mut page_token = None;
+        loop {
+            let mut payload = serde_json::json!({ "query": gaql });
+            if let Some(token) = &page_token {
+                payload["pageToken"] = serde_json::json!(token);
+            }
+
+            let response = self
+                .http
+                .post(&url)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .header("developer-token", &self.developer_token)
+                .header(
+                    "x-goog-request-params",
+                    format!("customer_id={customer_id}"),
+                )
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|err| {
+                    tracing::warn!(error = %err, "google fetch_review_status transport failed");
+                    AdvertisingError::PlatformUnavailable(
+                        "google fetch_review_status transport failed".to_string(),
+                    )
+                })?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                return Err(AdvertisingError::PlatformUnavailable(format!(
+                    "google fetch_review_status failed with status {status}"
+                )));
+            }
+
+            let body: GoogleSearchResponse = response.json().await.map_err(|err| {
+                tracing::warn!(error = %err, "google fetch_review_status JSON parse failed");
+                AdvertisingError::PlatformUnavailable(
+                    "invalid response shape from google fetch_review_status".to_string(),
+                )
+            })?;
+
+            for row in body.results {
+                let Some(ad_group_ad) = row.ad_group_ad else {
+                    continue;
+                };
+                let Some(ad_external_id) = ad_group_ad.ad.and_then(|ad| ad.id) else {
+                    continue;
+                };
+                let approval = ad_group_ad
+                    .policy_summary
+                    .as_ref()
+                    .and_then(|summary| summary.approval_status.as_deref());
+                let (state, attach_reasons) = match approval {
+                    Some(status) => map_google_approval_status(status),
+                    None => (AdReviewState::Pending, false),
+                };
+                let reasons = if attach_reasons {
+                    ad_group_ad
+                        .policy_summary
+                        .map(|summary| {
+                            summary
+                                .policy_topic_entries
+                                .into_iter()
+                                .filter_map(|entry| entry.topic)
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                observations.push(AdReviewObservation {
+                    ad_external_id,
+                    state,
+                    reasons,
+                });
+            }
+
+            match body.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+        Ok(observations)
+    }
+
     async fn upload(
         &self,
         connection: &ConnectionHandle,
@@ -1084,8 +1254,8 @@ impl AdPlatformPort for GoogleAdsAdapter {
         if permitted {
             for (key, val) in ids.values {
                 let tag = match key.to_ascii_lowercase().as_str() {
-                    "em" | "mail_hash" | "hashed_mail" => "hashed_mail".to_string(),
-                    "ph" | "phone_hash" | "hashed_phone" => "hashed_phone".to_string(),
+                    "em" | "mail_hash" | "hashed_mail" => "hashedEmail".to_string(),
+                    "ph" | "phone_hash" | "hashed_phone" => "hashedPhoneNumber".to_string(),
                     other => other.to_string(),
                 };
                 user_identifiers.push(serde_json::json!({
@@ -1215,6 +1385,397 @@ fn google_ads_descriptor() -> PlatformDescriptor {
             ],
             text_limits,
         },
+    }
+}
+
+/// Real Google Ads conversion sink: `uploadClickConversions` for uploads and
+/// `uploadConversionAdjustments` (RETRACTION) for post-upload withdrawals.
+/// Identifiers arrive already hashed — the sink never sees raw PII — and the
+/// consent snapshot rides on the event, so a consented and a suppressed
+/// upload cannot be confused at the transport layer.
+pub struct GoogleConversionSink {
+    http: reqwest::Client,
+    developer_token: String,
+    api_version: String,
+    api_base_url: String,
+    access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    descriptor: PlatformDescriptor,
+}
+
+impl GoogleConversionSink {
+    pub fn new(
+        config: &AdvertisingConfig,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    ) -> Result<Self, AdvertisingError> {
+        Self::with_custom_endpoints(config, DEFAULT_API_BASE.to_string(), access_tokens)
+    }
+
+    pub fn with_custom_endpoints(
+        config: &AdvertisingConfig,
+        api_base_url: String,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    ) -> Result<Self, AdvertisingError> {
+        if config.google_ads_developer_token.trim().is_empty() {
+            return Err(AdvertisingError::PlatformUnavailable(
+                "google ads developer token is required for the conversion sink".to_string(),
+            ));
+        }
+        Ok(Self {
+            http: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .map_err(|err| {
+                    AdvertisingError::PlatformUnavailable(format!(
+                        "google conversion sink http client: {err}"
+                    ))
+                })?,
+            developer_token: config.google_ads_developer_token.clone(),
+            api_version: config.google_ads_api_version.clone(),
+            api_base_url,
+            access_tokens,
+            descriptor: google_ads_descriptor(),
+        })
+    }
+
+    /// POST a version-rooted path; callers build the customer-rooted suffix
+    /// themselves because RPC calls (`:verb`) and job resources nest
+    /// differently.
+    async fn post(
+        &self,
+        connection: &ConnectionHandle,
+        path: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, AdvertisingError> {
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!("{}/{}/{path}", self.api_base_url, self.api_version);
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google conversion sink transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google conversion sink transport failed".to_string(),
+                )
+            })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google conversion sink {path} failed with status {status}"
+            )));
+        }
+        response.json().await.map_err(|err| {
+            tracing::warn!(error = %err, "google conversion sink JSON parse failed");
+            AdvertisingError::PlatformUnavailable(
+                "invalid response shape from google conversion sink".to_string(),
+            )
+        })
+    }
+}
+
+/// REST field names for `UserIdentifier`: Google's REST interface uses
+/// lowerCamelCase proto JSON (`hashedEmail`, `hashedPhoneNumber`), not the
+/// snake_case proto field names — a `hashed_mail` key is silently ignored and
+/// the identifier never matches, gutting match rate while the upload still
+/// answers 200.
+fn google_user_identifiers(
+    hashed: &std::collections::BTreeMap<String, crate::domain::HashedIdentifier>,
+) -> Vec<serde_json::Value> {
+    hashed
+        .iter()
+        .map(|(key, hash)| {
+            let lowered = key.to_ascii_lowercase();
+            let tag = match lowered.as_str() {
+                "em" | "mail_hash" | "hashed_mail" => "hashedEmail",
+                "ph" | "phone_hash" | "hashed_phone" => "hashedPhoneNumber",
+                other => other,
+            };
+            serde_json::json!({
+                "userIdentifierSource": "FIRST_PARTY",
+                tag: hash.as_str()
+            })
+        })
+        .collect()
+}
+
+#[async_trait]
+impl crate::domain::ConversionSinkPort for GoogleConversionSink {
+    fn descriptor(&self) -> PlatformDescriptor {
+        self.descriptor.clone()
+    }
+
+    async fn upload(
+        &self,
+        connection: &ConnectionHandle,
+        event: &crate::domain::ConversionEvent,
+    ) -> Result<crate::domain::UploadReceipt, AdvertisingError> {
+        let permitted =
+            !event.consent.answers.values().any(|ans| {
+                ans.eq_ignore_ascii_case("denied") || ans.eq_ignore_ascii_case("opt_out")
+            });
+
+        let mut conversion = serde_json::json!({
+            // The conversion action is provisioned per tenant account during
+            // connection setup; until that registry ships, the well-known
+            // default action is the documented interim (tracked in the
+            // TASK-012 row alongside the live-credential gap).
+            "conversionAction": format!(
+                "customers/{}/conversionActions/default",
+                require_customer_id(connection)?
+            ),
+            "conversionDateTime": event
+                .occurred_at
+                .format("%Y-%m-%d %H:%M:%S%:z")
+                .to_string(),
+            "orderId": event
+                .order_ref
+                .clone()
+                .unwrap_or_else(|| event.event_id.clone()),
+        });
+        if let Some(gclid) = &event.click_ids.gclid {
+            conversion["gclid"] = serde_json::Value::String(gclid.clone());
+        }
+        if let Some(gbraid) = &event.click_ids.gbraid {
+            conversion["gbraid"] = serde_json::Value::String(gbraid.clone());
+        }
+        if let Some(wbraid) = &event.click_ids.wbraid {
+            conversion["wbraid"] = serde_json::Value::String(wbraid.clone());
+        }
+        if let Some(value) = &event.value {
+            // `conversionValue` is a major-unit double; stored money is minor
+            // units, so the currency's exponent divides it back out.
+            // `currencyCode` names the value's currency — without it Google
+            // reads the amount in the account currency, which silently
+            // corrupts value-based bidding for every other currency.
+            let major =
+                value.amount_minor as f64 / 10_f64.powi(Money::exponent(&value.currency) as i32);
+            conversion["conversionValue"] = serde_json::json!(major);
+            conversion["currencyCode"] = serde_json::json!(value.currency);
+        }
+        if permitted {
+            let identifiers = google_user_identifiers(&event.hashed_identifiers);
+            if !identifiers.is_empty() {
+                conversion["userIdentifiers"] = serde_json::Value::Array(identifiers);
+            }
+        }
+
+        let customer_id = require_customer_id(connection)?;
+        self.post(
+            connection,
+            &format!("customers/{customer_id}:uploadClickConversions"),
+            serde_json::json!({ "conversions": [conversion], "partialFailure": true }),
+        )
+        .await?;
+
+        Ok(crate::domain::UploadReceipt {
+            platform: self.descriptor.key.clone(),
+            external_id: event.event_id.clone(),
+            uploaded_at: Utc::now(),
+        })
+    }
+
+    async fn retract(
+        &self,
+        connection: &ConnectionHandle,
+        event: &crate::domain::ConversionEvent,
+    ) -> Result<(), AdvertisingError> {
+        let adjustment = serde_json::json!({
+            "adjustmentType": "RETRACTION",
+            "conversionAction": format!(
+                "customers/{}/conversionActions/default",
+                require_customer_id(connection)?
+            ),
+            "conversionDateTime": event
+                .occurred_at
+                .format("%Y-%m-%d %H:%M:%S%:z")
+                .to_string(),
+            "orderId": event
+                .order_ref
+                .clone()
+                .unwrap_or_else(|| event.event_id.clone()),
+        });
+        let customer_id = require_customer_id(connection)?;
+        self.post(
+            connection,
+            &format!("customers/{customer_id}:uploadConversionAdjustments"),
+            serde_json::json!({ "conversionAdjustments": [adjustment], "partialFailure": true }),
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+/// Real Google Ads audience sync through the offline-user-data-job surface.
+/// All members ride `hashedEmail` — the port's members are type-less hashes
+/// today, so a subject carrying only a telephone-number hash would be
+/// mislabelled; the port must grow
+/// typed members before the live flag flips (recorded in the TASK-015 row).
+pub struct GoogleAudienceSync {
+    http: reqwest::Client,
+    developer_token: String,
+    api_version: String,
+    api_base_url: String,
+    access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    descriptor: PlatformDescriptor,
+}
+
+impl GoogleAudienceSync {
+    pub fn with_custom_endpoints(
+        config: &AdvertisingConfig,
+        api_base_url: String,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    ) -> Result<Self, AdvertisingError> {
+        if config.google_ads_developer_token.trim().is_empty() {
+            return Err(AdvertisingError::PlatformUnavailable(
+                "google ads developer token is required for the audience sink".to_string(),
+            ));
+        }
+        Ok(Self {
+            http: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .map_err(|err| {
+                    AdvertisingError::PlatformUnavailable(format!(
+                        "google audience sink http client: {err}"
+                    ))
+                })?,
+            developer_token: config.google_ads_developer_token.clone(),
+            api_version: config.google_ads_api_version.clone(),
+            api_base_url,
+            access_tokens,
+            descriptor: google_ads_descriptor(),
+        })
+    }
+
+    async fn post(
+        &self,
+        connection: &ConnectionHandle,
+        path: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, AdvertisingError> {
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let customer_id = require_customer_id(connection)?;
+        let url = format!("{}/{}/{path}", self.api_base_url, self.api_version);
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("developer-token", &self.developer_token)
+            .header(
+                "x-goog-request-params",
+                format!("customer_id={customer_id}"),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "google audience sink transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "google audience sink transport failed".to_string(),
+                )
+            })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "google audience sink {path} failed with status {status}"
+            )));
+        }
+        response.json().await.map_err(|err| {
+            tracing::warn!(error = %err, "google audience sink JSON parse failed");
+            AdvertisingError::PlatformUnavailable(
+                "invalid response shape from google audience sink".to_string(),
+            )
+        })
+    }
+}
+
+#[async_trait]
+impl crate::domain::AudienceSyncPort for GoogleAudienceSync {
+    fn descriptor(&self) -> PlatformDescriptor {
+        self.descriptor.clone()
+    }
+
+    async fn sync_audience(
+        &self,
+        connection: &ConnectionHandle,
+        external_ref: Option<&str>,
+        included: &[crate::domain::HashedIdentifier],
+        removed: &[crate::domain::HashedIdentifier],
+    ) -> Result<crate::domain::AudienceSyncReceipt, AdvertisingError> {
+        let Some(list_name) = external_ref else {
+            return Err(AdvertisingError::InvalidInput(
+                "google audience sync requires the platform user list resource name".to_string(),
+            ));
+        };
+        if included.is_empty() && removed.is_empty() {
+            return Ok(crate::domain::AudienceSyncReceipt {
+                external_ref: list_name.to_string(),
+            });
+        }
+
+        // One offline-user-data-job per sync: create → add operations → run.
+        // Removals ride the same job as additions so a refresh applies as one
+        // unit, and an opted-out member cannot survive a race between the add
+        // batch and the remove batch.
+        let customer_id = require_customer_id(connection)?;
+        let job = self
+            .post(
+                connection,
+                &format!("customers/{customer_id}/offlineUserDataJobs:create"),
+                serde_json::json!({
+                    "type": "USER_LIST",
+                    "userList": list_name,
+                }),
+            )
+            .await?;
+        let job_name = job
+            .get("resourceName")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                AdvertisingError::PlatformUnavailable(
+                    "google audience sink job create returned no resourceName".to_string(),
+                )
+            })?
+            .to_string();
+
+        let mut operations = Vec::new();
+        for member in included {
+            operations.push(serde_json::json!({
+                "create": { "userIdentifiers": [ { "hashedEmail": member.as_str() } ] }
+            }));
+        }
+        for member in removed {
+            operations.push(serde_json::json!({
+                "remove": { "userIdentifiers": [ { "hashedEmail": member.as_str() } ] }
+            }));
+        }
+        self.post(
+            connection,
+            &format!("{job_name}:addOperations"),
+            serde_json::json!({ "operations": operations, "enablePartialFailure": true }),
+        )
+        .await?;
+        self.post(
+            connection,
+            &format!("{job_name}:run"),
+            serde_json::json!({}),
+        )
+        .await?;
+
+        Ok(crate::domain::AudienceSyncReceipt {
+            external_ref: list_name.to_string(),
+        })
     }
 }
 
@@ -1641,6 +2202,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_review_status_maps_policy_topics_verbatim() {
+        let review_fixture = serde_json::json!({
+            "results": [
+                {
+                    "adGroupAd": {
+                        "ad": { "id": "111" },
+                        "status": "ENABLED",
+                        "policySummary": {
+                            "approvalStatus": "DISAPPROVED",
+                            "policyTopicEntries": [
+                                { "topic": "MISREPRESENTATION" },
+                                { "topic": "SHOCKING_CONTENT" }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "adGroupAd": {
+                        "ad": { "id": "222" },
+                        "status": "ENABLED",
+                        "policySummary": { "approvalStatus": "APPROVED" }
+                    }
+                },
+                {
+                    "adGroupAd": {
+                        "ad": { "id": "333" },
+                        "status": "ENABLED",
+                        "policySummary": { "approvalStatus": "PENDING_REVIEW" }
+                    }
+                },
+                {
+                    "adGroupAd": {
+                        "ad": { "id": "444" },
+                        "status": "ENABLED",
+                        "policySummary": {
+                            "approvalStatus": "APPROVED_LIMITED",
+                            "policyTopicEntries": [{ "topic": "MISLEADING" }]
+                        }
+                    }
+                }
+            ]
+        });
+
+        let mock = MockServer::start(vec![(200, review_fixture)]).await;
+
+        let adapter = GoogleAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}/auth", mock.addr),
+            format!("http://{}/token", mock.addr),
+            format!("http://{}", mock.addr),
+            stub_tokens("ya29.provider_issued_access_token"),
+        )
+        .unwrap();
+
+        let connection = ConnectionHandle {
+            id: "7318492050313216".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "7318492050313216".to_string(),
+        };
+
+        let observations = adapter
+            .fetch_review_status(&connection, "120330001")
+            .await
+            .expect("review status fetch succeeds");
+
+        assert_eq!(observations.len(), 4);
+        assert_eq!(observations[0].ad_external_id, "111");
+        assert_eq!(observations[0].state, AdReviewState::Rejected);
+        assert_eq!(
+            observations[0].reasons,
+            vec![
+                "MISREPRESENTATION".to_string(),
+                "SHOCKING_CONTENT".to_string()
+            ]
+        );
+        assert_eq!(observations[1].state, AdReviewState::Approved);
+        assert!(observations[1].reasons.is_empty());
+        assert_eq!(observations[2].state, AdReviewState::Pending);
+        assert_eq!(observations[3].state, AdReviewState::Approved);
+        assert_eq!(observations[3].reasons, vec!["MISLEADING".to_string()]);
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].path,
+            "/v22/customers/7318492050313216/googleAds:search"
+        );
+        let body = String::from_utf8_lossy(&recorded[0].body);
+        assert!(
+            body.contains("FROM ad_group_ad"),
+            "review query targets ad_group_ad: {body}"
+        );
+        assert!(body.contains("campaign.id = '120330001'"));
+    }
+
+    #[tokio::test]
     async fn refresh_grant_trades_refresh_token_for_access_token() {
         let token_fixture: serde_json::Value = serde_json::from_str(include_str!(
             "../../tests/fixtures/google/token_response.json"
@@ -1931,6 +2588,7 @@ mod tests {
                 &connection,
                 UploadedConversion {
                     event_id: "evt-order-1".to_string(),
+                    event_name: "purchase".to_string(),
                 },
                 HashedIds::default(),
                 ConsentSnapshot {
@@ -1968,9 +2626,185 @@ mod tests {
         };
 
         let result = adapter
-            .get_campaign(&connection, "non-existent-campaign")
+            .get_campaign(&connection, "9999999999")
             .await
             .expect("get_campaign query succeeds");
         assert!(result.is_none());
+    }
+
+    use crate::domain::{AudienceSyncPort, ConsentSnapshot, ConversionEvent, ConversionSinkPort};
+
+    fn sink_event() -> ConversionEvent {
+        ConversionEvent {
+            id: crate::domain::ConversionId::try_from(1_000_900_i64).unwrap(),
+            tenant_id: test_tenant(),
+            event_id: "evt-sink-1".to_string(),
+            dedupe_key: "test:evt-sink-1".to_string(),
+            name: "purchase".to_string(),
+            occurred_at: Utc::now(),
+            value: Some(Money::new(1_000, "USD").unwrap()),
+            value_source: Some(crate::domain::ValueSource::PaymentRecord),
+            order_ref: Some("order-sink-1".to_string()),
+            click_ids: crate::domain::ClickIds {
+                gclid: Some("test-gclid".to_string()),
+                ..Default::default()
+            },
+            hashed_identifiers: std::collections::BTreeMap::from([(
+                "em".to_string(),
+                crate::domain::hashing::hash_email("buyer@example.com"),
+            )]),
+            consent: ConsentSnapshot {
+                resolver_version: "v1".to_string(),
+                jurisdiction: "US-CA".to_string(),
+                purposes_asked: vec!["ads_measurement".to_string()],
+                answers: std::collections::BTreeMap::new(),
+                signal_source: "default".to_string(),
+            },
+            upload_states: std::collections::BTreeMap::new(),
+            subject_key: crate::domain::SubjectKeyRef::TenantDevice {
+                device_ref: "device-sink".to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn conversion_sink_uploads_click_conversion_and_retracts() {
+        let mock = MockServer::start(vec![
+            (200, serde_json::json!({})),
+            (200, serde_json::json!({})),
+        ])
+        .await;
+        let sink = GoogleConversionSink::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}", mock.addr),
+            stub_tokens("ya29.provider_issued_access_token"),
+        )
+        .unwrap();
+        let connection = ConnectionHandle {
+            id: "conn-sink".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "7318492050313216".to_string(),
+        };
+        let event = sink_event();
+
+        let receipt = sink
+            .upload(&connection, &event)
+            .await
+            .expect("google sink upload succeeds");
+        assert_eq!(receipt.external_id, "evt-sink-1");
+        assert_eq!(receipt.platform.as_str(), "google_ads");
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].path,
+            "/v22/customers/7318492050313216:uploadClickConversions"
+        );
+        let body: serde_json::Value = serde_json::from_slice(&recorded[0].body).unwrap();
+        let conversion = &body["conversions"][0];
+        assert_eq!(conversion["orderId"], "order-sink-1");
+        assert_eq!(conversion["gclid"], "test-gclid");
+        assert!(
+            conversion["userIdentifiers"][0]["hashedEmail"]
+                .as_str()
+                .is_some(),
+            "hashed identifiers ride lowerCamelCase, the REST field names Google matches on: {conversion}"
+        );
+        // 1000 minor units USD → 10.0 major units, labelled with its currency.
+        assert_eq!(conversion["conversionValue"], 10.0);
+        assert_eq!(conversion["currencyCode"], "USD");
+
+        sink.retract(&connection, &event)
+            .await
+            .expect("google sink retraction succeeds");
+        let recorded = mock.recorded();
+        assert_eq!(
+            recorded[1].path,
+            "/v22/customers/7318492050313216:uploadConversionAdjustments"
+        );
+        let body: serde_json::Value = serde_json::from_slice(&recorded[1].body).unwrap();
+        assert_eq!(
+            body["conversionAdjustments"][0]["adjustmentType"],
+            "RETRACTION"
+        );
+        assert_eq!(body["conversionAdjustments"][0]["orderId"], "order-sink-1");
+    }
+
+    #[tokio::test]
+    async fn audience_sink_runs_one_offline_user_data_job() {
+        let job_name = "customers/7318492050313216/offlineUserDataJobs/1";
+        let mock = MockServer::start(vec![
+            (200, serde_json::json!({ "resourceName": job_name })),
+            (200, serde_json::json!({})),
+            (200, serde_json::json!({})),
+        ])
+        .await;
+        let sink = GoogleAudienceSync::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}", mock.addr),
+            stub_tokens("ya29.provider_issued_access_token"),
+        )
+        .unwrap();
+        let connection = ConnectionHandle {
+            id: "conn-aud".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "7318492050313216".to_string(),
+        };
+
+        let included = vec![crate::domain::hashing::hash_email("keep@example.com")];
+        let removed = vec![crate::domain::hashing::hash_email("drop@example.com")];
+        let receipt = sink
+            .sync_audience(
+                &connection,
+                Some("customers/7318492050313216/userLists/9"),
+                &included,
+                &removed,
+            )
+            .await
+            .expect("google audience sync succeeds");
+        assert_eq!(
+            receipt.external_ref,
+            "customers/7318492050313216/userLists/9"
+        );
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 3, "create → addOperations → run");
+        assert!(
+            recorded[0].path.ends_with("/offlineUserDataJobs:create"),
+            "{}",
+            recorded[0].path
+        );
+        assert_eq!(recorded[1].path, format!("/v22/{job_name}:addOperations"));
+        let body: serde_json::Value = serde_json::from_slice(&recorded[1].body).unwrap();
+        assert_eq!(body["operations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            body["operations"][0]["create"]["userIdentifiers"][0]["hashedEmail"],
+            included[0].as_str()
+        );
+        assert_eq!(
+            body["operations"][1]["remove"]["userIdentifiers"][0]["hashedEmail"],
+            removed[0].as_str()
+        );
+        assert_eq!(recorded[2].path, format!("/v22/{job_name}:run"));
+    }
+
+    #[tokio::test]
+    async fn audience_sync_requires_the_platform_list_ref() {
+        let sink = GoogleAudienceSync::with_custom_endpoints(
+            &test_config(),
+            "http://127.0.0.1:9".to_string(),
+            stub_tokens("ya29.unused"),
+        )
+        .unwrap();
+        let connection = ConnectionHandle {
+            id: "conn-aud".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "7318492050313216".to_string(),
+        };
+        let err = sink
+            .sync_audience(&connection, None, &[], &[])
+            .await
+            .expect_err("missing list ref is refused");
+        assert!(matches!(err, AdvertisingError::InvalidInput(_)));
     }
 }

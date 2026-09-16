@@ -1,17 +1,18 @@
 use sanvi_advertising::adapters::http::handlers::{
     AccountView, AdvertisingProblemType, BudgetAlertsView, BudgetCapsView, CampaignChangesView,
-    CampaignView, CampaignsView, ConnectionFreshnessView, ConnectionHealthView, ConnectionView,
-    ConnectionsView, CreateAdGroupRequest, CreateAdRequest, CreateCampaignRequest,
-    CreateConnectionRequest, CreateCreativeRequest, CreativePreviewView, CreativePreviewsView,
-    CreativeView, CreativesView, MetricPoint, MetricsFreshnessView, MetricsQueryResponse,
-    MetricsSummaryResponse, MetricsSummaryRow, MoneyView, OAuthCallbackQuery, PatchAdGroupRequest,
-    PatchAdRequest, PatchCampaignRequest, PendingConnectionView, PutBudgetCapRequest,
-    RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView, StartOAuthRequest,
-    StartOAuthResponse, ValidationResultView,
+    CampaignReviewStatusView, CampaignView, CampaignsView, ConnectionFreshnessView,
+    ConnectionHealthView, ConnectionView, ConnectionsView, CreateAdGroupRequest, CreateAdRequest,
+    CreateCampaignRequest, CreateConnectionRequest, CreateCreativeRequest, CreativePreviewView,
+    CreativePreviewsView, CreativeView, CreativesView, MetricPoint, MetricsFreshnessView,
+    MetricsQueryResponse, MetricsSummaryResponse, MetricsSummaryRow, MoneyView, OAuthCallbackQuery,
+    PatchAdGroupRequest, PatchAdRequest, PatchCampaignRequest, PendingConnectionView,
+    PutBudgetCapRequest, RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView,
+    StartOAuthRequest, StartOAuthResponse, ValidationResultView,
 };
 use sanvi_advertising::adapters::http::tracking_handlers::{
     CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest,
 };
+use sanvi_advertising::application::AdReviewStatusView;
 use sanvi_advertising::application::{
     AdsFreshnessSummaryView, ConnectionAttentionView, DryRunEvaluationResult,
     PlatformAdsHealthReport, PlatformConnectionCountView, PutBudgetCapResponse, SpendStatusReport,
@@ -202,6 +203,7 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::handlers::publish_campaign,
         sanvi_advertising::adapters::http::handlers::pause_campaign,
         sanvi_advertising::adapters::http::handlers::resume_campaign,
+        sanvi_advertising::adapters::http::handlers::poll_campaign_review_status,
         sanvi_advertising::adapters::http::handlers::list_campaign_changes,
         sanvi_advertising::adapters::http::handlers::add_ad_group,
         sanvi_advertising::adapters::http::handlers::update_ad_group,
@@ -250,8 +252,9 @@ use utoipa::OpenApi;
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
         RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView,
         CampaignView, CampaignsView, CreateCampaignRequest, PatchCampaignRequest,
-        ValidationResultView, CampaignChangesView, CreateAdGroupRequest, PatchAdGroupRequest,
-        CreateAdRequest, PatchAdRequest, StartOAuthRequest, StartOAuthResponse,
+        ValidationResultView, CampaignChangesView, CampaignReviewStatusView, AdReviewStatusView,
+        CreateAdGroupRequest, PatchAdGroupRequest, CreateAdRequest, PatchAdRequest,
+        StartOAuthRequest, StartOAuthResponse,
         OAuthCallbackQuery, AccountView, PendingConnectionView, CreateConnectionRequest,
         ConnectionHealthView, ConnectionView, ConnectionsView,
         CreateCreativeRequest, CreativeView, CreativesView, CreativePreviewView, CreativePreviewsView,

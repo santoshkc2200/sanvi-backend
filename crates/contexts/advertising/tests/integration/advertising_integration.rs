@@ -20,15 +20,16 @@ use sanvi_advertising::{
         CreateConnection, CreateCreative, DeleteCreative, GetCampaign, GetCreative,
         GetCreativePreviews, GetPlatformAdsHealth, IngestConnectionMetrics, JoinCampaignRevenue,
         ListCampaignChanges, ListCampaigns, ListCreatives, NewAdFields, NewAdGroupFields,
-        NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign, PublishCampaign,
-        PublishError, QueryMetrics, ReconcileCampaign, ReconcileDueCampaigns, ResumeCampaign,
-        RunTokenRefresh, UpdateAd, UpdateAdGroup, ValidateCampaign,
+        NewCampaignFields, NewCreativeFields, PatchCampaign, PauseCampaign,
+        PollCampaignReviewStatus, PublishCampaign, PublishError, QueryMetrics, ReconcileCampaign,
+        ReconcileDueCampaigns, ResumeCampaign, RunTokenRefresh, UpdateAd, UpdateAdGroup,
+        ValidateCampaign,
     },
     domain::{
-        AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus, ChangeSource, Creative,
-        CreativeRepository, CreativeText, MetricsDailyRow, MetricsGroupBy, MetricsRangeQuery,
-        MetricsRepository, Money, Objective, PlatformAccount, StoredCreative, Targeting,
-        TargetingDimension, TenantEnvelopeCrypto,
+        AdReviewState, AssetMetadata, BidSettings, Budget, BudgetType, CampaignStatus,
+        ChangeSource, Creative, CreativeRepository, CreativeText, MetricsDailyRow, MetricsGroupBy,
+        MetricsRangeQuery, MetricsRepository, Money, Objective, PlatformAccount, StoredCreative,
+        Targeting, TargetingDimension, TenantEnvelopeCrypto,
     },
 };
 use sanvi_kernel::{TenantId, UserId};
@@ -2499,6 +2500,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                     },
                     ads: vec![sanvi_advertising::domain::Ad {
                         id: Uuid::now_v7().to_string(),
+                        external_id: None,
                         creative: Creative {
                             id: "not-a-uuid".to_string(),
                             placement: "feed".to_string(),
@@ -2507,6 +2509,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                         },
                         landing_url: "https://example.com".to_string(),
                         tracking_template: None,
+                        review: Default::default(),
                     }],
                 }]),
                 ..Default::default()
@@ -2538,6 +2541,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                     },
                     ads: vec![sanvi_advertising::domain::Ad {
                         id: Uuid::now_v7().to_string(),
+                        external_id: None,
                         creative: Creative {
                             id: missing_uuid.to_string(),
                             placement: "feed".to_string(),
@@ -2546,6 +2550,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                         },
                         landing_url: "https://example.com".to_string(),
                         tracking_template: None,
+                        review: Default::default(),
                     }],
                 }]),
                 ..Default::default()
@@ -2602,6 +2607,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                     },
                     ads: vec![sanvi_advertising::domain::Ad {
                         id: Uuid::now_v7().to_string(),
+                        external_id: None,
                         creative: Creative {
                             id: meta_creative_id.to_string(),
                             placement: "feed".to_string(),
@@ -2610,6 +2616,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                         },
                         landing_url: "https://example.com".to_string(),
                         tracking_template: None,
+                        review: Default::default(),
                     }],
                 }]),
                 ..Default::default()
@@ -2676,6 +2683,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                     },
                     ads: vec![sanvi_advertising::domain::Ad {
                         id: Uuid::now_v7().to_string(),
+                        external_id: None,
                         creative: Creative {
                             id: google_creative_id.to_string(),
                             placement: "feed".to_string(),
@@ -2688,6 +2696,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                         },
                         landing_url: "https://example.com".to_string(),
                         tracking_template: None,
+                        review: Default::default(),
                     }],
                 }]),
                 ..Default::default()
@@ -2726,6 +2735,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                     ads: vec![
                         sanvi_advertising::domain::Ad {
                             id: Uuid::now_v7().to_string(),
+                            external_id: None,
                             creative: Creative {
                                 id: unknown_creative_id.to_string(),
                                 placement: "feed".to_string(),
@@ -2734,9 +2744,11 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                             },
                             landing_url: "https://example.com".to_string(),
                             tracking_template: None,
+                            review: Default::default(),
                         },
                         sanvi_advertising::domain::Ad {
                             id: Uuid::now_v7().to_string(),
+                            external_id: None,
                             creative: Creative {
                                 id: meta_creative_id.to_string(),
                                 placement: "feed".to_string(),
@@ -2745,6 +2757,7 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
                             },
                             landing_url: "https://example.com".to_string(),
                             tracking_template: None,
+                            review: Default::default(),
                         },
                     ],
                 }]),
@@ -2926,6 +2939,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
             },
             ads: vec![sanvi_advertising::domain::Ad {
                 id: Uuid::now_v7().to_string(),
+                external_id: None,
                 creative: Creative {
                     id: valid_creative_id.to_string(),
                     placement: "feed".to_string(),
@@ -2939,6 +2953,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
                 },
                 landing_url: "https://example.com".to_string(),
                 tracking_template: None,
+                review: Default::default(),
             }],
         }]),
         ..Default::default()
@@ -2983,6 +2998,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
             },
             ads: vec![sanvi_advertising::domain::Ad {
                 id: Uuid::now_v7().to_string(),
+                external_id: None,
                 creative: Creative {
                     id: invalid_creative_id.to_string(),
                     placement: "feed".to_string(),
@@ -2995,6 +3011,7 @@ async fn dry_run_and_patch_agree_on_authoritative_stored_creative_content() {
                 },
                 landing_url: "https://example.com".to_string(),
                 tracking_template: None,
+                review: Default::default(),
             }],
         }]),
         ..Default::default()
@@ -3178,6 +3195,7 @@ async fn deleting_referenced_creative_fails_publish() {
                     },
                     ads: vec![sanvi_advertising::domain::Ad {
                         id: ad_id.clone(),
+                        external_id: None,
                         creative: Creative {
                             id: creative_id.to_string(),
                             placement: "feed".to_string(),
@@ -3186,6 +3204,7 @@ async fn deleting_referenced_creative_fails_publish() {
                         },
                         landing_url: "https://example.com".to_string(),
                         tracking_template: None,
+                        review: Default::default(),
                     }],
                 }]),
                 ..Default::default()
@@ -4520,4 +4539,452 @@ async fn publishing_intent_is_persisted_before_remote_call_and_reconciliation_wo
     assert_eq!(reconciled.intent.status, CampaignStatus::Active);
     assert!(reconciled.external_id.is_some());
     assert!(reconciled.publishing_mutation_id.is_none());
+}
+
+#[tokio::test]
+async fn review_status_poll_merges_platform_verdicts_into_intent() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "ad-review-status").await;
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let actor_id = test_actor();
+
+    let connection_repo = SqlxAdvertisingConnectionRepository::new();
+    let connection = AdvertisingConnection::new(
+        ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),
+        tenant_id,
+        PlatformKey::parse("google_ads").unwrap(),
+        "777-001-0001",
+        "JPY",
+        "Asia/Tokyo",
+        SecretRef::new("vault-ref-review-status"),
+        Some(actor_id),
+        Utc::now(),
+    )
+    .unwrap();
+    let connection_id = connection.id();
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    connection_repo
+        .upsert(&mut scope, &connection)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let campaigns: Arc<dyn sanvi_advertising::domain::CampaignRepository> =
+        Arc::new(SqlxCampaignRepository::new());
+    let connections: Arc<dyn AdvertisingConnectionRepository> = Arc::new(connection_repo);
+    let creatives: Arc<dyn CreativeRepository> = Arc::new(SqlxCreativeRepository::new());
+    let events: Arc<dyn sanvi_advertising::domain::EventPublisher> =
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids()));
+    let registry = Arc::new(FakeAdPlatform::registered_catalog());
+
+    let create = CreateCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        registry.clone(),
+        events.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let add_ad_group = AddAdGroup::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        events.clone(),
+        registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let add_ad = AddAd::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        creatives.clone(),
+        events.clone(),
+        registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let publish = PublishCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        creatives.clone(),
+        events.clone(),
+        registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let pause = PauseCampaign::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        events.clone(),
+        registry.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    let get = GetCampaign::new(manager.clone(), campaigns.clone());
+    let poll = PollCampaignReviewStatus::new(
+        manager.clone(),
+        campaigns.clone(),
+        connections.clone(),
+        registry.clone(),
+    );
+
+    // Draft → group → ad (fresh creative) → publish. The fake adapter stores
+    // the whole tree, so the poll has ads to report verdicts for.
+    let creative_id = CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+    let stored_creative = StoredCreative {
+        id: creative_id,
+        tenant_id,
+        connection_id,
+        platform: PlatformKey::parse("google_ads").unwrap(),
+        external_id: None,
+        creative: Creative {
+            id: creative_id.to_string(),
+            placement: "feed".to_string(),
+            texts: vec![CreativeText {
+                locale: "en".to_string(),
+                headline: "Review status headline".to_string(),
+                body: "Review status body".to_string(),
+            }],
+            asset_references: Vec::new(),
+        },
+        assets: Vec::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+    creatives
+        .insert(&mut scope, &stored_creative)
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+
+    let draft = create
+        .execute(
+            tenant_id,
+            connection_id,
+            Uuid::now_v7(),
+            actor_id,
+            NewCampaignFields {
+                name: "Review status campaign".to_string(),
+                objective: Objective::parse("sales").unwrap(),
+                budget: Budget {
+                    kind: BudgetType::Daily,
+                    amount: Money::new(5_000, "JPY").unwrap(),
+                },
+                schedule: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let with_group = add_ad_group
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdGroupFields {
+                name: "Group 1".to_string(),
+                targeting: Targeting::default(),
+                bid: BidSettings {
+                    strategy: "manual_cpc".to_string(),
+                    maximum_bid: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let ad_group_id = with_group.intent.ad_groups[0].id.clone();
+
+    let with_ad = add_ad
+        .execute(
+            tenant_id,
+            draft.id,
+            ad_group_id.clone(),
+            with_group.revision,
+            Uuid::now_v7(),
+            actor_id,
+            NewAdFields {
+                creative: Creative {
+                    id: creative_id.to_string(),
+                    placement: "feed".to_string(),
+                    texts: vec![CreativeText {
+                        locale: "en".to_string(),
+                        headline: "Review status headline".to_string(),
+                        body: "Review status body".to_string(),
+                    }],
+                    asset_references: Vec::new(),
+                },
+                landing_url: "https://example.com/review".to_string(),
+                tracking_template: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let published = publish
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
+        .await
+        .unwrap();
+    assert!(published.external_id.is_some());
+
+    // Pre-poll, the ad carries the default (pending, never checked) verdict.
+    assert_eq!(
+        get.execute(tenant_id, draft.id)
+            .await
+            .unwrap()
+            .intent
+            .ad_groups[0]
+            .ads[0]
+            .review
+            .state,
+        AdReviewState::Pending
+    );
+
+    // Poll against the fake platform: an Active campaign's ads review clean.
+    // The fake assigned the ad a platform id at create and publish persisted
+    // it onto the intent — that recorded id is what the verdict matched on.
+    let published_ad = &published.intent.ad_groups[0].ads[0];
+    assert!(
+        published_ad.external_id.is_some(),
+        "publish must persist the platform's id for the ad"
+    );
+    let (views, unmatched) = poll.execute(tenant_id, draft.id).await.unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].ad_id, with_ad.intent.ad_groups[0].ads[0].id);
+    assert_eq!(views[0].review.state, AdReviewState::Approved);
+    assert!(views[0].review.checked_at.is_some());
+    assert!(
+        unmatched.platform_ad_ids.is_empty() && unmatched.ads_without_platform_id == 0,
+        "a fully correlated poll reports no gap"
+    );
+
+    // The verdict persisted onto the intent, not just into the response.
+    let stored = get.execute(tenant_id, draft.id).await.unwrap();
+    assert_eq!(
+        stored.intent.ad_groups[0].ads[0].review.state,
+        AdReviewState::Approved
+    );
+
+    // A later poll overwrites the earlier verdict — the platform's latest
+    // word is always what the dashboard shows.
+    pause
+        .execute(tenant_id, draft.id, Uuid::now_v7(), actor_id)
+        .await
+        .unwrap();
+    let (after_pause, _) = poll.execute(tenant_id, draft.id).await.unwrap();
+    assert_eq!(after_pause[0].review.state, AdReviewState::Pending);
+}
+
+#[tokio::test]
+async fn retention_enforcement_anonymises_conversions_and_drops_aged_metrics() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+
+    // Aged conversion partition (well past the 730d window) and an aged
+    // metrics partition (well inside its own 1095d window at 2020-01): both
+    // are past their class cutoffs. Both are minted through the SECURITY
+    // DEFINER ensure function — the app role has no DDL rights on the
+    // schema, exactly like production.
+    sqlx::query("SELECT advertising.ensure_monthly_partitions('2020-01-15')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("SELECT advertising.ensure_monthly_partitions(current_date)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // A still-personal conversion event in the aged partition. The class is
+    // registered `anonymise`: the sweep must strip the personal-data columns
+    // (as the erasure path does) and KEEP the partition — the anonymised
+    // rows are the retained consent proof, not fodder for a drop. The insert
+    // carries tenant session context, exactly like a production write
+    // under RLS.
+    let tenant_id = seed_tenant(&pool, "advertising-retention-sweep").await;
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('sanvi.tenant_id', $1, true)")
+        .bind(tenant_id.as_i64().to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO advertising.conversion_event_dedup (tenant_id, event_id, dedupe_key, occurred_at)
+         VALUES ($1, 'aged-event', 'aged-event', '2020-01-15T00:00:00Z')",
+    )
+    .bind(tenant_id.as_i64())
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO advertising.conversion_events
+           (id, tenant_id, event_id, dedupe_key, name, occurred_at, click_ids, hashed_ids,
+            consent, subject_key)
+         VALUES (1, $1, 'aged-event', 'aged-event', 'purchase', '2020-01-15T00:00:00Z',
+                 '{\"gclid\": \"x\"}'::jsonb, '{\"em\": \"hash\"}'::jsonb,
+                 '{\"resolver_version\": \"v1\"}'::jsonb,
+                 '{\"kind\": \"end_user\", \"external_id\": \"u1\"}'::jsonb)",
+    )
+    .bind(tenant_id.as_i64())
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // First pass: the conversion partition is anonymised, the aged metrics
+    // partition (a `delete` class) is dropped.
+    let acted: (i32,) = sqlx::query_as(
+        "SELECT advertising.enforce_retention(
+           current_date - 730, current_date - 1095, true)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(acted.0, 2, "both aged 2020-01 partitions are acted on");
+
+    // The conversion partition survives, reduced to its anonymised,
+    // consent-proof form: subject link, identifier hashes and click ids are
+    // gone; the consent snapshot is retained. Read back under the tenant's
+    // session context, exactly like the insert above.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('sanvi.tenant_id', $1, true)")
+        .bind(tenant_id.as_i64().to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let anonymised: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT click_ids->>'gclid', hashed_ids->>'em',
+                    subject_key->>'external_id', subject_key->>'kind'
+             FROM advertising.conversion_events_202001
+             WHERE event_id = 'aged-event'",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(anonymised.0, None, "click ids must be stripped");
+    assert_eq!(anonymised.1, None, "identifier hashes must be stripped");
+    assert_eq!(anonymised.2, None, "the subject link must be stripped");
+    assert_eq!(
+        anonymised.3.as_deref(),
+        Some("contact"),
+        "the row keeps the anonymised marker"
+    );
+    let consent: (Option<String>,) = sqlx::query_as(
+        "SELECT consent->>'resolver_version' FROM advertising.conversion_events_202001
+         WHERE event_id = 'aged-event'",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        consent.0.as_deref(),
+        Some("v1"),
+        "the consent snapshot is retained as proof"
+    );
+    let conversions_kept: Option<(String,)> = sqlx::query_as(
+        "SELECT 'x' WHERE to_regclass('advertising.conversion_events_202001') IS NOT NULL",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(
+        conversions_kept.is_some(),
+        "an `anonymise` class keeps its partition — the retained rows are the point"
+    );
+
+    // The aged metrics partition (a `delete` class) is gone; the fresh one
+    // survives. Its name moves with the clock: minted from current_date
+    // above, so asserted the same way instead of a hard-coded month that
+    // breaks when the suite runs in a later month.
+    let metrics_gone: Option<(String,)> = sqlx::query_as(
+        "SELECT 'x' WHERE to_regclass('advertising.metrics_daily_202001') IS NOT NULL",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(
+        metrics_gone.is_none(),
+        "aged metrics partition must be dropped"
+    );
+    let kept: Option<(String,)> = sqlx::query_as(
+        "SELECT 'x' WHERE to_regclass('advertising.metrics_daily_' || to_char(current_date, 'YYYYMM')) IS NOT NULL",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(kept.is_some(), "fresh partition must survive");
+
+    // Every action is recorded, so retention reporting reads facts, not
+    // hopes — and the two actions read differently.
+    let log: Vec<(String, String)> = sqlx::query_as(
+        "SELECT partition_name, action FROM advertising.partition_retention_log ORDER BY partition_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        log,
+        vec![
+            (
+                "conversion_events_202001".to_string(),
+                "anonymise".to_string()
+            ),
+            ("metrics_daily_202001".to_string(), "drop".to_string()),
+        ]
+    );
+
+    // Idempotent: the anonymised rows are never rewritten and the dropped
+    // partition is gone — a second pass acts on nothing.
+    let second: (i32,) = sqlx::query_as(
+        "SELECT advertising.enforce_retention(
+           current_date - 730, current_date - 1095, true)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(second.0, 0);
+
+    // A NULL cutoff skips its class — a missing registry rule must stop the
+    // actions for that class, not fall back to a hard-coded window. A
+    // different aged month keeps the log's PK uninvolved.
+    sqlx::query("SELECT advertising.ensure_monthly_partitions('2019-12-15')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let skipped: (i32,) =
+        sqlx::query_as("SELECT advertising.enforce_retention(NULL, current_date - 1095, true)")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        skipped.0, 1,
+        "only the metrics partition is acted on; conversions are skipped"
+    );
+    let conversion_survives: Option<(String,)> = sqlx::query_as(
+        "SELECT 'x' WHERE to_regclass('advertising.conversion_events_201912') IS NOT NULL",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(
+        conversion_survives.is_some(),
+        "conversion partition is untouched when its class is skipped"
+    );
+    let metrics_dropped: Option<(String,)> = sqlx::query_as(
+        "SELECT 'x' WHERE to_regclass('advertising.metrics_daily_201912') IS NOT NULL",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(
+        metrics_dropped.is_none(),
+        "the other class still drops on its own cutoff"
+    );
 }

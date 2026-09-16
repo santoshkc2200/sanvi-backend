@@ -37,9 +37,9 @@ use sanvi_advertising::application::{
     AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
     DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, GetFreshness, HandleCallback,
     ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives, ListPlatformCatalog,
-    PatchCampaign, PauseCampaign, PlatformRegistry, PublishCampaign, QueryMetrics,
-    ReconcileCampaign, ResolveCampaignDrift, ResumeCampaign, StartAuthorization, UpdateAd,
-    UpdateAdGroup, ValidateCampaign,
+    PatchCampaign, PauseCampaign, PlatformRegistry, PollCampaignReviewStatus, PublishCampaign,
+    QueryMetrics, ReconcileCampaign, ResolveCampaignDrift, ResumeCampaign, StartAuthorization,
+    UpdateAd, UpdateAdGroup, ValidateCampaign,
 };
 use sanvi_advertising::domain::{
     AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, AudienceId,
@@ -1013,6 +1013,8 @@ fn create_test_advertising_state(
         Arc::new(SqlxConnectionTokenRepository::new()),
     ));
     let creatives = Arc::new(SqlxCreativeRepository::new());
+    let fx_rates: Arc<dyn sanvi_advertising::domain::FxRatePort> =
+        Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new());
 
     AdvertisingState {
         config,
@@ -1107,6 +1109,12 @@ fn create_test_advertising_state(
             events.clone(),
             registry.clone(),
             Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+        )),
+        poll_review_status: Arc::new(PollCampaignReviewStatus::new(
+            tx.clone(),
+            campaigns.clone(),
+            Arc::new(SqlxAdvertisingConnectionRepository::new()),
+            registry.clone(),
         )),
         update_ad: Arc::new(UpdateAd::new(
             tx.clone(),
@@ -1249,10 +1257,11 @@ fn create_test_advertising_state(
             Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new()),
             campaign_repo.clone(),
             connections.clone(),
-            Arc::new(sanvi_advertising::adapters::UnavailableFxRate::new()),
+            fx_rates.clone(),
             Arc::new(HarnessTimezones),
             7,
         )),
+        fx_rates: fx_rates.clone(),
         get_platform_ads_health: Arc::new(
             sanvi_advertising::application::GetPlatformAdsHealth::new(
                 tx.clone(),

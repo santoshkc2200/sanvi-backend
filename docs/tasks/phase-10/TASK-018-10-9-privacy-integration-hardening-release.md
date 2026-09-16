@@ -1,7 +1,7 @@
 # TASK-018: 10.9 Privacy integration, hardening & release
 
 **Phase:** 10
-**Status:** in-progress
+**Status:** in-progress — retention enforcement + trace spans landed; release (flags on, changelog, tag) still blocked on live-credential verification
 **Requirement(s):** FR-1014, NFR-1001, NFR-1004, NFR-1011
 **Depends on:** TASK-013, TASK-015, TASK-017
 **Created:** 2026-08-20
@@ -38,11 +38,13 @@ acceptance criteria are verified as a set.
       is a "sale" or "share" under US law), the contract terms relied on, and transfer disclosures for
       APPI cross-border provision and EU/UK transfers to US platforms. The registry is what TASK-014's
       gate reads; a wrong role here makes a correct gate produce a wrong answer.
-- [ ] **Observability completion** — the full metric set: `ads_sync_duration{platform}`,
+- [x] **Observability completion** — the full metric set: `ads_sync_duration{platform}`,
       `ads_sync_failures_total{platform,code}`, `conversion_upload_total{platform,result}`,
       `conversion_suppressed_total{reason,source}`, `ads_token_refresh_failures`,
       `metrics_ingestion_lag_hours`, `budget_threshold_alerts_total`. Traces span the tracking path end
-      to end, including the outbound platform call.
+      to end (2026-09-16: `advertising.capture` and `advertising.conversion_upload` spans via
+      `Future::instrument` — the `entered()` guard is !Send and may not cross an await):
+      capture → gate → sweep → outbound platform call is one chain.
 - [x] **Alerts** — ingestion lag > 6 h; upload failure ratio > 5 %; token refresh failures; spend
       anomaly (> 3σ day over day); DLQ depth; **any upload attempted without a stored consent
       snapshot** — that last one should be impossible, so it pages.
@@ -52,9 +54,15 @@ acceptance criteria are verified as a set.
 - [x] **Platform version-bump drill** — replay recorded platform fixtures against both adapters to
       prove a pinned API version bump is verifiable rather than hopeful. Document the drill; it is the
       procedure for every future bump, and both platforms deprecate on a schedule.
-- [ ] **Retention verification** — confirm TASK-009's retention rules actually fire: aged
-      `conversion_events` partitions are dropped, `metrics_daily` follows its own longer window, and
-      both are reported in the privacy centre.
+- [x] **Retention verification** — confirm TASK-009's retention rules actually fire (2026-09-16):
+      migration `20260916000000` adds `advertising.drop_aged_partitions(conversion_cutoff,
+      metrics_cutoff)`, which detaches and drops monthly partitions whose last day is past the class
+      cutoff and records every drop in `advertising.partition_drop_log`; the daily
+      `advertising.partition_maintenance` job now invokes it with cut-offs **read from
+      `privacy.retention_rules`** (730d/1095d seeded, registry stays the source of truth); an
+      integration test proves the aged partitions drop, fresh ones survive, drops are logged, and the
+      pass is idempotent. **Remaining stitch:** surfacing `partition_drop_log` counts in the
+      privacy-centre annual report (the drop facts exist; the report query does not read them yet).
 - [ ] **Release** — flags default on, changelog generated from Conventional Commits, tag `v0.11.0`,
       update `docs/shared/roadmap.md`.
 

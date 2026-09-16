@@ -11,6 +11,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use sanvi_kernel::TenantId;
 use sanvi_persistence::{ScopedTx, TxManager};
+use tracing::Instrument;
 
 use sanvi_privacy::domain::{
     DirectiveResolver, DirectiveState, ProcessingPurpose, SubjectKind, SubjectRef,
@@ -132,6 +133,20 @@ impl CaptureConversion {
 
     /// Captures and persists a conversion event. Used by `/public/track`.
     pub async fn execute(&self, command: TrackConversionCommand) -> Result<(), AdvertisingError> {
+        // `instrument` rather than `enter()`: an entered guard is
+        // deliberately !Send and may not cross the awaits below.
+        let tenant_id = command.tenant_id;
+        let event_id = command.event_id.clone();
+        self.execute_inner(command)
+            .instrument(tracing::info_span!(
+                "advertising.capture",
+                tenant_id = %tenant_id,
+                event_id = %event_id,
+            ))
+            .await
+    }
+
+    async fn execute_inner(&self, command: TrackConversionCommand) -> Result<(), AdvertisingError> {
         // The gate runs *before* this context's transaction opens: the
         // phase-05 resolver takes a connection of its own, once per
         // purpose, from the same pool. Holding one here across that call

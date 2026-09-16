@@ -1123,6 +1123,56 @@ paths:
           description: Platform adapter unavailable
       tags:
       - advertising
+  /api/v1/tenant/ads/campaigns/{campaign_id}/review-status:
+    post:
+      operationId: poll_campaign_review_status
+      parameters:
+      - description: Campaign UUID
+        in: path
+        name: campaign_id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignReviewStatusView'
+          description: Fresh per-ad review verdicts; rejection wording is the platform's own
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign not published yet — review has no meaning for a draft
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.read permission
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Campaign or connection not found
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Platform adapter unavailable
+      summary: |-
+        Refresh every ad's review verdict from the platform. Safe to repeat: it is
+        an observation with a persisted outcome, never a mutation of the platform.
+      tags:
+      - advertising
   /api/v1/tenant/ads/campaigns/{campaign_id}/validate:
     post:
       operationId: validate_campaign
@@ -1649,6 +1699,16 @@ paths:
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
+      - description: |-
+          Optional display-only currency for `rendered_spend`. Conversion is
+          never persisted and never replaces the native `spend` — each rendered
+          value carries its FX rate date. Omit to keep account currencies only.
+        example: JPY
+        in: query
+        name: render_currency
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -1720,7 +1780,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Invalid date range, unknown group_by, or a span exceeding the configured maximum
+          description: Invalid date range, unknown group_by, an unsupported query parameter (e.g. render_currency), or a span exceeding the configured maximum
         '403':
           content:
             application/json:

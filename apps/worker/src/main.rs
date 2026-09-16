@@ -1731,7 +1731,10 @@ async fn main() -> ExitCode {
         advertising_reconcile_campaign,
     ));
     let (advertising_conversion_sinks, conversion_sink_mode) =
-        match sanvi_advertising::adapters::build_conversion_sinks(&config.advertising) {
+        match sanvi_advertising::adapters::build_conversion_sinks(
+            &config.advertising,
+            &advertising_token_providers,
+        ) {
             Ok(res) => res,
             Err(err) => {
                 tracing::error!(%err, "failed to initialize advertising conversion sinks");
@@ -1759,7 +1762,10 @@ async fn main() -> ExitCode {
     ));
 
     let (advertising_audience_sinks, audience_sink_mode) =
-        match sanvi_advertising::adapters::build_audience_sinks(&config.advertising) {
+        match sanvi_advertising::adapters::build_audience_sinks(
+            &config.advertising,
+            &advertising_token_providers,
+        ) {
             Ok(res) => res,
             Err(err) => {
                 tracing::error!(%err, "failed to initialize advertising audience sinks");
@@ -2020,6 +2026,82 @@ async fn main() -> ExitCode {
                         sqlx::query(
                             "SELECT advertising.ensure_monthly_partitions((current_date + interval '1 month')::date)",
                         )
+                        .execute(&pool)
+                        .await?;
+                        // TASK-018 retention enforcement: the
+                        // privacy.retention_rules registry is the single
+                        // source of truth for both the cutoff *and* the
+                        // action. The conversion-event class is registered
+                        // `anonymise`: aged conversion partitions get their
+                        // personal-data columns stripped (consent snapshot
+                        // retained as proof) and are kept — only an explicit
+                        // `delete` action authorizes a drop. A missing rule
+                        // skips that class this pass — loudly, never
+                        // silently.
+                        let rules: Vec<(String, String, i64)> = sqlx::query_as(
+                            "SELECT data_class, action,
+                                    (EXTRACT(EPOCH FROM period) / 86400)::bigint AS days
+                             FROM privacy.retention_rules
+                             WHERE data_class IN ('advertising_conversion_event', 'advertising_metric')",
+                        )
+                        .fetch_all(&pool)
+                        .await?;
+                        let rules = rules
+                            .into_iter()
+                            .map(|(class, action, days)| (class, (action, days)))
+                            .collect::<std::collections::HashMap<String, (String, i64)>>();
+
+                        let mut conversion_cutoff: Option<i32> = None;
+                        let mut anonymise_conversions = true;
+                        match rules.get("advertising_conversion_event") {
+                            Some((action, days)) => {
+                                if action != "anonymise" && action != "delete" {
+                                    tracing::warn!(
+                                        action = %action,
+                                        "unexpected retention action for advertising_conversion_event; treating as anonymise"
+                                    );
+                                }
+                                // `anonymise` (the registered default) strips
+                                // personal data before the drop; `delete`
+                                // drops rows as-is.
+                                anonymise_conversions = action != "delete";
+                                conversion_cutoff = Some(*days as i32);
+                            }
+                            None => tracing::warn!(
+                                "privacy.retention_rules has no advertising_conversion_event row; conversion partition drops are skipped this pass"
+                            ),
+                        }
+
+                        let mut metrics_cutoff: Option<i32> = None;
+                        match rules.get("advertising_metric") {
+                            Some((action, days)) if action == "delete" => {
+                                metrics_cutoff = Some(*days as i32);
+                            }
+                            Some((action, _)) => tracing::warn!(
+                                action = %action,
+                                "privacy.retention_rules advertising_metric action is not delete; metrics partition drops are skipped this pass"
+                            ),
+                            None => tracing::warn!(
+                                "privacy.retention_rules has no advertising_metric row; metrics partition drops are skipped this pass"
+                            ),
+                        }
+
+                        // A NULL cutoff skips that class entirely; the SQL
+                        // function never acts on a missing rule. Under
+                        // `anonymise` the function strips personal data and
+                        // retains the partition; under `delete` it drops.
+                        sqlx::query(
+                            "SELECT advertising.enforce_retention(
+                               CASE WHEN $1::int IS NULL THEN NULL
+                                    ELSE current_date - $1::int END,
+                               CASE WHEN $2::int IS NULL THEN NULL
+                                    ELSE current_date - $2::int END,
+                               $3::boolean
+                             )",
+                        )
+                        .bind(conversion_cutoff)
+                        .bind(metrics_cutoff)
+                        .bind(anonymise_conversions)
                         .execute(&pool)
                         .await?;
                         Ok(())

@@ -1,7 +1,14 @@
 # TASK-016: 10.7 Metrics ingestion, rollups & ROAS query layer
 
 **Phase:** 10
-**Status:** in-progress — see `../backlog.md`'s TASK-016 row for the shipped/open split; not yet committed
+**Status:** in-progress — see `../backlog.md`'s TASK-016 row for the shipped/open split.
+**2026-09-16:** the FX gap closed — `GET /ads/metrics` gained an explicit, optional
+`render_currency` query parameter; `rendered_spend` is computed at query time through the existing
+ECB-backed `FxRatePort` snapshots (`PersistedFxRates`), carries its rate date, is never persisted,
+and stays `None` on any day without a published rate. Unit tests pin the JPY↔USD decimal-exponent
+boundary. Still open: real-platform reporting verification, per-event click-id campaign
+attribution, the 500×90 load target — all need test-account access or are tracked in the backlog
+row.
 **Requirement(s):** FR-1012, NFR-1005, NFR-1006, NFR-1009
 **Depends on:** TASK-012, TASK-015
 **Created:** 2026-08-20

@@ -20,12 +20,12 @@ use uuid::Uuid;
 
 use crate::config::AdvertisingConfig;
 use crate::domain::{
-    AdPlatformPort, AdvertisingError, AuthorizationExchange, AuthorizationRequest,
-    AuthorizationStart, Budget, BudgetType, Campaign, CampaignStatus, CapabilityMatrix,
-    ConnectionAccessTokenProvider, ConnectionHandle, ConsentSnapshot, CreativeAssetSpec,
-    CreativePlacement, DriftState, ExchangedAuthorization, GrantedAccessToken, HashedIds,
-    MetricPoint, MetricQuery, Money, Objective, PlatformAccount, PlatformDescriptor, PlatformKey,
-    RefreshTokenGrant, ScheduleGranularity, TargetingDimension, UploadedConversion,
+    AdPlatformPort, AdReviewObservation, AdReviewState, AdvertisingError, AuthorizationExchange,
+    AuthorizationRequest, AuthorizationStart, Budget, BudgetType, Campaign, CampaignStatus,
+    CapabilityMatrix, ConnectionAccessTokenProvider, ConnectionHandle, ConsentSnapshot,
+    CreativeAssetSpec, CreativePlacement, DriftState, ExchangedAuthorization, GrantedAccessToken,
+    HashedIds, MetricPoint, MetricQuery, Money, Objective, PlatformAccount, PlatformDescriptor,
+    PlatformKey, RefreshTokenGrant, ScheduleGranularity, TargetingDimension, UploadedConversion,
 };
 
 const META_SCOPE_ADS_MANAGEMENT: &str = "ads_management";
@@ -531,7 +531,10 @@ impl AdPlatformPort for MetaAdsAdapter {
         ];
 
         match campaign.budget.kind {
-            BudgetType::Daily => {
+            BudgetType::Daily | BudgetType::CampaignBudgetOptimization => {
+                // CBO carries the shared cap on the campaign object too — that
+                // is what Meta's campaign-budget optimization *is*: the budget
+                // lives on the campaign instead of on each ad set.
                 form.push((
                     "daily_budget",
                     campaign.budget.amount.amount_minor.to_string(),
@@ -636,6 +639,12 @@ impl AdPlatformPort for MetaAdsAdapter {
             )
         })?;
 
+        // Meta exposes no distinct CBO marker on read-back — a campaign-level
+        // `daily_budget` *is* the CBO budget. A read-back therefore always
+        // re-derives the plain Daily kind and must never be adopted as the
+        // stored intent: CBO lives on as our intent (see the publish and
+        // pause/resume paths), while this read-back only ever feeds the
+        // remote snapshot and drift detection.
         let (budget_kind, amount_minor) = if let Some(daily) = node.daily_budget {
             (BudgetType::Daily, daily.parse::<i64>().unwrap_or(0))
         } else if let Some(lifetime) = node.lifetime_budget {
@@ -694,7 +703,7 @@ impl AdPlatformPort for MetaAdsAdapter {
         ];
 
         match campaign.budget.kind {
-            BudgetType::Daily => {
+            BudgetType::Daily | BudgetType::CampaignBudgetOptimization => {
                 form.push((
                     "daily_budget",
                     campaign.budget.amount.amount_minor.to_string(),
@@ -1043,6 +1052,121 @@ impl AdPlatformPort for MetaAdsAdapter {
         Ok(points)
     }
 
+    async fn fetch_review_status(
+        &self,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
+    ) -> Result<Vec<AdReviewObservation>, AdvertisingError> {
+        if campaign_id.trim().is_empty() {
+            return Err(AdvertisingError::InvalidInput(
+                "campaign id is required to fetch review status".to_string(),
+            ));
+        }
+        let access_token = self.access_tokens.access_token(connection).await?;
+        // The request below addresses the campaign node, but the handle is
+        // still required to be account-bound: an authorization-time handle
+        // has no business reaching a review poll at all.
+        require_act_id(connection)?;
+        let url = format!("{}/{campaign_id}/ads", self.graph_base_url);
+
+        let mut observations = Vec::new();
+        // Graph pages its edges at 25 rows by default; stopping after the
+        // first page would leave every later ad's verdict stale (including
+        // ones the platform rejected). `paging.next` is the *existence*
+        // signal; the page is requested through the documented `after`
+        // cursor so the access token never has to ride a platform-echoed
+        // URL.
+        let mut after: Option<String> = None;
+        let mut pages = 0_usize;
+        loop {
+            pages += 1;
+            let mut query = vec![
+                (
+                    "fields",
+                    "id,effective_status,ad_review_feedback".to_string(),
+                ),
+                ("limit", "100".to_string()),
+            ];
+            if let Some(cursor) = &after {
+                query.push(("after", cursor.clone()));
+            }
+
+            let response = self
+                .http
+                .get(&url)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .query(&query)
+                .send()
+                .await
+                .map_err(|err| {
+                    tracing::warn!(error = %err, "meta fetch_review_status transport failed");
+                    AdvertisingError::PlatformUnavailable(
+                        "meta fetch_review_status transport failed".to_string(),
+                    )
+                })?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                return Err(AdvertisingError::PlatformUnavailable(format!(
+                    "meta fetch_review_status failed with status {status}"
+                )));
+            }
+
+            let body: MetaAdsListResponse = response.json().await.map_err(|err| {
+                tracing::warn!(error = %err, "meta fetch_review_status JSON parse failed");
+                AdvertisingError::PlatformUnavailable(
+                    "invalid response shape from meta fetch_review_status".to_string(),
+                )
+            })?;
+
+            for node in body.data {
+                let Some(ad_external_id) = node.id else {
+                    continue;
+                };
+                let effective_status = node.effective_status.as_deref().unwrap_or("");
+                let state = map_meta_effective_status(effective_status);
+                // The verbatim policy wording lives under ad_review_feedback when
+                // Meta supplies it; when it does not, the effective status itself
+                // is the honest reason — it is what the platform reports.
+                let reasons = node
+                    .ad_review_feedback
+                    .as_ref()
+                    .and_then(meta_denied_reasons)
+                    .unwrap_or_else(|| {
+                        if state == AdReviewState::Rejected {
+                            vec![effective_status.to_string()]
+                        } else {
+                            Vec::new()
+                        }
+                    });
+                observations.push(AdReviewObservation {
+                    ad_external_id,
+                    state,
+                    reasons,
+                });
+            }
+
+            match body.paging.filter(|paging| paging.next.is_some()) {
+                Some(paging) if pages < REVIEW_STATUS_PAGE_CAP => {
+                    after = paging.cursors.map(|cursors| cursors.after);
+                    if after.as_deref().unwrap_or("").is_empty() {
+                        break;
+                    }
+                }
+                Some(_) => {
+                    tracing::warn!(
+                        campaign_id,
+                        pages,
+                        "meta fetch_review_status hit the pagination cap; verdicts may be incomplete"
+                    );
+                    break;
+                }
+                None => break,
+            }
+        }
+        Ok(observations)
+    }
+
     async fn upload(
         &self,
         connection: &ConnectionHandle,
@@ -1080,7 +1204,7 @@ impl AdPlatformPort for MetaAdsAdapter {
         let payload = serde_json::json!({
             "data": [
                 {
-                    "event_name": "Purchase",
+                    "event_name": map_conversion_name_to_meta(&conversion.event_name),
                     "event_time": Utc::now().timestamp(),
                     "event_id": conversion.event_id,
                     "action_source": "website",
@@ -1114,6 +1238,352 @@ impl AdPlatformPort for MetaAdsAdapter {
     }
 }
 
+/// Map a Sanvi conversion name onto Meta's standard event vocabulary.
+/// Unrecognised names pass through unchanged: the Conversions API accepts
+/// custom event names, and guessing a standard one would misattribute the
+/// conversion inside Meta's own reporting.
+fn map_conversion_name_to_meta(name: &str) -> String {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "purchase" => "Purchase".to_string(),
+        "lead" => "Lead".to_string(),
+        "sign_up" | "signup" | "complete_registration" => "CompleteRegistration".to_string(),
+        "subscribe" => "Subscribe".to_string(),
+        "start_trial" => "StartTrial".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[derive(Deserialize)]
+struct MetaAdsListResponse {
+    #[serde(default)]
+    data: Vec<MetaAdReviewNode>,
+    #[serde(default)]
+    paging: Option<MetaPaging>,
+}
+
+#[derive(Deserialize)]
+struct MetaPaging {
+    #[serde(default)]
+    cursors: Option<MetaPagingCursors>,
+    /// Present exactly when another page exists.
+    #[serde(default)]
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MetaPagingCursors {
+    #[serde(default)]
+    after: String,
+}
+
+/// Upper bound on pages a single review poll will walk (100 ads each). A
+/// runaway `paging.next` from the platform must not become an unbounded
+/// loop; past the cap the poll fails loud-ish (warn) rather than hanging.
+const REVIEW_STATUS_PAGE_CAP: usize = 50;
+
+#[derive(Deserialize)]
+struct MetaAdReviewNode {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default, rename = "effective_status")]
+    effective_status: Option<String>,
+    #[serde(default, rename = "ad_review_feedback")]
+    ad_review_feedback: Option<serde_json::Value>,
+}
+
+/// Meta expresses campaign-budget-agnostic review state purely through
+/// `effective_status`. Anything not provably decided stays pending — an
+/// unknown status must never read as approved. `PAUSED` is deliberately not
+/// approved: a paused ad says nothing about whether it ever passed review,
+/// and a never-reviewed ad inside a paused campaign must not wake up
+/// "approved" just because someone hit pause.
+fn map_meta_effective_status(raw: &str) -> AdReviewState {
+    match raw {
+        "ACTIVE" | "PREAPPROVED" | "APPROVED_WITH_LIMITATIONS" => AdReviewState::Approved,
+        "DISAPPROVED" => AdReviewState::Rejected,
+        _ => AdReviewState::Pending,
+    }
+}
+
+/// Extract the platform's own policy wording from `ad_review_feedback`.
+/// Meta's documented shape carries a `denied_reasons` string array; when the
+/// node is shaped differently there is nothing verbatim to lift, and `None`
+/// tells the caller to fall back to the effective status itself.
+fn meta_denied_reasons(feedback: &serde_json::Value) -> Option<Vec<String>> {
+    let reasons = feedback.get("denied_reasons")?.as_array()?;
+    let mapped = reasons
+        .iter()
+        .filter_map(|reason| reason.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    Some(mapped)
+}
+
+/// Real Meta Conversions API sink. The dataset id rides the connection's
+/// external account id (the documented interim assumption from the TASK-013
+/// row — it holds unless the pixel is provisioned separately). Event names
+/// are mapped from the captured conversion, never hard-coded.
+pub struct MetaConversionSink {
+    http: reqwest::Client,
+    graph_base_url: String,
+    access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    descriptor: PlatformDescriptor,
+}
+
+impl MetaConversionSink {
+    pub fn new(
+        config: &AdvertisingConfig,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    ) -> Result<Self, AdvertisingError> {
+        Self::with_custom_endpoints(
+            config,
+            format!("https://graph.facebook.com/{}", config.meta_api_version),
+            access_tokens,
+        )
+    }
+
+    pub fn with_custom_endpoints(
+        _config: &AdvertisingConfig,
+        graph_base_url: String,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    ) -> Result<Self, AdvertisingError> {
+        Ok(Self {
+            http: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .map_err(|err| {
+                    AdvertisingError::PlatformUnavailable(format!(
+                        "meta conversion sink http client: {err}"
+                    ))
+                })?,
+            graph_base_url,
+            access_tokens,
+            descriptor: meta_descriptor(),
+        })
+    }
+}
+
+#[async_trait]
+impl crate::domain::ConversionSinkPort for MetaConversionSink {
+    fn descriptor(&self) -> PlatformDescriptor {
+        self.descriptor.clone()
+    }
+
+    async fn upload(
+        &self,
+        connection: &ConnectionHandle,
+        event: &crate::domain::ConversionEvent,
+    ) -> Result<crate::domain::UploadReceipt, AdvertisingError> {
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let dataset_id = require_act_id(connection)?;
+        let dataset_id = strip_act_prefix(&dataset_id).to_string();
+        let url = format!("{}/{dataset_id}/events", self.graph_base_url);
+
+        let permitted =
+            !event.consent.answers.values().any(|ans| {
+                ans.eq_ignore_ascii_case("denied") || ans.eq_ignore_ascii_case("opt_out")
+            });
+
+        let mut user_data = serde_json::Map::new();
+        if permitted {
+            for (key, hash) in &event.hashed_identifiers {
+                let normalized_key = match key.to_ascii_lowercase().as_str() {
+                    "em" | "mail_hash" | "hashed_mail" => "em".to_string(),
+                    "ph" | "phone_hash" | "hashed_phone" => "ph".to_string(),
+                    "fn" | "first_name" => "fn".to_string(),
+                    "ln" | "last_name" => "ln".to_string(),
+                    other => other.to_string(),
+                };
+                user_data.insert(
+                    normalized_key,
+                    serde_json::Value::Array(vec![serde_json::Value::String(
+                        hash.as_str().to_string(),
+                    )]),
+                );
+            }
+        }
+        if let Some(fbc) = &event.click_ids.fbc {
+            user_data.insert("fbc".to_string(), serde_json::Value::String(fbc.clone()));
+        }
+        if let Some(fbp) = &event.click_ids.fbp {
+            user_data.insert("fbp".to_string(), serde_json::Value::String(fbp.clone()));
+        }
+
+        let mut payload_event = serde_json::json!({
+            "event_name": map_conversion_name_to_meta(&event.name),
+            "event_time": event.occurred_at.timestamp(),
+            "event_id": event.event_id,
+            "action_source": "website",
+            "user_data": serde_json::Value::Object(user_data),
+        });
+        if let Some(value) = &event.value {
+            payload_event["custom_data"] = serde_json::json!({
+                "currency": value.currency,
+                "value": value.amount_minor,
+            });
+        }
+
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&serde_json::json!({ "data": [payload_event] }))
+            .send()
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "meta conversion sink transport failed");
+                AdvertisingError::PlatformUnavailable(
+                    "meta conversion sink transport failed".to_string(),
+                )
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "meta conversion sink failed with status {status}"
+            )));
+        }
+
+        Ok(crate::domain::UploadReceipt {
+            platform: self.descriptor.key.clone(),
+            external_id: event.event_id.clone(),
+            uploaded_at: Utc::now(),
+        })
+    }
+
+    async fn retract(
+        &self,
+        _connection: &ConnectionHandle,
+        _event: &crate::domain::ConversionEvent,
+    ) -> Result<(), AdvertisingError> {
+        // The Conversions API has no per-event deletion. The retraction
+        // sweep records this explicitly as `Unpropagated{reason}` rather
+        // than pretending the member was removed.
+        Err(AdvertisingError::Validation(vec![
+            crate::domain::ValidationViolation::unsupported(
+                "retract",
+                "meta conversions api does not support deleting an uploaded event",
+            ),
+        ]))
+    }
+}
+
+/// Real Meta custom-audience sync. Members are sent as SHA-256 mail-address hashes:
+/// the port's members are type-less today (see the Google audience sink note)
+/// and must grow typed members before the live flag flips.
+pub struct MetaAudienceSync {
+    http: reqwest::Client,
+    graph_base_url: String,
+    access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    descriptor: PlatformDescriptor,
+}
+
+impl MetaAudienceSync {
+    pub fn with_custom_endpoints(
+        _config: &AdvertisingConfig,
+        graph_base_url: String,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+    ) -> Result<Self, AdvertisingError> {
+        Ok(Self {
+            http: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .map_err(|err| {
+                    AdvertisingError::PlatformUnavailable(format!(
+                        "meta audience sink http client: {err}"
+                    ))
+                })?,
+            graph_base_url,
+            access_tokens,
+            descriptor: meta_descriptor(),
+        })
+    }
+
+    async fn mutate_members(
+        &self,
+        connection: &ConnectionHandle,
+        audience_id: &str,
+        method: reqwest::Method,
+        members: &[crate::domain::HashedIdentifier],
+    ) -> Result<(), AdvertisingError> {
+        if members.is_empty() {
+            return Ok(());
+        }
+        let access_token = self.access_tokens.access_token(connection).await?;
+        let url = format!("{}/{audience_id}/users", self.graph_base_url);
+        let data = members
+            .iter()
+            .map(|member| {
+                serde_json::Value::Array(vec![serde_json::Value::String(
+                    member.as_str().to_string(),
+                )])
+            })
+            .collect::<Vec<_>>();
+        let mut request = self
+            .http
+            .request(method, &url)
+            .header("Authorization", format!("Bearer {access_token}"));
+        // The Graph API reads the member payload from the body on both POST
+        // (add) and DELETE (remove) — query strings would leak hashes into
+        // access logs.
+        request = request.header("Content-Type", "application/json");
+        request = request.body(
+            serde_json::to_string(&serde_json::json!({
+                "payload": {
+                    "schema": ["EMAIL_SHA256"],
+                    "data": data
+                }
+            }))
+            .map_err(|err| {
+                AdvertisingError::PlatformUnavailable(format!("meta audience sink body: {err}"))
+            })?,
+        );
+        let response = request.send().await.map_err(|err| {
+            tracing::warn!(error = %err, "meta audience sink transport failed");
+            AdvertisingError::PlatformUnavailable("meta audience sink transport failed".to_string())
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            return Err(AdvertisingError::PlatformUnavailable(format!(
+                "meta audience sink failed with status {status}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::domain::AudienceSyncPort for MetaAudienceSync {
+    fn descriptor(&self) -> PlatformDescriptor {
+        self.descriptor.clone()
+    }
+
+    async fn sync_audience(
+        &self,
+        connection: &ConnectionHandle,
+        external_ref: Option<&str>,
+        included: &[crate::domain::HashedIdentifier],
+        removed: &[crate::domain::HashedIdentifier],
+    ) -> Result<crate::domain::AudienceSyncReceipt, AdvertisingError> {
+        let Some(audience_id) = external_ref else {
+            return Err(AdvertisingError::InvalidInput(
+                "meta audience sync requires the platform custom audience id".to_string(),
+            ));
+        };
+        // Additions first, then removals: an identifier in both sets is one
+        // whose consent state flipped since the last refresh, and the removal
+        // must be the surviving instruction.
+        self.mutate_members(connection, audience_id, reqwest::Method::POST, included)
+            .await?;
+        self.mutate_members(connection, audience_id, reqwest::Method::DELETE, removed)
+            .await?;
+        Ok(crate::domain::AudienceSyncReceipt {
+            external_ref: audience_id.to_string(),
+        })
+    }
+}
+
 fn meta_descriptor() -> PlatformDescriptor {
     let objectives = [
         "app_promotion",
@@ -1137,10 +1607,14 @@ fn meta_descriptor() -> PlatformDescriptor {
     .iter()
     .map(|value| TargetingDimension::parse(value).expect("static dimension"))
     .collect::<BTreeSet<_>>();
-    let budget_types = [BudgetType::Daily, BudgetType::Lifetime]
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
+    let budget_types = [
+        BudgetType::Daily,
+        BudgetType::Lifetime,
+        BudgetType::CampaignBudgetOptimization,
+    ]
+    .iter()
+    .copied()
+    .collect::<BTreeSet<_>>();
 
     let mut minimums = BTreeMap::new();
     minimums.insert(
@@ -1163,7 +1637,9 @@ fn meta_descriptor() -> PlatformDescriptor {
         display_name: "Meta Ads".to_string(),
         entitlement_key: "advertising.meta_ads".to_string(),
         capability_matrix: CapabilityMatrix {
-            matrix_version: "2026-08-24".to_string(),
+            // Bumped with the CBO budget type: this version is the cache key
+            // the frontend's form engine uses to re-fetch schemas.
+            matrix_version: "2026-09-16".to_string(),
             objectives,
             budget_types,
             minimum_budgets_minor: minimums,
@@ -1855,6 +2331,7 @@ mod tests {
                 &connection,
                 UploadedConversion {
                     event_id: "evt-123".to_string(),
+                    event_name: "purchase".to_string(),
                 },
                 HashedIds::default(),
                 ConsentSnapshot {
@@ -1867,6 +2344,240 @@ mod tests {
             )
             .await
             .expect("upload succeeds");
+
+        // The captured conversion name must reach the wire mapped into Meta's
+        // standard vocabulary — not a hard-coded event type.
+        let upload_body = mock
+            .recorded()
+            .last()
+            .expect("upload was recorded")
+            .body
+            .clone();
+        let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        assert_eq!(
+            upload_json["data"][0]["event_name"], "Purchase",
+            "the `purchase` conversion name maps to Meta's Purchase event"
+        );
+    }
+
+    #[tokio::test]
+    async fn campaign_budget_optimization_create_maps_to_campaign_level_daily_cap() {
+        let create_resp = serde_json::json!({ "id": "120330002" });
+        let mock = MockServer::start(vec![(200, create_resp)]).await;
+
+        let adapter = MetaAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}/auth", mock.addr),
+            format!("http://{}", mock.addr),
+            stub_tokens("eaab.provider_token"),
+        )
+        .unwrap();
+
+        let connection = ConnectionHandle {
+            id: "conn-cbo-1".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "1001001".to_string(),
+        };
+
+        let campaign = Campaign {
+            id: "draft-cbo-1".to_string(),
+            name: "CBO Campaign".to_string(),
+            status: CampaignStatus::Active,
+            objective: Objective::parse("sales").unwrap(),
+            budget: Budget {
+                kind: BudgetType::CampaignBudgetOptimization,
+                amount: Money::new(7000, "JPY").unwrap(),
+            },
+            schedule: None,
+            ad_groups: vec![],
+            drift: DriftState {
+                drifted: false,
+                changed_fields: vec![],
+            },
+        };
+
+        adapter
+            .create_campaign(&connection, campaign, Uuid::now_v7())
+            .await
+            .expect("CBO create succeeds");
+
+        let body = mock
+            .recorded()
+            .last()
+            .expect("create was recorded")
+            .body
+            .clone();
+        let form = String::from_utf8(body).unwrap();
+        assert!(
+            form.contains("daily_budget=7000"),
+            "CBO maps to the campaign-level daily cap: {form}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_maps_non_purchase_conversion_names() {
+        let upload_resp = serde_json::json!({ "events_received": 1 });
+        let mock = MockServer::start(vec![(200, upload_resp)]).await;
+
+        let adapter = MetaAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}/auth", mock.addr),
+            format!("http://{}", mock.addr),
+            stub_tokens("eaab.provider_token"),
+        )
+        .unwrap();
+
+        let connection = ConnectionHandle {
+            id: "conn-lead-1".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "1001001".to_string(),
+        };
+
+        adapter
+            .upload(
+                &connection,
+                UploadedConversion {
+                    event_id: "evt-lead-1".to_string(),
+                    event_name: "lead".to_string(),
+                },
+                HashedIds::default(),
+                ConsentSnapshot {
+                    resolver_version: "v1".to_string(),
+                    jurisdiction: "US-CA".to_string(),
+                    purposes_asked: vec![],
+                    answers: BTreeMap::new(),
+                    signal_source: "browser".to_string(),
+                },
+            )
+            .await
+            .expect("lead upload succeeds");
+
+        let body = mock
+            .recorded()
+            .last()
+            .expect("upload was recorded")
+            .body
+            .clone();
+        let upload_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(upload_json["data"][0]["event_name"], "Lead");
+    }
+
+    #[tokio::test]
+    async fn fetch_review_status_surfaces_effective_statuses_and_denied_reasons() {
+        let review_fixture = serde_json::json!({
+            "data": [
+                {
+                    "id": "111",
+                    "effective_status": "DISAPPROVED",
+                    "ad_review_feedback": { "denied_reasons": ["Restricted content: weapons"] }
+                },
+                { "id": "222", "effective_status": "ACTIVE" },
+                { "id": "333", "effective_status": "PENDING_REVIEW" },
+                {
+                    "id": "444",
+                    "effective_status": "DISAPPROVED",
+                    "ad_review_feedback": { "redistribution_status": "eligible_for_redistribution" }
+                }
+            ]
+        });
+
+        let mock = MockServer::start(vec![(200, review_fixture)]).await;
+
+        let adapter = MetaAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}/auth", mock.addr),
+            format!("http://{}", mock.addr),
+            stub_tokens("eaab.provider_token"),
+        )
+        .unwrap();
+
+        let connection = ConnectionHandle {
+            id: "conn-review-1".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "1001001".to_string(),
+        };
+
+        let observations = adapter
+            .fetch_review_status(&connection, "120330001")
+            .await
+            .expect("review status fetch succeeds");
+
+        assert_eq!(observations.len(), 4);
+        assert_eq!(observations[0].ad_external_id, "111");
+        assert_eq!(observations[0].state, AdReviewState::Rejected);
+        assert_eq!(
+            observations[0].reasons,
+            vec!["Restricted content: weapons".to_string()]
+        );
+        assert_eq!(observations[1].state, AdReviewState::Approved);
+        assert!(observations[1].reasons.is_empty());
+        assert_eq!(observations[2].state, AdReviewState::Pending);
+        // No denied_reasons in the feedback node: the verbatim effective
+        // status itself is the reason rather than an invented paraphrase.
+        assert_eq!(observations[3].state, AdReviewState::Rejected);
+        assert_eq!(observations[3].reasons, vec!["DISAPPROVED".to_string()]);
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1);
+        // The campaign-scoped ads edge, not a plain query param on the
+        // account-level edge — the latter is not documented to filter and
+        // would list every ad on the account.
+        assert!(recorded[0].path.contains("/120330001/ads"));
+        assert!(
+            recorded[0]
+                .path
+                .contains("fields=id%2Ceffective_status%2Cad_review_feedback")
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_review_status_follows_pagination() {
+        let page_one = serde_json::json!({
+            "data": [
+                { "id": "111", "effective_status": "ACTIVE" },
+                { "id": "222", "effective_status": "DISAPPROVED" }
+            ],
+            "paging": {
+                "cursors": { "after": "CURSOR-2" },
+                "next": "https://graph.example/120330001/ads?after=CURSOR-2"
+            }
+        });
+        let page_two = serde_json::json!({
+            "data": [
+                { "id": "333", "effective_status": "PENDING_REVIEW" }
+            ]
+        });
+
+        let mock = MockServer::start(vec![(200, page_one), (200, page_two)]).await;
+
+        let adapter = MetaAdsAdapter::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}/auth", mock.addr),
+            format!("http://{}", mock.addr),
+            stub_tokens("eaab.provider_token"),
+        )
+        .unwrap();
+
+        let connection = ConnectionHandle {
+            id: "conn-review-2".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "1001001".to_string(),
+        };
+
+        let observations = adapter
+            .fetch_review_status(&connection, "120330001")
+            .await
+            .expect("review status fetch succeeds");
+
+        // Ads past the default first page keep their verdicts reachable —
+        // this is exactly the slice a single-page read would have lost.
+        assert_eq!(observations.len(), 3);
+        assert_eq!(observations[2].ad_external_id, "333");
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 2);
+        assert!(recorded[1].path.contains("/120330001/ads"));
+        assert!(recorded[1].path.contains("after=CURSOR-2"));
     }
 
     #[tokio::test]
@@ -1961,5 +2672,154 @@ mod tests {
             .expect_err("empty refresh token is rejected");
         assert!(matches!(err, AdvertisingError::InvalidInput(_)));
         assert!(mock.recorded().is_empty());
+    }
+
+    use crate::domain::{AudienceSyncPort, ConsentSnapshot, ConversionEvent, ConversionSinkPort};
+
+    fn sink_event() -> ConversionEvent {
+        ConversionEvent {
+            id: crate::domain::ConversionId::try_from(1_000_900_i64).unwrap(),
+            tenant_id: test_tenant(),
+            event_id: "evt-sink-1".to_string(),
+            dedupe_key: "test:evt-sink-1".to_string(),
+            name: "purchase".to_string(),
+            occurred_at: Utc::now(),
+            value: Some(Money::new(1_000, "USD").unwrap()),
+            value_source: Some(crate::domain::ValueSource::PaymentRecord),
+            order_ref: Some("order-sink-1".to_string()),
+            click_ids: crate::domain::ClickIds {
+                fbp: Some("fb.1.test".to_string()),
+                ..Default::default()
+            },
+            hashed_identifiers: std::collections::BTreeMap::from([(
+                "em".to_string(),
+                crate::domain::hashing::hash_email("buyer@example.com"),
+            )]),
+            consent: ConsentSnapshot {
+                resolver_version: "v1".to_string(),
+                jurisdiction: "US-CA".to_string(),
+                purposes_asked: vec!["ads_measurement".to_string()],
+                answers: std::collections::BTreeMap::new(),
+                signal_source: "default".to_string(),
+            },
+            upload_states: std::collections::BTreeMap::new(),
+            subject_key: crate::domain::SubjectKeyRef::TenantDevice {
+                device_ref: "device-sink".to_string(),
+            },
+        }
+    }
+
+    fn sink_connection() -> ConnectionHandle {
+        ConnectionHandle {
+            id: "conn-sink".to_string(),
+            tenant_id: test_tenant(),
+            external_account_id: "1001001".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn conversion_sink_maps_event_name_and_carries_value() {
+        let mock =
+            MockServer::start(vec![(200, serde_json::json!({ "events_received": 1 }))]).await;
+        let sink = MetaConversionSink::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}", mock.addr),
+            stub_tokens("eaab.provider_token"),
+        )
+        .unwrap();
+
+        let receipt = sink
+            .upload(&sink_connection(), &sink_event())
+            .await
+            .expect("meta sink upload succeeds");
+        assert_eq!(receipt.platform.as_str(), "meta");
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert!(
+            recorded[0].path.contains("/1001001/events"),
+            "{}",
+            recorded[0].path
+        );
+        let body: serde_json::Value = serde_json::from_slice(&recorded[0].body).unwrap();
+        let event = &body["data"][0];
+        assert_eq!(event["event_name"], "Purchase");
+        assert_eq!(event["custom_data"]["currency"], "USD");
+        assert_eq!(event["custom_data"]["value"], 1_000);
+        assert_eq!(event["user_data"]["fbp"], "fb.1.test");
+        assert_eq!(
+            event["user_data"]["em"][0],
+            crate::domain::hashing::hash_email("buyer@example.com").as_str()
+        );
+    }
+
+    #[tokio::test]
+    async fn conversion_sink_retract_is_explicitly_unsupported() {
+        let sink = MetaConversionSink::with_custom_endpoints(
+            &test_config(),
+            "http://127.0.0.1:9".to_string(),
+            stub_tokens("eaab.unused"),
+        )
+        .unwrap();
+        let err = sink
+            .retract(&sink_connection(), &sink_event())
+            .await
+            .expect_err("meta has no per-event deletion");
+        let AdvertisingError::Validation(violations) = err else {
+            panic!("expected a capability violation, got {err:?}");
+        };
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.code == "capability_unsupported"),
+            "{violations:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audience_sink_posts_additions_then_deletes_removals() {
+        let mock = MockServer::start(vec![
+            (200, serde_json::json!({ "success": true })),
+            (200, serde_json::json!({ "success": true })),
+        ])
+        .await;
+        let sink = MetaAudienceSync::with_custom_endpoints(
+            &test_config(),
+            format!("http://{}", mock.addr),
+            stub_tokens("eaab.provider_token"),
+        )
+        .unwrap();
+
+        let included = vec![crate::domain::hashing::hash_email("keep@example.com")];
+        let removed = vec![crate::domain::hashing::hash_email("drop@example.com")];
+        let receipt = sink
+            .sync_audience(&sink_connection(), Some("987654"), &included, &removed)
+            .await
+            .expect("meta audience sync succeeds");
+        assert_eq!(receipt.external_ref, "987654");
+
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0].method, "POST");
+        assert!(
+            recorded[0].path.contains("/987654/users"),
+            "{}",
+            recorded[0].path
+        );
+        let body: serde_json::Value = serde_json::from_slice(&recorded[0].body).unwrap();
+        assert_eq!(
+            body["payload"]["schema"],
+            serde_json::json!(["EMAIL_SHA256"])
+        );
+        assert_eq!(
+            body["payload"]["data"],
+            serde_json::json!([[included[0].as_str()]])
+        );
+        assert_eq!(recorded[1].method, "DELETE");
+        let body: serde_json::Value = serde_json::from_slice(&recorded[1].body).unwrap();
+        assert_eq!(
+            body["payload"]["data"],
+            serde_json::json!([[removed[0].as_str()]])
+        );
     }
 }

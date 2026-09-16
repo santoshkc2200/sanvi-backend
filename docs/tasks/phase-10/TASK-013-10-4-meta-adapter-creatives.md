@@ -1,7 +1,7 @@
 # TASK-013: 10.4 Meta adapter & creatives
 
 **Phase:** 10
-**Status:** in-progress
+**Status:** in-progress — CBO variant landed; live-credential verification pending
 **Requirement(s):** FR-1007, NFR-1008
 **Depends on:** TASK-012
 **Created:** 2026-08-20
@@ -39,10 +39,12 @@ Runs in parallel with TASK-014 once TASK-012 is on staging.
       covers the interim.
 - [x] **Meta capability matrix** — broadened from 2 objectives/1 budget type/1 placement to 6 objectives,
       2 budget types (`daily`, `lifetime`), 6 targeting dimensions, and 3 placements
-      (`feed`/`stories`/`reels`), each with its own asset spec. **Not done:** a dedicated
-      campaign-budget-optimization `BudgetType` variant and explicit ad-set-level scheduling — `BudgetType`
-      still has only `Daily`/`Lifetime`; adding CBO is a domain-model decision left for whoever picks up
-      the real Meta adapter, not rushed in here.
+      (`feed`/`stories`/`reels`), each with its own asset spec. **Done 2026-09-16:** the
+      campaign-budget-optimization `BudgetType::CampaignBudgetOptimization` variant exists — Meta's
+      matrix declares it (matrix_version bumped to 2026-09-16 for the frontend schema cache), Google's
+      does not, so validation rejects it for Google on the `budget.kind` path; the Meta adapter maps it
+      to the campaign-level daily cap, and the exported frontend fixture JSON carries it. **Still
+      open:** explicit ad-set-level scheduling.
 - [x] **Creative model** — `Creative`/`StoredCreative` persisted via `CreativeRepository` (new port +
       Postgres impl), with assets, per-locale copy, and a placement link. Asset storage reuses
       `course-media` references (`asset_references: Vec<String>`) rather than a second uploader.

@@ -1,7 +1,7 @@
 # TASK-012: 10.3 Campaign tree, Google Ads adapter & drift
 
 **Phase:** 10
-**Status:** in-progress
+**Status:** in-progress — code complete against the fake adapter; live-credential verification pending
 **Requirement(s):** FR-1004, FR-1005, FR-1006, NFR-1007, NFR-1010
 **Depends on:** TASK-011
 **Created:** 2026-08-20
@@ -37,9 +37,19 @@ per-connection and platform-wide, wrapping every registered adapter in `api` and
 
 **Still open**
 
-- **Google Ads adapter** against the real API — blocked on developer-token access.
-- **Review status** polling, which has no meaning until the real adapter exists.
+- **Review status** polling — implemented 2026-09-16 (see below); live verification of the
+  Google/Meta poll paths still needs test-account access.
 - Staging deployment behind the flag.
+
+**2026-09-16 — review-status polling landed.** `AdPlatformPort::fetch_review_status` returns
+per-ad `AdReviewObservation`s; Google polls `ad_group_ad.policy_summary` via GAQL (policy topic
+entries surfaced **verbatim** as rejection reasons), Meta polls `effective_status` +
+`ad_review_feedback.denied_reasons`, the fake derives Active→Approved/Pending. Verdicts merge onto
+the campaign intent's ads (`Ad.review`, JSONB, `#[serde(default)]`), are surfaced by
+`POST /ads/campaigns/{id}/review-status` (`advertising.read`, on-demand refresh), and a creative
+edit resets the ad's verdict (re-review). Deliberately **not** a nightly sweep: polling shares no
+cursor with reconciliation, and a worker job would need its own cadence column — recorded as
+follow-up rather than rushed. Contract suite gained a review-status step.
 
 
 ## What to do
@@ -70,8 +80,9 @@ per-connection and platform-wide, wrapping every registered adapter in `api` and
         `CampaignDrifted`, notify. **Never write back.**
 - [x] **Drift resolution** — `keep_theirs` adopts remote as intent; `reapply_ours` re-pushes our intent
       as an ordinary attributed mutation. Both clear the flag; neither happens automatically.
-- [ ] **Review status** — per-ad review state with rejection reasons surfaced **verbatim** from the
-      platform. A paraphrased policy rejection is worse than useless when the tenant has to fix it.
+- [x] **Review status** — per-ad review state with rejection reasons surfaced **verbatim** from the
+      platform (2026-09-16: port + both adapters + fake + contract step + poll use case + HTTP
+      refresh endpoint; live-adapter verification still needs test-account access).
 - [x] **Rate limiting & quota** — Google Ads quota is per developer token and shared across all
       tenants. Queue and budget requests per connection so one tenant's bulk edit cannot exhaust the
       quota for every other tenant.

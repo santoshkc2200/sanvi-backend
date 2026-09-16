@@ -279,6 +279,10 @@ pub struct MetricPoint {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadedConversion {
     pub event_id: String,
+    /// The Sanvi conversion name as captured (e.g. `purchase`, `lead`). Each
+    /// adapter maps it onto its platform's own event vocabulary — adapters
+    /// must not assume one fixed event type for every conversion.
+    pub event_name: String,
 }
 
 /// A platform access token minted from a stored refresh token.
@@ -343,6 +347,14 @@ pub trait AdPlatformPort: Send + Sync {
         &self,
         exchange: &AuthorizationExchange,
     ) -> Result<ExchangedAuthorization, AdvertisingError>;
+    /// Create the campaign on the platform. The response tree must key ad
+    /// groups and ads by the ids the caller sent, and carry the platform's
+    /// own ids for them in `Ad::external_id` — publish persists those onto
+    /// the stored intent, and they are the only key review-status
+    /// observations can ever be matched on. An adapter that does not create
+    /// ads remotely returns the tree unchanged (empty external ids) and
+    /// review polling will report the ads as uncorrelated until that
+    /// feature exists.
     async fn create_campaign(
         &self,
         connection: &ConnectionHandle,
@@ -380,6 +392,14 @@ pub trait AdPlatformPort: Send + Sync {
         connection: &ConnectionHandle,
         request: &MetricQuery,
     ) -> Result<Vec<MetricPoint>, AdvertisingError>;
+    /// Per-ad review verdicts for a published campaign, keyed by the
+    /// platform's own ad id. `reasons` must carry the platform's policy
+    /// wording verbatim.
+    async fn fetch_review_status(
+        &self,
+        connection: &ConnectionHandle,
+        campaign_id: &str,
+    ) -> Result<Vec<AdReviewObservation>, AdvertisingError>;
     async fn upload(
         &self,
         connection: &ConnectionHandle,
@@ -387,6 +407,14 @@ pub trait AdPlatformPort: Send + Sync {
         ids: HashedIds,
         consent: ConsentSnapshot,
     ) -> Result<(), AdvertisingError>;
+}
+
+/// One ad's review observation as the platform reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdReviewObservation {
+    pub ad_external_id: String,
+    pub state: super::model::AdReviewState,
+    pub reasons: Vec<String>,
 }
 
 #[async_trait]
