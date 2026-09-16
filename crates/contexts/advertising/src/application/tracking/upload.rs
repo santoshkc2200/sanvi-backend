@@ -7,6 +7,7 @@ use chrono::Utc;
 use sanvi_persistence::TxManager;
 use sanvi_privacy::domain::{DirectiveResolver, DirectiveState, ProcessingPurpose};
 use serde::Serialize;
+use tracing::Instrument;
 
 use super::retry::rebuild_subject;
 use crate::adapters::AdvertisingMetrics;
@@ -232,7 +233,18 @@ impl UploadPendingConversions {
                         tenant_id: conn.tenant_id(),
                         external_account_id: conn.external_account_id().to_string(),
                     };
-                    sink.upload(&handle, &event).await
+                    // End-to-end traceability: the outbound platform call gets
+                    // its own span so capture → gate → upload is one chain.
+                    // `instrument` rather than `enter()`: the entered guard is
+                    // deliberately !Send and may not cross the await.
+                    sink.upload(&handle, &event)
+                        .instrument(tracing::info_span!(
+                            "advertising.conversion_upload",
+                            platform = platform.as_str(),
+                            event_id = %event.event_id,
+                            attempt = current_attempts,
+                        ))
+                        .await
                 } else {
                     Err(AdvertisingError::ConnectionNotFound)
                 };

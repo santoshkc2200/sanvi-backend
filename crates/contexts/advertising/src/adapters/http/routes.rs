@@ -8,9 +8,9 @@ use super::handlers::{
     get_campaign, get_campaign_budget_cap, get_creative, get_creative_previews,
     get_platform_ads_health, get_spend_status, list_ad_platforms, list_campaign_changes,
     list_campaigns, list_connections, list_creatives, oauth_callback, patch_campaign,
-    pause_campaign, publish_campaign, put_budget_cap, put_campaign_budget_cap,
-    resolve_campaign_drift, resume_campaign, start_oauth, update_ad, update_ad_group,
-    validate_campaign,
+    pause_campaign, poll_campaign_review_status, publish_campaign, put_budget_cap,
+    put_campaign_budget_cap, resolve_campaign_drift, resume_campaign, start_oauth, update_ad,
+    update_ad_group, validate_campaign,
 };
 
 /// A catalog is available when at least one platform can be used. Individual
@@ -111,6 +111,11 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
         web::resource("/ads/campaigns/{campaign_id}/drift")
             .app_data(PermissionMap::new(vec![(Method::POST, write)]))
             .route(web::post().to(resolve_campaign_drift)),
+    );
+    cfg.service(
+        web::resource("/ads/campaigns/{campaign_id}/review-status")
+            .app_data(PermissionMap::new(vec![(Method::POST, read)]))
+            .route(web::post().to(poll_campaign_review_status)),
     );
     cfg.service(
         web::resource("/ads/campaigns/{campaign_id}/ad-groups")

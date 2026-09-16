@@ -383,7 +383,7 @@ impl BudgetCapRepository for SqlxBudgetCapRepository {
 ///
 /// `claim_notice` is one statement: it inserts the suspended state when the
 /// tenant has no row — and answers `false`, because a first observation is
-/// not a rollback and must not email — and on conflict updates the row only
+/// not a rollback and must not notify by mail — and on conflict updates the row only
 /// when the recorded state is `serving` (an observed enabled→suspended
 /// transition) or the recorded reason differs *and that suspension was
 /// actually notified* (a reason change re-arms only a notice the tenant has

@@ -8,8 +8,9 @@ use sanvi_persistence::TxManager;
 use sanvi_kernel::CapabilityMode;
 
 use crate::adapters::{
-    FakeAdPlatform, FakeAudienceSync, FakeConversionSink, GoogleAdsAdapter,
-    GoogleRefreshTokenGrant, MetaAdsAdapter, MetaRefreshTokenGrant,
+    FakeAdPlatform, FakeAudienceSync, FakeConversionSink, GoogleAdsAdapter, GoogleAudienceSync,
+    GoogleConversionSink, GoogleRefreshTokenGrant, MetaAdsAdapter, MetaAudienceSync,
+    MetaConversionSink, MetaRefreshTokenGrant,
 };
 use crate::application::{PlatformRegistry, VaultAccessTokenProvider};
 use crate::config::AdvertisingConfig;
@@ -140,9 +141,13 @@ pub fn build_platform_registry(
     }
 }
 
-/// Construct conversion sinks for advertising.
+/// Construct conversion sinks for advertising. Live mode builds the real
+/// Google/Meta sinks per platform whose token provider exists, mirroring
+/// `build_platform_registry`'s per-platform fallback: a missing provider
+/// means that platform has no sink rather than a failed process.
 pub fn build_conversion_sinks(
     config: &AdvertisingConfig,
+    token_providers: &HashMap<PlatformKey, std::sync::Arc<dyn ConnectionAccessTokenProvider>>,
 ) -> Result<
     (
         std::collections::BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>>,
@@ -169,15 +174,30 @@ pub fn build_conversion_sinks(
             Ok((sinks, CapabilityMode::Sandbox))
         }
         CapabilityMode::Live => {
-            tracing::info!("live conversion sinks not available; capability disabled");
-            Ok((std::collections::BTreeMap::new(), CapabilityMode::Live))
+            let mut sinks: std::collections::BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> =
+                std::collections::BTreeMap::new();
+            if let Some(provider) = token_providers.get(&PlatformKey::parse("google_ads")?) {
+                sinks.insert(
+                    PlatformKey::parse("google_ads")?,
+                    Arc::new(GoogleConversionSink::new(config, provider.clone())?),
+                );
+            }
+            if let Some(provider) = token_providers.get(&PlatformKey::parse("meta")?) {
+                sinks.insert(
+                    PlatformKey::parse("meta")?,
+                    Arc::new(MetaConversionSink::new(config, provider.clone())?),
+                );
+            }
+            Ok((sinks, CapabilityMode::Live))
         }
     }
 }
 
-/// Construct audience sync sinks for advertising.
+/// Construct audience sync sinks for advertising (same per-platform fallback
+/// as [`build_conversion_sinks`]).
 pub fn build_audience_sinks(
     config: &AdvertisingConfig,
+    token_providers: &HashMap<PlatformKey, std::sync::Arc<dyn ConnectionAccessTokenProvider>>,
 ) -> Result<
     (
         std::collections::BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>>,
@@ -204,8 +224,29 @@ pub fn build_audience_sinks(
             Ok((sinks, CapabilityMode::Sandbox))
         }
         CapabilityMode::Live => {
-            tracing::info!("live audience sinks not available; capability disabled");
-            Ok((std::collections::BTreeMap::new(), CapabilityMode::Live))
+            let mut sinks: std::collections::BTreeMap<PlatformKey, Arc<dyn AudienceSyncPort>> =
+                std::collections::BTreeMap::new();
+            if let Some(provider) = token_providers.get(&PlatformKey::parse("google_ads")?) {
+                sinks.insert(
+                    PlatformKey::parse("google_ads")?,
+                    Arc::new(GoogleAudienceSync::with_custom_endpoints(
+                        config,
+                        crate::adapters::google::DEFAULT_API_BASE.to_string(),
+                        provider.clone(),
+                    )?),
+                );
+            }
+            if let Some(provider) = token_providers.get(&PlatformKey::parse("meta")?) {
+                sinks.insert(
+                    PlatformKey::parse("meta")?,
+                    Arc::new(MetaAudienceSync::with_custom_endpoints(
+                        config,
+                        format!("https://graph.facebook.com/{}", config.meta_api_version),
+                        provider.clone(),
+                    )?),
+                );
+            }
+            Ok((sinks, CapabilityMode::Live))
         }
     }
 }
@@ -310,15 +351,17 @@ mod tests {
 
     #[test]
     fn sinks_builders_modes() {
+        let no_providers = HashMap::new();
         let sandbox_config = AdvertisingConfig {
             real_platform_adapters: false,
             ..AdvertisingConfig::default()
         };
-        let (conv_sinks, conv_mode) = build_conversion_sinks(&sandbox_config).unwrap();
+        let (conv_sinks, conv_mode) =
+            build_conversion_sinks(&sandbox_config, &no_providers).unwrap();
         assert_eq!(conv_mode, CapabilityMode::Sandbox);
         assert_eq!(conv_sinks.len(), 2);
 
-        let (aud_sinks, aud_mode) = build_audience_sinks(&sandbox_config).unwrap();
+        let (aud_sinks, aud_mode) = build_audience_sinks(&sandbox_config, &no_providers).unwrap();
         assert_eq!(aud_mode, CapabilityMode::Sandbox);
         assert_eq!(aud_sinks.len(), 2);
 
@@ -326,11 +369,15 @@ mod tests {
             real_platform_adapters: true,
             ..AdvertisingConfig::default()
         };
-        let (conv_live, conv_live_mode) = build_conversion_sinks(&live_config).unwrap();
+        // Live mode with no configured token providers yields no sinks — the
+        // per-platform fallback never fails the process, it just skips that
+        // platform (same rule as `build_platform_registry`).
+        let (conv_live, conv_live_mode) =
+            build_conversion_sinks(&live_config, &no_providers).unwrap();
         assert_eq!(conv_live_mode, CapabilityMode::Live);
         assert_eq!(conv_live.len(), 0);
 
-        let (aud_live, aud_live_mode) = build_audience_sinks(&live_config).unwrap();
+        let (aud_live, aud_live_mode) = build_audience_sinks(&live_config, &no_providers).unwrap();
         assert_eq!(aud_live_mode, CapabilityMode::Live);
         assert_eq!(aud_live.len(), 0);
     }

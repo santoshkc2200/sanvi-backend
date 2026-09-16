@@ -40,6 +40,8 @@ pub struct AdvertisingState {
     pub update_ad_group: Arc<UpdateAdGroup>,
     pub add_ad: Arc<AddAd>,
     pub update_ad: Arc<UpdateAd>,
+    /// Per-ad review verdicts pulled verbatim from the platform (TASK-012).
+    pub poll_review_status: Arc<crate::application::PollCampaignReviewStatus>,
     /// Connections: OAuth start/callback, account selection, list, disconnect
     /// (TASK-011).
     pub start_authorization: Arc<StartAuthorization>,
@@ -83,6 +85,9 @@ pub struct AdvertisingState {
     pub list_budget_alerts: Arc<crate::application::ListBudgetAlerts>,
     pub acknowledge_budget_alert: Arc<crate::application::AcknowledgeBudgetAlert>,
     pub get_spend_status: Arc<crate::application::GetSpendStatus>,
+    /// FX rate snapshots backing `rendered_spend` on the metrics endpoints —
+    /// display-only conversion, always labelled with its rate date.
+    pub fx_rates: Arc<dyn crate::domain::FxRatePort>,
     /// Platform-admin health overview (TASK-018, 10.9).
     pub get_platform_ads_health: Arc<crate::application::GetPlatformAdsHealth>,
 }

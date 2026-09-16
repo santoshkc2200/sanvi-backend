@@ -93,6 +93,12 @@ impl Objective {
 pub enum BudgetType {
     Daily,
     Lifetime,
+    /// Campaign-budget optimization: one shared budget on the campaign caps
+    /// spend across all of its ad sets, instead of each ad set carrying its
+    /// own. Only platforms that declare it in their `CapabilityMatrix` accept
+    /// it — validation rejects it elsewhere on the `budget.kind` path. The
+    /// platform mapping lives in the adapter descriptors, never here.
+    CampaignBudgetOptimization,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -198,12 +204,66 @@ pub struct Creative {
     pub asset_references: Vec<String>,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AdReviewState {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+/// The platform's review verdict for one ad. `reasons` preserves the
+/// platform's own policy wording verbatim — a paraphrased rejection is worse
+/// than useless when the tenant has to fix the ad in the native tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AdReview {
+    pub state: AdReviewState,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+    #[serde(default)]
+    pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl Default for AdReview {
+    fn default() -> Self {
+        Self {
+            state: AdReviewState::Pending,
+            reasons: Vec::new(),
+            checked_at: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Ad {
     pub id: String,
+    /// The platform's own id for this ad, once one has been recorded — the
+    /// only key that correlates a review observation (which arrives keyed by
+    /// platform id) back onto this ad. `None` for ads the platform has never
+    /// echoed an id for; a platform that assigns ids at creation must persist
+    /// them here, or its verdicts can never be matched.
+    #[serde(default)]
+    pub external_id: Option<String>,
     pub creative: Creative,
     pub landing_url: String,
     pub tracking_template: Option<String>,
+    /// Last review observation pulled from the platform. Absent (pending,
+    /// never checked) until a poll happens — ads only get reviewed once they
+    /// are published.
+    #[serde(default)]
+    pub review: AdReview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

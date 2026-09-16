@@ -12,6 +12,7 @@ pub mod platform_health;
 pub mod reconciliation;
 pub mod reconciliation_sweep;
 pub mod registry;
+pub mod review_status;
 pub mod token_refresh;
 pub mod tracking;
 
@@ -48,6 +49,7 @@ pub use platform_health::{
 pub use reconciliation::ReconcileCampaign;
 pub use reconciliation_sweep::{ReconcileDueCampaigns, ReconciliationSweepReport};
 pub use registry::PlatformRegistry;
+pub use review_status::{AdReviewStatusView, PollCampaignReviewStatus, UnmatchedPlatformAds};
 pub use token_refresh::{RunTokenRefresh, TokenRefreshSweepReport};
 pub use tracking::{
     AudienceSyncReport, CreateAudience, GetConversionDiagnostics, ListAudiences, ListConversions,

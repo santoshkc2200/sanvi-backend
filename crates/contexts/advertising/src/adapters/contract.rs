@@ -94,6 +94,24 @@ pub async fn assert_ad_platform_contract(
         ));
     }
 
+    // Review verdicts arrive keyed by the platform's own ad ids. The port
+    // only promises well-formed observations — coverage of the caller's
+    // campaign tree is the merge's concern, and can never be inferred here:
+    // adapters that echo the input campaign tree (and platforms that have
+    // never seen our ads at all) make any local-vs-platform count equality
+    // either vacuous or falsely failing.
+    let review = adapter
+        .fetch_review_status(&connection, &updated.id)
+        .await?;
+    if review
+        .iter()
+        .any(|observation| observation.ad_external_id.trim().is_empty())
+    {
+        return Err(AdvertisingError::PlatformUnavailable(
+            "review status returned an observation with no ad id".to_string(),
+        ));
+    }
+
     let metrics = adapter
         .fetch_metrics(
             &connection,
@@ -114,6 +132,7 @@ pub async fn assert_ad_platform_contract(
             &connection,
             UploadedConversion {
                 event_id: "contract-event".to_string(),
+                event_name: "purchase".to_string(),
             },
             HashedIds {
                 values: BTreeMap::from([(
@@ -167,6 +186,7 @@ fn contract_campaign() -> Result<Campaign, AdvertisingError> {
             },
             ads: vec![Ad {
                 id: "contract-ad".to_string(),
+                external_id: None,
                 creative: Creative {
                     id: "contract-creative".to_string(),
                     placement: "feed".to_string(),
@@ -179,6 +199,7 @@ fn contract_campaign() -> Result<Campaign, AdvertisingError> {
                 },
                 landing_url: "https://tenant.example/landing".to_string(),
                 tracking_template: None,
+                review: Default::default(),
             }],
         }],
         drift: DriftState {

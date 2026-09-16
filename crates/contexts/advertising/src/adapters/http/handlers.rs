@@ -402,6 +402,52 @@ fn campaign_validation_problem(violations: Vec<ValidationViolation>) -> actix_we
     .into()
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CampaignReviewStatusView {
+    pub campaign_id: String,
+    pub ads: Vec<crate::application::AdReviewStatusView>,
+    /// What the platform listed that this campaign's tree cannot account
+    /// for. Non-empty means the poll could not fully correlate — an
+    /// all-pending `ads` list alongside platform-listed ids here is a
+    /// correlation gap, not a clean "everything still in review".
+    pub unmatched_platform_ads: crate::application::UnmatchedPlatformAds,
+}
+
+/// Refresh every ad's review verdict from the platform. Safe to repeat: it is
+/// an observation with a persisted outcome, never a mutation of the platform.
+#[utoipa::path(
+    post,
+    path = "/api/v1/tenant/ads/campaigns/{campaign_id}/review-status",
+    tag = "advertising",
+    operation_id = "poll_campaign_review_status",
+    params(("campaign_id" = String, Path, description = "Campaign UUID")),
+    responses(
+        (status = 200, description = "Fresh per-ad review verdicts; rejection wording is the platform's own", body = CampaignReviewStatusView),
+        (status = 400, description = "Campaign not published yet — review has no meaning for a draft", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 404, description = "Campaign or connection not found", body = ProblemDetail),
+        (status = 503, description = "Platform adapter unavailable", body = ProblemDetail)
+    )
+)]
+pub async fn poll_campaign_review_status(
+    state: web::Data<AdvertisingState>,
+    tenant: CurrentTenant,
+    path: web::Path<CampaignId>,
+    _permission: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let campaign_id = path.into_inner();
+    let (ads, unmatched_platform_ads) = state
+        .poll_review_status
+        .execute(tenant.0.tenant_id, campaign_id)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(CampaignReviewStatusView {
+        campaign_id: campaign_id.to_string(),
+        ads,
+        unmatched_platform_ads,
+    }))
+}
+
 /// Explicitly resolve a platform-observed campaign drift. The idempotency
 /// claim is durable and created before any provider write; the adapter also
 /// receives the same key for provider-side deduplication.
@@ -2102,6 +2148,35 @@ pub struct MetricsQueryParams {
     #[param(example = "google_ads")]
     pub platform: Option<String>,
     pub campaign_id: Option<String>,
+    /// Optional display-only currency for `rendered_spend`. Conversion is
+    /// never persisted and never replaces the native `spend` — each rendered
+    /// value carries its FX rate date. Omit to keep account currencies only.
+    #[param(example = "JPY")]
+    pub render_currency: Option<String>,
+}
+
+/// The CSV export's slice of the metrics query: everything
+/// [`MetricsQueryParams`] carries except `render_currency`, because the
+/// export renders only native-currency figures. Publishing the shared struct
+/// here advertised a parameter the handler silently ignored — native-currency
+/// CSV with no signal that a requested conversion never happened.
+/// `deny_unknown_fields` turns a stray `render_currency` into a 400 instead.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct MetricsExportQueryParams {
+    /// Inclusive range start, `YYYY-MM-DD`.
+    #[param(example = "2026-08-01")]
+    pub from: String,
+    /// Inclusive range end, `YYYY-MM-DD`.
+    #[param(example = "2026-08-24")]
+    pub to: String,
+    /// `campaign` (default), `platform`, or `tenant`.
+    #[param(example = "campaign")]
+    pub group_by: Option<String>,
+    #[param(example = "google_ads")]
+    pub platform: Option<String>,
+    pub campaign_id: Option<String>,
 }
 
 fn parse_group_by(raw: Option<&str>) -> Result<MetricsGroupBy, ApiError> {
@@ -2173,16 +2248,105 @@ pub async fn get_ads_metrics(
     _permission: RequiredPermission,
     query: web::Query<MetricsQueryParams>,
 ) -> Result<HttpResponse, ApiError> {
-    let range = parse_metrics_query(tenant.0.tenant_id, query.into_inner())?;
+    let params = query.into_inner();
+    let render_currency = match params.render_currency.as_deref() {
+        None => None,
+        Some(raw) => Some(
+            Money::new(0, raw)
+                .map_err(|_| ApiError::BadRequest {
+                    detail: "render_currency must be an ISO-4217 currency code".to_string(),
+                })?
+                .currency,
+        ),
+    };
+    let range = parse_metrics_query(tenant.0.tenant_id, params)?;
     let today = Utc::now().date_naive();
     let rows = state
         .query_metrics
         .execute(range, today)
         .await
         .map_err(api_error)?;
-    Ok(HttpResponse::Ok().json(MetricsQueryResponse {
-        rows: rows.into_iter().map(MetricPoint::from).collect(),
-    }))
+    let mut points: Vec<MetricPoint> = rows.into_iter().map(MetricPoint::from).collect();
+    if let Some(target) = &render_currency {
+        resolve_rendered_spend(state.fx_rates.as_ref(), target, &mut points).await;
+    }
+    Ok(HttpResponse::Ok().json(MetricsQueryResponse { rows: points }))
+}
+
+/// Fill in every row's `rendered_spend` at query time. Rates are resolved
+/// once per distinct (source currency, day) pair before any row is
+/// converted — the persisted FX port is a database round-trip per lookup
+/// plus outbound provider HTTP on a snapshot miss, so per-row resolution on
+/// a 90-day × N-campaign response meant up to 90×N serial queries and just
+/// as many cold external fetches. A day without a published rate keeps
+/// `rendered_spend: None` — an omitted value is honest, a guessed rate is
+/// not. A *failing* rate store is not "no rate that day": the error is
+/// logged per affected pair instead of collapsing into the same silent
+/// `None`. Nothing here is persisted (NFR: converted money is display-only
+/// and always labelled with its rate date).
+async fn resolve_rendered_spend(
+    fx: &dyn crate::domain::FxRatePort,
+    target: &str,
+    points: &mut [MetricPoint],
+) {
+    use std::collections::{BTreeSet, HashMap};
+
+    // Same-currency rows need no rate (1.0 by convention); collect the
+    // remaining (currency, date) pairs exactly once each. Rows whose date
+    // does not parse keep `rendered_spend: None`, as before.
+    let pairs: BTreeSet<(String, String)> = points
+        .iter()
+        .filter(|point| point.spend.currency != target)
+        .filter_map(|point| {
+            NaiveDate::parse_from_str(&point.date, "%Y-%m-%d").ok()?;
+            Some((point.spend.currency.clone(), point.date.clone()))
+        })
+        .collect();
+
+    let mut rates: HashMap<(String, String), crate::domain::FxRate> =
+        HashMap::with_capacity(pairs.len());
+    for (currency, date_label) in &pairs {
+        let Ok(spend_date) = NaiveDate::parse_from_str(date_label, "%Y-%m-%d") else {
+            continue;
+        };
+        match fx.rate(currency, target, spend_date).await {
+            Ok(Some(rate)) => {
+                rates.insert((currency.clone(), date_label.clone()), rate);
+            }
+            // No published rate that day: leave those rows unconverted.
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    currency = %currency,
+                    date = %date_label,
+                    "FX lookup failed; affected rows render without converted spend"
+                );
+            }
+        }
+    }
+
+    for point in points.iter_mut() {
+        if point.spend.currency == target {
+            point.rendered_spend = Some(RenderedMoneyView {
+                amount_minor: point.spend.amount_minor,
+                currency: target.to_string(),
+                fx_rate_date: point.date.clone(),
+            });
+            continue;
+        }
+        let Some(rate) = rates.get(&(point.spend.currency.clone(), point.date.clone())) else {
+            continue;
+        };
+        let source_exponent = 10_f64.powi(Money::exponent(&point.spend.currency) as i32);
+        let target_exponent = 10_f64.powi(Money::exponent(target) as i32);
+        let converted_major = point.spend.amount_minor as f64 / source_exponent * rate.rate;
+        point.rendered_spend = Some(RenderedMoneyView {
+            amount_minor: (converted_major * target_exponent).round() as i64,
+            currency: target.to_string(),
+            fx_rate_date: rate.date.format("%Y-%m-%d").to_string(),
+        });
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
@@ -2345,10 +2509,10 @@ pub async fn get_ads_metrics_summary(
     path = "/api/v1/tenant/ads/metrics/export",
     tag = "advertising",
     operation_id = "get_ads_metrics_export",
-    params(MetricsQueryParams),
+    params(MetricsExportQueryParams),
     responses(
         (status = 200, description = "The same labelled columns as /ads/metrics, streamed as CSV — no blended ROAS column", content_type = "text/csv"),
-        (status = 400, description = "Invalid date range, unknown group_by, or a span exceeding the configured maximum", body = ProblemDetail),
+        (status = 400, description = "Invalid date range, unknown group_by, an unsupported query parameter (e.g. render_currency), or a span exceeding the configured maximum", body = ProblemDetail),
         (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail)
     )
 )]
@@ -2356,9 +2520,19 @@ pub async fn get_ads_metrics_export(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     _permission: RequiredPermission,
-    query: web::Query<MetricsQueryParams>,
+    query: web::Query<MetricsExportQueryParams>,
 ) -> Result<HttpResponse, ApiError> {
-    let range = parse_metrics_query(tenant.0.tenant_id, query.into_inner())?;
+    let range = parse_metrics_query(
+        tenant.0.tenant_id,
+        MetricsQueryParams {
+            from: query.from.clone(),
+            to: query.to.clone(),
+            group_by: query.group_by.clone(),
+            platform: query.platform.clone(),
+            campaign_id: query.campaign_id.clone(),
+            render_currency: None,
+        },
+    )?;
     let today = Utc::now().date_naive();
     let rows = state
         .query_metrics
@@ -2885,4 +3059,171 @@ mod if_match_tests {
             Err(ApiError::BadRequest { .. })
         ));
     }
+}
+
+#[cfg(test)]
+mod fx_render_tests {
+    use super::*;
+    use crate::domain::{AdReviewObservation, AdReviewState};
+    use async_trait::async_trait;
+
+    /// Fixed-rate FX stub: every pair converts at 0.5 quote per base.
+    struct HalfRateFx;
+
+    #[async_trait]
+    impl crate::domain::FxRatePort for HalfRateFx {
+        async fn rate(
+            &self,
+            _base: &str,
+            _quote: &str,
+            date: NaiveDate,
+        ) -> Result<Option<crate::domain::FxRate>, AdvertisingError> {
+            Ok(Some(crate::domain::FxRate { rate: 0.5, date }))
+        }
+        async fn has_snapshot(&self, _date: NaiveDate) -> Result<bool, AdvertisingError> {
+            Ok(true)
+        }
+        async fn published_day(
+            &self,
+            _date: NaiveDate,
+        ) -> Result<Option<Vec<(String, f64)>>, AdvertisingError> {
+            Ok(None)
+        }
+    }
+
+    fn row(currency: &str, amount_minor: i64) -> MetricPoint {
+        MetricPoint {
+            platform: Some("google_ads".to_string()),
+            campaign_id: None,
+            date: "2026-09-01".to_string(),
+            impressions: 0,
+            clicks: 0,
+            spend: MoneyView {
+                amount_minor,
+                currency: currency.to_string(),
+            },
+            conversions: 0.0,
+            conversion_value: MoneyView {
+                amount_minor: 0,
+                currency: currency.to_string(),
+            },
+            sanvi_revenue: MoneyView {
+                amount_minor: 0,
+                currency: currency.to_string(),
+            },
+            roas_platform: None,
+            roas_sanvi: None,
+            restating: false,
+            rendered_spend: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn rendered_spend_crosses_the_decimal_exponent_boundary() {
+        // 1_000 JPY (zero-decimal) at 0.5 => 500.00 USD => 50_000 minor units.
+        let mut rows = vec![row("JPY", 1_000)];
+        resolve_rendered_spend(&HalfRateFx, "USD", &mut rows).await;
+        let rendered = rows[0].rendered_spend.as_ref().expect("JPY->USD renders");
+        assert_eq!(rendered.amount_minor, 50_000);
+        assert_eq!(rendered.currency, "USD");
+        assert_eq!(rendered.fx_rate_date, "2026-09-01");
+
+        // 5_000 USD (2-decimal) at 0.5 => 25.00 of a zero-decimal target => 25 minor units.
+        let mut rows = vec![row("USD", 5_000)];
+        resolve_rendered_spend(&HalfRateFx, "JPY", &mut rows).await;
+        let rendered = rows[0].rendered_spend.as_ref().expect("USD->JPY renders");
+        assert_eq!(rendered.amount_minor, 25);
+        assert_eq!(rendered.currency, "JPY");
+
+        // Same-currency rows render unchanged and never reach the rate
+        // source: the port contract is only asked for base != quote.
+        let mut rows = vec![row("EUR", 4_000)];
+        resolve_rendered_spend(&HalfRateFx, "EUR", &mut rows).await;
+        let rendered = rows[0].rendered_spend.as_ref().expect("EUR->EUR renders");
+        assert_eq!(rendered.amount_minor, 4_000);
+        assert_eq!(rendered.fx_rate_date, "2026-09-01");
+
+        // A day without a published rate stays None rather than guessing.
+        struct NoRate;
+        #[async_trait]
+        impl crate::domain::FxRatePort for NoRate {
+            async fn rate(
+                &self,
+                _: &str,
+                _: &str,
+                _: NaiveDate,
+            ) -> Result<Option<crate::domain::FxRate>, AdvertisingError> {
+                Ok(None)
+            }
+            async fn has_snapshot(&self, _: NaiveDate) -> Result<bool, AdvertisingError> {
+                Ok(false)
+            }
+            async fn published_day(
+                &self,
+                _: NaiveDate,
+            ) -> Result<Option<Vec<(String, f64)>>, AdvertisingError> {
+                Ok(None)
+            }
+        }
+        let mut rows = vec![row("GBP", 1_000)];
+        resolve_rendered_spend(&NoRate, "USD", &mut rows).await;
+        assert!(rows[0].rendered_spend.is_none());
+    }
+
+    /// Rate source that counts how many times it is asked.
+    struct CountingFx(std::sync::atomic::AtomicUsize);
+
+    #[async_trait]
+    impl crate::domain::FxRatePort for CountingFx {
+        async fn rate(
+            &self,
+            _base: &str,
+            _quote: &str,
+            date: NaiveDate,
+        ) -> Result<Option<crate::domain::FxRate>, AdvertisingError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(crate::domain::FxRate { rate: 1.0, date }))
+        }
+        async fn has_snapshot(&self, _date: NaiveDate) -> Result<bool, AdvertisingError> {
+            Ok(true)
+        }
+        async fn published_day(
+            &self,
+            _date: NaiveDate,
+        ) -> Result<Option<Vec<(String, f64)>>, AdvertisingError> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn rates_resolve_once_per_currency_and_day() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Three rows, but only two distinct (currency, day) pairs — the rate
+        // source is asked exactly twice, not once per row.
+        let fx = CountingFx(AtomicUsize::new(0));
+        let mut other_day = row("JPY", 300);
+        other_day.date = "2026-09-02".to_string();
+        let mut rows = vec![row("JPY", 100), row("JPY", 200), other_day];
+        resolve_rendered_spend(&fx, "USD", &mut rows).await;
+
+        assert_eq!(fx.0.load(Ordering::SeqCst), 2, "one lookup per pair");
+        // Rate 1.0, JPY (zero-decimal) → USD (2-decimal): ×100 on the way out.
+        assert_eq!(
+            rows[0].rendered_spend.as_ref().unwrap().amount_minor,
+            10_000
+        );
+        assert_eq!(
+            rows[1].rendered_spend.as_ref().unwrap().amount_minor,
+            20_000
+        );
+        assert_eq!(
+            rows[2].rendered_spend.as_ref().unwrap().fx_rate_date,
+            "2026-09-02"
+        );
+    }
+
+    // The unused trait imports below are load-bearing only for signatures.
+    #[allow(dead_code)]
+    fn _witness(_: AdReviewObservation, _: AdReviewState) {}
 }

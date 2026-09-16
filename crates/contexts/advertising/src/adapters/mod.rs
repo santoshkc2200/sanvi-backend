@@ -27,8 +27,10 @@ pub use events::{OutboxEventPublisher, SystemIdGenerator};
 pub use fx_rate::{
     EcbFxRate, PersistedFxRates, SqlxFxSnapshotStore, UnavailableFxRate, build_fx_rates,
 };
-pub use google::{GoogleAdsAdapter, GoogleRefreshTokenGrant};
-pub use meta::{MetaAdsAdapter, MetaRefreshTokenGrant};
+pub use google::{
+    GoogleAdsAdapter, GoogleAudienceSync, GoogleConversionSink, GoogleRefreshTokenGrant,
+};
+pub use meta::{MetaAdsAdapter, MetaAudienceSync, MetaConversionSink, MetaRefreshTokenGrant};
 pub use metrics::AdvertisingMetrics;
 pub use metrics_repo::SqlxMetricsRepository;
 pub use notification_intent::notification_intent;

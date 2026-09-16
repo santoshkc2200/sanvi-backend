@@ -25,18 +25,18 @@ pub use matrix::{
     AssetMetadata, CapabilityMatrix, CreativeAssetSpec, CreativePlacement, ScheduleGranularity,
 };
 pub use model::{
-    Ad, AdGroup, AdGroupId, AdGroupTag, AdId, AdTag, BidSettings, Budget, BudgetType, Campaign,
-    CampaignChangeId, CampaignChangeTag, CampaignId, CampaignStatus, CampaignTag, ConnectionHandle,
-    ConnectionId, ConnectionState, ConnectionTag, ConsentSnapshot, ConversionId, ConversionTag,
-    Creative, CreativeId, CreativeTag, CreativeText, DriftState, HashedIds, Money, Objective,
-    PlatformKey, Schedule, Targeting, TargetingDimension,
+    Ad, AdGroup, AdGroupId, AdGroupTag, AdId, AdReview, AdReviewState, AdTag, BidSettings, Budget,
+    BudgetType, Campaign, CampaignChangeId, CampaignChangeTag, CampaignId, CampaignStatus,
+    CampaignTag, ConnectionHandle, ConnectionId, ConnectionState, ConnectionTag, ConsentSnapshot,
+    ConversionId, ConversionTag, Creative, CreativeId, CreativeTag, CreativeText, DriftState,
+    HashedIds, Money, Objective, PlatformKey, Schedule, Targeting, TargetingDimension,
 };
 pub use oauth_state::{
     InMemoryOAuthStateStore, OAuthStateClaims, OAuthStateError, OAuthStateManager, OAuthStateStore,
 };
 pub use ports::{
-    AdPlatformPort, AdvertisingConnectionRepository, AdvertisingError, AuthorizationExchange,
-    AuthorizationRequest, AuthorizationStart, BudgetGuardrailEntitlement,
+    AdPlatformPort, AdReviewObservation, AdvertisingConnectionRepository, AdvertisingError,
+    AuthorizationExchange, AuthorizationRequest, AuthorizationStart, BudgetGuardrailEntitlement,
     ConnectionAccessTokenProvider, CreativeRepository, ExchangedAuthorization, GrantedAccessToken,
     GuardrailSuspensionLedger, IdGenerator, MetricPoint, MetricQuery, PlatformAccount,
     PlatformDescriptor, RefreshTokenGrant, StoredCreative, TenantDirectory, TenantTimezoneSource,

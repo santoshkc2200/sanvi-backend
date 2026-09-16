@@ -1,9 +1,13 @@
 # TASK-015: 10.6 Conversion upload, dedupe & diagnostics
 
 **Phase:** 10
-**Status:** 🟡 partial — every item below is code-complete against the fake adapter; the one
-open gap is the real Google Ads/Meta `ConversionSinkPort` implementations, blocked on live
-platform credentials (same blocker as 10.2/10.3 — see `../phase-10-advertising/implementation-plan.md`).
+**Status:** 🟡 partial — every item is code-complete; the real Google Ads/Meta
+`ConversionSinkPort`/`AudienceSyncPort` transports landed 2026-09-16 with mock-server coverage
+(Google `uploadClickConversions` + `uploadConversionAdjustments` RETRACTION, Meta Conversions API
+with per-event event names, offline-user-data-job audience sync). What remains open is **live
+verification against test accounts** (same external blocker as 10.2–10.4) plus one recorded
+assumption: the audience ports carry type-less hashes, so both real audience sinks send members as
+SHA-256 mail-address hashes — the port must grow typed members before the flag flips.
 **Requirement(s):** FR-1010, FR-1011, NFR-1001, NFR-1002
 **Depends on:** TASK-014
 **Created:** 2026-08-20
@@ -37,11 +41,13 @@ causes a tenant can fix from the ones they must respect.
       platform's own error text; `POST /ads/conversions/{id}/retry` (`advertising.campaign.write`);
       `GET/POST /ads/audiences`; `POST /ads/audiences/{id}/refresh`. Hashed identifiers are shown as
       hashes; raw customer data appears nowhere.
-- [ ] **`ConversionSinkPort` implementations** — Google Ads offline/enhanced conversions and Meta
-      Conversions API. Both take the `ConsentSnapshot` as a **required argument** (TASK-009's gate makes
-      the alternative uncompilable) and both send hashed identifiers only. **Open:** only the fake
-      adapter exists (`FakeConversionSink`); blocked on live Google Ads/Meta credentials, same as the
-      10.2/10.3 OAuth and campaign adapters.
+- [x] **`ConversionSinkPort` implementations** — Google Ads offline/enhanced conversions and Meta
+      Conversions API. Both take the `ConsentSnapshot` as a **required argument** and both send hashed
+      identifiers only. 2026-09-16: `GoogleConversionSink` (upload + RETRACTION adjustments) and
+      `MetaConversionSink` (per-event names via the shared mapping, `custom_data` value/currency,
+      explicit `capability_unsupported` retract — the Conversions API has no per-event deletion) are
+      implemented and `build_conversion_sinks`/`build_audience_sinks` now construct the real transports
+      per platform when the capability mode is Live. Live-credential verification remains open.
 - [x] **Upload workers** — batched per platform to the platform's preferred batch size, exponential
       backoff with jitter. Distinguish permanent failures (bad identifier format, unknown conversion
       action, revoked token) from transient ones: permanent failures stop retrying and surface,
