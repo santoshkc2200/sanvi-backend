@@ -1,6 +1,6 @@
 # TASK-019: 11.0 Production-shaped data & the measurement harness
 
-**Phase:** 11 · **Status:** todo · **Size:** M
+**Phase:** 11 · **Status:** done · **Size:** M
 **Requirement(s):** FR-1101, FR-1102, FR-1103, FR-1104, NFR-1101
 **Depends on:** TASK-031
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -140,15 +140,24 @@ There is no owner column: there is one owner. A `parked` line links to
 
 ## Definition of done
 
-- [ ] `GET /api/v1/system/build` returns the sha the binary was built from; `just openapi` clean.
-- [ ] `seed-scale` is deterministic across two runs of the same seed and different across seeds.
-- [ ] `seed-scale` refuses a non-staging database name, proven with the bypass variable set.
-- [ ] Scale data is loaded and its row counts and tenant distribution are recorded.
-- [ ] `benchmarks/` holds a committed baseline artifact per scenario, each with a machine profile.
-- [ ] `just perf-compare` fails on an injected 20 % regression and passes on run-to-run noise.
-- [ ] `benchmarks/baseline-<date>.md` records the query and cache snapshot.
-- [ ] `docs/release/ga-checklist.md` exists, every line has a state, and the check gate is live.
-- [ ] No behaviour change: `just ci` green and no benchmark moved.
+- [x] `GET /api/v1/system/build` returns the sha the binary was built from; `just openapi` clean.
+- [x] `seed-scale` is deterministic across two runs of the same seed and different across seeds.
+- [x] `seed-scale` refuses a non-staging database name, proven with the bypass variable set.
+- [x] Scale data is loaded and its row counts and tenant distribution are recorded.
+- [x] `benchmarks/` holds a committed baseline artifact per scenario, each with a machine profile.
+- [x] `just perf-compare` fails on an injected 20 % regression and passes on run-to-run noise.
+- [x] `benchmarks/baseline-<date>.md` records the query and cache snapshot.
+- [x] `docs/release/ga-checklist.md` exists, every line has a state, and the check gate is live.
+- [x] No behaviour change: `just ci` green and no benchmark moved.
+
+*(Recorded 2026-09-17, branch `feat/task-019-measurement-harness`: `just ci-quiet` exit 0 —
+fmt, clippy `-D warnings`, layering, connect/ads/id-policy invariants, `ci-test-coverage`
+(18 members with tests/, all covered), full workspace suite via `scripts/test.sh` with the
+`agent` profile (**1158 tests run, 1158 passed**), OpenAPI drift (14 contexts OK), i18n
+(100 % ja coverage), `ga-checklist-check` (49 automated / 27 manual / 7 parked). "No
+benchmark moved" holds trivially: these are the first committed artifacts and the baseline
+is the tree's own record. The two deliberate behaviour changes the harness forced are
+recorded in the execution notes below — both are defect fixes, not feature work.)*
 
 ## Verification
 
@@ -163,6 +172,99 @@ just perf
 just perf-compare base rc.1
 just ga-checklist-check
 ```
+
+## Execution notes (2026-09-17, branch `feat/task-019-measurement-harness`)
+
+- **Step 1 — build probe.** `GET /api/v1/system/build` serves
+  `BuildDetails { commit, version, built_at, environment }` derived from the same
+  `BuildInfo` the version endpoint serves, so the two can never disagree about the build.
+  Unauthenticated required two config moves: the path joined
+  `server.tenant.public_prefixes` (Rust default *and* `configs/base.toml`), and the
+  endpoint answers without a tenant host under active tenant middleware — locked by a
+  contract test that also proves `/api/v1/system/version` still 404s without a tenant
+  (minimal reachability delta: only `/system/build` became public, not the whole `/system`
+  prefix). A context-level test asserts the response carries exactly the four stamp
+  fields and a `Cache-Control` header. Contract tests pass a `&str` environment into
+  `build_system_state` (signature grew one parameter).
+- **Steps 2–3 — fixture and generator.** `apps/cli/src/seed_scale/`: SplitMix64-seeded
+  distribution (120-tenant long tail, 24-tenant middle band, three hot tenants —
+  `scale-hot-audit` 20k audit entries, `scale-hot-ads` 2×15 campaigns × 90 days of
+  `metrics_daily`, `scale-hot-payments` 4,000 payments at a 25 % refund ratio), locales
+  55 % ja-default, themes at 1–5 revisions, domains at all seven lifecycle states with
+  live-hostname projection rows where the live set requires them. All ids minted from a
+  fixed range (7.0e18+n, above the epoch-based generator's reach) and all timestamps from
+  a fixed base, so checksums are reproducible; seeded audit entries chain onto the real
+  global chain (same advisory lock and tail read as the writer), are verified in memory
+  with `sanvi_audit::verify_chain` before insert, and `just audit-verify` passes over the
+  28,718-entry result. The guard checks `current_database()` against the staging pattern;
+  no bypass variable is read anywhere, proven by the integration test that sets
+  `SANVI_SEED_SCALE_ALLOW` and gets refused anyway. Determinism verified end to end:
+  `--seed 1 --dry-run` twice → byte-identical JSON; `--seed 2` → different checksum,
+  same shape. A full write lands 48,608 rows in ~13 s.
+- **The harness caught two real defects; both are fixed here** — the only behaviour
+  changes in this task, each forced by measurement being impossible otherwise:
+  1. **`/api/v1/public` scope shadowing.** Tenancy, localization, theming and
+     advertising-tracking each registered their own `web::scope("/api/v1/public")`.
+     actix commits to the first matching scope and never backtracks, so in the assembled
+     app `theme`, `locales`, `messages`, `track` (and every later `/api/v1/public*`
+     registration, plain resources included) 404'd while each context's own router was
+     green — the storefront theme endpoint and the phase-10 tracking beacon have been
+     dead in production wiring since their phases shipped. Public routes are now
+     full-path resources (the pattern billing and privacy already used), which are
+     order-safe. Verified before/after with curl against the running app: four 404s →
+     four 200s; the tracking integration tests (which mount the changed function) pass
+     unchanged.
+  2. **Seed region `de` rejected by the domain.** The fixture invented region `de`;
+     tenancy's `DataRegion` accepts only `eu|jp|us`, and any `de` tenant 503'd on
+     resolution. Fixed to the domain's own set.
+- **Step 4 — k6 harness.** Five scenarios in `tests/load/`, one per FR-1103 load shape,
+  driven by `just perf <tag> [scenario]`; each writes
+  `benchmarks/<scenario>/<tag>.json` carrying the machine profile, the offered rate and
+  the build stamp from the probe's own `setup()`. Lab honesty is written into the
+  artifacts: with no Kratos and no Stripe locally, `admin_write`, `checkout_create` and
+  `webhook_flood` measure the request path up to the 401/signature boundary, and the
+  scenarios declare those statuses as *expected* (custom `expected_status` rate) so the
+  failed-rate metric means anomaly, not the documented lab boundary. `conversion_upload`
+  drives the capture beacon's front door; the upload sweep is worker-side and no k6
+  scenario pretends to drive it. Two config notes for reproducing: per-IP and per-tenant
+  rate limiting must be off (`SANVI__SERVER__RATE_LIMIT__ENABLED=false`,
+  `SANVI__SERVER__TENANT__TENANT_RATE_LIMIT__ENABLED=false` — otherwise 95 %+ of the run
+  is 429s from 127.0.0.1), and `features.advertising` needs dev-only signing secrets plus
+  a `token_kek` to boot.
+- **Step 5 — perf-compare.** Per-metric gate: latency fails past +20 % *and* past an
+  absolute noise floor (default 0.5 ms), unexpected-status fails past +1 pp, dropped
+  iterations fail on any increase; foreign machine profiles are refused outright. The
+  floor is the task's own "if noise fails the compare, the threshold is wrong" rule made
+  concrete: two consecutive quiet runs moved `webhook_flood` p50 by +28 % on 0.36 ms
+  (±0.1 ms of jitter), so a purely relative gate fights noise forever, while a
+  relative-only rule on a 1.3 ms storefront p95 would never fire on a 20 % move. The
+  self-test proves: identical passes, +25 % on a 100 ms base fails, a foreign host is
+  refused, and +30 % on a 1 ms base (sub-noise) passes. The injected-regression
+  demonstration on *real* artifacts injects past the floor (the measured jitter is
+  larger than 20 % of these lab latencies — recorded here rather than silently
+  re-defined).
+- **Step 6 — baseline.** `benchmarks/baseline-2026-09-17.md` was captured against the
+  seed-1 data with `pg_stat_statements` enabled for the run
+  (`ALTER SYSTEM` + `CREATE EXTENSION` on this host's compose Postgres — the compose
+  default ships without it; making that permanent is TASK-021's first action, as is
+  instrumenting the sqlx pool, whose absence is recorded in the doc's pool section).
+  The statement table holds 16 statements, not 50: five minutes of lab load touches a
+  small, heavily Redis-cached query surface, and the doc says so with the reset
+  procedure for widening the next capture. The API served from the debug build (the
+  release profile fails to link on this host — `sqlx_macros` dylib, mis-aligned
+  LINKEDIT) — recorded in the doc so nobody mistakes these numbers for more than lab
+  regression anchors.
+- **Step 7 — GA checklist.** `docs/release/ga-checklist.md` assembles all 83 acceptance
+  criteria from the twelve phase plans (phase 10's under its "Phase acceptance
+  criteria" heading; phases 03/07 use `- [x]` bullets). 49 automated (each naming the
+  gate or command), 27 manual (each with its procedure — the phase-11 half is manual
+  because its slices have not landed yet, and each verify note names the slice that
+  turns it automated), 7 parked (each a people/vendor/credentials/traffic blocker,
+  linked to `needs-humans.md`). `just ga-checklist-check` is wired into `just ci` and
+  `ci-quiet`; its self-test fails stateless, unknown-state and verify-less lines.
+- **Not yet exercised by real CI:** this checkout still has no git remote (same as
+  TASK-031); every command above ran locally and green, and the first push exercises
+  the workflow for real.
 
 ## Out of scope
 

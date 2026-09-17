@@ -19,9 +19,7 @@ use super::handlers::{
 /// resolves its tenant from the Host itself (public paths skip the tenant
 /// middleware).
 pub fn theming_public_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::resource("/api/v1/public/theme").route(web::get().to(get_public_theme)),
-    );
+    cfg.service(web::resource("/api/v1/public/theme").route(web::get().to(get_public_theme)));
 }
 
 /// Tenant-scoped theme control (mounted inside the shared `/api/v1/tenant`

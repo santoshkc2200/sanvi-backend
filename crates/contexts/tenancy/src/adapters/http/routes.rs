@@ -69,12 +69,10 @@ pub fn tenant_routes(cfg: &mut web::ServiceConfig) {
 /// tested against its own router alone. Full-path resources are order-safe.
 pub fn public_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::resource("/api/v1/public/slug-availability")
-            .route(web::get().to(slug_availability)),
+        web::resource("/api/v1/public/slug-availability").route(web::get().to(slug_availability)),
     )
     .service(
-        web::resource("/api/v1/public/tenant-context")
-            .route(web::get().to(public_tenant_context)),
+        web::resource("/api/v1/public/tenant-context").route(web::get().to(public_tenant_context)),
     );
 }
 
