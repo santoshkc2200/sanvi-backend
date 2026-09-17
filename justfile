@@ -30,6 +30,12 @@ migrate-down:
 seed:
     ./scripts/seed.sh
 
+# TASK-019 (FR-1101): deterministic production-shaped scale data. Targets a
+# staging-named database (SANVI__DATABASE__NAME=sanvi_scale, say) — the
+# command refuses anything that does not match the staging pattern.
+seed-scale *args:
+    cargo run -p sanvi-cli -- seed-scale {{args}}
+
 seed-roles:
     cargo run -p sanvi-cli -- seed roles
 

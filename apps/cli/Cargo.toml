@@ -34,8 +34,13 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
 zip.workspace = true
+
+[dev-dependencies]
+sanvi-testsupport.workspace = true
+sqlx.workspace = true

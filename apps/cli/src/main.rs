@@ -17,6 +17,7 @@ mod i18n;
 mod migrate;
 mod openapi;
 mod payments;
+mod seed_scale;
 mod tenant;
 mod theme;
 
@@ -123,6 +124,17 @@ enum Command {
     Theme {
         #[command(subcommand)]
         action: ThemeAction,
+    },
+    /// Phase-11 (TASK-019): deterministic, production-shaped scale data.
+    /// Refuses any database whose name does not match the staging pattern.
+    SeedScale {
+        /// The generation seed: the same seed produces identical row counts
+        /// and checksums.
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// Print the plan's row counts and checksum without writing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
     },
     /// Probe an HTTP endpoint without a shell or `curl` (container HEALTHCHECK).
     Healthcheck {
@@ -787,5 +799,14 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::SeedScale { seed, dry_run } => {
+            match seed_scale::run(&cli.env, seed, dry_run, ids.clone()).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("seed-scale failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
     }
 }
