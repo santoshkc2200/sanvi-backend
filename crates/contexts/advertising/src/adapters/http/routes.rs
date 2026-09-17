@@ -601,11 +601,9 @@ pub const FEATURE_GATED_ROUTES: &[(&str, Method, &[&str])] = &[
 
 pub fn tracking_public_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/api/v1/public").service(
-            web::resource("/track")
-                .app_data(super::tracking_handlers::tracking_json_config())
-                .route(web::post().to(super::tracking_handlers::public_track_conversion)),
-        ),
+        web::resource("/api/v1/public/track")
+            .app_data(super::tracking_handlers::tracking_json_config())
+            .route(web::post().to(super::tracking_handlers::public_track_conversion)),
     );
 }
 

@@ -201,7 +201,8 @@ impl RowCounts {
 const LONG_TAIL_TENANTS: u32 = 120;
 const MIDDLE_TENANTS: u32 = 24;
 
-const REGIONS: &[&str] = &["jp", "us", "de"];
+// Only the regions tenancy's DataRegion accepts: "eu", "jp", "us".
+const REGIONS: &[&str] = &["jp", "us", "eu"];
 const JA_DISPLAY_NAMES: &[&str] = &[
     "スケール商店",
     "株式会社サンビ",

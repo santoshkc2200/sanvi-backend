@@ -80,7 +80,7 @@ fn base_date() -> chrono::NaiveDate {
 fn currency_for(region: &str) -> &'static str {
     match region {
         "jp" => "JPY",
-        "de" => "EUR",
+        "eu" => "EUR",
         _ => "USD",
     }
 }

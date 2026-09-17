@@ -61,11 +61,20 @@ pub fn tenant_routes(cfg: &mut web::ServiceConfig) {
 }
 
 /// Public routes (no tenant required).
+///
+/// Deliberately *not* a `web::scope("/api/v1/public")`: several contexts
+/// contribute public routes under the same prefix, and actix commits to the
+/// first matching scope without backtracking, so every later scope (and any
+/// resource registered after it) 404s — invisible while each context is
+/// tested against its own router alone. Full-path resources are order-safe.
 pub fn public_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/api/v1/public")
-            .route("/slug-availability", web::get().to(slug_availability))
-            .route("/tenant-context", web::get().to(public_tenant_context)),
+        web::resource("/api/v1/public/slug-availability")
+            .route(web::get().to(slug_availability)),
+    )
+    .service(
+        web::resource("/api/v1/public/tenant-context")
+            .route(web::get().to(public_tenant_context)),
     );
 }
 

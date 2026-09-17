@@ -229,5 +229,56 @@ i18n-extract:
 
 ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test openapi i18n
 
+# TASK-019 (FR-1103): run the k6 load shapes against a running API and
+# write benchmarks/<scenario>/<tag>.json. Point PERF_BASE_URL at the API
+# (default http://localhost:8081, scale data loaded) and set PERF_TAG per
+# run: `just perf rc.1`. Requires k6.
+perf tag="local" scenario="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v k6 >/dev/null 2>&1; then
+        echo "k6 is required (brew install k6)" >&2
+        exit 1
+    fi
+    mem_gb=0
+    if command -v sysctl >/dev/null 2>&1; then
+        mem_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
+    elif [[ -r /proc/meminfo ]]; then
+        mem_gb=$(( $(awk '/MemTotal/ {print int($2/1048576)}' /proc/meminfo) ))
+    fi
+    export PERF_TAG="{{tag}}"
+    export PERF_BASE_URL="${PERF_BASE_URL:-http://localhost:8081}"
+    export PERF_SEED="${PERF_SEED:-1}"
+    export PERF_MACHINE="{\"cores\":$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 0),\"mem_gb\":${mem_gb},\"os\":\"$(uname -s) $(uname -r)\",\"arch\":\"$(uname -m)\"}"
+    scenarios=(storefront_read admin_write checkout_create webhook_flood conversion_upload)
+    if [[ "{{scenario}}" != "all" ]]; then
+        scenarios=("{{scenario}}")
+    fi
+    for s in "${scenarios[@]}"; do
+        echo "perf: $s (tag {{tag}})"
+        mkdir -p "benchmarks/$s"
+        case "$s" in
+            storefront_read) rate=50 ;;
+            admin_write) rate=20 ;;
+            checkout_create) rate=10 ;;
+            webhook_flood) rate=100 ;;
+            conversion_upload) rate=50 ;;
+            *) rate=0 ;;
+        esac
+        k6 run -e PERF_SCENARIO="$s" -e PERF_RATE="${PERF_RATE:-$rate}" "tests/load/$s.js"
+    done
+
+# TASK-019 (FR-1103): diff two tagged runs; a regression past the
+# per-metric tolerance blocks the merge. Refuses artifacts whose machine
+# profiles differ. `--self-test` proves the check fails on an injected
+# latency increase and refuses a foreign machine profile.
+perf-compare base_tag="base" cand_tag="local" *scenario="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/perf-compare.sh "{{base_tag}}" "{{cand_tag}}" {{scenario}}
+
+perf-compare-self-test:
+    ./scripts/perf-compare.sh --self-test
+
 # `ci` with the low-noise variants of the two chattiest gates.
 ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi i18n

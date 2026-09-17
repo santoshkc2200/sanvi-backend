@@ -1,0 +1,33 @@
+{
+  "scenario": "storefront_read",
+  "tag": "rc.1",
+  "seed": "1",
+  "offered_rate_rps": 50,
+  "duration": "30s",
+  "machine_profile": {
+    "cores": 10,
+    "mem_gb": 16,
+    "os": "Darwin 27.0.0",
+    "arch": "arm64"
+  },
+  "build": {
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0"
+  },
+  "metrics": {
+    "http_req_duration_p50_ms": 2.651,
+    "http_req_duration_p95_ms": 1.348,
+    "http_req_duration_p99_ms": 1.3527,
+    "http_req_duration_avg_ms": 2.8531169610129945,
+    "http_reqs_total": 3001,
+    "http_req_failed_rate": 0,
+    "iterations_total": 1500,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "lab: anonymous storefront SSR bootstrap (tenant-context + public theme)",
+    "journey budget from the plan: p95 <= 200 ms"
+  ]
+}

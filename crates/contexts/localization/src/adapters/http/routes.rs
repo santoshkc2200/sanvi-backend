@@ -18,11 +18,11 @@ use super::handlers::{
 /// endpoint serves the platform catalogs (static + platform overrides);
 /// tenant overrides merge inside tenant-scoped requests.
 pub fn localization_public_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/api/v1/public")
-            .route("/locales", web::get().to(get_public_locales))
-            .route("/messages/{domain}", web::get().to(get_public_messages)),
-    );
+    cfg.service(web::resource("/api/v1/public/locales").route(web::get().to(get_public_locales)))
+        .service(
+            web::resource("/api/v1/public/messages/{domain}")
+                .route(web::get().to(get_public_messages)),
+        );
 }
 
 /// Tenant-scoped localization settings and copy overrides.
