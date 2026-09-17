@@ -280,5 +280,10 @@ perf-compare base_tag="base" cand_tag="local" *scenario="":
 perf-compare-self-test:
     ./scripts/perf-compare.sh --self-test
 
+# TASK-019 (FR-1104): every GA-criterion line carries a state; fails the
+# build while any line has none.
+ga-checklist-check:
+    ./scripts/check-ga-checklist.sh
+
 # `ci` with the low-noise variants of the two chattiest gates.
 ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi i18n
