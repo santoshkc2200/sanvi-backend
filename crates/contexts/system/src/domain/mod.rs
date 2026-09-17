@@ -8,7 +8,7 @@ pub mod error;
 pub mod health;
 pub mod ports;
 
-pub use build_info::BuildInfo;
+pub use build_info::{BuildDetails, BuildInfo};
 pub use error::SystemError;
 pub use health::{DependencyStatus, HealthState, Readiness};
 pub use ports::HealthProbe;

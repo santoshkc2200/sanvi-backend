@@ -29,7 +29,11 @@ fn test_config() -> AppConfig {
     config
 }
 
-fn test_app() -> actix_web::App<
+/// The assembled app with the tenant middleware off (default: every route
+/// behaves public) or on (`features.tenancy`, the production posture).
+fn test_app_with_tenancy(
+    tenancy: bool,
+) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<
         actix_web::dev::ServiceRequest,
         Config = (),
@@ -40,7 +44,8 @@ fn test_app() -> actix_web::App<
         InitError = (),
     > + 'static,
 > {
-    let config = test_config();
+    let mut config = test_config();
+    config.features.tenancy = tenancy;
     let metrics = MetricsRegistry::prometheus_only();
     let build_info = BuildInfo::new(
         "0.1.0-test".into(),
@@ -49,7 +54,7 @@ fn test_app() -> actix_web::App<
         "test".into(),
         "sanvi-api-test".into(),
     );
-    let system = build_system_state(build_info, pool_stub(), None, 1);
+    let system = build_system_state(build_info, "test", pool_stub(), None, 1);
 
     // Identity/access wiring: real adapter construction with the lazy pool
     // (nothing connects until a route actually exercises it).
@@ -143,7 +148,7 @@ fn build_approval_gate_stub() -> std::sync::Arc<dyn sanvi_access::domain::Approv
 
 #[actix_web::test]
 async fn healthz_is_live() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/healthz").to_request();
     let res = test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::OK);
@@ -154,7 +159,7 @@ async fn healthz_is_live() {
 #[actix_web::test]
 async fn readyz_degrades_when_a_dependency_is_down() {
     // The stub pool cannot connect: readiness must answer 503 problem+json.
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/readyz").to_request();
     let res = test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -171,7 +176,7 @@ async fn readyz_degrades_when_a_dependency_is_down() {
 
 #[actix_web::test]
 async fn version_reports_build_info() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get()
         .uri("/api/v1/system/version")
         .to_request();
@@ -183,8 +188,56 @@ async fn version_reports_build_info() {
 }
 
 #[actix_web::test]
+async fn build_probe_stamps_the_build_without_tenant_data() {
+    let app = test::init_service(test_app_with_tenancy(false)).await;
+    let req = test::TestRequest::get()
+        .uri("/api/v1/system/build")
+        .to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers().get("cache-control").is_some());
+
+    let body: serde_json::Value = test::read_body_json(res).await;
+    assert_eq!(body["commit"], "test");
+    assert_eq!(body["version"], "0.1.0-test");
+    assert_eq!(body["environment"], "test");
+
+    // Exactly the four stamp fields (FR-1102): no tenant-scoped field may
+    // ever join, so the endpoint can stay unauthenticated.
+    let mut keys = body
+        .as_object()
+        .expect("json object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(keys, vec!["built_at", "commit", "environment", "version"]);
+}
+
+/// With tenant resolution actually wired (the flag on), the build probe
+/// must still answer without a tenant host — it is the unauthenticated
+/// stamp RUM and the error tracker read — while the sibling version
+/// endpoint keeps its tenant-scoped behaviour.
+#[actix_web::test]
+async fn build_probe_is_public_under_active_tenant_middleware() {
+    let app = test::init_service(test_app_with_tenancy(true)).await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/system/build")
+        .to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/system/version")
+        .to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
 async fn unknown_route_is_a_404_problem() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/api/v1/nope").to_request();
     let res = test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
@@ -195,7 +248,7 @@ async fn unknown_route_is_a_404_problem() {
 
 #[actix_web::test]
 async fn responses_carry_security_headers_and_request_id() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/healthz").to_request();
     let res = test::call_service(&app, req).await;
 
@@ -214,7 +267,7 @@ async fn responses_carry_security_headers_and_request_id() {
 
 #[actix_web::test]
 async fn inbound_request_id_is_propagated() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let inbound = uuid::Uuid::now_v7();
     let req = test::TestRequest::get()
         .uri("/healthz")
@@ -229,7 +282,7 @@ async fn inbound_request_id_is_propagated() {
 
 #[actix_web::test]
 async fn openapi_json_is_served() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/openapi.json").to_request();
     let res = test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::OK);
@@ -240,7 +293,7 @@ async fn openapi_json_is_served() {
 
 #[actix_web::test]
 async fn metrics_endpoint_renders_prometheus_format() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/metrics").to_request();
     let res = test::call_service(&app, req).await;
     assert_eq!(res.status(), StatusCode::OK);
@@ -252,7 +305,7 @@ async fn metrics_endpoint_renders_prometheus_format() {
 
 #[actix_web::test]
 async fn cors_preflight_from_allowed_origin_succeeds() {
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::with_uri("/healthz")
         .method(actix_web::http::Method::OPTIONS)
         .insert_header(("Origin", "http://localhost:5173"))
@@ -267,7 +320,7 @@ async fn cors_preflight_from_allowed_origin_succeeds() {
 async fn body_of_unknown_route_has_boxed_type_and_streams() {
     // Guards the middleware chain's body typing: every response body must
     // still be consumable through actix's standard read helpers.
-    let app = test::init_service(test_app()).await;
+    let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/healthz").to_request();
     let res = test::call_service(&app, req).await;
     let bytes = actix_web::body::to_bytes(res.into_body()).await.unwrap();

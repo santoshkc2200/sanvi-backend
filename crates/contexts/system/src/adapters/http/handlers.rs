@@ -9,14 +9,15 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, web};
 use sanvi_http::{ApiError, ProblemDetail};
 
 use crate::{
-    application::{CheckLiveness, CheckReadiness, GetBuildInfo, LivenessResult},
-    domain::{BuildInfo, Readiness},
+    application::{CheckLiveness, CheckReadiness, GetBuildDetails, GetBuildInfo, LivenessResult},
+    domain::{BuildDetails, BuildInfo, Readiness},
 };
 
 /// Application state visible to this context's handlers.
 #[derive(Clone)]
 pub struct SystemState {
     pub build_info: Arc<GetBuildInfo>,
+    pub build_details: Arc<GetBuildDetails>,
     pub readiness: Arc<CheckReadiness>,
     pub liveness: Arc<CheckLiveness>,
 }
@@ -93,9 +94,33 @@ pub async fn version(state: web::Data<SystemState>) -> impl Responder {
     HttpResponse::Ok().json(state.build_info.execute())
 }
 
+/// Build probe: `GET /api/v1/system/build` (FR-1102). Unauthenticated and
+/// cacheable so RUM, the error tracker and load tools can stamp a
+/// measurement with the exact build that produced it; carries no tenant
+/// data.
+#[utoipa::path(
+    get,
+    path = "/api/v1/system/build",
+    tag = "system",
+    operation_id = "build",
+    responses(
+        (status = 200, description = "Release stamp of the running binary", body = BuildDetails,
+         headers(
+             ("Cache-Control" = String, description = "public — the stamp is identical for every caller of a build")
+         )),
+        (status = 500, description = "Internal error", body = ProblemDetail)
+    )
+)]
+pub async fn build(state: web::Data<SystemState>) -> impl Responder {
+    HttpResponse::Ok()
+        .insert_header((actix_web::http::header::CACHE_CONTROL, "public, max-age=60"))
+        .json(state.build_details.execute())
+}
+
 /// Convenience for tests: state with no real dependencies.
 pub fn state_for_tests(build_info: BuildInfo, budget: Duration) -> SystemState {
     SystemState {
+        build_details: Arc::new(GetBuildDetails::new(&build_info, "local".to_string())),
         build_info: Arc::new(GetBuildInfo::new(build_info)),
         readiness: Arc::new(CheckReadiness::new(Vec::new(), budget)),
         liveness: Arc::new(CheckLiveness::new()),

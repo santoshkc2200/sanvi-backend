@@ -293,8 +293,11 @@ pub struct AppState {
 }
 
 /// Build the system context's application state (use cases + probes).
+/// `environment` names the deployment the process runs in (FR-1102's build
+/// probe reports it).
 pub fn build_system_state(
     build_info: BuildInfo,
+    environment: &str,
     pool: sanvi_persistence::PgPool,
     redis: Option<redis::aio::ConnectionManager>,
     readiness_budget_secs: u64,
@@ -306,6 +309,10 @@ pub fn build_system_state(
     }
 
     SystemState {
+        build_details: Arc::new(sanvi_system::application::GetBuildDetails::new(
+            &build_info,
+            environment.to_string(),
+        )),
         build_info: Arc::new(GetBuildInfo::new(build_info.clone())),
         readiness: Arc::new(CheckReadiness::new(
             probes,

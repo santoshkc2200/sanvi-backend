@@ -99,6 +99,9 @@ impl Default for TenantPolicyConfig {
                 "/scalar".to_string(),
                 "/api/v1/platform".to_string(),
                 "/api/v1/public".to_string(),
+                // FR-1102: the build probe is unauthenticated — RUM, the
+                // error tracker and load tools stamp measurements with it.
+                "/api/v1/system/build".to_string(),
             ],
             suspended_allowlist: vec!["/api/v1/billing".to_string()],
             tenant_rate_limit: None,

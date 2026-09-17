@@ -38,6 +38,7 @@ use utoipa::OpenApi;
         sanvi_system::adapters::http::healthz,
         sanvi_system::adapters::http::readyz,
         sanvi_system::adapters::http::version,
+        sanvi_system::adapters::http::build,
         sanvi_tenancy::adapters::http::provision_tenant,
         sanvi_tenancy::adapters::http::list_tenants,
         sanvi_tenancy::adapters::http::get_tenant,

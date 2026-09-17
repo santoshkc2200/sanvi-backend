@@ -48,6 +48,8 @@ public_prefixes = [
   "/api/v1/auth",
   "/api/v1/me",
   "/api/v1/access",
+  # FR-1102: the build probe is unauthenticated (it carries no tenant data).
+  "/api/v1/system/build",
   "/internal",
 ]
 suspended_allowlist = ["/api/v1/billing", "/api/v1/tenant/billing"]

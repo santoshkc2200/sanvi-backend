@@ -113,6 +113,7 @@ async fn main() -> ExitCode {
 
     let system = build_system_state(
         build_info(&config),
+        &config.telemetry.environment,
         pool.clone(),
         redis.clone(),
         config.readiness_probe_secs,

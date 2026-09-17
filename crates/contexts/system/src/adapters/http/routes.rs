@@ -2,7 +2,7 @@
 
 use actix_web::web;
 
-use super::handlers::{healthz, readyz, version};
+use super::handlers::{build, healthz, readyz, version};
 
 /// Root-level health routes (`/healthz`, `/readyz`).
 pub fn health_routes(cfg: &mut web::ServiceConfig) {
@@ -12,5 +12,6 @@ pub fn health_routes(cfg: &mut web::ServiceConfig) {
 
 /// Context routes under `/api/v1/system`.
 pub fn api_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::resource("/version").route(web::get().to(version)));
+    cfg.service(web::resource("/version").route(web::get().to(version)))
+        .service(web::resource("/build").route(web::get().to(build)));
 }
