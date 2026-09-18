@@ -152,6 +152,15 @@ trace-coverage-write:
 trace-coverage-self-test:
     ./scripts/check-trace-coverage.sh --self-test
 
+# TASK-020 (FR-1106): the log emitter never renders a corpus PII value.
+# `--self-test` plants one unredacted emission and expects the scan to
+# catch it.
+log-pii-scan:
+    ./scripts/check-log-pii.sh
+
+log-pii-scan-self-test:
+    ./scripts/check-log-pii.sh --self-test
+
 # `just test` and `just test-quiet` need nothing from this recipe -- they run
 # the same script themselves and eval its output in their own shell.
 #
