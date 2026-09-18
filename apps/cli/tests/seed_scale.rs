@@ -48,32 +48,53 @@ struct Output {
     text: String,
 }
 
-/// The test server may not carry a database literally named `sanvi` (the
-/// production-shaped name from `configs/base.toml`); create it if absent.
-/// CREATE DATABASE cannot run inside a transaction, so it goes through a
-/// plain connection.
-async fn ensure_database_named_sanvi(db: &sanvi_testsupport::TestDb) {
+/// The refusal test needs a database whose name is production-shaped —
+/// no staging prefix, so the guard must refuse it — but that no real dev
+/// database could ever carry and no concurrent run can collide on: unique
+/// per test database (the harness's uuid token). Created here, dropped by
+/// the test before it asserts, and the negative test's safety therefore
+/// never depends on the guard it is testing. CREATE/DROP DATABASE cannot
+/// run inside a transaction, so they go through plain statements.
+async fn create_production_shaped_database(db: &sanvi_testsupport::TestDb) -> String {
+    let name = format!("sanvi_prod_{}", db.name().trim_start_matches("sanvi_t_"));
     let admin = db.admin_pool().await;
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'sanvi')")
-            .fetch_one(&admin)
-            .await
-            .expect("pg_database is readable");
-    if !exists {
-        sqlx::query("CREATE DATABASE sanvi")
-            .execute(&admin)
-            .await
-            .expect("test-server superuser creates a database");
-    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .expect("test-server superuser drops a leftover database");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+        .execute(&admin)
+        .await
+        .expect("test-server superuser creates a database");
+    name
+}
+
+async fn drop_database(db: &sanvi_testsupport::TestDb, name: &str) {
+    let admin = db.admin_pool().await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {name} WITH (FORCE)"
+    )))
+    .execute(&admin)
+    .await
+    .expect("test-server superuser drops the throwaway database");
 }
 
 #[tokio::test]
 async fn refuses_a_production_shaped_database_even_with_a_bypass_variable_set() {
     let db = sanvi_testsupport::test_db().await;
-    ensure_database_named_sanvi(&db).await;
+    let name = create_production_shaped_database(&db).await;
 
-    let out = run_cli(&db, "sanvi", "1", &["--dry-run"]);
-    assert_ne!(out.code, 0, "seed-scale must refuse the name 'sanvi'");
+    let out = run_cli(&db, &name, "1", &["--dry-run"]);
+
+    // Drop before asserting: a failed assert must not leak the database.
+    drop_database(&db, &name).await;
+
+    assert_ne!(
+        out.code, 0,
+        "seed-scale must refuse a production-shaped name"
+    );
     assert!(
         out.text.contains("staging pattern"),
         "refusal must name the staging pattern, got: {}",
@@ -163,6 +184,40 @@ async fn seeds_a_staging_database_and_matches_the_plan() {
     assert!(
         refunds >= 500,
         "the payments hot tenant carries many refunds: {refunds}"
+    );
+
+    // The written tables must match the plan's printed row counts — the
+    // seed's contract is "same seed = identical row counts" (the payments
+    // table once quietly wrote a row per checkout, 25 % more than planned).
+    let counts = &plan["row_counts"];
+    for table in ["checkouts", "payments", "refunds"] {
+        let expected = counts[table].as_u64().expect("plan prints the row count");
+        let (actual,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM payments.{table}"
+        )))
+        .fetch_one(&admin)
+        .await
+        .expect("payment-table row count");
+        assert_eq!(
+            u64::try_from(actual).unwrap(),
+            expected,
+            "{table} rows must match the plan"
+        );
+    }
+
+    // And the state mix must be one production can produce: every payment
+    // sits on a completed checkout, succeeded there, with a capture.
+    let (inconsistent,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM payments.payments p \
+         JOIN payments.checkouts c ON c.id = p.checkout_id \
+         WHERE c.status <> 'complete' OR p.status <> 'succeeded' OR p.captured_at IS NULL",
+    )
+    .fetch_one(&admin)
+    .await
+    .expect("payment/checkout consistency count");
+    assert_eq!(
+        inconsistent, 0,
+        "payments exist only as captures of completed checkouts"
     );
 
     // A second real run refuses instead of half-colliding on primary keys.

@@ -716,6 +716,7 @@ async fn write_payments(
         .await?;
 
         let n_checkouts = plan_tenant.checkouts() as usize;
+        let n_payments = plan_tenant.payments as usize;
         let mut tenant_checkout_ids = Vec::with_capacity(n_checkouts);
         for i in 0..n_checkouts {
             let checkout_id = seeded.next_id();
@@ -727,44 +728,44 @@ async fn write_payments(
                 external: format!("cs_scale_{checkout_id}"),
                 amount: amount_minor(i),
                 currency,
-                completed: i < plan_tenant.payments as usize,
+                completed: i < n_payments,
                 step: 40 + (i % 100_000) as i64,
             });
         }
 
-        let mut succeeded_ids = Vec::with_capacity(plan_tenant.payments as usize);
-        for (i, &checkout_id) in tenant_checkout_ids.iter().enumerate() {
+        // One payment per *completed* checkout — exactly the plan's
+        // `payments` rows. A payment exists only where its checkout
+        // completed, and there it succeeded: an expired checkout with a
+        // captured payment (or a completed one with a failed payment) is a
+        // state production cannot produce, and revenue/conversion joins
+        // would read it. The amount rides along from here; rescanning
+        // `payment_rows` per refund grows with the square of the fixture.
+        let mut succeeded: Vec<(i64, i64)> = Vec::with_capacity(n_payments);
+        for (i, &checkout_id) in tenant_checkout_ids.iter().take(n_payments).enumerate() {
             let payment_id = seeded.next_id();
-            let succeeded = (i * 13) % 100 < 85;
-            if succeeded {
-                succeeded_ids.push(payment_id);
-            }
+            let amount = amount_minor(i);
+            succeeded.push((payment_id, amount));
             payment_rows.push(PaymentRow {
                 id: payment_id,
                 tenant_id: *tenant_id,
                 parent_id: checkout_id,
                 external: format!("pi_scale_{payment_id}"),
-                amount: amount_minor(i),
+                amount,
                 currency,
-                completed: succeeded,
+                completed: true,
                 step: 41 + (i % 100_000) as i64,
             });
         }
 
-        // Refund the first `refunds()` succeeded payments, deterministically.
-        for refund in succeeded_ids.iter().take(plan_tenant.refunds() as usize) {
+        // Refund the first `refunds()` payments, deterministically.
+        for &(payment_id, amount) in succeeded.iter().take(plan_tenant.refunds() as usize) {
             let refund_id = seeded.next_id();
-            let amount = payment_rows
-                .iter()
-                .find(|p| p.id == *refund)
-                .map(|p| p.amount / 2)
-                .unwrap_or(100);
             refund_rows.push(RefundRow {
                 id: refund_id,
                 tenant_id: *tenant_id,
-                payment_id: *refund,
+                payment_id,
                 external: format!("re_scale_{refund_id}"),
-                amount,
+                amount: amount / 2,
                 currency,
             });
         }
