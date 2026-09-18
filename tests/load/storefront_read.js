@@ -21,7 +21,7 @@ import {
 const SLUGS = tenant_slugs(12);
 
 export const options = {
-  summaryTrendStats: ['med', 'avg', 'p(0.95)', 'p(0.99)'],
+  summaryTrendStats: ['med', 'avg', 'p(95)', 'p(99)'],
   scenarios: {
     storefront_read: rate_scenario(Number(RATE || 50)),
   },
@@ -32,16 +32,14 @@ export const options = {
   },
 };
 
-// handleSummary cannot see setup()'s return value, so the stamp rides on
-// the global.
 export function setup() {
-  const build = fetch_build_stamp();
-  globalThis.__BUILD_STAMP = build;
-  return { build };
+  return { build: fetch_build_stamp() };
 }
 
 export default function () {
-  const slug = SLUGS[__ITER % SLUGS.length];
+  // __VU phase-offsets the walk: __ITER alone steps every VU in
+  // lockstep, pointing the whole offered rate at one tenant per instant.
+  const slug = SLUGS[(__VU + __ITER) % SLUGS.length];
   const headers = { Host: host_for(slug) };
 
   const context = http.get(`${BASE_URL}/api/v1/public/tenant-context`, {

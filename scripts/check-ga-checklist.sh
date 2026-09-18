@@ -18,30 +18,28 @@ checklist="$root/docs/release/ga-checklist.md"
 awk_check() {
     awk '
         BEGIN { bad = 0; pending = 0; verified = 0; last = "" }
-        /^- automated — / { next }
-        /^- manual — /    { pending = 1; verified = 0; last = $0; next }
-        /^- parked — /    { pending = 1; verified = 0; last = $0; next }
-        /^  - verify: /   { verified = 1; next }
-        /^- / {
-            print "no state (use automated|manual|parked): " $0
-            bad = 1
-            next
-        }
-        /^## / {
+        # Close out the previous bullet wherever a new one starts — not
+        # only at section headings and EOF, or a verify-less manual/parked
+        # line slips through whenever another bullet follows it.
+        function close_bullet() {
             if (pending && !verified) {
                 print "manual/parked line without a verify note: " last
                 bad = 1
             }
             pending = 0; verified = 0
+        }
+        /^- automated — / { close_bullet(); next }
+        /^- manual — /    { close_bullet(); pending = 1; verified = 0; last = $0; next }
+        /^- parked — /    { close_bullet(); pending = 1; verified = 0; last = $0; next }
+        /^  - verify: /   { verified = 1; next }
+        /^- / {
+            close_bullet()
+            print "no state (use automated|manual|parked): " $0
+            bad = 1
             next
         }
-        END {
-            if (pending && !verified) {
-                print "manual/parked line without a verify note: " last
-                bad = 1
-            }
-            exit bad ? 1 : 0
-        }
+        /^## / { close_bullet(); next }
+        END { close_bullet(); exit bad ? 1 : 0 }
     ' "$1"
 }
 
@@ -67,13 +65,30 @@ if [[ "${1:-}" == "--self-test" ]]; then
         exit 1
     fi
 
+    # The verify-less line must fail even when another bullet follows it:
+    # the check has to fire at every bullet boundary, not just at the next
+    # heading or EOF.
+    printf -- '## 99 · test\n\n- manual — a human does this.\n- automated — checked by CI.\n' >"$tmp/followed.md"
+    if awk_check "$tmp/followed.md" >/dev/null 2>&1; then
+        echo "self-test failed: a verify-less manual line before another bullet was accepted" >&2
+        exit 1
+    fi
+
+    # Two manual lines in a row: the first one's missing note must not be
+    # masked by the second one carrying it.
+    printf -- '## 99 · test\n\n- manual — a human does this.\n- manual — a human does that.\n  - verify: how to check it.\n' >"$tmp/twice.md"
+    if awk_check "$tmp/twice.md" >/dev/null 2>&1; then
+        echo "self-test failed: a verify-less manual line was masked by the next one's note" >&2
+        exit 1
+    fi
+
     if ! awk_check "$checklist" >/dev/null; then
         echo "self-test failed: the committed checklist does not pass its own gate:" >&2
         awk_check "$checklist" >&2 || true
         exit 1
     fi
 
-    echo "ga-checklist self-test: OK (stateless, unknown-state and verify-less lines fail; the committed checklist passes)"
+    echo "ga-checklist self-test: OK (stateless, unknown-state and verify-less lines fail — including before another bullet; the committed checklist passes)"
     exit 0
 fi
 

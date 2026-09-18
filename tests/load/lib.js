@@ -2,9 +2,13 @@
 //
 // Every scenario is one load shape, driven by `just perf`. Every run
 // writes `benchmarks/<scenario>/<tag>.json` carrying the machine profile
-// and the API build stamp (`GET /api/v1/system/build`), so two artifacts
-// from different hosts or different builds are never silently compared
-// (perf-compare refuses them).
+// and the API build stamp (`GET /api/v1/system/build`), so artifacts from
+// different hosts or different builds are never *silently* compared:
+// perf-compare refuses a foreign machine profile or an unusable build
+// stamp, and announces a build-stamp difference. Artifacts also carry a
+// `stats_version`, so captures made with a different summary-stat
+// definition (e.g. the inverted p(0.95)/p(0.99) keys) are refused rather
+// than diffed.
 //
 // Lab honesty, stated once and inherited by every artifact: these are lab
 // numbers. The local harness has no Ory Kratos and no Stripe, so the
@@ -58,26 +62,41 @@ export function host_for(slug) {
 }
 
 // `GET /api/v1/system/build` (FR-1102): the stamp that names the build
-// that produced every number in the artifact.
+// that produced every number in the artifact. Only a 200 whose body
+// carries the stamp fields counts: a 5xx also parses (problem+json), and
+// a problem document recorded as a build stamp would be worse than none.
 export function fetch_build_stamp() {
   const res = http.get(`${BASE_URL}/api/v1/system/build`);
   try {
-    return res.json();
+    const body = res.json();
+    if (
+      res.status === 200 &&
+      body &&
+      typeof body === 'object' &&
+      typeof body.version === 'string' &&
+      typeof body.environment === 'string' &&
+      typeof body.commit === 'string'
+    ) {
+      return body;
+    }
   } catch {
-    return { error: `build probe failed: ${res.status}` };
+    // unparsable body: fall through to the failed-probe note
   }
+  return { error: `build probe failed: ${res.status}` };
 }
 
 // Constant-arrival-rate executor at `rate` rps for the shared duration.
 // The rate is the *offered* load; the artifact records what completed.
 export function rate_scenario(rate) {
+  const preAllocated = Math.max(10, rate);
   return {
     executor: 'constant-arrival-rate',
     rate,
     timeUnit: '1s',
     duration: DURATION,
-    preAllocatedVUs: Math.max(10, rate),
-    maxVUs: rate * 4,
+    preAllocatedVUs: preAllocated,
+    // k6 rejects maxVUs below preAllocatedVUs (PERF_RATE=2: 8 < 10).
+    maxVUs: Math.max(preAllocated, rate * 4),
   };
 }
 
@@ -85,10 +104,9 @@ export function rate_scenario(rate) {
 // plus the machine profile and build stamp that gate the comparison.
 export function build_summary(data, extra) {
   const m = flatten_metrics(data.metrics);
-  const build =
-    (data.setup_data && data.setup_data.build) ||
-    (globalThis && globalThis.__BUILD_STAMP) ||
-    null;
+  // The stamp reaches handleSummary only through setup()'s return value
+  // (data.setup_data): setup and summary do not share globals.
+  const build = (data.setup_data && data.setup_data.build) || null;
   return JSON.stringify(
     {
       scenario: SCENARIO,
@@ -98,10 +116,18 @@ export function build_summary(data, extra) {
       duration: DURATION,
       machine_profile: MACHINE_PROFILE,
       build,
+      // Bumped when the summary-stat definitions change; perf-compare
+      // refuses to diff across versions. 2 = k6 p(95)/p(99) percent keys.
+      // Version 1 artifacts held 0.95/0.99 quantiles under the p95/p99
+      // names (see benchmarks/baseline-2026-09-17.md).
+      stats_version: 2,
       metrics: {
         http_req_duration_p50_ms: m.duration.med ?? null,
-        http_req_duration_p95_ms: m.duration['p(0.95)'] ?? null,
-        http_req_duration_p99_ms: m.duration['p(0.99)'] ?? null,
+        // k6 trend stats are percent-of-observations: p(95), not p(0.95).
+        // p(0.95) keys the 0.95th percentile — below the median — so the
+        // artifact once published near-minimum latency as "p95".
+        http_req_duration_p95_ms: m.duration['p(95)'] ?? null,
+        http_req_duration_p99_ms: m.duration['p(99)'] ?? null,
         http_req_duration_avg_ms: m.duration.avg ?? null,
         http_reqs_total: m.reqs ?? 0,
         // The unexpected-status rate: prefer the scenario's lab-contract

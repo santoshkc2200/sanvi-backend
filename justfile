@@ -240,12 +240,20 @@ perf tag="local" scenario="all":
         echo "k6 is required (brew install k6)" >&2
         exit 1
     fi
+    # Gate on the OS, not on tool presence: Linux ships a `sysctl` too
+    # (procps), whose hw.memsize probe fails and left every Linux artifact
+    # recording mem_gb: 0 — two Linux hosts then profile as one machine.
     mem_gb=0
-    if command -v sysctl >/dev/null 2>&1; then
-        mem_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
-    elif [[ -r /proc/meminfo ]]; then
-        mem_gb=$(( $(awk '/MemTotal/ {print int($2/1048576)}' /proc/meminfo) ))
-    fi
+    case "$(uname -s)" in
+        Darwin)
+            mem_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
+            ;;
+        Linux)
+            if [[ -r /proc/meminfo ]]; then
+                mem_gb=$(( $(awk '/MemTotal/ {print int($2/1048576)}' /proc/meminfo) ))
+            fi
+            ;;
+    esac
     export PERF_TAG="{{tag}}"
     export PERF_BASE_URL="${PERF_BASE_URL:-http://localhost:8081}"
     export PERF_SEED="${PERF_SEED:-1}"
@@ -254,6 +262,10 @@ perf tag="local" scenario="all":
     if [[ "{{scenario}}" != "all" ]]; then
         scenarios=("{{scenario}}")
     fi
+    # k6 exits 99 on a threshold breach: keep sweeping so one breaching
+    # shape doesn't leave the tag with partial artifacts — the breach is
+    # still reported and still fails the recipe once every shape ran.
+    rc=0
     for s in "${scenarios[@]}"; do
         echo "perf: $s (tag {{tag}})"
         mkdir -p "benchmarks/$s"
@@ -265,13 +277,19 @@ perf tag="local" scenario="all":
             conversion_upload) rate=50 ;;
             *) rate=0 ;;
         esac
-        k6 run -e PERF_SCENARIO="$s" -e PERF_RATE="${PERF_RATE:-$rate}" "tests/load/$s.js"
+        if ! k6 run -e PERF_SCENARIO="$s" -e PERF_RATE="${PERF_RATE:-$rate}" "tests/load/$s.js"; then
+            echo "perf: $s FAILED (threshold breach or k6 error; artifact may still have been written)" >&2
+            rc=1
+        fi
     done
+    exit "$rc"
 
 # TASK-019 (FR-1103): diff two tagged runs; a regression past the
 # per-metric tolerance blocks the merge. Refuses artifacts whose machine
-# profiles differ. `--self-test` proves the check fails on an injected
-# latency increase and refuses a foreign machine profile.
+# profiles differ, whose stats_version is missing or mismatched, or whose
+# build stamp is missing or failed; a build-stamp difference is announced.
+# `--self-test` proves the check fails on an injected latency increase and
+# refuses a foreign machine profile.
 perf-compare base_tag="base" cand_tag="local" *scenario="":
     #!/usr/bin/env bash
     set -euo pipefail

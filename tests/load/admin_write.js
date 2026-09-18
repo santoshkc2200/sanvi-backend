@@ -26,7 +26,7 @@ import {
 const SLUGS = tenant_slugs(6);
 
 export const options = {
-  summaryTrendStats: ['med', 'avg', 'p(0.95)', 'p(0.99)'],
+  summaryTrendStats: ['med', 'avg', 'p(95)', 'p(99)'],
   scenarios: {
     admin_write: rate_scenario(Number(RATE || 20)),
   },
@@ -37,13 +37,13 @@ export const options = {
 };
 
 export function setup() {
-  const build = fetch_build_stamp();
-  globalThis.__BUILD_STAMP = build;
-  return { build };
+  return { build: fetch_build_stamp() };
 }
 
 export default function () {
-  const slug = SLUGS[__ITER % SLUGS.length];
+  // __VU phase-offsets the walk: __ITER alone steps every VU in
+  // lockstep, pointing the whole offered rate at one tenant per instant.
+  const slug = SLUGS[(__VU + __ITER) % SLUGS.length];
   const res = http.put(
     `${BASE_URL}/api/v1/tenant/settings`,
     JSON.stringify({ settings: { 'perf.write': String(__ITER) } }),

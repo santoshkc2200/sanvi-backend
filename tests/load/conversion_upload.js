@@ -24,16 +24,14 @@ import {
 } from './lib.js';
 
 export const options = {
-  summaryTrendStats: ['med', 'avg', 'p(0.95)', 'p(0.99)'],
+  summaryTrendStats: ['med', 'avg', 'p(95)', 'p(99)'],
   scenarios: {
     conversion_upload: rate_scenario(Number(RATE || 50)),
   },
 };
 
 export function setup() {
-  const build = fetch_build_stamp();
-  globalThis.__BUILD_STAMP = build;
-  return { build };
+  return { build: fetch_build_stamp() };
 }
 
 export default function () {
