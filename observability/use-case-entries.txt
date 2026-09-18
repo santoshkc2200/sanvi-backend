@@ -1,0 +1,25 @@
+# Non-`execute` use-case entry points (TASK-020).
+#
+# `scripts/check-trace-coverage.sh` treats every `fn execute(` in a context's
+# `src/application/` as a spanned use-case entry. The files below expose
+# their use-case boundary under a different verb; each line names one entry
+# that must carry a span. Format: `<path> <fn_name>` — a name the file no
+# longer declares is a stale entry and fails the gate.
+crates/contexts/access/src/application/check_permission.rs check_raw
+crates/contexts/access/src/application/feature_gate.rs resolve
+crates/contexts/access/src/application/feature_gate.rs invalidate
+crates/contexts/advertising/src/application/budget/evaluator.rs evaluate_tenant
+crates/contexts/advertising/src/application/budget/evaluator.rs detect_anomalies_for_tenant
+crates/contexts/advertising/src/application/budget/rollover.rs sweep_tenant
+crates/contexts/advertising/src/application/budget/rollover.rs sweep_all
+crates/contexts/advertising/src/application/tracking/settings.rs get_settings
+crates/contexts/advertising/src/application/tracking/settings.rs update_settings
+crates/contexts/billing/src/application/webhooks.rs receive
+crates/contexts/billing/src/application/webhooks.rs dispatch
+crates/contexts/domains/src/application/lookup.rs resolve
+crates/contexts/domains/src/application/lookup.rs invalidate
+crates/contexts/identity/src/application/delegation.rs validate_assignable
+crates/contexts/identity/src/application/delegation.rs check_grant
+crates/contexts/identity/src/application/delegation.rs check_invite
+crates/contexts/identity/src/application/delegation.rs check_accept
+crates/contexts/identity/src/application/delegation.rs check_update_roles

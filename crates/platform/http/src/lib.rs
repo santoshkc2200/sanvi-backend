@@ -23,6 +23,7 @@ pub mod openapi;
 pub mod rate_limit;
 pub mod server;
 pub mod tenancy;
+pub mod trace_context;
 pub mod tracing;
 
 pub use authn::{

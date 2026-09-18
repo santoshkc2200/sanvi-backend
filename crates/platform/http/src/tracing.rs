@@ -7,6 +7,7 @@ use actix_web::{
 };
 use tracing::{Span, info_span};
 use tracing_actix_web::RootSpanBuilder;
+use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
 use crate::{metrics::context_from_path, middleware::RequestId};
 
@@ -44,6 +45,10 @@ impl RootSpanBuilder for SanviRootSpanBuilder {
             http.client_ip = %request.connection_info().realip_remote_addr().unwrap_or_default(),
             sanvi.context = context_from_path(request.path()),
         );
+        // Join an inbound W3C trace when the caller sent one (TASK-020):
+        // with no `traceparent` header this is a no-op and the request
+        // starts its own trace.
+        let _ = span.set_parent(extract_inbound_context(request));
         if let (Some(id), Ok(mut starts)) = (span.id(), SPAN_STARTS.lock()) {
             starts.insert(id, Instant::now());
         }
@@ -78,3 +83,24 @@ impl RootSpanBuilder for SanviRootSpanBuilder {
 
 /// Re-export for middleware.rs.
 pub use tracing_actix_web::TracingLogger;
+
+/// Extract the W3C TraceContext from a request's headers through the global
+/// propagator. Returns an empty context (a fresh trace) when no propagator
+/// is installed or the request carries no valid `traceparent`.
+fn extract_inbound_context(request: &ServiceRequest) -> opentelemetry::Context {
+    struct HeaderExtractor<'a>(&'a actix_web::http::header::HeaderMap);
+
+    impl opentelemetry::propagation::Extractor for HeaderExtractor<'_> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|value| value.to_str().ok())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            self.0.keys().map(|key| key.as_str()).collect()
+        }
+    }
+
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(request.headers()))
+    })
+}

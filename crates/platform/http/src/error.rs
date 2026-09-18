@@ -20,7 +20,10 @@ pub struct ProblemDetail {
     /// URI of the offending resource, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
-    /// Correlates with the request id and the trace in OpenObserve.
+    /// Correlates with the trace in OpenObserve: the W3C trace id of the
+    /// span serving the request (the same trace the `traceparent` response
+    /// header references), falling back to the request id when the request
+    /// ran outside any OpenTelemetry context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
     /// Machine-readable reason for statuses that carry one (e.g. tenant
@@ -310,11 +313,15 @@ async fn enrich(res: ServiceResponse<BoxBody>) -> ServiceResponse<BoxBody> {
     }
 
     let instance = res.request().path().to_string();
-    let trace_id = res
-        .request()
-        .extensions()
-        .get::<RequestId>()
-        .map(|id| id.to_string());
+    // TASK-020 convention: the body's `trace_id` names the trace, not just
+    // the request — the active span's W3C trace id, with the request id kept
+    // as the fallback for spans outside any OpenTelemetry context.
+    let trace_id = crate::trace_context::current_trace_id().or_else(|| {
+        res.request()
+            .extensions()
+            .get::<RequestId>()
+            .map(|id| id.to_string())
+    });
 
     let (req, response) = res.into_parts();
     let (_, body) = response.into_parts();

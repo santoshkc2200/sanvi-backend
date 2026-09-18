@@ -140,6 +140,18 @@ ci-test-coverage:
 ci-test-coverage-self-test:
     ./scripts/check-ci-test-coverage.sh --self-test
 
+# TASK-020 (FR-1105): every use case carries a `<context>.<usecase>` span.
+# Regenerates observability/trace-coverage.md and fails on any unspanned
+# use case — or on a stale committed matrix.
+trace-coverage:
+    ./scripts/check-trace-coverage.sh
+
+trace-coverage-write:
+    ./scripts/check-trace-coverage.sh --write
+
+trace-coverage-self-test:
+    ./scripts/check-trace-coverage.sh --self-test
+
 # `just test` and `just test-quiet` need nothing from this recipe -- they run
 # the same script themselves and eval its output in their own shell.
 #

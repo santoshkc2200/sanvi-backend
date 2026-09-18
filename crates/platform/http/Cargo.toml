@@ -25,8 +25,11 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-actix-web.workspace = true
+tracing-opentelemetry.workspace = true
 utoipa.workspace = true
 utoipa-scalar.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+opentelemetry_sdk.workspace = true
+tracing-subscriber.workspace = true

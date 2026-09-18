@@ -129,6 +129,7 @@ where
             crate::tracing::SanviRootSpanBuilder,
         >::new())
         .wrap(RequestIdLayer)
+        .wrap(crate::trace_context::TraceparentLayer)
         .wrap(RecordMetrics)
 }
 

@@ -168,6 +168,15 @@ pub fn init(config: TelemetryConfig) -> Result<(Arc<MetricsRegistry>, TelemetryG
         opentelemetry::global::set_tracer_provider(provider.clone());
     }
 
+    // W3C TraceContext is the correlation contract (TASK-020): inbound
+    // `traceparent` headers join the caller's trace at the root span, and
+    // the error bodies / response headers name the same trace. Registered
+    // unconditionally so local runs extract the same way, into a noop
+    // propagator's empty context when OTLP is off.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     let fmt_layer = match config.log_format {
         TelemetryLogFormat::Json => tracing_subscriber::fmt::layer()
             .json()
