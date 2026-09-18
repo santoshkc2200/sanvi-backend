@@ -18,21 +18,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [[ "${1:-}" == "--self-test" ]]; then
-    out="$(SANVI_PII_PLANT_LEAK=bearer_token \
-        cargo nextest run -p sanvi-telemetry --test pii_corpus \
-        -E 'test(planted_leak_is_detected)' 2>&1)" || status=$?
-    status="${status:-0}"
-    if [[ "$status" -eq 0 ]]; then
-        echo "log-pii-scan self-test failed: the planted leak was not caught" >&2
-        echo "$out" >&2
-        exit 1
-    fi
-    if ! grep -q "LEAK FINDING: bearer_token" <<<"$out"; then
-        echo "log-pii-scan self-test failed: the finding did not name the leaked type" >&2
-        echo "$out" >&2
-        exit 1
-    fi
-    echo "log-pii-scan self-test: OK (the planted bearer_token leak was caught and named)"
+    # Plant the two easy-to-dismiss shapes by name: a base64-wrapped token
+    # and a hashed identifier that is still an identifier. Each planted run
+    # must fail the scan and name the leaked type.
+    for kind in base64_wrapped_token hashed_identifier; do
+        out="$(SANVI_PII_PLANT_LEAK="$kind" \
+            cargo nextest run -p sanvi-telemetry --test pii_corpus \
+            -E 'test(planted_leak_is_detected)' 2>&1)" || status=$?
+        status="${status:-0}"
+        if [[ "$status" -eq 0 ]]; then
+            echo "log-pii-scan self-test failed: the planted $kind leak was not caught" >&2
+            echo "$out" >&2
+            exit 1
+        fi
+        if ! grep -q "LEAK FINDING: $kind" <<<"$out"; then
+            echo "log-pii-scan self-test failed: the finding did not name $kind" >&2
+            echo "$out" >&2
+            exit 1
+        fi
+    done
+    echo "log-pii-scan self-test: OK (planted base64-wrapped-token and hashed-identifier leaks were both caught and named)"
     exit 0
 fi
 

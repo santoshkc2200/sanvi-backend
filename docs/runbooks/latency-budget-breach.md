@@ -11,6 +11,12 @@ an incident instead of a mood.
 
 ## Detection
 
+> Commands last executed successfully against the compose stack on
+> 2026-09-18 (TASK-020 slice 11.1f): the `/metrics` RED grep, the
+> `pg_stat_activity` live view, and a storefront probe (200, 48 ms).
+> The `pg_stat_statements` aggregate is recorded but not yet executable
+> on the compose default — the preload is TASK-021's first action.
+
 The alert fires from the Prometheus-side expression above. Confirm it on
 the live system:
 
@@ -37,10 +43,18 @@ which: re-run `just perf <tag>` against the current build and diff.
    request.
 3. **Cache or database?** A collapsed Redis cache shows as a storm of
    `tenant_resolution_*` and theme-resolution reads; a query problem shows
-   as one statement with `calls` flat and `mean` spiking in
-   `pg_stat_statements`.
+   as one statement dominating. `pg_stat_statements` needs the
+   `shared_preload_libraries` preload the compose default does not ship
+   (making that permanent is TASK-021's first action); until then, the
+   live statement view answers the same question:
 
 ```bash
+# What is running right now, longest first (works without the preload):
+docker exec sanvi-postgres-1 psql -U postgres -c \
+  "SELECT pid, now() - query_start AS running_for, left(query, 80) \
+   FROM pg_stat_activity WHERE state = 'active' AND pid <> pg_backend_pid() \
+   ORDER BY running_for DESC LIMIT 10"
+# With the preload enabled, the per-statement aggregate:
 docker exec sanvi-postgres-1 psql -U postgres -c \
   "SELECT calls, round(mean_exec_time::numeric, 2) AS mean_ms, left(query, 80) \
    FROM pg_stat_statements ORDER BY mean_exec_time DESC LIMIT 10"

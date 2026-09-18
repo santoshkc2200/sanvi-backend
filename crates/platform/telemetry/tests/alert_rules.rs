@@ -34,7 +34,7 @@ fn rules() -> Vec<Value> {
         .expect("rules.json holds a rules array")
 }
 
-fn check<'a>(rule: &'a Value) -> &'a Value {
+fn check(rule: &Value) -> &Value {
     rule.get("check").expect("every rule carries a check")
 }
 
@@ -61,9 +61,12 @@ fn labels_of(spec: &Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// metric → [(labels, per-step values)]
+type LabeledSeries = Vec<(Vec<(String, String)>, Vec<f64>)>;
+
 struct Series {
     step_secs: u64,
-    values: BTreeMap<String, Vec<(Vec<(String, String)>, Vec<f64>)>>,
+    values: BTreeMap<String, LabeledSeries>,
 }
 
 impl Series {
@@ -87,9 +90,15 @@ impl Series {
                 .iter()
                 .map(|v| v.as_f64().expect("numeric"))
                 .collect();
-            values.entry(metric).or_insert_with(Vec::new).push((labels, values_list));
+            values
+                .entry(metric)
+                .or_insert_with(Vec::new)
+                .push((labels, values_list));
         }
-        Self { step_secs: step, values }
+        Self {
+            step_secs: step,
+            values,
+        }
     }
 
     fn steps(&self) -> usize {
@@ -109,9 +118,9 @@ impl Series {
                 series
                     .iter()
                     .filter(|(series_labels, _)| {
-                        labels.iter().all(|(k, v)| {
-                            series_labels.iter().any(|(lk, lv)| lk == k && lv == v)
-                        })
+                        labels
+                            .iter()
+                            .all(|(k, v)| series_labels.iter().any(|(lk, lv)| lk == k && lv == v))
                     })
                     .map(|(_, values)| values.get(t).copied().unwrap_or(0.0))
                     .sum()
@@ -119,7 +128,13 @@ impl Series {
             .unwrap_or(0.0)
     }
 
-    fn window_sum(&self, metric: &str, labels: &[(String, String)], t: usize, window_secs: u64) -> f64 {
+    fn window_sum(
+        &self,
+        metric: &str,
+        labels: &[(String, String)],
+        t: usize,
+        window_secs: u64,
+    ) -> f64 {
         let window_steps = (window_secs / self.step_secs).max(1) as usize;
         (t.saturating_sub(window_steps - 1)..=t)
             .map(|step| self.sample(metric, labels, step))
@@ -169,27 +184,29 @@ fn fires(series: &Series, check: &Value) -> bool {
                     })
                     .sum();
                 let holds = den > 0.0 && num / den > threshold;
-                if holds && (1..=for_steps).all(|back: usize| {
-                    let u = t.saturating_sub(back);
-                    let n = series.window_sum(
-                        numerator["metric"].as_str().unwrap(),
-                        &metric_labels(numerator),
-                        u,
-                        check["window_secs"].as_u64().unwrap(),
-                    );
-                    let d: f64 = denominators
-                        .iter()
-                        .map(|spec| {
-                            series.window_sum(
-                                spec["metric"].as_str().unwrap(),
-                                &metric_labels(spec),
-                                u,
-                                check["window_secs"].as_u64().unwrap(),
-                            )
-                        })
-                        .sum();
-                    d > 0.0 && n / d >= threshold
-                }) {
+                if holds
+                    && (1..=for_steps).all(|back: usize| {
+                        let u = t.saturating_sub(back);
+                        let n = series.window_sum(
+                            numerator["metric"].as_str().unwrap(),
+                            &metric_labels(numerator),
+                            u,
+                            check["window_secs"].as_u64().unwrap(),
+                        );
+                        let d: f64 = denominators
+                            .iter()
+                            .map(|spec| {
+                                series.window_sum(
+                                    spec["metric"].as_str().unwrap(),
+                                    &metric_labels(spec),
+                                    u,
+                                    check["window_secs"].as_u64().unwrap(),
+                                )
+                            })
+                            .sum();
+                        d > 0.0 && n / d >= threshold
+                    })
+                {
                     return true;
                 }
             }
@@ -199,12 +216,8 @@ fn fires(series: &Series, check: &Value) -> bool {
             let metric = check["metric"].as_str().unwrap();
             let labels = metric_labels(check);
             for t in 0..series.steps() {
-                let sum = series.window_sum(
-                    metric,
-                    &labels,
-                    t,
-                    check["window_secs"].as_u64().unwrap(),
-                );
+                let sum =
+                    series.window_sum(metric, &labels, t, check["window_secs"].as_u64().unwrap());
                 if sum > threshold {
                     return true;
                 }
@@ -254,7 +267,10 @@ fn every_rule_is_well_formed() {
             "{kind}"
         );
         if kind == "probe" {
-            assert!(check["probe"].as_str().is_some(), "probe rules document their predicate");
+            assert!(
+                check["probe"].as_str().is_some(),
+                "probe rules document their predicate"
+            );
         } else {
             assert!(check["threshold"].is_number());
             assert!(check["for_secs"].is_number());
@@ -311,10 +327,7 @@ fn every_evaluable_rule_fires_on_a_breach_and_stays_silent_when_clean() {
                 let numerator_labels = labels_of(numerator);
                 let numerator_metric = numerator["metric"].as_str().unwrap().to_string();
                 let mut values = BTreeMap::new();
-                values.insert(
-                    numerator_metric.clone(),
-                    vec![(numerator_labels, errors)],
-                );
+                values.insert(numerator_metric.clone(), vec![(numerator_labels, errors)]);
                 for spec in check["denominator"].as_array().unwrap() {
                     let metric = spec["metric"].as_str().unwrap().to_string();
                     // A denominator that IS the numerator metric (failure /
@@ -503,20 +516,39 @@ fn exprs_reference_declared_metrics_only() {
         known.extend(exported.iter().copied());
         known.extend(expr_declared_only.iter().copied());
         const PROMQL_WORDS: &[&str] = &[
-            "sum", "rate", "increase", "max_over_time", "min_over_time",
-            "histogram_quantile", "by", "without", "le", "and", "or", "unless",
-            "ignoring", "on", "group_left", "group_right", "offset", "bool",
+            "sum",
+            "rate",
+            "increase",
+            "max_over_time",
+            "min_over_time",
+            "histogram_quantile",
+            "by",
+            "without",
+            "le",
+            "and",
+            "or",
+            "unless",
+            "ignoring",
+            "on",
+            "group_left",
+            "group_right",
+            "offset",
+            "bool",
         ];
-        for candidate in expr.split(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')) {
-            if candidate.is_empty() || candidate.starts_with(|c: char| c.is_ascii_digit()) || PROMQL_WORDS.contains(&candidate) {
+        for candidate in
+            expr.split(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+        {
+            if candidate.is_empty()
+                || candidate.starts_with(|c: char| c.is_ascii_digit())
+                || PROMQL_WORDS.contains(&candidate)
+            {
                 continue;
             }
             let matches_known = known.iter().any(|m| candidate.starts_with(m));
             assert!(
                 matches_known,
                 "{}: expr names `{}` which no known metric starts with",
-                rule["alert"],
-                candidate
+                rule["alert"], candidate
             );
         }
     }

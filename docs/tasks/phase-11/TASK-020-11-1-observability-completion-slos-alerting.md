@@ -1,10 +1,10 @@
 # TASK-020: 11.1 Observability gates, latency budgets & alerting
 
-**Phase:** 11 · **Status:** todo · **Size:** L
+**Phase:** 11 · **Status:** done · **Size:** L
 **Requirement(s):** FR-1105, FR-1106, FR-1107, NFR-1103, NFR-1111
 **Depends on:** TASK-031, TASK-019
-**Created:** 2026-08-21 · **Rewritten:** 2026-09-01
-**Flag:** `platform.tail_sampling`
+**Created:** 2026-08-21 · **Rewritten:** 2026-09-01 · **Closed:** 2026-09-18
+**Flag:** `platform.tail_sampling` (landed as `telemetry.sampling.tail_sampling`, default off)
 
 > **For agentic workers:** REQUIRED SUB-SKILL — `superpowers:subagent-driven-development`.
 > **Execute one slice per session, not one task per session** — see `## Execution slices` below. Each
@@ -175,16 +175,16 @@ never been executed is a comment. Correct what does not work.
 
 ## Definition of done
 
-- [ ] `just trace-coverage` passes, and fails when a use case is added without a span.
-- [ ] The coverage matrix is committed.
-- [ ] `just log-pii-scan` blocks with zero findings on the corpus, and catches the base64-wrapped token
+- [x] `just trace-coverage` passes, and fails when a use case is added without a span.
+- [x] The coverage matrix is committed.
+- [x] `just log-pii-scan` blocks with zero findings on the corpus, and catches the base64-wrapped token
       and the hashed identifier when redaction is removed.
-- [ ] Tail sampling is behind its flag; with the collector down, requests still complete.
-- [ ] `docs/slo/budgets.md` records six lab budgets, each with a measured value and a query.
-- [ ] `just alert-rules-test` distinguishes a 10-minute outage from a single failed request.
-- [ ] `just runbook-xref` is green and fails on a deliberately orphaned rule.
-- [ ] Every runbook's commands have been executed against the compose stack.
-- [ ] A test asserts the `trace_id` in an error response equals the id in the corresponding span.
+- [x] Tail sampling is behind its flag; with the collector down, requests still complete.
+- [x] `docs/slo/budgets.md` records six lab budgets, each with a measured value and a query.
+- [x] `just alert-rules-test` distinguishes a 10-minute outage from a single failed request.
+- [x] `just runbook-xref` is green and fails on a deliberately orphaned rule.
+- [x] Every runbook's commands have been executed against the compose stack.
+- [x] A test asserts the `trace_id` in an error response equals the id in the corresponding span.
 
 ## Verification
 
@@ -202,6 +202,73 @@ just log-pii-scan
 just runbook-xref
 just alert-rules-test
 ```
+
+### Verification record (2026-09-18, slice 11.1f)
+
+All nine commands run green on `feat/task-020-observability-gates`: fmt and
+clippy (`-D warnings`) clean; layering OK; full suite 1176/1176
+(`just test-quiet`, the same suite with the low-noise profile); openapi
+clean; trace-coverage 115/115; log-pii-scan zero findings (self-test
+plants the base64-wrapped token and the hashed identifier, both caught);
+runbook-xref OK (self-test proves all four failure modes); alert-rules-test
+5/5. The four new gates are wired into `just ci` and `just ci-quiet`.
+
+## Execution record (slices as committed)
+
+- **11.1a** (`feat(observability): trace context conventions and the red
+  trace-coverage gate`) — the two conventions fixed once in `sanvi-http`:
+  every problem-details body carries the W3C trace id of the active span
+  (`x-request-id` stays the fallback outside any OTel context — the DoD
+  test asserts body `trace_id` == span trace id against a real SDK
+  tracer), every response carries a matching `traceparent` header, and an
+  inbound `traceparent` joins the caller's trace at the root span via the
+  global `TraceContextPropagator` `sanvi_telemetry::init` now registers.
+  `scripts/check-trace-coverage.sh` walks use-case entries and failed red
+  on first run: **107 of 111 use cases without a conforming span**. The
+  red matrix was committed.
+- **11.1b** — 239 entries instrumented across all fifteen contexts with
+  `#[tracing::instrument(name = "<context>.<usecase>", …)]`, named from
+  the enclosing use-case struct; cross-tenant sweeps keep a span without a
+  tenant field. Falsified before merge: a planted spanless use case fails
+  the gate naming its file.
+- **11.1c** — the PII corpus test and `scripts/check-log-pii.sh` in both
+  directions.
+- **11.1d** — `TailSamplingProcessor` behind `telemetry.sampling.tail_sampling`
+  (the task's `platform.tail_sampling`; key named for the section it lives
+  in, still default-off): errors and latency outliers always exported, the
+  keep decision sticky per trace, head sampling the fallback; the
+  collector-unavailable invariant proven in both flag positions.
+  `observability/field-standard.md` fixes field names and level volumes.
+- **11.1e** — budgets re-captured on the post-erratum seed
+  (`benchmarks/*/baseline-2026-09-18.json`, `stats_version: 2` — the
+  removed stats_version-1 artifacts from TASK-019 replaced);
+  `observability/alerts/rules.json` codifies 26 rules; the xref gate.
+- **11.1f** — the new runbooks executed against the live compose stack
+  (dates recorded in the files); full verification block run once.
+
+### Decisions worth remembering
+
+- **Gate granularity is the file, not the struct.** A use case is a file
+  under `src/application/` with an `fn execute(`, plus non-`execute` entry
+  verbs registered in `observability/use-case-entries.txt` (`receive`,
+  `dispatch`, `check_raw`, sweeps, resolvers — 18 entries). A stale
+  registry entry is itself a gate failure. Attribute coverage
+  (`tenant_id`) is a reviewed matrix column, not an enforced one: the gate
+  enforces span presence and the `<context>.` name prefix.
+- **`outcome` is not a span field.** Recording it per use case would have
+  doubled the 11.1b diff for a value the request root span already carries
+  as `http.status_code`; the field-standard doc records the decision.
+- **`TenantDisconnected` is deliberately unregistered.** An info-level
+  funnel signal whose condition is normal business flow, not a symptom;
+  the payments-alerts table keeps it, the registry does not.
+- **Three of the six budgets cannot be measured end to end in the lab**
+  (webhook entitlement effect, conversion sweep ratio, domain issuance).
+  `docs/slo/budgets.md` records the measured boundary proxies and names
+  the gaps rather than inventing numbers.
+- **`pg_stat_statements` is not in the compose default**, so the
+  latency-budget runbook's database triage step leads with the
+  `pg_stat_activity` live view; enabling the preload permanently is
+  TASK-021's first action.
 
 ## Out of scope
 

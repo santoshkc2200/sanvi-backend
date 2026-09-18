@@ -2,6 +2,11 @@
 
 **Alerts:** `ApiErrorRatioHigh` — `sum(rate(http_server_errors_total[10m])) / sum(rate(http_server_requests_total[10m])) > 0.05` (see the [alerts registry](../../observability/alerts/rules.json)).
 
+> Commands last executed successfully against the compose stack on
+> 2026-09-18 (TASK-020 slice 11.1f): `/healthz` 200, `/readyz` reporting
+> database and redis ok, `/metrics` serving 164 `http_server_duration`
+> series, `pg_isready` accepting.
+
 ## Symptoms
 
 - `/healthz` or `/readyz` failing or timing out.
