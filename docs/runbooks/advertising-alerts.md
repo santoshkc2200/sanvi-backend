@@ -1,5 +1,7 @@
 # Advertising alert rules (phase 10)
 
+**Alerts:** `AdvertisingConsentMissing` — the invariant alarm below is this file's own runbook.
+
 The metric set every alert reads lives in `crates/contexts/advertising/src/adapters/metrics.rs`
 (`conversion_*`, `ads_sync_*`, `metrics_ingestion_*`, `budget_*`, exposed on `/metrics`).
 This file is the canonical list of phase-10 alerts: name, condition, severity, and the

@@ -161,6 +161,21 @@ log-pii-scan:
 log-pii-scan-self-test:
     ./scripts/check-log-pii.sh --self-test
 
+# TASK-020 (FR-1106): the alert registry evaluated against recorded
+# series — a ten-minute outage fires, a single failed request does not,
+# and every rule fires on its own synthetic breach.
+alert-rules-test:
+    cargo nextest run -p sanvi-telemetry --test alert_rules
+
+# TASK-020 (FR-1105): the runbook loop, both directions — every alert has
+# a runbook that declares it, every declared alert is registered, and
+# every alert-less runbook is exempted with a reason.
+runbook-xref:
+    ./scripts/check-runbook-xref.sh
+
+runbook-xref-self-test:
+    ./scripts/check-runbook-xref.sh --self-test
+
 # `just test` and `just test-quiet` need nothing from this recipe -- they run
 # the same script themselves and eval its output in their own shell.
 #

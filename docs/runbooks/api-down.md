@@ -1,5 +1,7 @@
 # Runbook: API is down
 
+**Alerts:** `ApiErrorRatioHigh` — `sum(rate(http_server_errors_total[10m])) / sum(rate(http_server_requests_total[10m])) > 0.05` (see the [alerts registry](../../observability/alerts/rules.json)).
+
 ## Symptoms
 
 - `/healthz` or `/readyz` failing or timing out.

@@ -1,0 +1,19 @@
+# Runbooks that answer no alert (runbook-xref exemptions).
+#
+# `scripts/check-runbook-xref.sh` requires every runbook to declare the
+# alerts it answers (`**Alerts:**` / `**Alert:**` line) and every alert to
+# name its runbook. Procedure and drill documents answer no alert; each
+# line here is one such file, with the reason. A file here that grows an
+# alert must come off this list.
+#
+# <file>  <reason>
+add-oidc-provider.md  operator procedure, not an alert response
+advertising-api-version-upgrade-drill.md  scheduled drill, not an alert response
+audit-chain.md  integrity procedure, not an alert response
+billing.md  operator procedure (plan/price changes), not an alert response
+domains.md  operator procedure (domain lifecycle), not an alert response
+grant-entitlement.md  operator procedure, not an alert response
+impersonation.md  operator procedure, not an alert response
+payments-alerts.md  the phase-09 alert index; its alerts name per-alert runbooks
+privacy.md  operator procedure (DSR handling), not an alert response
+stripe-api-version-upgrade-drill.md  scheduled drill, not an alert response

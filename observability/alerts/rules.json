@@ -1,0 +1,378 @@
+{
+  "$comment": "TASK-020 (FR-1105/FR-1106): the alert registry — every alert the platform declares, with its PromQL expression for the monitoring stack, a machine-checkable `check` for the unit test (crates/platform/telemetry/tests/alert_rules.rs), and the runbook that answers it. `check.kind` is one of: ratio, increase, gauge, p95_gauge (all evaluated against recorded series fixtures) or probe (a database/audit predicate documented in `probe`; not series-evaluable — such rules carry `expr: null` rather than an expression for a metric that is not exported). A runbook path must exist and carry the alert id in its **Alerts:** line — enforced by `just runbook-xref`.",
+  "rules": [
+    {
+      "alert": "ApiErrorRatioHigh",
+      "symptom": "users are receiving 5xx responses at more than 5% of traffic",
+      "severity": "page",
+      "runbook": "docs/runbooks/api-down.md",
+      "expr": "sum(rate(http_server_errors_total[10m])) / sum(rate(http_server_requests_total[10m])) > 0.05",
+      "check": {
+        "kind": "ratio",
+        "numerator": {
+          "metric": "http_server_errors_total"
+        },
+        "denominator": [
+          {
+            "metric": "http_server_requests_total"
+          }
+        ],
+        "window_secs": 600,
+        "threshold": 0.05,
+        "for_secs": 600
+      }
+    },
+    {
+      "alert": "ApiLatencyBudgetBreached",
+      "symptom": "p95 latency of served requests exceeds the tightest journey budget in docs/slo/budgets.md",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/latency-budget-breach.md",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket[5m]))) > 0.4",
+      "check": {
+        "kind": "p95_gauge",
+        "metric": "http_server_duration_seconds_p95_recorded",
+        "threshold": 0.4,
+        "for_secs": 600
+      }
+    },
+    {
+      "alert": "PaymentsPlatformBalanceMovement",
+      "symptom": "funds moved across the platform balance — impossible by construction, always a sev-1",
+      "severity": "page",
+      "runbook": "docs/runbooks/payments-accidental-fee-rollback.md",
+      "expr": "increase(payments_platform_balance_movements_total[5m]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "payments_platform_balance_movements_total",
+        "window_secs": 300,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "ConnectionsStuckOnboarding",
+      "symptom": "provider connections have sat in onboarding for over a week",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/payments-restricted-account.md",
+      "expr": "max_over_time(payments_connection_status_gauge{status=\"onboarding\"}[7d]) > 0",
+      "check": {
+        "kind": "probe",
+        "probe": "gauge AND SQL: SELECT count(*) FROM payments.provider_connections WHERE status = 'onboarding' AND disconnected_at IS NULL AND last_synced_at < now() - interval '7 days'"
+      }
+    },
+    {
+      "alert": "ConnectionRestrictedRegression",
+      "symptom": "a connected account moved to Restricted",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/payments-restricted-account.md",
+      "expr": "increase(payments_connection_status_gauge{status=\"restricted\"}[10m]) > 0",
+      "check": {
+        "kind": "probe",
+        "probe": "two-signal AND (webhook processed AND status gauge rise); evaluated from the payments webhook event log, not a single series"
+      }
+    },
+    {
+      "alert": "WebhookBacklog",
+      "symptom": "Stripe webhook events are queueing faster than they are processed",
+      "severity": "page",
+      "runbook": "docs/runbooks/payments-webhook-backlog.md",
+      "expr": "payments_webhook_unprocessed_gauge > 100",
+      "check": {
+        "kind": "gauge",
+        "metric": "payments_webhook_unprocessed_gauge",
+        "threshold": 100,
+        "for_secs": 900
+      }
+    },
+    {
+      "alert": "WebhookDeadLetterDepth",
+      "symptom": "webhook events have exhausted retries and sit in the dead-letter queue",
+      "severity": "page",
+      "runbook": "docs/runbooks/payments-webhook-backlog.md",
+      "expr": "payments_webhook_dead_letter_gauge > 0",
+      "check": {
+        "kind": "gauge",
+        "metric": "payments_webhook_dead_letter_gauge",
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "WebhookLagHigh",
+      "symptom": "webhooks take over five minutes from arrival to effect",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/payments-webhook-backlog.md",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(payments_webhook_lag_seconds_bucket[15m]))) > 300",
+      "check": {
+        "kind": "p95_gauge",
+        "metric": "payments_webhook_lag_seconds_p95_recorded",
+        "threshold": 300,
+        "for_secs": 900
+      }
+    },
+    {
+      "alert": "UnknownAccountEvents",
+      "symptom": "Stripe delivered events for accounts Sanvi does not know",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/payments-orphaned-account.md",
+      "expr": "increase(payments_webhook_unknown_account_total[1h]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "payments_webhook_unknown_account_total",
+        "window_secs": 3600,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "PayoutFailed",
+      "symptom": "a tenant payout failed — tenant money is stuck",
+      "severity": "page",
+      "runbook": "docs/runbooks/payments-failed-payout.md",
+      "expr": "increase(payments_payout_failures_total[5m]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "payments_payout_failures_total",
+        "window_secs": 300,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "CheckoutFailureSpike",
+      "symptom": "more than 30% of checkouts fail — Stripe is likely degraded",
+      "severity": "page",
+      "runbook": "docs/runbooks/payments-stripe-outage.md",
+      "expr": "sum(rate(payments_payment_failure_total[10m])) / (sum(rate(payments_payment_succeeded_total[10m])) + sum(rate(payments_payment_failure_total[10m]))) > 0.3",
+      "check": {
+        "kind": "ratio",
+        "numerator": {
+          "metric": "payments_payment_failure_total"
+        },
+        "denominator": [
+          {
+            "metric": "payments_payment_succeeded_total"
+          },
+          {
+            "metric": "payments_payment_failure_total"
+          }
+        ],
+        "window_secs": 600,
+        "threshold": 0.3,
+        "for_secs": 1800
+      }
+    },
+    {
+      "alert": "DisputeOpenAging",
+      "symptom": "a dispute is open and its evidence due date is close",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/payments-dispute.md",
+      "expr": "payments_dispute_open_gauge > 0",
+      "check": {
+        "kind": "gauge",
+        "metric": "payments_dispute_open_gauge",
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "AdvertisingConsentMissing",
+      "symptom": "a conversion row exists without a consent snapshot — impossible by construction",
+      "severity": "page",
+      "runbook": "docs/runbooks/advertising-alerts.md",
+      "expr": "increase(conversion_suppressed_total{reason=\"missing_consent\"}[5m]) > 0",
+      "check": {
+        "kind": "probe",
+        "probe": "metric OR SQL: any conversion row where consent IS NULL (advertising.conversion_events.consent is NOT NULL; the schema is the alarm's second half)"
+      }
+    },
+    {
+      "alert": "ConversionUploadFailureSpike",
+      "symptom": "more than 5% of conversion uploads to the ad platforms fail",
+      "severity": "page",
+      "runbook": "docs/runbooks/advertising-upload-failure-surge.md",
+      "expr": "sum(rate(conversion_upload_total{result=\"failed\"}[10m])) / sum(rate(conversion_upload_total[10m])) > 0.05",
+      "check": {
+        "kind": "ratio",
+        "numerator": {
+          "metric": "conversion_upload_total",
+          "labels": {
+            "result": "failed"
+          }
+        },
+        "denominator": [
+          {
+            "metric": "conversion_upload_total"
+          }
+        ],
+        "window_secs": 600,
+        "threshold": 0.05,
+        "for_secs": 900
+      }
+    },
+    {
+      "alert": "ConversionDeadLetterDepth",
+      "symptom": "conversion events are parked in the dead-letter queue after 5 failed attempts",
+      "severity": "page",
+      "runbook": "docs/runbooks/advertising-upload-failure-surge.md",
+      "expr": "conversion_dlq_depth > 0",
+      "check": {
+        "kind": "gauge",
+        "metric": "conversion_dlq_depth",
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "ConversionUploadLagHigh",
+      "symptom": "conversions take over five minutes to reach the ad platforms",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-upload-failure-surge.md",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(conversion_upload_lag_seconds_bucket[15m]))) > 300",
+      "check": {
+        "kind": "p95_gauge",
+        "metric": "conversion_upload_lag_seconds_p95_recorded",
+        "threshold": 300,
+        "for_secs": 900
+      }
+    },
+    {
+      "alert": "ConversionRetractionUnpropagatedSpike",
+      "symptom": "a withdrawn conversion could not be retracted everywhere it was uploaded",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-audience-retraction.md",
+      "expr": "increase(conversion_retraction_total{result=\"unpropagated\"}[1h]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "conversion_retraction_total",
+        "labels": {
+          "result": "unpropagated"
+        },
+        "window_secs": 3600,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "AudienceSyncFailure",
+      "symptom": "an audience synchronisation against an ad platform failed",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-audience-retraction.md",
+      "expr": "increase(audience_sync_total{result=\"failed\"}[1h]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "audience_sync_total",
+        "labels": {
+          "result": "failed"
+        },
+        "window_secs": 3600,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "MetricsIngestionLagHigh",
+      "symptom": "reporting data is more than six hours stale on some connection",
+      "severity": "page",
+      "runbook": "docs/runbooks/advertising-ingestion-backlog.md",
+      "expr": "metrics_ingestion_lag_hours > 6",
+      "check": {
+        "kind": "gauge",
+        "metric": "metrics_ingestion_lag_hours",
+        "threshold": 6,
+        "for_secs": 3600
+      }
+    },
+    {
+      "alert": "AdsSyncFailuresSpike",
+      "symptom": "ad platform synchronisations are failing",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-ingestion-backlog.md",
+      "expr": "sum(rate(ads_sync_failures_total[15m])) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "ads_sync_failures_total",
+        "window_secs": 900,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "AdsSyncDurationHigh",
+      "symptom": "ad platform sync calls take over thirty seconds at p95",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-platform-outage.md",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(ads_sync_duration_seconds_bucket[30m]))) > 30",
+      "check": {
+        "kind": "p95_gauge",
+        "metric": "ads_sync_duration_seconds_p95_recorded",
+        "threshold": 30,
+        "for_secs": 1800
+      }
+    },
+    {
+      "alert": "AdvertisingSpendAnomaly",
+      "symptom": "spend on a campaign is more than 3 sigma above its 14-day trailing mean",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-spend-anomaly.md",
+      "expr": null,
+      "check": {
+        "kind": "probe",
+        "probe": "SQL: SELECT id FROM advertising.budget_alerts WHERE condition = 'spend_anomaly' AND created_at > now() - interval '1h'"
+      }
+    },
+    {
+      "alert": "BudgetThresholdBreached",
+      "symptom": "a campaign cap crossed its 100% threshold and the tenant was notified",
+      "severity": "info",
+      "runbook": "docs/runbooks/advertising-accidental-autopause.md",
+      "expr": "increase(budget_threshold_alerts_total{threshold=\"100\"}[5m]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "budget_threshold_alerts_total",
+        "labels": {
+          "threshold": "100"
+        },
+        "window_secs": 300,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "BudgetAutoPauseSpike",
+      "symptom": "campaigns were auto-paused by the budget guardrail",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-accidental-autopause.md",
+      "expr": "increase(budget_auto_pause_total[15m]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "budget_auto_pause_total",
+        "window_secs": 900,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
+      "alert": "AdConnectionRevoked",
+      "symptom": "an advertising connection transitioned to disconnected or expired",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/advertising-token-revoked.md",
+      "expr": null,
+      "check": {
+        "kind": "probe",
+        "probe": "SQL: SELECT count(*) FROM advertising.connections WHERE status IN ('disconnected', 'expired') — see the runbook's known gap on deduplication"
+      }
+    },
+    {
+      "alert": "PartitionMaintenanceFailed",
+      "symptom": "next month's partitions for a partitioned table do not exist",
+      "severity": "page",
+      "runbook": "docs/runbooks/advertising-partition-maintenance-failure.md",
+      "expr": null,
+      "check": {
+        "kind": "probe",
+        "probe": "SQL: SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'advertising' AND c.relname = format('conversion_events_%s', to_char(now() + interval '1 month', 'YYYYMM')) = 0"
+      }
+    }
+  ]
+}

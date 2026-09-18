@@ -1,5 +1,7 @@
 # Runbook — accidental fee enablement rollback
 
+**Alerts:** `PaymentsPlatformBalanceMovement` (see [payments-alerts](./payments-alerts.md)).
+
 **Trigger:** the invariant alarm `PaymentsPlatformBalanceMovement`
 (see [payments-alerts](./payments-alerts.md)) — an application fee or
 transfer shape observed on a tenant transaction — or a platform-admin
