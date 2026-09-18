@@ -8,7 +8,7 @@ use actix_web::{http::StatusCode, test};
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, IdentityDependencies, PlatformAdminDependencies,
     TenantCatalogAdapter, build_access_state, build_app, build_audit_state, build_identity_state,
-    build_platform_admin_state, build_system_state,
+    build_platform_admin_state, build_system_state, build_theming_state,
 };
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
@@ -46,6 +46,27 @@ fn test_app_with_tenancy(
 > {
     let mut config = test_config();
     config.features.tenancy = tenancy;
+    test_app_with(config)
+}
+
+/// The assembled app for an arbitrary config. Identity wiring is real
+/// adapter construction against the lazy pool; with
+/// `features.identity` on, session verification dials the (unreachable
+/// in tests) Kratos URL, which is exactly the incident posture some
+/// contracts are about.
+fn test_app_with(
+    config: AppConfig,
+) -> actix_web::App<
+    impl actix_web::dev::ServiceFactory<
+        actix_web::dev::ServiceRequest,
+        Config = (),
+        Response = actix_web::dev::ServiceResponse<
+            tracing_actix_web::StreamSpan<actix_web::body::BoxBody>,
+        >,
+        Error = actix_web::Error,
+        InitError = (),
+    > + 'static,
+> {
     let metrics = MetricsRegistry::prometheus_only();
     let build_info = BuildInfo::new(
         "0.1.0-test".into(),
@@ -98,6 +119,21 @@ fn test_app_with_tenancy(
         None,
     );
 
+    // Theming wired for real: its public route shares the /api/v1/public
+    // prefix with tenancy's, and the routing contract below needs both
+    // mounted in one router (the lazy pool answers nothing, which is
+    // fine — that contract pins routing, not storage).
+    let tenancy = tenancy_state_for_tests(test_ids());
+    let theming = build_theming_state(
+        pool.clone(),
+        test_ids(),
+        &config.theming,
+        metrics.prometheus_registry(),
+        None,
+        access.domain_feature_gate.clone(),
+        tenancy.host_resolver.clone(),
+    );
+
     let entitlement_admin: std::sync::Arc<dyn sanvi_platform_admin::domain::EntitlementAdmin> =
         std::sync::Arc::new(AccessEntitlementAdmin::new(
             access.grant_entitlement.clone(),
@@ -124,7 +160,7 @@ fn test_app_with_tenancy(
         config,
         metrics,
         system,
-        tenancy_state_for_tests(test_ids()),
+        tenancy,
         identity,
         access,
         audit,
@@ -132,7 +168,7 @@ fn test_app_with_tenancy(
         None, // billing
         None, // privacy
         None, // localization
-        None, // theming
+        Some(theming),
         None, // domains
         None, // payments
         None, // advertising
@@ -235,6 +271,33 @@ async fn build_probe_is_public_under_active_tenant_middleware() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// The incident posture: identity wired (`features.identity`, so the authn
+/// middleware is live) and the identity backend unreachable (Kratos is
+/// down in tests, as in a real incident). A same-origin caller — browser
+/// RUM, a status page — carries the session cookie, so if the probe ran
+/// session verification it would fail closed with 503 exactly when the
+/// incident-time stamp is needed most. The probe must be authn-exempt and
+/// answer 200 regardless.
+#[actix_web::test]
+async fn build_probe_answers_while_the_identity_backend_is_down() {
+    let mut config = test_config();
+    config.features.identity = true;
+    let cookie_name = config.identity.session_cookie_name.clone();
+    let app = test::init_service(test_app_with(config)).await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/system/build")
+        .cookie(actix_web::cookie::Cookie::new(cookie_name, "stale-session"))
+        .to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "the build probe must not run session verification: an unreachable \
+         identity backend must not 503 the incident-time stamp"
+    );
+}
+
 #[actix_web::test]
 async fn unknown_route_is_a_404_problem() {
     let app = test::init_service(test_app_with_tenancy(false)).await;
@@ -244,6 +307,39 @@ async fn unknown_route_is_a_404_problem() {
     let body: serde_json::Value = test::read_body_json(res).await;
     assert!(body.get("type").is_some());
     assert!(body.get("status").is_some());
+}
+
+/// The routing pin for the actix scope-shadowing outage: several contexts
+/// contribute public routes under `/api/v1/public`, and registering that
+/// prefix as a `web::scope` commits the router to the first matching
+/// scope without backtracking, so every later context's public routes
+/// 404 — invisible while each context was tested against its own router,
+/// and invisible in OpenAPI, which stayed green through the outage. Both
+/// contexts are wired into one router here.
+///
+/// A GET cannot do the pinning: the theme handler itself answers 404 for
+/// a host it cannot resolve, and that handler-404 is indistinguishable
+/// by status from the router-404 the scope bug produces. A method the
+/// route does not serve is unambiguous — on a registered resource actix
+/// answers 405, while under the scope bug the request never reaches a
+/// resource and the answer stays 404.
+#[actix_web::test]
+async fn every_contexts_public_routes_resolve_under_one_router() {
+    let mut config = test_config();
+    config.features.tenancy = true;
+    let app = test::init_service(test_app_with(config)).await;
+
+    for uri in ["/api/v1/public/tenant-context", "/api/v1/public/theme"] {
+        let req = test::TestRequest::post().uri(uri).to_request();
+        let res = test::call_service(&app, req).await;
+        assert_ne!(
+            res.status(),
+            StatusCode::NOT_FOUND,
+            "POST {uri} must reach a registered resource (405): a 404 here is \
+             the scope-shadowing regression, where actix commits to the first \
+             context's /api/v1/public scope and later contexts' routes vanish"
+        );
+    }
 }
 
 #[actix_web::test]

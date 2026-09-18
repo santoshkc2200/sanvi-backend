@@ -3735,6 +3735,12 @@ pub fn build_app(
                     "/openapi.json".to_string(),
                     "/scalar".to_string(),
                     "/api/v1/public".to_string(),
+                    // FR-1102: the build probe is the incident-time stamp —
+                    // it must not run session verification, or a
+                    // same-origin caller's cookie turns "identity backend
+                    // down" into a 503 here too (it is tenant-exempt for
+                    // the same reason).
+                    "/api/v1/system/build".to_string(),
                     "/internal".to_string(),
                 ]
             },
