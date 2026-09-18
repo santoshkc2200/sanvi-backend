@@ -6,9 +6,14 @@
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
 **Flag:** `platform.tail_sampling`
 
-> **For agentic workers:** REQUIRED SUB-SKILL — `superpowers:executing-plans` or
-> `superpowers:subagent-driven-development`. Every step carries a verification command. Do not tick a
-> step whose command has not been run and passed.
+> **For agentic workers:** REQUIRED SUB-SKILL — `superpowers:subagent-driven-development`.
+> **Execute one slice per session, not one task per session** — see `## Execution slices` below. Each
+> slice is a commit with its own scoped verification; a slice that has not been committed is not done.
+> Every step carries a verification command; do not tick a step whose command has not been run and
+> passed. **Run the full `## Verification` block once, in the final slice** — not per step and not per
+> slice. Running the workspace suite after every step is the single largest avoidable cost in this
+> phase: `just test` links every test binary, and on an un-exempted macOS host Gatekeeper scans each
+> one (~15 of ~16 minutes). Use `just check` and `just test-fast` while working.
 
 ## Goal
 
@@ -50,9 +55,34 @@ find out that a metric you need does not exist.
 - `docs/slo/budgets.md` — the six journeys and their lab budgets
 - the shared problem-details schema — `trace_id`
 
+## Execution slices
+
+Nine steps in one session means one context, one compaction, and re-reads of work already done. The
+slices below are the commit boundaries; each is one agent session with a fresh context, and each
+carries the scoped commands to run **in that session**. The task is done when the last slice is.
+
+| Slice | Steps | Shape | Scoped verification for the session |
+| --- | --- | --- | --- |
+| **11.1a** conventions & the coverage gate, red | 1–2 | small, design-led | `just check`, `cargo nextest run -p sanvi-http`, `just openapi`, then `just trace-coverage` → **must fail**, listing the unspanned use cases |
+| **11.1b** instrument to green | 3 | **bulk, mechanical — delegatable** | `just trace-coverage` → passes; falsify with a throwaway unspanned use case; `just test-fast` |
+| **11.1c** log PII corpus & scanner | 4 | small, self-contained | `cargo nextest run -p sanvi-telemetry`, `just log-pii-scan` in both directions (catches every corpus value with redaction removed from one type; zero findings clean) |
+| **11.1d** field standardisation & tail sampling | 5 | small, flagged | `cargo nextest run -p sanvi-telemetry`, plus the collector-unavailable fallback test |
+| **11.1e** budgets, alert rules & the runbook loop | 6–8 | medium, artifact-led | `just alert-rules-test`, `just runbook-xref` + the deliberately orphaned rule |
+| **11.1f** execute every runbook, then close the task | 9 | wall-clock, no code | the full `## Verification` block, once |
+
+**Order and parallelism.** 11.1a → 11.1b is a hard edge: the gate must exist and be red before anything
+is instrumented, or "it passes" means nothing. 11.1c, 11.1d and 11.1e are independent of each other and
+of 11.1b, and may run concurrently in separate sessions. 11.1f is last by definition.
+
+**Why 11.1b is the delegation candidate.** It is the only slice that is bulk-mechanical — adding a span
+per use case across thirteen contexts, with the gate as the oracle for whether it is complete. Its
+correctness is machine-checkable (`just trace-coverage`), so a cheaper model can produce it and the
+review is reading a diff rather than re-deriving a design. Every other slice here is judgement-led:
+what counts as PII, which alert is a symptom rather than a cause, what a budget should be.
+
 ## Steps
 
-### Step 1: Fix the two conventions in the shared schema
+### Step 1 · slice 11.1a: Fix the two conventions in the shared schema
 
 **Files:** Modify the shared problem-details schema, `crates/platform/http/**`; Test: contract test
 
@@ -62,7 +92,7 @@ responses.
 **Verify:** `just openapi` clean; a test asserts an error response carries a `trace_id` matching the
 active span.
 
-### Step 2: Write the trace-coverage check and let it fail
+### Step 2 · slice 11.1a: Write the trace-coverage check and let it fail
 
 **Files:** Create `scripts/check-trace-coverage.sh`, `observability/trace-coverage.md`; Modify
 `justfile`
@@ -73,7 +103,7 @@ committed artifact — **the matrix is the deliverable, not the claim**.
 
 **Verify:** `just trace-coverage` → **fails**, listing the currently unspanned use cases.
 
-### Step 3: Instrument until the check passes
+### Step 3 · slice 11.1b: Instrument until the check passes
 
 **Files:** Modify every context's `application/**` where a span is missing
 
@@ -83,7 +113,7 @@ Postgres, Redis, Kratos, Keto, Stripe, ACME/DNS, Google Ads, Meta, object storag
 **Verify:** `just trace-coverage` → passes. Then add a throwaway use case with no span in the same PR
 and confirm the gate fails; remove it before merge.
 
-### Step 4: Build the PII corpus, then the scanner
+### Step 4 · slice 11.1c: Build the PII corpus, then the scanner
 
 **Files:** Create `crates/platform/telemetry/tests/pii_corpus.rs`, `scripts/check-log-pii.sh`
 
@@ -94,7 +124,7 @@ identifier**. The scanner runs the log emitter over it and fails the build on an
 **Verify:** `just log-pii-scan` catches every corpus value when redaction is deliberately removed from
 one type, then reports zero findings on the clean tree.
 
-### Step 5: Standardise fields and add tail sampling
+### Step 5 · slice 11.1d: Standardise fields and add tail sampling
 
 **Files:** Modify `crates/platform/telemetry/**`; Modify `configs/**`
 
@@ -105,7 +135,7 @@ cost estimate per level. Tail-based sampling on errors and latency outliers behi
 **Verify:** a test asserts that with the collector unavailable, requests still complete and sampling
 falls back to head.
 
-### Step 6: Record the lab latency budgets
+### Step 6 · slice 11.1e: Record the lab latency budgets
 
 **Files:** Create `docs/slo/budgets.md`
 
@@ -115,7 +145,7 @@ with burn-rate alerting when there is traffic (`docs/release/needs-humans.md`).
 
 **Verify:** every budget in the document has a measured value from a committed `benchmarks/` artifact.
 
-### Step 7: Write alert rules and unit-test them
+### Step 7 · slice 11.1e: Write alert rules and unit-test them
 
 **Files:** Create `observability/alerts/**`; Create recorded metric series fixtures
 
@@ -125,7 +155,7 @@ by itself mean a user is having a bad time. Unit-test each against recorded seri
 **Verify:** `just alert-rules-test` → a synthetic 10-minute outage fires; a single failed request does
 not.
 
-### Step 8: Close the runbook loop in both directions
+### Step 8 · slice 11.1e: Close the runbook loop in both directions
 
 **Files:** Create `scripts/check-runbook-xref.sh`; Modify `docs/runbooks/**`; Modify `justfile`
 
@@ -134,7 +164,7 @@ alert with no runbook **and** on a runbook with no alert.
 
 **Verify:** `just runbook-xref` passes; deliberately orphan one rule and confirm it fails.
 
-### Step 9: Execute every new runbook against the compose stack
+### Step 9 · slice 11.1f: Execute every new runbook against the compose stack
 
 **Files:** Modify `docs/runbooks/**`
 
@@ -157,6 +187,9 @@ never been executed is a comment. Correct what does not work.
 - [ ] A test asserts the `trace_id` in an error response equals the id in the corresponding span.
 
 ## Verification
+
+Run this **once, in slice 11.1f**. While working a slice, run that slice's scoped commands from
+`## Execution slices` instead.
 
 ```bash
 just fmt

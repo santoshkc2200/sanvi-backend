@@ -11,10 +11,41 @@ this file is authoritative for **order**, slicing, and each slice's exit criteri
 [`../../release/needs-humans.md`](../../release/needs-humans.md).
 
 > **For agentic workers:** every task file in this directory is written as an executable plan.
-> Use `superpowers:subagent-driven-development` (a fresh subagent per task, review between tasks) or
-> `superpowers:executing-plans` (inline). Steps are `- [ ]` checkboxes with a verification command each.
-> **Do not tick a step whose verification command has not been run.** A task whose steps are all ticked
-> but whose `## Definition of done` still has an unchecked line is not done.
+> Use `superpowers:subagent-driven-development` — a fresh subagent per **slice**, review between
+> slices. Steps are `- [ ]` checkboxes with a verification command each. **Do not tick a step whose
+> verification command has not been run.** A task whose steps are all ticked but whose
+> `## Definition of done` still has an unchecked line is not done.
+
+## Execution cost: slices, and when to run the gates
+
+Two conventions exist because a task executed as one long agent session costs several times what the
+same work costs as a sequence of short ones. Both are about *when* work is proved, not about how
+strictly — the falsifiability rule above is unchanged.
+
+**One slice per session, not one task per session.** An `L` task is seven to nine steps across dozens
+of files; run as a single session it outgrows its context, compacts, and pays again to re-read what it
+already did. Tasks carry an `## Execution slices` table giving the commit boundaries, which slices are
+independent enough to run concurrently, and which slice is bulk-mechanical enough to delegate to a
+cheaper model with a gate as its oracle. TASK-019 is the worked example: it shipped as four commits cut
+exactly along its step groups, which is the shape every task should start in rather than arrive at.
+TASK-020 and TASK-024 carry the tables today; the rest are sliced as they are picked up.
+
+**Two-tier verification.** A slice runs only its own scoped commands; the task's full `## Verification`
+block runs **once**, in its final slice. The cheap tier is `just check` (type-check only), `just
+test-fast` (lib and bin targets, no database) and `cargo nextest run -p <crate>` — note that
+`scripts/test.sh -p <crate>` still passes `--workspace`, so scope with `cargo nextest` directly. The
+expensive tier is `just test` / `just ci-quiet`, which links every test binary.
+
+**Exempt the host before the first cold run.** On a macOS host without developer mode, Gatekeeper
+scans every freshly linked test binary: ~15 of a ~16-minute cold suite is scanning, not testing.
+`scripts/test.sh` detects and warns. Fix it once per agent host:
+
+```bash
+sudo spctl developer-mode enable-terminal
+```
+
+then System Settings → Privacy & Security → Developer Tools, and enable the terminal, IDE, or agent
+host the suite runs from. The exemption is per parent process, so each new host needs it again.
 
 ## The invariant that governs every task
 

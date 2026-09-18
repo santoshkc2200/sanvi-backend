@@ -53,6 +53,9 @@ the parked item below.
 | Provenance attestation on release artifacts | TASK-024 | A release pipeline that produces signed artifacts. The SBOM is generated today and is published with the tag. |
 | Misconfiguration scanning for the tracked container IaC (`Dockerfile`, `docker-compose*.yml`) | TASK-024, NFR-1108 | Triaging what trivy's misconfig rules flag on the existing files. Their vulnerabilities and secrets are scanned already; only the misconfig ruleset is parked. |
 | CDN image transforms and edge cache configuration | frontend TASK-022 | A CDN. |
+| Deploying each merged task to a staging environment behind its flag (`docker-compose.staging.yml`) | every task's DoD, phases 09–11 | An image registry and a host. Neither repository has a git remote, so nothing can be pushed or pulled; `docker-compose.staging.yml` references `ghcr.io/sanvi/*` images that are never built and a host secret manager that does not exist. Replaced in the DoD by exercising the flagged path against the local `docker-compose` stack in both flag positions. |
+| Migrations applied to a staging database before merge | every task's DoD, phases 09–11 | The same staging host. Replaced in the DoD by a down-and-up cycle against the compose database, which proves reversibility — the property the staging step was there to check. |
+| CI actually running any gate on a pushed branch | TASK-031, and every task's CI claim | A git remote. `pr.yml` and `main.yml` are written, wired, and self-tested, but no run of them exists; every task that says a gate "blocks CI" means it blocks `just ci` locally. |
 
 ## Needs real traffic
 
