@@ -14,6 +14,7 @@
 mod config;
 mod metrics;
 mod redaction;
+mod sampling;
 
 use std::sync::Arc;
 
@@ -29,9 +30,10 @@ use tonic::metadata::{Ascii, MetadataMap, MetadataValue};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
-pub use config::{OtlpConfig, TelemetryConfig, TelemetryLogFormat};
+pub use config::{OtlpConfig, SamplingConfig, TelemetryConfig, TelemetryLogFormat};
 pub use metrics::{MetricsRegistry, instrument_registry};
 pub use redaction::Redacted;
+pub use sampling::TailSamplingProcessor;
 
 /// Handle returned by [`init`]; flushes and shuts down providers when dropped.
 pub struct TelemetryGuard {
@@ -95,7 +97,7 @@ fn otlp_metadata(config: &OtlpConfig) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
-fn build_otlp_tracer(config: &TelemetryConfig) -> Result<Option<SdkTracerProvider>> {
+pub(crate) fn build_otlp_tracer(config: &TelemetryConfig) -> Result<Option<SdkTracerProvider>> {
     if !config.otlp.enabled {
         return Ok(None);
     }
@@ -105,12 +107,25 @@ fn build_otlp_tracer(config: &TelemetryConfig) -> Result<Option<SdkTracerProvide
         .with_metadata(otlp_metadata(&config.otlp)?)
         .build()
         .context("failed to build OTLP span exporter")?;
-    Ok(Some(
-        SdkTracerProvider::builder()
-            .with_batch_exporter(exporter)
-            .with_resource(build_resource(config))
-            .build(),
-    ))
+    // Head sampling always decides at span start; it is the fallback when
+    // the collector is unavailable, and the per-trace baseline the tail
+    // processor refines when it is on.
+    let head_ratio = config.sampling.head_ratio;
+    let mut builder = SdkTracerProvider::builder()
+        .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
+            opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(head_ratio),
+        )))
+        .with_resource(build_resource(config));
+    if config.sampling.tail_sampling {
+        builder = builder.with_span_processor(sampling::TailSamplingProcessor::new(
+            opentelemetry_sdk::trace::BatchSpanProcessor::builder(exporter).build(),
+            std::time::Duration::from_millis(config.sampling.latency_threshold_ms),
+            head_ratio,
+        ));
+    } else {
+        builder = builder.with_batch_exporter(exporter);
+    }
+    Ok(Some(builder.build()))
 }
 
 fn build_otlp_meter_reader(

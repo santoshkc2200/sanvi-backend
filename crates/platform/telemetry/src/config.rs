@@ -70,6 +70,37 @@ pub struct TelemetryConfig {
     pub log_format: TelemetryLogFormat,
     pub default_level: String,
     pub otlp: OtlpConfig,
+    /// Span sampling policy (TASK-020 step 5). Optional in config files so
+    /// older configs keep loading; the default keeps every span (head
+    /// ratio 1.0) with tail sampling off.
+    #[serde(default)]
+    pub sampling: SamplingConfig,
+}
+
+/// Sampling policy. Head sampling (`head_ratio`) decides at span start and
+/// is always in effect — it is the fallback when the collector is down.
+/// Tail sampling (`tail_sampling`, the task's `platform.tail_sampling`
+/// flag) additionally keeps every error span and every span slower than
+/// `latency_threshold_ms` even when the head coin dropped their trace.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SamplingConfig {
+    /// Fraction of traces kept by the head sampler, 0.0–1.0.
+    pub head_ratio: f64,
+    /// Keep error spans and latency outliers regardless of the head coin.
+    pub tail_sampling: bool,
+    /// Spans at or above this duration are latency outliers.
+    pub latency_threshold_ms: u64,
+}
+
+impl Default for SamplingConfig {
+    fn default() -> Self {
+        Self {
+            head_ratio: 1.0,
+            tail_sampling: false,
+            latency_threshold_ms: 1_000,
+        }
+    }
 }
 
 impl Default for TelemetryConfig {
@@ -80,6 +111,7 @@ impl Default for TelemetryConfig {
             log_format: TelemetryLogFormat::Text,
             default_level: "info".to_string(),
             otlp: OtlpConfig::default(),
+            sampling: SamplingConfig::default(),
         }
     }
 }
@@ -117,6 +149,17 @@ impl TelemetryConfig {
         }
         if self.environment.trim().is_empty() {
             anyhow::bail!("telemetry.environment must not be empty");
+        }
+        if !(0.0..=1.0).contains(&self.sampling.head_ratio) {
+            anyhow::bail!(
+                "telemetry.sampling.head_ratio must be within 0.0–1.0, got {}",
+                self.sampling.head_ratio
+            );
+        }
+        if self.sampling.tail_sampling && self.sampling.latency_threshold_ms == 0 {
+            anyhow::bail!(
+                "telemetry.sampling.latency_threshold_ms must be positive when tail_sampling is on"
+            );
         }
         // No `.context("telemetry.otlp")` here: callers surface these with
         // `to_string()`, which prints only the outermost context and would

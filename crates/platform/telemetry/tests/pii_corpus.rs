@@ -95,6 +95,7 @@ fn emit_and_capture() -> String {
         );
         tracing::info!("pii corpus probe: message emission of {redacted}");
         #[derive(Debug)]
+        #[allow(dead_code)] // the fields exist to be Debug-rendered
         struct Probe<'a> {
             kind: &'a str,
             value: Redacted<String>,
@@ -126,10 +127,7 @@ fn redaction_hides_every_corpus_value_from_the_logs() {
         "LEAK FINDING: raw values rendered for {findings:?} — the emitting code must wrap them in Redacted"
     );
     // The emitter itself ran: the corpus really went through the formatter.
-    assert_eq!(
-        captured.matches("pii corpus probe").count() >= CORPUS.len() * 3,
-        true
-    );
+    assert!(captured.matches("pii corpus probe").count() >= CORPUS.len() * 3);
     // The approved rendering is present in the output.
     assert!(captured.contains("<redacted>"));
 }
