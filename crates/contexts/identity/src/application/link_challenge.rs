@@ -68,6 +68,7 @@ impl StartLinkChallenge {
         }
     }
 
+    #[tracing::instrument(name = "identity.start_link_challenge", skip_all)]
     pub async fn execute(
         &self,
         cmd: StartLinkChallengeCommand,
@@ -150,6 +151,7 @@ impl CompleteLinkChallenge {
 
     /// `nonce` is the browser cookie's value; `user_id`/`email` come from the
     /// authenticated subject.
+    #[tracing::instrument(name = "identity.complete_link_challenge", skip_all)]
     pub async fn execute(
         &self,
         nonce: &str,

@@ -57,6 +57,7 @@ impl UploadPendingConversions {
         }
     }
 
+    #[tracing::instrument(name = "advertising.upload_pending_conversions", skip_all)]
     pub async fn execute(&self, limit: i64) -> Result<UploadSweepReport, AdvertisingError> {
         let mut report = UploadSweepReport::default();
 

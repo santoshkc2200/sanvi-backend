@@ -25,6 +25,7 @@ impl CheckTaxRegistrations {
     /// Returns the active registrations. When `automatic_tax` is enabled but
     /// no registration is active, fails loudly (and logs at error level, so
     /// the alerting rules fire) — never silently.
+    #[tracing::instrument(name = "billing.check_tax_registrations", skip_all)]
     pub async fn execute(&self) -> Result<Vec<TaxRegistration>, BillingError> {
         let registrations = self.stripe.list_active_tax_registrations().await?;
         if self.automatic_tax_enabled && registrations.is_empty() {

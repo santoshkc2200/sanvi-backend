@@ -38,6 +38,7 @@ impl CheckPermission {
     }
 
     /// The uncached core of the check.
+    #[tracing::instrument(name = "access.check_raw", skip_all)]
     pub async fn check_raw(
         &self,
         user_id: UserId,

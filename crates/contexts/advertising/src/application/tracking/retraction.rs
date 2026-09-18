@@ -55,6 +55,7 @@ impl RetractWithdrawnConversions {
         }
     }
 
+    #[tracing::instrument(name = "advertising.retract_withdrawn_conversions", skip_all)]
     pub async fn execute(&self, limit: i64) -> Result<RetractionSweepReport, AdvertisingError> {
         let mut report = RetractionSweepReport::default();
 

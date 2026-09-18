@@ -62,6 +62,7 @@ impl GetBudgetCaps {
         Self { tx, caps }
     }
 
+    #[tracing::instrument(name = "advertising.get_budget_caps", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<BudgetCap>, AdvertisingError> {
         let mut scope = self
             .tx
@@ -87,6 +88,7 @@ impl GetCampaignBudgetCap {
         Self { tx, caps }
     }
 
+    #[tracing::instrument(name = "advertising.get_campaign_budget_cap", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -136,6 +138,7 @@ impl PutBudgetCap {
         }
     }
 
+    #[tracing::instrument(name = "advertising.put_budget_cap", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

@@ -60,6 +60,7 @@ impl ListMembers {
         }
     }
 
+    #[tracing::instrument(name = "identity.list_members", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<MemberView>, IdentityError> {
         let mut scope = self
             .tx_manager
@@ -122,6 +123,7 @@ impl GrantMembership {
 
     /// Grant a brand-new membership (or error when one already exists —
     /// role changes go through [`UpdateMemberRoles`]).
+    #[tracing::instrument(name = "identity.grant_membership", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -226,6 +228,7 @@ impl UpdateMemberRoles {
         self
     }
 
+    #[tracing::instrument(name = "identity.update_member_roles", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -300,6 +303,7 @@ impl RemoveMember {
         }
     }
 
+    #[tracing::instrument(name = "identity.remove_member", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

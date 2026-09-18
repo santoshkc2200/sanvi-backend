@@ -99,6 +99,7 @@ impl ProcessDsrBatch {
     }
 
     /// Advance up to `limit` open requests.
+    #[tracing::instrument(name = "privacy.process_dsr_batch", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<ProcessDsrReport, PrivacyError> {
         let mut report = ProcessDsrReport::default();
         let mut scope = self
@@ -594,6 +595,7 @@ impl PropagateOptOuts {
         }
     }
 
+    #[tracing::instrument(name = "privacy.propagate_opt_outs", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<PropagateOptOutsReport, PrivacyError> {
         let mut report = PropagateOptOutsReport::default();
         let mut scope = self

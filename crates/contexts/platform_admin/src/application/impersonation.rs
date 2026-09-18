@@ -109,6 +109,7 @@ impl CreateImpersonation {
         }
     }
 
+    #[tracing::instrument(name = "platform_admin.create_impersonation", skip_all, fields(tenant_id = ?cmd.tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -233,6 +234,7 @@ impl ListImpersonations {
         }
     }
 
+    #[tracing::instrument(name = "platform_admin.list_impersonations", skip_all, fields(tenant_id = ?tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: Option<TenantId>,
@@ -284,6 +286,7 @@ impl RevokeImpersonation {
 
     /// Revoke a grant. Immediate: the middleware validates per request, so
     /// the next exchange fails. Idempotent.
+    #[tracing::instrument(name = "platform_admin.revoke_impersonation", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,

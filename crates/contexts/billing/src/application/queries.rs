@@ -51,6 +51,7 @@ impl GetSubscription {
         }
     }
 
+    #[tracing::instrument(name = "billing.get_subscription", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -138,6 +139,7 @@ impl ListInvoices {
         }
     }
 
+    #[tracing::instrument(name = "billing.list_invoices", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

@@ -82,6 +82,7 @@ impl EntitlementResolver {
     /// The resolved set for a tenant. Cache hits skip the database; on a
     /// miss the database is read and the result is cached. Backend failures
     /// fail closed — never fabricate an entitlement.
+    #[tracing::instrument(name = "access.resolve", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn resolve(&self, tenant_id: TenantId) -> Result<ResolvedSet, AccessError> {
         if let Some(cached) = self.cache.get(tenant_id).await {
             return Ok(ResolvedSet::Cached(cached.entries));
@@ -130,6 +131,7 @@ impl EntitlementResolver {
     }
 
     /// Drop the cached set for a tenant (grant/revoke/expiry paths).
+    #[tracing::instrument(name = "access.invalidate", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn invalidate(&self, tenant_id: TenantId) {
         self.cache.invalidate(tenant_id).await;
     }

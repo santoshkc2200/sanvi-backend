@@ -25,6 +25,7 @@ impl SearchTenantAdminViews {
         Self { tx_manager, views }
     }
 
+    #[tracing::instrument(name = "platform_admin.search_tenant_admin_views", skip_all)]
     pub async fn execute(
         &self,
         search: &TenantViewSearch,
@@ -54,6 +55,7 @@ impl GetTenantAdminView {
         Self { tx_manager, views }
     }
 
+    #[tracing::instrument(name = "platform_admin.get_tenant_admin_view", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

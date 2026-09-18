@@ -60,6 +60,7 @@ impl GetTenant {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.get_tenant", skip_all)]
     pub async fn execute(&self, id: TenantId) -> Result<TenantView, TenancyError> {
         let mut scope = self
             .tx_manager

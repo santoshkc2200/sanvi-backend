@@ -34,6 +34,7 @@ impl GetFreshness {
         }
     }
 
+    #[tracing::instrument(name = "advertising.get_freshness", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

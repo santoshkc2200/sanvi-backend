@@ -238,6 +238,7 @@ pub async fn ensure_subject(
 }
 
 impl SubmitDsr {
+    #[tracing::instrument(name = "privacy.submit_dsr", skip_all, fields(tenant_id = ?tenant_id))]
     pub async fn execute(
         &self,
         requester_user: Option<UserId>,
@@ -535,6 +536,7 @@ impl VerifyRequest {
         }
     }
 
+    #[tracing::instrument(name = "privacy.verify_request", skip_all)]
     pub async fn execute(
         &self,
         command: VerifyRequestCommand,
@@ -675,6 +677,7 @@ impl GetRequestStatus {
     /// `requester_user`: the authenticated subject (if any);
     /// `token`: the verification-challenge token (if any). At least one must
     /// own the request.
+    #[tracing::instrument(name = "privacy.get_request_status", skip_all)]
     pub async fn execute(
         &self,
         request_id: DsrId,
@@ -771,6 +774,7 @@ impl ListRequestsOperator {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_requests_operator", skip_all)]
     pub async fn execute(
         &self,
         status: Option<DsrStatus>,
@@ -862,6 +866,7 @@ impl ExtendDeadline {
         }
     }
 
+    #[tracing::instrument(name = "privacy.extend_deadline", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -936,6 +941,7 @@ impl RejectRequest {
     /// Reject with reason. US subjects get the appeal route and the state
     /// authority's complaint address in the response (the handler appends
     /// them from the profile).
+    #[tracing::instrument(name = "privacy.reject_request", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -1017,6 +1023,7 @@ impl PatchRequest {
 
     /// Apply rectification corrections to the owning providers. Only the
     /// request's subject (authenticated) may patch.
+    #[tracing::instrument(name = "privacy.patch_request", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -1074,6 +1081,7 @@ impl SubmitTenantRequest {
         Self { inner }
     }
 
+    #[tracing::instrument(name = "privacy.submit_tenant_request", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         operator: UserId,

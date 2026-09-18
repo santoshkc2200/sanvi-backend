@@ -36,6 +36,7 @@ impl ResolveTenant {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.by_slug", skip_all)]
     pub async fn by_slug(&self, slug: &TenantSlug) -> Result<Option<Tenant>, TenancyError> {
         match self.cache.get_slug(slug.as_str()).await {
             Ok(Some(tenant)) => return Ok(Some(tenant)),
@@ -60,6 +61,7 @@ impl ResolveTenant {
         Ok(tenant)
     }
 
+    #[tracing::instrument(name = "tenancy.by_id", skip_all)]
     pub async fn by_id(&self, id: TenantId) -> Result<Option<Tenant>, TenancyError> {
         match self.cache.get_id(id).await {
             Ok(Some(tenant)) => return Ok(Some(tenant)),
@@ -85,6 +87,7 @@ impl ResolveTenant {
     }
 
     /// Drop cached entries for a tenant (event-driven invalidation).
+    #[tracing::instrument(name = "tenancy.invalidate", skip_all)]
     pub async fn invalidate(&self, slug: &str, id: TenantId) {
         if let Err(err) = self.cache.invalidate(slug, id).await {
             warn!(error = %err, slug, tenant_id = %id, "failed to invalidate resolution cache");

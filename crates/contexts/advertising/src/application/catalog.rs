@@ -15,6 +15,7 @@ impl ListPlatformCatalog {
         Self { registry }
     }
 
+    #[tracing::instrument(name = "advertising.list_platform_catalog", skip_all)]
     pub fn execute(&self) -> Vec<PlatformDescriptor> {
         self.registry
             .adapters()

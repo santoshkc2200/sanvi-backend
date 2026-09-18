@@ -84,6 +84,7 @@ impl GetDomainInstructions {
         }
     }
 
+    #[tracing::instrument(name = "domains.get_domain_instructions", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,

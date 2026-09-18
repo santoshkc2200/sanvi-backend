@@ -57,6 +57,7 @@ impl AuthorizeTls {
         }
     }
 
+    #[tracing::instrument(name = "domains.authorize_tls", skip_all)]
     pub async fn execute(&self, host: &str) -> Result<AuthorizeDecision, DomainsError> {
         // Host headers can carry a port (`example.com:443`); normalize it
         // away before parsing. Anything unparseable is simply not served.

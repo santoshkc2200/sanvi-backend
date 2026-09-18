@@ -68,6 +68,7 @@ impl InstallThemeVersion {
         }
     }
 
+    #[tracing::instrument(name = "theming.install_theme_version", skip_all)]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
@@ -218,6 +219,7 @@ impl YankThemeVersion {
         }
     }
 
+    #[tracing::instrument(name = "theming.yank_theme_version", skip_all)]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
@@ -256,6 +258,7 @@ impl ListThemesAdmin {
         Self { themes, pool }
     }
 
+    #[tracing::instrument(name = "theming.list_themes_admin", skip_all)]
     pub async fn execute(&self) -> Result<Vec<ThemeAdminView>, ThemingError> {
         let registry = self.themes.list(&self.pool).await?;
         let mut views = Vec::with_capacity(registry.len());
@@ -280,6 +283,7 @@ impl ListThemeVersionsAdmin {
         Self { themes, pool }
     }
 
+    #[tracing::instrument(name = "theming.list_theme_versions_admin", skip_all)]
     pub async fn execute(
         &self,
         theme_key: &str,

@@ -48,6 +48,7 @@ impl CreateAccountSession {
     /// Returns the session plus the connection *when its status moved*
     /// (`Pending → Onboarding` on first mint) — the caller persists that
     /// transition. The session secret itself is never persisted.
+    #[tracing::instrument(name = "payments.create_account_session", skip_all, fields(tenant_id = %connection.tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,

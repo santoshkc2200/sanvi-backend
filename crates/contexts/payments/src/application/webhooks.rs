@@ -76,6 +76,7 @@ impl WebhookReceiver {
     /// Verify on the raw bytes, store, ack. Returns `true` when the event
     /// was newly stored; a redelivery returns `Ok(false)` — both answer
     /// 2xx so Stripe stops retrying either way.
+    #[tracing::instrument(name = "payments.receive", skip_all)]
     pub async fn receive(
         &self,
         payload: &[u8],

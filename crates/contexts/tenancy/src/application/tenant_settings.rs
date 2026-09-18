@@ -36,6 +36,7 @@ impl GetTenantSettings {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.get_tenant_settings", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<TenantSettingsOutput, TenancyError> {
         let mut scope = self
             .tx_manager
@@ -81,6 +82,7 @@ impl UpdateTenantSettings {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.update_tenant_settings", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

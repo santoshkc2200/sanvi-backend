@@ -45,6 +45,7 @@ impl DefineFeature {
         }
     }
 
+    #[tracing::instrument(name = "access.define_feature", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -144,6 +145,7 @@ impl UpdateFeature {
         }
     }
 
+    #[tracing::instrument(name = "access.update_feature", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -245,6 +247,7 @@ impl DeprecateFeature {
         }
     }
 
+    #[tracing::instrument(name = "access.deprecate_feature", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -310,6 +313,7 @@ impl ListFeatures {
         }
     }
 
+    #[tracing::instrument(name = "access.list_features", skip_all)]
     pub async fn execute(&self) -> Result<Vec<Feature>, AccessError> {
         let mut scope = self
             .tx_manager

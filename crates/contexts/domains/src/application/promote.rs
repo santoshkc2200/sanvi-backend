@@ -28,6 +28,7 @@ impl PromotePrimaryDomain {
         }
     }
 
+    #[tracing::instrument(name = "domains.promote_primary_domain", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,

@@ -96,6 +96,7 @@ impl WebhookReceiver {
 
     /// Verify + store. Returns `true` when the event was newly stored
     /// (redeliveries return `false` without error — both answer 2xx).
+    #[tracing::instrument(name = "billing.receive", skip_all)]
     pub async fn receive(
         &self,
         payload: &[u8],
@@ -438,6 +439,7 @@ impl WebhookDispatcher {
 
     /// Drain one batch. Every row is processed in its own transaction, so a
     /// poisoned event cannot take the batch down with it.
+    #[tracing::instrument(name = "billing.dispatch", skip_all)]
     pub async fn dispatch(&self, limit: u32) -> Result<DispatchReport, BillingError> {
         let batch = {
             let mut scope = self

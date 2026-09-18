@@ -16,6 +16,7 @@ impl RequestVerification {
         Self { domains, clock }
     }
 
+    #[tracing::instrument(name = "domains.request_verification", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,

@@ -34,6 +34,7 @@ impl ListSessions {
 
     /// The current session, from Kratos (the cache is not a source of truth
     /// for anything except subject resolution).
+    #[tracing::instrument(name = "identity.list_sessions", skip_all)]
     pub async fn execute(
         &self,
         session_token: &str,
@@ -85,6 +86,7 @@ impl RevokeSession {
 
     /// Revoke the *current* session: the token must belong to the session
     /// being revoked (Kratos enforces this too; we refuse mismatches).
+    #[tracing::instrument(name = "identity.revoke_session", skip_all)]
     pub async fn execute(
         &self,
         user_id: crate::domain::UserId,

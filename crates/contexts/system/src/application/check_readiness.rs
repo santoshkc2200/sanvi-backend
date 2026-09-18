@@ -21,6 +21,7 @@ impl CheckReadiness {
     }
 
     /// Probe every dependency concurrently under a shared time budget.
+    #[tracing::instrument(name = "system.check_readiness", skip_all)]
     pub async fn execute(&self) -> ReadinessOutput {
         let checks = futures_concurrent(self.probes.clone(), self.budget).await;
         let all_ok = checks.iter().all(|check| check.state == HealthState::Ok);

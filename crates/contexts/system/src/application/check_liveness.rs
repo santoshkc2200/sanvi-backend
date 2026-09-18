@@ -9,6 +9,7 @@ impl CheckLiveness {
         Self
     }
 
+    #[tracing::instrument(name = "system.check_liveness", skip_all)]
     pub fn execute(&self) -> LivenessResult {
         LivenessResult {
             status: "ok".to_string(),

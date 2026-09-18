@@ -37,6 +37,7 @@ impl ListJurisdictions {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_jurisdictions", skip_all)]
     pub async fn execute(&self) -> Result<Vec<JurisdictionProfile>, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -94,6 +95,7 @@ impl UpsertJurisdiction {
         }
     }
 
+    #[tracing::instrument(name = "privacy.upsert_jurisdiction", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -181,6 +183,7 @@ impl ApplyLegalHold {
         }
     }
 
+    #[tracing::instrument(name = "privacy.apply_legal_hold", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -252,6 +255,7 @@ impl ReleaseLegalHold {
         }
     }
 
+    #[tracing::instrument(name = "privacy.release_legal_hold", skip_all)]
     pub async fn execute(&self, actor: UserId, hold_id: LegalHoldId) -> Result<(), PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -296,6 +300,7 @@ impl ListSubProcessors {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_sub_processors", skip_all)]
     pub async fn execute(&self, include_removed: bool) -> Result<Vec<SubProcessor>, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -348,6 +353,7 @@ impl UpsertSubProcessor {
         }
     }
 
+    #[tracing::instrument(name = "privacy.upsert_sub_processor", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -413,6 +419,7 @@ impl RemoveSubProcessor {
         }
     }
 
+    #[tracing::instrument(name = "privacy.remove_sub_processor", skip_all)]
     pub async fn execute(&self, actor: UserId, name: &str) -> Result<(), PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -499,6 +506,7 @@ impl RecordBreachIncident {
         }
     }
 
+    #[tracing::instrument(name = "privacy.record_breach_incident", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -599,6 +607,7 @@ impl ListIncidents {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_incidents", skip_all)]
     pub async fn execute(&self) -> Result<Vec<BreachIncident>, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -627,6 +636,7 @@ impl ListObligations {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_obligations", skip_all)]
     pub async fn execute(
         &self,
         incident_id: BreachIncidentId,
@@ -683,6 +693,7 @@ impl UpsertActivity {
         }
     }
 
+    #[tracing::instrument(name = "privacy.upsert_activity", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -762,6 +773,7 @@ impl UpsertAssessment {
         }
     }
 
+    #[tracing::instrument(name = "privacy.upsert_assessment", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -821,6 +833,7 @@ impl ListActivities {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_activities", skip_all)]
     pub async fn execute(&self) -> Result<Vec<ProcessingActivity>, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -847,6 +860,7 @@ impl ListHolds {
         Self { tx_manager, holds }
     }
 
+    #[tracing::instrument(name = "privacy.list_holds", skip_all)]
     pub async fn execute(&self, include_released: bool) -> Result<Vec<LegalHold>, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -890,6 +904,7 @@ impl MarkBreachNotified {
         }
     }
 
+    #[tracing::instrument(name = "privacy.mark_breach_notified", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -946,6 +961,7 @@ impl ListAssessments {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_assessments", skip_all)]
     pub async fn execute(&self) -> Result<Vec<RiskAssessment>, PrivacyError> {
         let mut scope = self
             .tx_manager

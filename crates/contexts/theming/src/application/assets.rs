@@ -60,6 +60,7 @@ impl UploadBrandAsset {
         }
     }
 
+    #[tracing::instrument(name = "theming.upload_brand_asset", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
@@ -180,6 +181,7 @@ impl RemoveBrandAsset {
         }
     }
 
+    #[tracing::instrument(name = "theming.remove_brand_asset", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,

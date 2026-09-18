@@ -87,6 +87,7 @@ impl ReconcileDueCampaigns {
 
     /// Pull up to `limit` published campaigns, oldest-checked-first, and
     /// reconcile each against its platform.
+    #[tracing::instrument(name = "advertising.reconcile_due_campaigns", skip_all)]
     pub async fn execute(&self, limit: i64) -> Result<ReconciliationSweepReport, AdvertisingError> {
         let mut report = ReconciliationSweepReport::default();
 

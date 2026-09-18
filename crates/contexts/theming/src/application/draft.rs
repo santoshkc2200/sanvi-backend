@@ -268,6 +268,7 @@ impl GetTenantThemeDraft {
         }
     }
 
+    #[tracing::instrument(name = "theming.get_tenant_theme_draft", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
@@ -356,6 +357,7 @@ impl UpdateTenantThemeDraft {
         }
     }
 
+    #[tracing::instrument(name = "theming.update_tenant_theme_draft", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,

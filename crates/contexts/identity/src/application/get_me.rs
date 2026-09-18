@@ -74,6 +74,7 @@ impl GetMe {
         }
     }
 
+    #[tracing::instrument(name = "identity.get_me", skip_all)]
     pub async fn execute(&self, user_id: UserId) -> Result<MeView, IdentityError> {
         let mut scope = self
             .tx_manager

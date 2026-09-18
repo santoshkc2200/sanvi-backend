@@ -33,6 +33,7 @@ impl QueryMetrics {
 
     /// Bounded, tenant-scoped read. Rejects an over-long span outright
     /// rather than letting a raw-partition scan run long and time out.
+    #[tracing::instrument(name = "advertising.query_metrics", skip_all, fields(tenant_id = %query.tenant_id))]
     pub async fn execute(
         &self,
         query: MetricsRangeQuery,

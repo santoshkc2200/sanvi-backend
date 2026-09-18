@@ -19,6 +19,7 @@ impl PlatformListDomains {
         Self { domains, tx }
     }
 
+    #[tracing::instrument(name = "domains.platform_list_domains", skip_all)]
     pub async fn execute(
         &self,
         query: &str,
@@ -68,6 +69,7 @@ impl PlatformReleaseDomain {
         }
     }
 
+    #[tracing::instrument(name = "domains.platform_release_domain", skip_all)]
     pub async fn execute(
         &self,
         domain_id: CustomDomainId,

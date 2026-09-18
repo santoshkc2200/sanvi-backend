@@ -58,6 +58,7 @@ impl DownloadExport {
 
     /// Validate token, passphrase, TTL and the download cap; then read the
     /// (encrypted) archive from the artifact directory and return it.
+    #[tracing::instrument(name = "privacy.download_export", skip_all)]
     pub async fn execute(
         &self,
         command: DownloadExportCommand,
@@ -140,6 +141,7 @@ impl CleanupExpiredExports {
         }
     }
 
+    #[tracing::instrument(name = "privacy.cleanup_expired_exports", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<usize, PrivacyError> {
         let mut scope = self
             .tx_manager

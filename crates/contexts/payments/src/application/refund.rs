@@ -98,6 +98,7 @@ impl IssueRefund {
     /// Issue (or replay, or re-drive) a refund. Returns the refund record
     /// and whether this call replayed an already-finalized refund (the
     /// handler answers 200 for a replay, 201 for a fresh issue).
+    #[tracing::instrument(name = "payments.issue_refund", skip_all, fields(tenant_id = %command.tenant_id))]
     pub async fn execute(
         &self,
         command: RefundCommand,

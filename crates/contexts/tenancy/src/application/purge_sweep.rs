@@ -40,6 +40,7 @@ impl PurgeSweep {
 
     /// Emit `TenantPurgeRequested` for every eligible archived tenant.
     /// Returns how many purge requests were emitted.
+    #[tracing::instrument(name = "tenancy.purge_sweep", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<u64, TenancyError> {
         let now = self.clock.now();
         let before = now - self.retention;

@@ -78,6 +78,7 @@ impl GetPlatformAdsHealth {
         }
     }
 
+    #[tracing::instrument(name = "advertising.get_platform_ads_health", skip_all)]
     pub async fn execute(&self) -> Result<PlatformAdsHealthReport, AdvertisingError> {
         let mut scope = self
             .tx

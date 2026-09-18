@@ -69,6 +69,7 @@ impl SyncConnections {
     }
 
     /// Re-sync up to `limit` stale connections, oldest observation first.
+    #[tracing::instrument(name = "payments.sync_connections", skip_all)]
     pub async fn execute(&self, limit: i64) -> Result<SyncReport, PaymentsError> {
         let stale_before = Utc::now() - self.stale_after;
         let mut report = SyncReport::default();

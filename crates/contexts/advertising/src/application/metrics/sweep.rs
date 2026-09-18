@@ -61,6 +61,7 @@ impl RunMetricsIngestion {
     /// re-covers the platform's restatement window, which is simpler and
     /// still correct (it just re-fetches a few more days than the strict
     /// minimum each time).
+    #[tracing::instrument(name = "advertising.run_metrics_ingestion", skip_all)]
     pub async fn execute(
         &self,
         limit: i64,

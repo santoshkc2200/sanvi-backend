@@ -32,6 +32,7 @@ impl HandleLogoutWebhook {
         }
     }
 
+    #[tracing::instrument(name = "identity.handle_logout_webhook", skip_all)]
     pub async fn execute(
         &self,
         session_id: Option<String>,

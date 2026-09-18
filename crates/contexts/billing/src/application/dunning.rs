@@ -64,6 +64,7 @@ impl DunningSweep {
         }
     }
 
+    #[tracing::instrument(name = "billing.dunning_sweep", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<DunningSweepReport, BillingError> {
         Ok(DunningSweepReport {
             grace_expired: self.expire_grace(limit).await?,

@@ -68,6 +68,7 @@ impl ResolveCampaignDrift {
     /// Resolve one observed drift. `mutation_id` makes both choices safe to
     /// retry after a client timeout; `expected_revision` prevents a stale UI
     /// from resolving a newer drift observation.
+    #[tracing::instrument(name = "advertising.resolve_campaign_drift", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

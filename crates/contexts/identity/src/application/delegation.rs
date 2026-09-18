@@ -12,6 +12,7 @@ pub struct DelegationPolicy;
 impl DelegationPolicy {
     /// Validates that `role_ids` is non-empty and all IDs are assignable in `tenant_id`.
     /// Returns the resolved assignable roles `(RoleId, role_key)`.
+    #[tracing::instrument(name = "identity.validate_assignable", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn validate_assignable(
         tenant_id: TenantId,
         role_ids: &[RoleId],
@@ -34,6 +35,7 @@ impl DelegationPolicy {
     /// If `target_roles` includes `protected_role_key`, `actor` must
     /// be an active member holding `protected_role_key` in `tenant_id`,
     /// unless no holders currently exist in the tenant (initial bootstrap).
+    #[tracing::instrument(name = "identity.check_grant", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn check_grant(
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
@@ -71,6 +73,7 @@ impl DelegationPolicy {
     }
 
     /// Checks that `actor` has authority to invite with `target_roles`.
+    #[tracing::instrument(name = "identity.check_invite", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn check_invite(
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
@@ -94,6 +97,7 @@ impl DelegationPolicy {
 
     /// Checks that when accepting an invitation with `target_roles`, the invitation's creator
     /// (`invited_by`) was authorized to grant those roles.
+    #[tracing::instrument(name = "identity.check_accept", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn check_accept(
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
@@ -138,6 +142,7 @@ impl DelegationPolicy {
     /// Checks role replacement in `UpdateMemberRoles`:
     /// - Checks delegation limits (only protected role holder can add/modify/remove protected role)
     /// - Preserves last-owner invariant if protected role is being removed.
+    #[tracing::instrument(name = "identity.check_update_roles", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn check_update_roles(
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,

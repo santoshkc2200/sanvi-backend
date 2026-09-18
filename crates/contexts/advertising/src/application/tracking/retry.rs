@@ -57,6 +57,7 @@ impl RetryConversion {
         }
     }
 
+    #[tracing::instrument(name = "advertising.retry_conversion", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

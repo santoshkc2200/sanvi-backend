@@ -49,6 +49,7 @@ impl ReconcileSubscriptions {
         }
     }
 
+    #[tracing::instrument(name = "billing.reconcile_subscriptions", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<ReconciliationReport, BillingError> {
         let candidates = {
             let mut scope = self

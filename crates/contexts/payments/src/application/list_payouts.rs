@@ -65,6 +65,7 @@ impl ListPayouts {
     /// Read the live payout history off the tenant's own connected
     /// account. No connection → an empty view, not an error: the settings
     /// page renders before onboarding completes.
+    #[tracing::instrument(name = "payments.list_payouts", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<PayoutsView, PaymentsError> {
         let mut scope = self
             .tx_manager

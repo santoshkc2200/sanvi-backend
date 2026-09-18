@@ -27,6 +27,7 @@ impl ListAuditLog {
         Self { tx_manager, reader }
     }
 
+    #[tracing::instrument(name = "audit.list_audit_log", skip_all)]
     pub async fn execute(
         &self,
         filters: AuditFilters,

@@ -68,6 +68,7 @@ impl RunTokenRefresh {
         }
     }
 
+    #[tracing::instrument(name = "advertising.run_token_refresh", skip_all)]
     pub async fn execute(&self, limit: i64) -> Result<TokenRefreshSweepReport, AdvertisingError> {
         let mut scope = self
             .tx

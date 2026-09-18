@@ -60,6 +60,7 @@ impl StartAuthorization {
         }
     }
 
+    #[tracing::instrument(name = "advertising.start_authorization", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -126,6 +127,7 @@ impl HandleCallback {
         }
     }
 
+    #[tracing::instrument(name = "advertising.handle_callback", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -192,6 +194,7 @@ impl CreateConnection {
         Self { tx, connections }
     }
 
+    #[tracing::instrument(name = "advertising.create_connection", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -265,6 +268,7 @@ impl ListConnections {
         Ok(connection.health(&adapter.required_scopes(), now))
     }
 
+    #[tracing::instrument(name = "advertising.list_connections", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -303,6 +307,7 @@ impl DeleteConnection {
         Self { tx, connections }
     }
 
+    #[tracing::instrument(name = "advertising.delete_connection", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

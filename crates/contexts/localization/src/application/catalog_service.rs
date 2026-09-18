@@ -49,6 +49,7 @@ impl CatalogService {
     }
 
     /// Build the merged catalog for a domain + locale under one scope.
+    #[tracing::instrument(name = "localization.catalog", skip_all)]
     pub async fn catalog(
         &self,
         scope: &str,
@@ -106,6 +107,7 @@ impl CatalogService {
     }
 
     /// The platform's enabled supported locales for `GET /locales`.
+    #[tracing::instrument(name = "localization.supported_locales", skip_all)]
     pub async fn supported_locales(&self) -> Result<Vec<SupportedLocale>, LocalizationError> {
         self.supported.list(&self.pool).await
     }

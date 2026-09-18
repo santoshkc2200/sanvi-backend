@@ -70,6 +70,7 @@ impl PollCampaignReviewStatus {
     /// Pull verdicts from the platform and persist them onto the campaign's
     /// ads. Requires a published campaign — review has no meaning for a draft
     /// the platform has never seen.
+    #[tracing::instrument(name = "advertising.poll_campaign_review_status", skip_all)]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

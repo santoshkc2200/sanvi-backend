@@ -82,6 +82,7 @@ impl GrantEntitlement {
         }
     }
 
+    #[tracing::instrument(name = "access.grant_entitlement", skip_all, fields(tenant_id = %cmd.tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -251,6 +252,7 @@ impl RevokeEntitlement {
         }
     }
 
+    #[tracing::instrument(name = "access.revoke_entitlement", skip_all, fields(tenant_id = %cmd.tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -318,6 +320,7 @@ impl ListTenantEntitlements {
         Self { resolver }
     }
 
+    #[tracing::instrument(name = "access.list_tenant_entitlements", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -344,6 +347,7 @@ impl ListTenantOverrides {
         }
     }
 
+    #[tracing::instrument(name = "access.list_tenant_overrides", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<Entitlement>, AccessError> {
         let mut scope = self
             .tx_manager
@@ -390,6 +394,7 @@ impl ExpireEntitlements {
     }
 
     /// Process up to `limit` expired rows. Returns how many expired.
+    #[tracing::instrument(name = "access.expire_entitlements", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<usize, AccessError> {
         let now = self.clock.now();
         let mut scope = self

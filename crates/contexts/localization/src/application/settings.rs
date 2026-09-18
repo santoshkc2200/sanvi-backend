@@ -63,6 +63,7 @@ impl GetLocalizationSettings {
         Self { repo }
     }
 
+    #[tracing::instrument(name = "localization.get_localization_settings", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -100,6 +101,7 @@ impl UpdateLocalizationSettings {
         }
     }
 
+    #[tracing::instrument(name = "localization.update_localization_settings", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,

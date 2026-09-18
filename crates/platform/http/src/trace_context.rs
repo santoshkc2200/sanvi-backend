@@ -178,7 +178,9 @@ mod tests {
 
         let response = actix_web::test::call_service(
             &app,
-            actix_web::test::TestRequest::get().uri("/boom").to_request(),
+            actix_web::test::TestRequest::get()
+                .uri("/boom")
+                .to_request(),
         )
         .instrument(span.clone())
         .await;
@@ -196,7 +198,9 @@ mod tests {
         // …and the response headers carry a traceparent for the same trace.
         let response = actix_web::test::call_service(
             &app,
-            actix_web::test::TestRequest::get().uri("/boom").to_request(),
+            actix_web::test::TestRequest::get()
+                .uri("/boom")
+                .to_request(),
         )
         .instrument(span)
         .await;
@@ -206,7 +210,10 @@ mod tests {
             .map(|value| value.to_str().unwrap().to_string());
         assert_eq!(
             header_traceparent.as_deref(),
-            seen.lock().unwrap().as_ref().and_then(|(_, tp)| tp.as_deref()),
+            seen.lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|(_, tp)| tp.as_deref()),
             "header traceparent must reference the request span"
         );
         let traceparent = header_traceparent.expect("traceparent header on responses");
@@ -222,21 +229,27 @@ mod tests {
     /// instead of failing the request.
     #[actix_web::test]
     async fn without_otel_the_conventions_degrade_instead_of_failing() {
-        let app = actix_web::test::init_service(
-            App::new()
-                .wrap(TraceparentLayer)
-                .service(
-                    web::resource("/boom")
-                        .route(web::get().to(|| async { HttpResponse::InternalServerError().finish() })),
+        let app =
+            actix_web::test::init_service(App::new().wrap(TraceparentLayer).service(
+                web::resource("/boom").route(
+                    web::get().to(|| async { HttpResponse::InternalServerError().finish() }),
                 ),
+            ))
+            .await;
+        let response = actix_web::test::call_service(
+            &app,
+            actix_web::test::TestRequest::get()
+                .uri("/boom")
+                .to_request(),
         )
         .await;
-        let response = actix_web::test::call_service(&app, actix_web::test::TestRequest::get().uri("/boom").to_request())
-            .await;
         assert_eq!(response.status().as_u16(), 500);
         assert!(response.headers().get(TRACEPARENT_HEADER).is_none());
 
-        assert!(current_trace_id().is_none(), "a noop context must not fabricate ids");
+        assert!(
+            current_trace_id().is_none(),
+            "a noop context must not fabricate ids"
+        );
         assert!(current_traceparent().is_none());
     }
 

@@ -51,6 +51,7 @@ impl PublishTenantTheme {
         }
     }
 
+    #[tracing::instrument(name = "theming.publish_tenant_theme", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,
@@ -160,6 +161,7 @@ impl RollbackTenantTheme {
         }
     }
 
+    #[tracing::instrument(name = "theming.rollback_tenant_theme", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::ScopedTx<'_>,

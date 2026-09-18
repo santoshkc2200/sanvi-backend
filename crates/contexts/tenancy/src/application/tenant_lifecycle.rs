@@ -67,6 +67,7 @@ impl TenantLifecycle {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.tenant_lifecycle", skip_all)]
     pub async fn execute(
         &self,
         id: TenantId,
@@ -126,6 +127,7 @@ macro_rules! lifecycle_use_case {
                 }
             }
 
+            #[tracing::instrument(name = "tenancy.tenant_lifecycle_2", skip_all)]
             pub async fn execute(&self, id: TenantId) -> Result<TenantView, TenancyError> {
                 self.inner.execute(id, $action, None).await
             }
@@ -162,6 +164,7 @@ impl SuspendTenant {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.suspend_tenant", skip_all)]
     pub async fn execute(
         &self,
         id: TenantId,

@@ -16,6 +16,7 @@ impl ManageTrackingSettings {
         Self { tx, repo }
     }
 
+    #[tracing::instrument(name = "advertising.get_settings", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn get_settings(
         &self,
         tenant_id: TenantId,
@@ -34,6 +35,7 @@ impl ManageTrackingSettings {
         }
     }
 
+    #[tracing::instrument(name = "advertising.update_settings", skip_all, fields(tenant_id = %settings.tenant_id))]
     pub async fn update_settings(
         &self,
         settings: TrackingSettings,

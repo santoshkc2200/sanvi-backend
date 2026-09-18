@@ -18,131 +18,131 @@ Rules:
 
 | context | use case | entries | spans | tenant refs | state |
 | --- | --- | --- | --- | --- | --- |
-| access | check_permission.rs | 1 | 0 | yes | missing span (0/1)
-| access | entitlements.rs | 5 | 0 | yes | missing span (0/5)
-| access | feature_gate.rs | 2 | 0 | yes | missing span (0/2)
-| access | features.rs | 4 | 0 | yes | missing span (0/4)
-| access | list_permissions.rs | 1 | 0 | no | missing span (0/1)
-| access | rebuild_tuples.rs | 1 | 0 | yes | missing span (0/1)
-| access | roles.rs | 3 | 0 | yes | missing span (0/3)
-| access | seed_features.rs | 1 | 0 | no | missing span (0/1)
-| access | seed_roles.rs | 1 | 0 | yes | missing span (0/1)
+| access | check_permission.rs | 1 | 1 | yes | covered
+| access | entitlements.rs | 5 | 5 | yes | covered
+| access | feature_gate.rs | 2 | 2 | yes | covered
+| access | features.rs | 4 | 4 | yes | covered
+| access | list_permissions.rs | 1 | 1 | no | covered
+| access | rebuild_tuples.rs | 1 | 1 | yes | covered
+| access | roles.rs | 3 | 3 | yes | covered
+| access | seed_features.rs | 1 | 1 | no | covered
+| access | seed_roles.rs | 1 | 1 | yes | covered
 | advertising | access_tokens.rs | 0 | 0 | yes | n/a
-| advertising | budget/alerts.rs | 2 | 0 | yes | missing span (0/2)
-| advertising | budget/caps.rs | 3 | 0 | yes | missing span (0/3)
+| advertising | budget/alerts.rs | 2 | 2 | yes | covered
+| advertising | budget/caps.rs | 3 | 3 | yes | covered
 | advertising | budget/enforcement.rs | 0 | 0 | yes | n/a
-| advertising | budget/evaluator.rs | 2 | 0 | yes | missing span (0/2)
-| advertising | budget/rollover.rs | 2 | 0 | yes | missing span (0/2)
-| advertising | budget/status.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | campaigns.rs | 14 | 0 | yes | missing span (0/14)
-| advertising | catalog.rs | 1 | 0 | no | missing span (0/1)
-| advertising | connections.rs | 5 | 0 | yes | missing span (0/5)
-| advertising | creatives.rs | 5 | 0 | yes | missing span (0/5)
-| advertising | drift_resolution.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | metrics/freshness.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | metrics/ingest.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | metrics/query.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | metrics/revenue_join.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | metrics/sweep.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | platform_health.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | reconciliation.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | reconciliation_sweep.rs | 1 | 0 | yes | missing span (0/1)
+| advertising | budget/evaluator.rs | 2 | 2 | yes | covered
+| advertising | budget/rollover.rs | 2 | 2 | yes | covered
+| advertising | budget/status.rs | 1 | 1 | yes | covered
+| advertising | campaigns.rs | 14 | 14 | yes | covered
+| advertising | catalog.rs | 1 | 1 | no | covered
+| advertising | connections.rs | 5 | 5 | yes | covered
+| advertising | creatives.rs | 5 | 5 | yes | covered
+| advertising | drift_resolution.rs | 1 | 1 | yes | covered
+| advertising | metrics/freshness.rs | 1 | 1 | yes | covered
+| advertising | metrics/ingest.rs | 1 | 1 | yes | covered
+| advertising | metrics/query.rs | 1 | 1 | yes | covered
+| advertising | metrics/revenue_join.rs | 1 | 1 | yes | covered
+| advertising | metrics/sweep.rs | 1 | 1 | yes | covered
+| advertising | platform_health.rs | 1 | 1 | yes | covered
+| advertising | reconciliation.rs | 1 | 1 | yes | covered
+| advertising | reconciliation_sweep.rs | 1 | 1 | yes | covered
 | advertising | registry.rs | 0 | 0 | no | n/a
-| advertising | review_status.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | token_refresh.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | tracking/audiences.rs | 4 | 0 | yes | missing span (0/4)
+| advertising | review_status.rs | 1 | 1 | yes | covered
+| advertising | token_refresh.rs | 1 | 1 | yes | covered
+| advertising | tracking/audiences.rs | 4 | 4 | yes | covered
 | advertising | tracking/capture.rs | 1 | 2 | yes | covered
-| advertising | tracking/conversions.rs | 2 | 0 | yes | missing span (0/2)
-| advertising | tracking/retraction.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | tracking/retry.rs | 1 | 0 | yes | missing span (0/1)
-| advertising | tracking/settings.rs | 2 | 0 | yes | missing span (0/2)
+| advertising | tracking/conversions.rs | 2 | 2 | yes | covered
+| advertising | tracking/retraction.rs | 1 | 1 | yes | covered
+| advertising | tracking/retry.rs | 1 | 1 | yes | covered
+| advertising | tracking/settings.rs | 2 | 2 | yes | covered
 | advertising | tracking/site_key.rs | 0 | 0 | yes | n/a
-| advertising | tracking/upload.rs | 1 | 2 | yes | covered
-| audit | list_audit.rs | 1 | 0 | no | missing span (0/1)
-| audit | verify_chain.rs | 1 | 0 | no | missing span (0/1)
-| billing | checkout.rs | 1 | 0 | yes | missing span (0/1)
-| billing | dunning.rs | 1 | 0 | yes | missing span (0/1)
+| advertising | tracking/upload.rs | 1 | 3 | yes | covered
+| audit | list_audit.rs | 1 | 1 | no | covered
+| audit | verify_chain.rs | 1 | 1 | no | covered
+| billing | checkout.rs | 1 | 1 | yes | covered
+| billing | dunning.rs | 1 | 1 | yes | covered
 | billing | entitlements_sync.rs | 0 | 0 | no | n/a
-| billing | override_sub.rs | 2 | 0 | yes | missing span (0/2)
-| billing | plans.rs | 6 | 0 | yes | missing span (0/6)
-| billing | portal.rs | 1 | 0 | yes | missing span (0/1)
-| billing | queries.rs | 2 | 0 | yes | missing span (0/2)
-| billing | reconcile.rs | 1 | 0 | yes | missing span (0/1)
+| billing | override_sub.rs | 2 | 2 | yes | covered
+| billing | plans.rs | 6 | 6 | yes | covered
+| billing | portal.rs | 1 | 1 | yes | covered
+| billing | queries.rs | 2 | 2 | yes | covered
+| billing | reconcile.rs | 1 | 1 | yes | covered
 | billing | storage.rs | 0 | 0 | no | n/a
-| billing | tax.rs | 1 | 0 | no | missing span (0/1)
-| billing | webhooks.rs | 2 | 0 | yes | missing span (0/2)
-| domains | certs_job.rs | 1 | 0 | yes | missing span (0/1)
-| domains | claim.rs | 1 | 0 | yes | missing span (0/1)
-| domains | health_job.rs | 1 | 0 | yes | missing span (0/1)
-| domains | instructions.rs | 1 | 0 | yes | missing span (0/1)
-| domains | list.rs | 2 | 0 | yes | missing span (0/2)
-| domains | lookup.rs | 2 | 0 | yes | missing span (0/2)
-| domains | orders.rs | 2 | 0 | yes | missing span (0/2)
-| domains | orders_job.rs | 1 | 0 | yes | missing span (0/1)
-| domains | platform.rs | 2 | 0 | yes | missing span (0/2)
-| domains | promote.rs | 1 | 0 | yes | missing span (0/1)
-| domains | remove.rs | 1 | 0 | yes | missing span (0/1)
-| domains | renewal_job.rs | 1 | 0 | yes | missing span (0/1)
-| domains | search.rs | 1 | 0 | yes | missing span (0/1)
-| domains | tls_authorize.rs | 1 | 0 | yes | missing span (0/1)
-| domains | verification_job.rs | 1 | 0 | yes | missing span (0/1)
-| domains | verify.rs | 1 | 0 | yes | missing span (0/1)
+| billing | tax.rs | 1 | 1 | no | covered
+| billing | webhooks.rs | 2 | 2 | yes | covered
+| domains | certs_job.rs | 1 | 1 | yes | covered
+| domains | claim.rs | 1 | 1 | yes | covered
+| domains | health_job.rs | 1 | 1 | yes | covered
+| domains | instructions.rs | 1 | 1 | yes | covered
+| domains | list.rs | 2 | 2 | yes | covered
+| domains | lookup.rs | 2 | 2 | yes | covered
+| domains | orders.rs | 2 | 2 | yes | covered
+| domains | orders_job.rs | 1 | 1 | yes | covered
+| domains | platform.rs | 2 | 2 | yes | covered
+| domains | promote.rs | 1 | 1 | yes | covered
+| domains | remove.rs | 1 | 1 | yes | covered
+| domains | renewal_job.rs | 1 | 1 | yes | covered
+| domains | search.rs | 1 | 1 | yes | covered
+| domains | tls_authorize.rs | 1 | 1 | yes | covered
+| domains | verification_job.rs | 1 | 1 | yes | covered
+| domains | verify.rs | 1 | 1 | yes | covered
 | domains | views.rs | 0 | 0 | no | n/a
-| identity | delegation.rs | 5 | 0 | yes | missing span (0/5)
-| identity | get_me.rs | 1 | 0 | yes | missing span (0/1)
-| identity | handle_logout.rs | 1 | 0 | no | missing span (0/1)
-| identity | invitations.rs | 5 | 0 | yes | missing span (0/5)
-| identity | link_challenge.rs | 2 | 0 | no | missing span (0/2)
-| identity | members.rs | 4 | 0 | yes | missing span (0/4)
-| identity | sessions.rs | 2 | 0 | no | missing span (0/2)
-| identity | sync_identity.rs | 1 | 0 | no | missing span (0/1)
-| localization | catalog_service.rs | 0 | 0 | no | n/a
-| localization | settings.rs | 2 | 0 | yes | missing span (0/2)
-| localization | translations.rs | 4 | 0 | yes | missing span (0/4)
-| notifications | dispatcher.rs | 0 | 0 | yes | n/a
-| payments | account_session.rs | 1 | 0 | yes | missing span (0/1)
-| payments | catalog.rs | 1 | 0 | yes | missing span (0/1)
+| identity | delegation.rs | 5 | 5 | yes | covered
+| identity | get_me.rs | 1 | 1 | yes | covered
+| identity | handle_logout.rs | 1 | 1 | no | covered
+| identity | invitations.rs | 5 | 5 | yes | covered
+| identity | link_challenge.rs | 2 | 2 | no | covered
+| identity | members.rs | 4 | 4 | yes | covered
+| identity | sessions.rs | 2 | 2 | no | covered
+| identity | sync_identity.rs | 1 | 1 | no | covered
+| localization | catalog_service.rs | 2 | 2 | no | covered
+| localization | settings.rs | 2 | 2 | yes | covered
+| localization | translations.rs | 4 | 4 | yes | covered
+| notifications | dispatcher.rs | 1 | 1 | yes | covered
+| payments | account_session.rs | 1 | 1 | yes | covered
+| payments | catalog.rs | 1 | 1 | yes | covered
 | payments | create_checkout.rs | 1 | 1 | yes | covered
-| payments | create_connection.rs | 1 | 0 | yes | missing span (0/1)
+| payments | create_connection.rs | 1 | 1 | yes | covered
 | payments | disconnect.rs | 1 | 1 | yes | covered
-| payments | disputes.rs | 1 | 0 | yes | missing span (0/1)
+| payments | disputes.rs | 1 | 1 | yes | covered
 | payments | export.rs | 0 | 0 | yes | n/a
 | payments | fees.rs | 0 | 0 | yes | n/a
 | payments | lifecycle.rs | 0 | 0 | yes | n/a
-| payments | list_payments.rs | 2 | 0 | yes | missing span (0/2)
-| payments | list_payouts.rs | 1 | 0 | yes | missing span (0/1)
-| payments | refund.rs | 1 | 0 | yes | missing span (0/1)
+| payments | list_payments.rs | 2 | 2 | yes | covered
+| payments | list_payouts.rs | 1 | 1 | yes | covered
+| payments | refund.rs | 1 | 1 | yes | covered
 | payments | registry.rs | 0 | 0 | no | n/a
-| payments | sync_connection.rs | 1 | 0 | no | missing span (0/1)
-| payments | tax_settings.rs | 1 | 0 | yes | missing span (0/1)
-| payments | webhooks.rs | 0 | 1 | yes | n/a
-| platform_admin | approvals.rs | 4 | 0 | yes | missing span (0/4)
-| platform_admin | impersonation.rs | 3 | 0 | yes | missing span (0/3)
-| platform_admin | tenant_views.rs | 2 | 0 | yes | missing span (0/2)
-| privacy | appeals.rs | 3 | 0 | no | missing span (0/3)
-| privacy | directives.rs | 6 | 0 | yes | missing span (0/6)
-| privacy | exports.rs | 2 | 0 | no | missing span (0/2)
-| privacy | governance.rs | 16 | 0 | no | missing span (0/16)
-| privacy | metrics.rs | 2 | 0 | no | missing span (0/2)
+| payments | sync_connection.rs | 1 | 1 | no | covered
+| payments | tax_settings.rs | 1 | 1 | yes | covered
+| payments | webhooks.rs | 1 | 2 | yes | covered
+| platform_admin | approvals.rs | 4 | 4 | yes | covered
+| platform_admin | impersonation.rs | 3 | 3 | yes | covered
+| platform_admin | tenant_views.rs | 2 | 2 | yes | covered
+| privacy | appeals.rs | 3 | 3 | no | covered
+| privacy | directives.rs | 6 | 6 | yes | covered
+| privacy | exports.rs | 2 | 2 | no | covered
+| privacy | governance.rs | 16 | 16 | no | covered
+| privacy | metrics.rs | 2 | 2 | no | covered
 | privacy | notices.rs | 0 | 0 | no | n/a
-| privacy | processing.rs | 2 | 0 | yes | missing span (0/2)
-| privacy | requests.rs | 8 | 0 | yes | missing span (0/8)
-| privacy | retention.rs | 3 | 0 | no | missing span (0/3)
-| system | check_liveness.rs | 1 | 0 | no | missing span (0/1)
-| system | check_readiness.rs | 1 | 0 | no | missing span (0/1)
-| system | get_build_info.rs | 2 | 0 | no | missing span (0/2)
-| tenancy | check_slug_availability.rs | 1 | 0 | no | missing span (0/1)
-| tenancy | get_tenant.rs | 1 | 0 | no | missing span (0/1)
-| tenancy | list_tenants.rs | 1 | 0 | no | missing span (0/1)
-| tenancy | provision_tenant.rs | 1 | 0 | yes | missing span (0/1)
-| tenancy | purge_sweep.rs | 1 | 0 | no | missing span (0/1)
-| tenancy | resolve_tenant.rs | 0 | 0 | yes | n/a
-| tenancy | tenant_lifecycle.rs | 3 | 0 | yes | missing span (0/3)
-| tenancy | tenant_settings.rs | 2 | 0 | yes | missing span (0/2)
-| theming | assets.rs | 2 | 0 | yes | missing span (0/2)
-| theming | available.rs | 1 | 0 | yes | missing span (0/1)
-| theming | draft.rs | 2 | 0 | yes | missing span (0/2)
-| theming | install.rs | 4 | 0 | no | missing span (0/4)
-| theming | publish.rs | 2 | 0 | yes | missing span (0/2)
-| theming | resolve.rs | 2 | 0 | yes | missing span (0/2)
+| privacy | processing.rs | 2 | 2 | yes | covered
+| privacy | requests.rs | 8 | 8 | yes | covered
+| privacy | retention.rs | 3 | 3 | no | covered
+| system | check_liveness.rs | 1 | 1 | no | covered
+| system | check_readiness.rs | 1 | 1 | no | covered
+| system | get_build_info.rs | 2 | 2 | no | covered
+| tenancy | check_slug_availability.rs | 1 | 1 | no | covered
+| tenancy | get_tenant.rs | 1 | 1 | no | covered
+| tenancy | list_tenants.rs | 1 | 1 | no | covered
+| tenancy | provision_tenant.rs | 1 | 1 | yes | covered
+| tenancy | purge_sweep.rs | 1 | 1 | no | covered
+| tenancy | resolve_tenant.rs | 3 | 3 | yes | covered
+| tenancy | tenant_lifecycle.rs | 3 | 3 | yes | covered
+| tenancy | tenant_settings.rs | 2 | 2 | yes | covered
+| theming | assets.rs | 2 | 2 | yes | covered
+| theming | available.rs | 1 | 1 | yes | covered
+| theming | draft.rs | 2 | 2 | yes | covered
+| theming | install.rs | 4 | 4 | no | covered
+| theming | publish.rs | 2 | 2 | yes | covered
+| theming | resolve.rs | 2 | 2 | yes | covered
 | theming | views.rs | 0 | 0 | no | n/a

@@ -51,6 +51,7 @@ impl CreatePortalSession {
         }
     }
 
+    #[tracing::instrument(name = "billing.create_portal_session", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,

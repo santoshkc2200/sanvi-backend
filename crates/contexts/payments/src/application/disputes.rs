@@ -69,6 +69,7 @@ impl ListDisputes {
         }
     }
 
+    #[tracing::instrument(name = "payments.list_disputes", skip_all, fields(tenant_id = %command.tenant_id))]
     pub async fn execute(
         &self,
         command: ListDisputesCommand,

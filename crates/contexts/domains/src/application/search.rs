@@ -76,6 +76,7 @@ impl SearchDomains {
         }
     }
 
+    #[tracing::instrument(name = "domains.search_domains", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

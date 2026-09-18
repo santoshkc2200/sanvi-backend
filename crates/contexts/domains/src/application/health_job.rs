@@ -61,6 +61,7 @@ impl RunHealthSweep {
         }
     }
 
+    #[tracing::instrument(name = "domains.run_health_sweep", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<HealthReport, DomainsError> {
         let mut scope = self
             .tx

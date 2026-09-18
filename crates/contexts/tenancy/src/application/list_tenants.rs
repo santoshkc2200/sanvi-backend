@@ -35,6 +35,7 @@ impl ListTenants {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.list_tenants", skip_all)]
     pub async fn execute(
         &self,
         after: Option<TenantId>,

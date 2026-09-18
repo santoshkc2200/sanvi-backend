@@ -100,6 +100,7 @@ impl CreateCustomRole {
         }
     }
 
+    #[tracing::instrument(name = "access.create_custom_role", skip_all, fields(tenant_id = %cmd.tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -216,6 +217,7 @@ impl UpdateCustomRole {
         }
     }
 
+    #[tracing::instrument(name = "access.update_custom_role", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -349,6 +351,7 @@ impl DeleteCustomRole {
         }
     }
 
+    #[tracing::instrument(name = "access.delete_custom_role", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,

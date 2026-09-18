@@ -68,6 +68,7 @@ impl RetentionSweep {
         }
     }
 
+    #[tracing::instrument(name = "privacy.retention_sweep", skip_all)]
     pub async fn execute(&self) -> Result<RetentionSweepReport, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -179,6 +180,7 @@ impl ListRetentionRules {
         Self { tx_manager, rules }
     }
 
+    #[tracing::instrument(name = "privacy.list_retention_rules", skip_all)]
     pub async fn execute(&self) -> Result<Vec<RetentionRule>, PrivacyError> {
         let mut scope = self
             .tx_manager
@@ -223,6 +225,7 @@ impl UpsertRetentionRule {
         }
     }
 
+    #[tracing::instrument(name = "privacy.upsert_retention_rule", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,

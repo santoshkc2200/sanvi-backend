@@ -117,6 +117,7 @@ impl CreateCheckoutSession {
         }
     }
 
+    #[tracing::instrument(name = "billing.create_checkout_session", skip_all, fields(tenant_id = %cmd.tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,

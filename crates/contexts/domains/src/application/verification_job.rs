@@ -75,6 +75,7 @@ impl RunVerificationSweep {
         }
     }
 
+    #[tracing::instrument(name = "domains.run_verification_sweep", skip_all)]
     pub async fn execute(
         &self,
         now: DateTime<Utc>,

@@ -79,6 +79,7 @@ impl RunRenewalSweep {
         }
     }
 
+    #[tracing::instrument(name = "domains.run_renewal_sweep", skip_all)]
     pub async fn execute(
         &self,
         now: DateTime<Utc>,

@@ -66,6 +66,7 @@ impl NotificationDispatcher {
         }
     }
 
+    #[tracing::instrument(name = "notifications.handle_envelope", skip_all)]
     pub async fn handle_envelope(&self, envelope: EventEnvelope) -> anyhow::Result<()> {
         let age_secs = (Utc::now() - envelope.occurred_at).num_seconds();
         if age_secs > self.max_event_age_secs as i64 {

@@ -121,6 +121,7 @@ impl ListProviders {
         Self { catalog }
     }
 
+    #[tracing::instrument(name = "payments.list_providers", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

@@ -19,6 +19,7 @@ impl ListPermissions {
         Self
     }
 
+    #[tracing::instrument(name = "access.list_permissions", skip_all)]
     pub fn execute(&self) -> Vec<PermissionView> {
         PERMISSIONS
             .iter()

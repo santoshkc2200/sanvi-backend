@@ -105,6 +105,7 @@ impl ResolveJurisdiction {
         }
     }
 
+    #[tracing::instrument(name = "privacy.resolve_jurisdiction", skip_all)]
     pub async fn execute(
         &self,
         subject_id: SubjectId,
@@ -366,6 +367,7 @@ impl GetDirectives {
 
     /// Resolve the snapshot for `subject`, first binding any unbound
     /// preference signals recorded for its identifiers.
+    #[tracing::instrument(name = "privacy.get_directives", skip_all)]
     pub async fn execute(&self, subject: &SubjectRef) -> Result<GetDirectivesOutput, PrivacyError> {
         self.bind(subject).await?;
         let snapshot = self.resolver.snapshot(subject).await?;
@@ -419,6 +421,7 @@ impl BindUnboundSignals {
         Self { inner }
     }
 
+    #[tracing::instrument(name = "privacy.bind_unbound_signals", skip_all)]
     pub async fn execute(&self, subject: &SubjectRef) -> Result<(), PrivacyError> {
         self.inner.bind(subject).await
     }
@@ -476,6 +479,7 @@ impl RecordConsentChange {
         }
     }
 
+    #[tracing::instrument(name = "privacy.record_consent_change", skip_all, fields(tenant_id = ?subject.tenant_id))]
     pub async fn execute(
         &self,
         subject: &SubjectRef,
@@ -642,6 +646,7 @@ impl RecordOptOut {
         }
     }
 
+    #[tracing::instrument(name = "privacy.record_opt_out", skip_all, fields(tenant_id = ?subject.tenant_id))]
     pub async fn execute(
         &self,
         subject: &SubjectRef,
@@ -779,6 +784,7 @@ impl RecordLimitSensitive {
         Self { inner }
     }
 
+    #[tracing::instrument(name = "privacy.record_limit_sensitive", skip_all)]
     pub async fn execute(
         &self,
         subject: &SubjectRef,

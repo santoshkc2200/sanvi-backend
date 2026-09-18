@@ -73,6 +73,7 @@ impl StartProviderConnection {
     /// a crash mid-create, or (concurrently) whichever insert won the
     /// race. A *different* key while an active connection exists is a
     /// `409 payments/connection-exists`.
+    #[tracing::instrument(name = "payments.start_provider_connection", skip_all, fields(tenant_id = %command.tenant_id))]
     pub async fn execute(
         &self,
         command: StartConnectionCommand,

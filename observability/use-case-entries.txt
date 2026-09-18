@@ -23,3 +23,10 @@ crates/contexts/identity/src/application/delegation.rs check_grant
 crates/contexts/identity/src/application/delegation.rs check_invite
 crates/contexts/identity/src/application/delegation.rs check_accept
 crates/contexts/identity/src/application/delegation.rs check_update_roles
+crates/contexts/localization/src/application/catalog_service.rs catalog
+crates/contexts/localization/src/application/catalog_service.rs supported_locales
+crates/contexts/notifications/src/application/dispatcher.rs handle_envelope
+crates/contexts/payments/src/application/webhooks.rs receive
+crates/contexts/tenancy/src/application/resolve_tenant.rs by_slug
+crates/contexts/tenancy/src/application/resolve_tenant.rs by_id
+crates/contexts/tenancy/src/application/resolve_tenant.rs invalidate

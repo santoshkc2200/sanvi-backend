@@ -25,6 +25,7 @@ impl LiveDomainLookupService {
     }
 
     /// The tenant a hostname resolves to, if it holds a live claim.
+    #[tracing::instrument(name = "domains.resolve", skip_all)]
     pub async fn resolve(&self, host: &str) -> Option<TenantId> {
         let host = host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host);
         let hostname = Hostname::parse(host.trim_end_matches('.')).ok()?;
@@ -48,6 +49,7 @@ impl LiveDomainLookupService {
 
     /// Drop the local + shared cache entries for a hostname (called after
     /// transitions that change resolution).
+    #[tracing::instrument(name = "domains.invalidate", skip_all)]
     pub async fn invalidate(&self, host: &str) -> Result<(), DomainsError> {
         self.cache.invalidate(host).await
     }

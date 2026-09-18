@@ -33,6 +33,7 @@ impl SeedRoles {
 
     /// Ensure every system role exists with its seeded permissions. Returns
     /// the number of roles created/updated.
+    #[tracing::instrument(name = "access.seed_roles", skip_all)]
     pub async fn execute(&self) -> Result<usize, AccessError> {
         let mut scope = self
             .tx_manager

@@ -117,6 +117,7 @@ impl ThresholdEvaluator {
         Ok(())
     }
 
+    #[tracing::instrument(name = "advertising.evaluate_tenant", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn evaluate_tenant(&self, tenant_id: TenantId) -> Result<(), AdvertisingError> {
         let mut scope = self
             .tx
@@ -694,6 +695,7 @@ impl SpendAnomalyDetector {
         }
     }
 
+    #[tracing::instrument(name = "advertising.detect_anomalies_for_tenant", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn detect_anomalies_for_tenant(
         &self,
         tenant_id: TenantId,

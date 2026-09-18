@@ -63,6 +63,7 @@ impl ClaimCustomDomain {
         }
     }
 
+    #[tracing::instrument(name = "domains.claim_custom_domain", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,

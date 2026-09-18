@@ -52,6 +52,7 @@ impl ListPayments {
         }
     }
 
+    #[tracing::instrument(name = "payments.list_payments", skip_all, fields(tenant_id = %command.tenant_id))]
     pub async fn execute(
         &self,
         command: ListPaymentsCommand,
@@ -163,6 +164,7 @@ impl GetPaymentDetail {
         }
     }
 
+    #[tracing::instrument(name = "payments.get_payment_detail", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

@@ -25,6 +25,7 @@ impl SeedFeatures {
     /// Insert every seed missing from the catalog. Existing rows are left
     /// untouched (seeds are defaults, not overrides). Returns the number of
     /// rows created.
+    #[tracing::instrument(name = "access.seed_features", skip_all)]
     pub async fn execute(&self) -> Result<usize, AccessError> {
         let mut scope = self
             .tx_manager

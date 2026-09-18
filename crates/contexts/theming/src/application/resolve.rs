@@ -331,6 +331,7 @@ impl ResolvePublicTheme {
         Self { service }
     }
 
+    #[tracing::instrument(name = "theming.resolve_public_theme", skip_all)]
     pub async fn execute(&self, host: &str, locale: &str) -> Result<ResolvedTheme, ThemingError> {
         self.service.resolve_public(host, locale).await
     }
@@ -346,6 +347,7 @@ impl PreviewTenantTheme {
         Self { service }
     }
 
+    #[tracing::instrument(name = "theming.preview_tenant_theme", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

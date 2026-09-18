@@ -36,6 +36,7 @@ impl ReconcileCampaign {
 
     /// Store a provider observation. This operation never calls the provider,
     /// so a reconciliation pass cannot resurrect a paused remote campaign.
+    #[tracing::instrument(name = "advertising.reconcile_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

@@ -13,6 +13,7 @@ impl GetBuildInfo {
         Self { info }
     }
 
+    #[tracing::instrument(name = "system.get_build_info", skip_all)]
     pub fn execute(&self) -> BuildInfo {
         self.info.clone()
     }
@@ -40,6 +41,7 @@ impl GetBuildDetails {
         }
     }
 
+    #[tracing::instrument(name = "system.get_build_details", skip_all)]
     pub fn execute(&self) -> BuildDetails {
         self.details.clone()
     }

@@ -46,6 +46,7 @@ impl RunOrderSweep {
         }
     }
 
+    #[tracing::instrument(name = "domains.run_order_sweep", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<OrderSweepReport, DomainsError> {
         let mut scope = self
             .tx

@@ -41,6 +41,7 @@ impl RebuildAccessTuples {
     /// *assignments* (Keto-only tuples from `cli membership grant
     /// --platform`) live in the `role` namespace and are wiped too — re-run
     /// the grant after a rebuild (phase 03 gives them a database home).
+    #[tracing::instrument(name = "access.rebuild_access_tuples", skip_all)]
     pub async fn execute(&self) -> Result<usize, AccessError> {
         let mut scope = self
             .tx_manager

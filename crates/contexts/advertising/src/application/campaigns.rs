@@ -141,6 +141,7 @@ impl CreateCampaign {
         }
     }
 
+    #[tracing::instrument(name = "advertising.create_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -265,6 +266,7 @@ impl GetCampaign {
         Self { tx, campaigns }
     }
 
+    #[tracing::instrument(name = "advertising.get_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -299,6 +301,7 @@ impl ListCampaigns {
         Self { tx, campaigns }
     }
 
+    #[tracing::instrument(name = "advertising.list_campaigns", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -342,6 +345,7 @@ impl ValidateCampaign {
         }
     }
 
+    #[tracing::instrument(name = "advertising.validate_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -606,6 +610,7 @@ impl PatchCampaign {
         }
     }
 
+    #[tracing::instrument(name = "advertising.patch_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -730,6 +735,7 @@ impl AddAdGroup {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(name = "advertising.add_ad_group", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -800,6 +806,7 @@ impl UpdateAdGroup {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(name = "advertising.update_ad_group", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -985,6 +992,7 @@ impl AddAd {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(name = "advertising.add_ad", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -1080,6 +1088,7 @@ impl UpdateAd {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(name = "advertising.update_ad", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -1252,6 +1261,7 @@ impl PublishCampaign {
         }
     }
 
+    #[tracing::instrument(name = "advertising.publish_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -1593,6 +1603,7 @@ struct SetCampaignRunState {
 }
 
 impl SetCampaignRunState {
+    #[tracing::instrument(name = "advertising.set_campaign_run_state", skip_all, fields(tenant_id = %tenant_id))]
     async fn execute(
         &self,
         tenant_id: TenantId,
@@ -1732,6 +1743,7 @@ impl PauseCampaign {
         })
     }
 
+    #[tracing::instrument(name = "advertising.pause_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -1793,6 +1805,7 @@ impl ResumeCampaign {
         })
     }
 
+    #[tracing::instrument(name = "advertising.resume_campaign", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -1844,6 +1857,7 @@ impl ListCampaignChanges {
         Self { tx, campaigns }
     }
 
+    #[tracing::instrument(name = "advertising.list_campaign_changes", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

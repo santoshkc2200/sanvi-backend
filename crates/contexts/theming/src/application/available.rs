@@ -42,6 +42,7 @@ impl ListAvailableThemes {
         }
     }
 
+    #[tracing::instrument(name = "theming.list_available_themes", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<AvailableThemesView, ThemingError> {
         let registry = self.themes.list(&self.pool).await?;
         let mut views = Vec::new();

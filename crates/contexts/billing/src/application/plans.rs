@@ -148,6 +148,7 @@ impl ListPublicPlans {
         }
     }
 
+    #[tracing::instrument(name = "billing.list_public_plans", skip_all)]
     pub async fn execute(&self) -> Result<Vec<PublicPlanView>, BillingError> {
         let mut scope = self
             .tx_manager
@@ -203,6 +204,7 @@ impl ListPlans {
         }
     }
 
+    #[tracing::instrument(name = "billing.list_plans", skip_all)]
     pub async fn execute(&self) -> Result<Vec<PlanAdminView>, BillingError> {
         let mut scope = self
             .tx_manager
@@ -285,6 +287,7 @@ impl CreatePlan {
         }
     }
 
+    #[tracing::instrument(name = "billing.create_plan", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -371,6 +374,7 @@ impl UpdatePlan {
         }
     }
 
+    #[tracing::instrument(name = "billing.update_plan", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -457,6 +461,7 @@ impl AddPlanPrice {
         }
     }
 
+    #[tracing::instrument(name = "billing.add_plan_price", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -538,6 +543,7 @@ impl SetPlanEntitlements {
         }
     }
 
+    #[tracing::instrument(name = "billing.set_plan_entitlements", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,

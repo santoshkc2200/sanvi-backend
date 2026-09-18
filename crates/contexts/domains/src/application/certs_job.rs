@@ -48,6 +48,7 @@ impl RunCertIssuanceSweep {
         }
     }
 
+    #[tracing::instrument(name = "domains.run_cert_issuance_sweep", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<CertIssuanceReport, DomainsError> {
         let mut scope = self
             .tx

@@ -68,6 +68,7 @@ impl AppealRequest {
         }
     }
 
+    #[tracing::instrument(name = "privacy.appeal_request", skip_all)]
     pub async fn execute(
         &self,
         requester_user: Option<UserId>,
@@ -232,6 +233,7 @@ impl DecideAppeal {
         }
     }
 
+    #[tracing::instrument(name = "privacy.decide_appeal", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -341,6 +343,7 @@ impl ListOpenAppeals {
         }
     }
 
+    #[tracing::instrument(name = "privacy.list_open_appeals", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<Vec<Appeal>, PrivacyError> {
         let mut scope = self
             .tx_manager

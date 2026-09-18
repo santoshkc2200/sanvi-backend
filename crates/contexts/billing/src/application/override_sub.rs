@@ -77,6 +77,7 @@ impl ApplySubscriptionOverride {
         }
     }
 
+    #[tracing::instrument(name = "billing.apply_subscription_override", skip_all, fields(tenant_id = %cmd.tenant_id))]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -231,6 +232,7 @@ impl RevokeSubscriptionOverride {
         }
     }
 
+    #[tracing::instrument(name = "billing.revoke_subscription_override", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, actor: UserId, tenant_id: TenantId) -> Result<(), BillingError> {
         let mut scope = self
             .tx_manager

@@ -122,6 +122,7 @@ impl PlaceDomainOrder {
         }
     }
 
+    #[tracing::instrument(name = "domains.place_domain_order", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -600,6 +601,7 @@ impl SetOrderAutoRenew {
         }
     }
 
+    #[tracing::instrument(name = "domains.set_order_auto_renew", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,

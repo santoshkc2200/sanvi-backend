@@ -36,6 +36,7 @@ impl VerifyAuditChain {
     /// Verify the whole chain from genesis. Paged so an arbitrarily long
     /// trail never loads into memory at once; the per-page verification
     /// carries the running hash across pages by re-reading page boundaries.
+    #[tracing::instrument(name = "audit.verify_audit_chain", skip_all)]
     pub async fn execute(&self) -> Result<ChainVerificationReport, AuditError> {
         let mut scope = self
             .tx_manager

@@ -19,6 +19,7 @@ impl ListBudgetAlerts {
         Self { tx, alerts }
     }
 
+    #[tracing::instrument(name = "advertising.list_budget_alerts", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -63,6 +64,7 @@ impl AcknowledgeBudgetAlert {
         Self { tx, alerts }
     }
 
+    #[tracing::instrument(name = "advertising.acknowledge_budget_alert", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

@@ -57,6 +57,7 @@ impl GetTenantOverrides {
         Self { repo }
     }
 
+    #[tracing::instrument(name = "localization.get_tenant_overrides", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -86,6 +87,7 @@ impl UpdateTenantOverrides {
         }
     }
 
+    #[tracing::instrument(name = "localization.update_tenant_overrides", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -179,6 +181,7 @@ impl GetPlatformTranslations {
         Self { repo, pool }
     }
 
+    #[tracing::instrument(name = "localization.get_platform_translations", skip_all)]
     pub async fn execute(&self) -> Result<Vec<TranslationView>, LocalizationError> {
         let overrides = self.repo.list_platform(&self.pool).await?;
         Ok(overrides.into_iter().map(TranslationView::from).collect())
@@ -204,6 +207,7 @@ impl UpdatePlatformTranslations {
         }
     }
 
+    #[tracing::instrument(name = "localization.update_platform_translations", skip_all)]
     pub async fn execute(
         &self,
         scope: &mut PlatformScope<'_>,

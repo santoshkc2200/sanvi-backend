@@ -104,6 +104,7 @@ impl InviteMember {
         self
     }
 
+    #[tracing::instrument(name = "identity.invite_member", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -214,6 +215,7 @@ impl AcceptInvitation {
 
     /// Accept with the signed-in user's identity: the invitation's email
     /// must match the session's email, and the token is single-use.
+    #[tracing::instrument(name = "identity.accept_invitation", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -347,6 +349,7 @@ impl ResendInvitation {
         }
     }
 
+    #[tracing::instrument(name = "identity.resend_invitation", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -414,6 +417,7 @@ impl RevokeInvitation {
         }
     }
 
+    #[tracing::instrument(name = "identity.revoke_invitation", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -446,6 +450,7 @@ impl ListInvitations {
         }
     }
 
+    #[tracing::instrument(name = "identity.list_invitations", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<InvitationView>, IdentityError> {
         let mut scope = self
             .tx_manager

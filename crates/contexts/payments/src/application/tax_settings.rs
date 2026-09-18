@@ -262,6 +262,7 @@ impl CheckTenantTaxCompliance {
     }
 
     /// Re-verify up to `limit` enabled tenants, oldest check first.
+    #[tracing::instrument(name = "payments.check_tenant_tax_compliance", skip_all)]
     pub async fn execute(&self, limit: i64) -> Result<ComplianceReport, PaymentsError> {
         let mut report = ComplianceReport::default();
         let batch = {

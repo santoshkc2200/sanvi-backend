@@ -20,6 +20,7 @@ impl ListConversions {
         Self { tx, repo }
     }
 
+    #[tracing::instrument(name = "advertising.list_conversions", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -44,6 +45,7 @@ impl GetConversionDiagnostics {
         Self { tx, repo }
     }
 
+    #[tracing::instrument(name = "advertising.get_conversion_diagnostics", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

@@ -61,6 +61,7 @@ impl ListPendingApprovals {
         }
     }
 
+    #[tracing::instrument(name = "platform_admin.list_pending_approvals", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<Vec<ApprovalView>, PlatformAdminError> {
         let mut scope = self
             .tx_manager
@@ -125,6 +126,7 @@ impl DecideApproval {
 }
 
 impl ApproveRequest {
+    #[tracing::instrument(name = "platform_admin.approve_request", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -138,6 +140,7 @@ impl ApproveRequest {
 }
 
 impl RejectRequest {
+    #[tracing::instrument(name = "platform_admin.reject_request", skip_all)]
     pub async fn execute(
         &self,
         actor: UserId,
@@ -309,6 +312,7 @@ impl RecordApprovalRequest {
         }
     }
 
+    #[tracing::instrument(name = "platform_admin.record_approval_request", skip_all)]
     pub async fn execute(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,

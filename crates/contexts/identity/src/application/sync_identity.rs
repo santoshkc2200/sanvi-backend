@@ -93,6 +93,7 @@ impl SyncIdentityFromKratos {
     /// Idempotent by construction: refresh is an upsert, linking is guarded
     /// by the `(provider, subject)` primary key, and registration only
     /// creates when the Kratos identity is unknown.
+    #[tracing::instrument(name = "identity.sync_identity_from_kratos", skip_all)]
     pub async fn execute(&self, mut input: SyncIdentityInput) -> Result<(), IdentityError> {
         // Kratos strips `credentials` from webhook payloads: resolve OIDC
         // identifiers through the admin API (best effort — a reachable

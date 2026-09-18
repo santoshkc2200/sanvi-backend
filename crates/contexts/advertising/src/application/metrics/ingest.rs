@@ -46,6 +46,7 @@ impl IngestConnectionMetrics {
     /// recorded (not yet synced, or synced under a different connection)
     /// is skipped rather than guessed at — logged so a persistent
     /// mismatch is visible operationally.
+    #[tracing::instrument(name = "advertising.ingest_connection_metrics", skip_all, fields(tenant_id = %connection.tenant_id()))]
     pub async fn execute(
         &self,
         connection: &AdvertisingConnection,

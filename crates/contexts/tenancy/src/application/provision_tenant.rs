@@ -65,6 +65,7 @@ impl ProvisionTenant {
         }
     }
 
+    #[tracing::instrument(name = "tenancy.provision_tenant", skip_all)]
     pub async fn execute(&self, cmd: ProvisionTenantCommand) -> Result<TenantView, TenancyError> {
         let slug = TenantSlug::parse(&cmd.slug)?;
         let display_name = TenantName::parse(&cmd.display_name)?;

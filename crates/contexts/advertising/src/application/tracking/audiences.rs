@@ -280,6 +280,7 @@ impl CreateAudience {
         Self { tx, repo, ids }
     }
 
+    #[tracing::instrument(name = "advertising.create_audience", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -332,6 +333,7 @@ impl ListAudiences {
         Self { tx, repo }
     }
 
+    #[tracing::instrument(name = "advertising.list_audiences", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<Audience>, AdvertisingError> {
         let mut scope = self
             .tx
@@ -380,6 +382,7 @@ impl RefreshAudience {
         }
     }
 
+    #[tracing::instrument(name = "advertising.refresh_audience", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -452,6 +455,7 @@ impl SyncAudiences {
         }
     }
 
+    #[tracing::instrument(name = "advertising.sync_audiences", skip_all)]
     pub async fn execute(
         &self,
         stale_after_secs: i64,

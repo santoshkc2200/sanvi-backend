@@ -73,6 +73,7 @@ impl CreateCreative {
         }
     }
 
+    #[tracing::instrument(name = "advertising.create_creative", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -179,6 +180,7 @@ impl GetCreative {
         Self { tx, creatives }
     }
 
+    #[tracing::instrument(name = "advertising.get_creative", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -205,6 +207,7 @@ impl ListCreatives {
         Self { tx, creatives }
     }
 
+    #[tracing::instrument(name = "advertising.list_creatives", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -228,6 +231,7 @@ impl DeleteCreative {
         Self { tx, creatives }
     }
 
+    #[tracing::instrument(name = "advertising.delete_creative", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -281,6 +285,7 @@ impl GetCreativePreviews {
         }
     }
 
+    #[tracing::instrument(name = "advertising.get_creative_previews", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

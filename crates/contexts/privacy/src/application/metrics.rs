@@ -35,6 +35,7 @@ impl PublicMetrics {
         }
     }
 
+    #[tracing::instrument(name = "privacy.public_metrics", skip_all)]
     pub async fn execute(&self, year: Option<i32>) -> Result<Vec<PublicMetricsRow>, PrivacyError> {
         let year =
             year.unwrap_or_else(|| chrono::Datelike::year(&chrono::Utc::now().date_naive()) - 1);
@@ -86,6 +87,7 @@ impl GenerateAnnualMetrics {
     }
 
     /// Regenerate the completed calendar year (or the one requested).
+    #[tracing::instrument(name = "privacy.generate_annual_metrics", skip_all)]
     pub async fn execute(&self, year: Option<i32>) -> Result<usize, PrivacyError> {
         let year =
             year.unwrap_or_else(|| chrono::Datelike::year(&self.clock.now().date_naive()) - 1);

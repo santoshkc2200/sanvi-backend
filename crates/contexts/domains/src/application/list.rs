@@ -22,6 +22,7 @@ impl ListCustomDomains {
         Self { domains, certs }
     }
 
+    #[tracing::instrument(name = "domains.list_custom_domains", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -53,6 +54,7 @@ impl ListDomainOrders {
         Self { orders }
     }
 
+    #[tracing::instrument(name = "domains.list_domain_orders", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         scope: &mut ScopedTx<'_>,

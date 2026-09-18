@@ -64,6 +64,7 @@ impl BudgetRolloverSweep {
     /// Returns `true` when a boundary was recorded, `false` when the tick landed
     /// inside the period already processed. Campaigns are never resumed
     /// (FR-1013).
+    #[tracing::instrument(name = "advertising.sweep_tenant", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn sweep_tenant(
         &self,
         tenant_id: TenantId,
@@ -131,6 +132,7 @@ impl BudgetRolloverSweep {
     /// The cap listing runs in its own short transaction, committed before the
     /// per-tenant work begins, so no platform transaction is held across the
     /// sweep.
+    #[tracing::instrument(name = "advertising.sweep_all", skip_all)]
     pub async fn sweep_all(&self, period: BudgetPeriod) -> Result<usize, AdvertisingError> {
         let tenants = {
             let mut scope = self

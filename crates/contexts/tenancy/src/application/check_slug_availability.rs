@@ -34,6 +34,7 @@ impl CheckSlugAvailability {
 
     /// `true` when the slug is free to claim. Invalid or reserved slugs
     /// answer `false` — the same signal as "taken", on purpose.
+    #[tracing::instrument(name = "tenancy.check_slug_availability", skip_all)]
     pub async fn execute(&self, raw: &str) -> Result<SlugAvailability, TenancyError> {
         let slug = match TenantSlug::parse(raw) {
             Ok(slug) => slug,

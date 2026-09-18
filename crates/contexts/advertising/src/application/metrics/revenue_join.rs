@@ -63,6 +63,7 @@ impl JoinCampaignRevenue {
         }
     }
 
+    #[tracing::instrument(name = "advertising.join_campaign_revenue", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
