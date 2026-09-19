@@ -106,7 +106,8 @@ scan_tree() {
     local search="$tree/crates/contexts"
     [[ -d "$search" ]] || return 0
     local f rel ctx extra stale_flag row state
-    for f in $(find "$search" -path '*/src/application/*' -name '*.rs' ! -name 'mod.rs' | LC_ALL=C sort); do
+    # Read line-wise, not as an unquoted for-glob: paths must survive spaces.
+    while IFS= read -r f; do
         rel="${f#"$tree"/}"
         ctx="$(echo "$rel" | cut -d/ -f3)"
         extra=""
@@ -130,7 +131,7 @@ scan_tree() {
         if [[ "$state" != "n/a" ]]; then
             TOTAL_USE_CASES=$((TOTAL_USE_CASES + 1))
         fi
-    done
+    done < <(find "$search" -path '*/src/application/*' -name '*.rs' ! -name 'mod.rs' | LC_ALL=C sort)
 }
 
 write_matrix() {

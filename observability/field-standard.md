@@ -45,10 +45,12 @@ a redaction strategy.
 
 ## Sampling
 
-Head sampling keeps `telemetry.sampling.head_ratio` of traces and is the
-fallback when the collector is down; tail sampling — the
-`telemetry.sampling.tail_sampling` flag, off by default — additionally
+Head sampling keeps `telemetry.sampling.head_ratio` of traces at span
+start; with `telemetry.sampling.tail_sampling` off (the default) that is
+the whole policy. With the flag on, the tail processor decides instead: it
 keeps every error span and every span slower than
-`telemetry.sampling.latency_threshold_ms`. Both are unit-tested in
+`telemetry.sampling.latency_threshold_ms`, and applies `head_ratio` as a
+per-trace coin to the rest — a trace is exported whole or dropped whole.
+Both positions are unit-tested in
 `crates/platform/telemetry/src/sampling.rs`, including the
 collector-unavailable invariant: losing traces must never cost requests.

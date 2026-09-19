@@ -41,8 +41,9 @@ find out that a metric you need does not exist.
 - No `/api/v1` shape changes. Two cross-cutting conventions are fixed once in the shared schemas
   rather than per context: server-rendered documents and API responses carry the W3C `traceparent`,
   and every problem-details error carries a `trace_id`.
-- Head sampling stays as the fallback when the collector is unavailable. **Losing traces must never
-  cost requests.**
+- With `tail_sampling` off, head sampling decides at span start; with it on,
+  the tail processor is the sole decider. Either way **losing traces must
+  never cost requests.**
 - No performance change of any kind in this task.
 
 ## File ownership map
@@ -130,10 +131,12 @@ one type, then reports zero findings on the clean tree.
 
 **Do:** consistent field names across contexts; levels tuned for production volume with a documented
 cost estimate per level. Tail-based sampling on errors and latency outliers behind
-`platform.tail_sampling`, with head sampling retained as the fallback.
+`platform.tail_sampling`; with the flag on the tail processor is the sole decider, applying
+`head_ratio` as the per-trace coin for ordinary spans (a head sampler would drop spans before the
+processor ever saw them, so keep-errors could not hold).
 
-**Verify:** a test asserts that with the collector unavailable, requests still complete and sampling
-falls back to head.
+**Verify:** a test asserts that with the collector unavailable, requests still complete — sampling
+never costs requests in either flag position.
 
 ### Step 6 · slice 11.1e: Record the lab latency budgets
 
@@ -223,6 +226,10 @@ runbook-xref OK (self-test proves all four failure modes); alert-rules-test
   tracer), every response carries a matching `traceparent` header, and an
   inbound `traceparent` joins the caller's trace at the root span via the
   global `TraceContextPropagator` `sanvi_telemetry::init` now registers.
+  Review pass: `TraceparentLayer` moved inside `TracingLogger` in
+  `middleware::stack` — registered after it, the layer sat outside the
+  request span and stamped nothing (proven by an integration test through
+  the assembled stack, which the hand-wrapped unit tests could not see).
   `scripts/check-trace-coverage.sh` walks use-case entries and failed red
   on first run: **107 of 111 use cases without a conforming span**. The
   red matrix was committed.
@@ -236,9 +243,15 @@ runbook-xref OK (self-test proves all four failure modes); alert-rules-test
 - **11.1d** — `TailSamplingProcessor` behind `telemetry.sampling.tail_sampling`
   (the task's `platform.tail_sampling`; key named for the section it lives
   in, still default-off): errors and latency outliers always exported, the
-  keep decision sticky per trace, head sampling the fallback; the
-  collector-unavailable invariant proven in both flag positions.
+  keep decision sticky per trace; with the flag on the processor is the
+  sole decider (`Sampler::AlwaysOn` — a head sampler drops spans before
+  `on_end`, so keep-errors could not hold under `ParentBased`), applying
+  `head_ratio` as the ordinary-trace coin; the collector-unavailable
+  invariant proven in both flag positions.
   `observability/field-standard.md` fixes field names and level volumes.
+  Review pass: the decision map now evicts one entry at cap instead of
+  clearing (a clear re-coined in-flight traces into partial exports), and
+  a provider-level test pins the `AlwaysOn` composition.
 - **11.1e** — budgets re-captured on the post-erratum seed
   (`benchmarks/*/baseline-2026-09-18.json`, `stats_version: 2` — the
   removed stats_version-1 artifacts from TASK-019 replaced);

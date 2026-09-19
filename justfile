@@ -164,6 +164,9 @@ log-pii-scan-self-test:
 # TASK-020 (FR-1106): the alert registry evaluated against recorded
 # series — a ten-minute outage fires, a single failed request does not,
 # and every rule fires on its own synthetic breach.
+# Bare `cargo nextest` is exempted here only because `alert_rules` is
+# DB-less (no testsupport Postgres fixture); if it ever grows one, route
+# through scripts/test.sh — see CLAUDE.md on stranded containers.
 alert-rules-test:
     cargo nextest run -p sanvi-telemetry --test alert_rules
 

@@ -50,10 +50,10 @@ const PUBLIC_CROSS_ORIGIN_PATHS: &[&str] = &["/api/v1/public/track"];
 /// Apply the canonical middleware chain to an `App`.
 ///
 /// Outermost → innermost:
-/// metrics → request id → tracing span → concurrency limit → panic catch →
-/// rate limit → tenant resolution → authentication → impersonation →
-/// locale negotiation → tenant rate limit → request timeout → body normalize
-/// → CORS → security headers → error handlers.
+/// metrics → request id → tracing span → traceparent header → concurrency
+/// limit → panic catch → rate limit → tenant resolution → authentication →
+/// impersonation → locale negotiation → tenant rate limit → request timeout
+/// → body normalize → CORS → security headers → error handlers.
 ///
 /// `tenant` is `None` until the tenancy context is wired (phase 01+); without
 /// it every route behaves as a public route. `authn` is `None` until the
@@ -125,11 +125,15 @@ where
         })
         .wrap(CatchPanic)
         .wrap(ConcurrencyLimit::new(config.max_concurrency))
+        // Inside the request span: the traceparent response header and the
+        // error bodies' trace_id must name *this server's* span, which only
+        // exists while `TracingLogger` holds it entered. Wrapping after it
+        // would read an exited span and stamp nothing.
+        .wrap(crate::trace_context::TraceparentLayer)
         .wrap(crate::tracing::TracingLogger::<
             crate::tracing::SanviRootSpanBuilder,
         >::new())
         .wrap(RequestIdLayer)
-        .wrap(crate::trace_context::TraceparentLayer)
         .wrap(RecordMetrics)
 }
 

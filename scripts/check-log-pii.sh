@@ -17,6 +17,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Bare `cargo nextest` is normally forbidden (CLAUDE.md: the testsupport
+# harness strands Postgres containers). The exemption holds only while
+# `pii_corpus` stays DB-less — it never touches the Postgres fixture. If a
+# test here ever needs the database, route through scripts/test.sh instead.
 if [[ "${1:-}" == "--self-test" ]]; then
     # Plant the two easy-to-dismiss shapes by name: a base64-wrapped token
     # and a hashed identifier that is still an identifier. Each planted run

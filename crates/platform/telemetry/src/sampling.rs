@@ -14,10 +14,19 @@
 //!   a trace is exported whole or dropped whole rather than arriving in
 //!   OpenObserve as confetti.
 //!
-//! Head sampling stays as the fallback: with the flag off the processor is
-//! not installed at all, and with the collector unavailable the batch
-//! exporter fails asynchronously — sampling decisions never block or fail a
-//! request, which is the invariant the init tests assert.
+//! When the flag is on this processor is the *sole* decider:
+//! `build_otlp_tracer` pairs it with `Sampler::AlwaysOn`, because a head
+//! sampler drops non-sampled spans before any processor sees them — under
+//! `ParentBased(TraceIdRatioBased)` the keep-errors promise would only hold
+//! inside head-sampled traces, and ordinary spans would draw the ratio coin
+//! twice. The provider-level test `tail_sampling_sees_spans_the_head_coin_
+//! would_drop` pins that seam.
+//!
+//! With the flag off the processor is not installed at all and the
+//! provider's `ParentBased(TraceIdRatioBased(head_ratio))` is the whole
+//! policy. Either way, with the collector unavailable the batch exporter
+//! fails asynchronously — sampling decisions never block or fail a request,
+//! which is the invariant the init tests assert.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -32,10 +41,23 @@ use opentelemetry_sdk::trace::SpanProcessor;
 
 /// Per-trace sticky decisions live in a bounded map: a lab-shaped process
 /// sees thousands of short traces per second, and unbounded growth here
-/// would be a memory leak wearing a sampling costume. The map is cleared
-/// wholesale when it reaches the cap — at that size the oldest entries are
-/// long-closed traces.
+/// would be a memory leak wearing a sampling costume. At the cap one
+/// arbitrary entry is evicted per new decision — at that size the evicted
+/// entry is almost certainly a long-closed trace, and every other in-flight
+/// trace keeps its stickiness. (A wholesale clear was rejected: it would
+/// turn cap pressure into exactly the partial-trace confetti the sticky
+/// decision exists to prevent.)
 const DECISION_MAP_CAP: usize = 65_536;
+
+/// Reserve room for `incoming`: at the cap, evict one arbitrary entry.
+fn make_room(decisions: &mut HashMap<TraceId, bool>, incoming: TraceId) {
+    if decisions.len() < DECISION_MAP_CAP || decisions.contains_key(&incoming) {
+        return;
+    }
+    if let Some(evicted) = decisions.keys().next().copied() {
+        decisions.remove(&evicted);
+    }
+}
 
 #[derive(Debug)]
 pub struct TailSamplingProcessor<P> {
@@ -66,15 +88,14 @@ impl<P: SpanProcessor> TailSamplingProcessor<P> {
             .unwrap_or_default();
         let notable =
             matches!(span.status, Status::Error { .. }) || duration >= self.latency_threshold;
+        let trace_id = span.span_context.trace_id();
         if notable {
             // Errors and latency outliers make their whole trace worth
             // keeping: record the decision so later ordinary spans of the
             // same trace follow it into OpenObserve.
             if let Ok(mut decisions) = self.decisions.lock() {
-                if decisions.len() >= DECISION_MAP_CAP {
-                    decisions.clear();
-                }
-                decisions.insert(span.span_context.trace_id(), true);
+                make_room(&mut decisions, trace_id);
+                decisions.insert(trace_id, true);
             }
             true
         } else {
@@ -82,11 +103,9 @@ impl<P: SpanProcessor> TailSamplingProcessor<P> {
                 // Consult the trace's existing decision, or draw the head
                 // coin for it.
                 Ok(mut decisions) => {
-                    if decisions.len() >= DECISION_MAP_CAP {
-                        decisions.clear();
-                    }
+                    make_room(&mut decisions, trace_id);
                     *decisions
-                        .entry(span.span_context.trace_id())
+                        .entry(trace_id)
                         .or_insert_with(rand_keep(self.head_ratio))
                 }
                 Err(_) => false,
@@ -262,19 +281,81 @@ mod tests {
         assert_eq!(processor.inner.ended(), 3);
     }
 
-    /// With the collector unavailable the exporter fails asynchronously;
-    /// sampling must neither block nor fail the caller. The full `init`
-    /// path is exercised with an unroutable endpoint in
-    /// `collector_unavailable_requests_still_complete`.
+    /// Cap pressure evicts one arbitrary decision per new trace, not the
+    /// map: the bound holds and no wholesale wipe occurs (a wholesale clear
+    /// would re-coin every in-flight trace's remaining spans into confetti).
     #[test]
-    fn processor_never_blocks_when_the_inner_sink_is_stuck() {
-        // force_flush/shutdown delegate: a hanging sink is the batch
-        // exporter's problem, not the sampler's — asserted by the init
-        // test's time bound, not here.
+    fn cap_pressure_evicts_one_entry_not_the_whole_map() {
+        let inner = CountingProcessor::default();
+        let processor = TailSamplingProcessor::new(inner, Duration::from_secs(1), 1.0);
+        for trace in 1..=(DECISION_MAP_CAP as u128 + 1) {
+            processor.on_end(span(trace, Duration::from_millis(1), OtStatus::Unset));
+        }
+        assert_eq!(processor.inner.ended(), DECISION_MAP_CAP + 1);
+        assert_eq!(processor.decisions.lock().unwrap().len(), DECISION_MAP_CAP);
+    }
+
+    /// `force_flush`/`shutdown` delegate to the inner processor; a hanging
+    /// sink is the batch exporter's problem, not the sampler's — asserted
+    /// by the init test's time bound, not here.
+    #[test]
+    fn force_flush_and_shutdown_delegate_to_the_inner_processor() {
         let inner = CountingProcessor::default();
         let processor = TailSamplingProcessor::new(inner, Duration::from_secs(1), 1.0);
         assert!(processor.force_flush().is_ok());
         assert!(processor.shutdown().is_ok());
+    }
+
+    /// The composition seam: with tail sampling on, the provider must
+    /// *record* spans the head coin would drop — the processor is the sole
+    /// decider, and a head sampler would never let it see them (`on_end` is
+    /// not called for dropped spans). With tail off, head ratio 0 drops at
+    /// span start as before. Pointed at a dead collector; nothing is
+    /// exported, only recorded.
+    #[tokio::test]
+    async fn tail_sampling_sees_spans_the_head_coin_would_drop() {
+        use opentelemetry::trace::Span as _;
+        use opentelemetry::trace::Tracer as _;
+        use opentelemetry::trace::TracerProvider as _;
+
+        let config = |tail_sampling| crate::TelemetryConfig {
+            environment: "test".to_string(),
+            service_name: "sanvi-test".to_string(),
+            otlp: crate::OtlpConfig {
+                enabled: true,
+                // Nothing listens here: the exporter target is dead.
+                endpoint: "http://127.0.0.1:1".to_string(),
+                organization: "default".to_string(),
+                stream: "default".to_string(),
+                auth_token: "dGVzdDp0ZXN0".to_string(),
+            },
+            sampling: crate::SamplingConfig {
+                head_ratio: 0.0,
+                tail_sampling,
+                latency_threshold_ms: 1_000,
+            },
+            ..crate::TelemetryConfig::default()
+        };
+
+        let provider = crate::build_otlp_tracer(&config(true))
+            .expect("tracer provider builds with an unreachable collector")
+            .expect("otlp is enabled");
+        let kept = provider
+            .tracer("composition probe")
+            .start("kept-for-the-tail");
+        assert!(
+            kept.is_recording(),
+            "tail sampling must see spans the head coin would drop"
+        );
+
+        let provider = crate::build_otlp_tracer(&config(false))
+            .expect("tracer provider builds with an unreachable collector")
+            .expect("otlp is enabled");
+        let dropped = provider.tracer("composition probe").start("head-dropped");
+        assert!(
+            !dropped.is_recording(),
+            "with tail off, head_ratio 0 drops at span start"
+        );
     }
 
     /// The DoD test: with the collector unreachable, the pipeline still

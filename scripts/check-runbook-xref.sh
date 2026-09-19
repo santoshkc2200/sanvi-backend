@@ -36,7 +36,7 @@ declared_alerts() {
                 print id
                 line = substr(line, RSTART + RLENGTH)
             }
-            if ($0 ~ /[^,]$/) collecting = 0   # paragraph ended
+            if ($0 == "" || $0 !~ /,$/) collecting = 0   # paragraph ended (blank line or no trailing comma)
             next
         }
     ' "$file" | sort -u
@@ -113,6 +113,11 @@ self_test() {
 }
 EOF
     printf '**Alerts:** `GoodAlert`\n' > "$tree/docs/runbooks/good.md"
+    # A wrapped declaration ends in a comma; the blank line below ends the
+    # paragraph — `SneakyWord` in the following prose must not be collected
+    # as a declared alert.
+    printf '**Alerts:** `GoodAlert`,\n\nProse mentioning `SneakyWord` after the blank line.\n' \
+        > "$tree/docs/runbooks/wrapped.md"
     printf 'nothing declared here\n' > "$tree/docs/runbooks/undeclared.md"
     printf '**Alerts:** `GhostAlert`\n' > "$tree/docs/runbooks/phantom.md"
     printf '# exempt on purpose\n' > "$tree/scripts/runbook-xref-exempt.txt"
@@ -131,6 +136,10 @@ EOF
         { echo "self-test failed: the unregistered alert reference was not caught" >&2; exit 1; }
     if grep -q "GoodAlert" <<<"$out"; then
         echo "self-test failed: the well-formed pairing was flagged" >&2
+        exit 1
+    fi
+    if grep -q "SneakyWord" <<<"$out"; then
+        echo "self-test failed: prose after a wrapped Alerts line was collected as a declaration" >&2
         exit 1
     fi
 

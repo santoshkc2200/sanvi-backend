@@ -311,11 +311,6 @@ fn every_evaluable_rule_fires_on_a_breach_and_stays_silent_when_clean() {
         let step = 60_u64;
         let horizon = 120; // two hours of one-minute steps
         let threshold = check["threshold"].as_f64().unwrap_or(0.0);
-        let series = Series {
-            step_secs: step,
-            values: BTreeMap::new(),
-        };
-        let _ = series; // constructed per case below
 
         let breach = match kind {
             "ratio" => {
@@ -422,7 +417,6 @@ fn every_evaluable_rule_fires_on_a_breach_and_stays_silent_when_clean() {
             "{} fires on a clean series",
             rule["alert"]
         );
-        let _ = threshold;
     }
 }
 
@@ -454,49 +448,71 @@ fn a_ten_minute_outage_fires_and_a_single_failed_request_does_not() {
     );
 }
 
+/// The Prometheus metric names the platform exports (OTel → Prometheus
+/// naming) — the only identifiers an alert expr may reference. Anchored to
+/// the declaring sources by `exported_names_stay_anchored_to_the_metric_
+/// sources`, so a metric renamed in source fails here instead of leaving a
+/// stale entry that silently matches forever.
+const EXPORTED_METRICS: &[&str] = &[
+    // platform/http/src/metrics.rs (the http ones via `OTEL_EXPORTED` below)
+    "http_server_requests_total",
+    "http_server_errors_total",
+    "http_server_duration_seconds",
+    "http_server_duration_seconds_bucket",
+    "tenant_resolution_duration",
+    "tenant_resolution_source_total",
+    // contexts/payments/src/adapters/metrics.rs
+    "payments_platform_balance_movements_total",
+    "payments_connection_status_gauge",
+    "payments_webhook_events_total",
+    "payments_connection_disconnects_total",
+    "payments_webhook_unprocessed_gauge",
+    "payments_webhook_dead_letter_gauge",
+    "payments_webhook_lag_seconds",
+    "payments_webhook_lag_seconds_bucket",
+    "payments_webhook_unknown_account_total",
+    "payments_payout_failures_total",
+    "payments_payment_failure_total",
+    "payments_payment_succeeded_total",
+    "payments_dispute_open_gauge",
+    // contexts/advertising/src/adapters/metrics.rs
+    "conversion_upload_total",
+    "conversion_suppressed_total",
+    "conversion_retraction_total",
+    "audience_sync_total",
+    "conversion_dlq_depth",
+    "conversion_upload_lag_seconds",
+    "conversion_upload_lag_seconds_bucket",
+    "metrics_ingestion_lag_hours",
+    "ads_sync_failures_total",
+    "ads_sync_duration_seconds",
+    "ads_sync_duration_seconds_bucket",
+    "budget_threshold_alerts_total",
+    "budget_auto_pause_total",
+];
+
+/// Where those metrics are declared. `include_str!` keeps the anchor honest:
+/// renaming or moving a source breaks the compile, not the guarantee.
+const METRIC_SOURCES: &[&str] = &[
+    include_str!("../../http/src/metrics.rs"),
+    include_str!("../../../contexts/payments/src/adapters/metrics.rs"),
+    include_str!("../../../contexts/advertising/src/adapters/metrics.rs"),
+];
+
+/// The semconv http metrics are declared in OTel naming (dots); the
+/// Prometheus exporter renders them with unit suffixes.
+const OTEL_EXPORTED: &[(&str, &str)] = &[
+    ("http.server.requests", "http_server_requests_total"),
+    ("http.server.errors", "http_server_errors_total"),
+    ("http.server.duration", "http_server_duration_seconds"),
+];
+
 /// Expressions only name metrics the platform exports, or probe-declared
 /// ones. `probe`-kind rules with `expr: null` are skipped; an expr that
 /// names a metric nobody exports is a typo that would silently never fire.
 #[test]
 fn exprs_reference_declared_metrics_only() {
-    let exported: &[&str] = &[
-        // platform/http/src/metrics.rs (OTel → Prometheus naming)
-        "http_server_requests_total",
-        "http_server_errors_total",
-        "http_server_duration_seconds",
-        "http_server_duration_seconds_bucket",
-        "tenant_resolution_duration",
-        "tenant_resolution_source_total",
-        // contexts/payments/src/adapters/metrics.rs
-        "payments_platform_balance_movements_total",
-        "payments_connection_status_gauge",
-        "payments_webhook_events_total",
-        "payments_connection_disconnects_total",
-        "payments_webhook_unprocessed_gauge",
-        "payments_webhook_dead_letter_gauge",
-        "payments_webhook_lag_seconds",
-        "payments_webhook_lag_seconds_bucket",
-        "payments_webhook_unknown_account_total",
-        "payments_payout_failures_total",
-        "payments_payment_failure_total",
-        "payments_payment_succeeded_total",
-        "payments_dispute_open_gauge",
-        // contexts/advertising/src/adapters/metrics.rs
-        "conversion_upload_total",
-        "conversion_suppressed_total",
-        "conversion_retraction_total",
-        "audience_sync_total",
-        "conversion_dlq_depth",
-        "conversion_upload_lag_seconds",
-        "conversion_upload_lag_seconds_bucket",
-        "metrics_ingestion_lag_hours",
-        "ads_sync_failures_total",
-        "ads_sync_duration_seconds",
-        "ads_sync_duration_seconds_bucket",
-        "budget_threshold_alerts_total",
-        "budget_auto_pause_total",
-    ];
-    let expr_declared_only: &[&str] = &[];
+    let exported = EXPORTED_METRICS;
     for rule in rules() {
         let Some(raw_expr) = rule["expr"].as_str() else {
             continue;
@@ -514,7 +530,6 @@ fn exprs_reference_declared_metrics_only() {
         // Metric-shaped identifiers in the expression.
         let mut known = Vec::new();
         known.extend(exported.iter().copied());
-        known.extend(expr_declared_only.iter().copied());
         const PROMQL_WORDS: &[&str] = &[
             "sum",
             "rate",
@@ -551,5 +566,38 @@ fn exprs_reference_declared_metrics_only() {
                 rule["alert"], candidate
             );
         }
+    }
+}
+
+/// The inverse of the expr check, so `EXPORTED_METRICS` cannot rot: every
+/// name in it must still be derivable from the declaring sources — verbatim,
+/// as a histogram's `_bucket` child of a declared name, or via
+/// `OTEL_EXPORTED`. Without this, renaming a metric in source would leave a
+/// stale list entry that the expr check happily matches forever while the
+/// real alert never fires.
+#[test]
+fn exported_names_stay_anchored_to_the_metric_sources() {
+    let in_source = |needle: &str| METRIC_SOURCES.iter().any(|src| src.contains(needle));
+    for name in EXPORTED_METRICS {
+        let verbatim = in_source(&format!("\"{name}\""));
+        let histogram_base = name
+            .strip_suffix("_bucket")
+            .is_some_and(|base| in_source(&format!("\"{base}\"")));
+        let otel_mapped = OTEL_EXPORTED.iter().any(|(otel, prom)| {
+            in_source(&format!("\"{otel}\""))
+                && (*name == *prom || *name == format!("{prom}_bucket"))
+        });
+        assert!(
+            verbatim || histogram_base || otel_mapped,
+            "`{name}` is listed as exported but no metric source declares it (or its \
+             histogram base / OTel name) — was a metric renamed? Update EXPORTED_METRICS \
+             and every expr that references it."
+        );
+    }
+    for (otel, prom) in OTEL_EXPORTED {
+        assert!(
+            in_source(&format!("\"{otel}\"")),
+            "OTel metric `{otel}` (exported as `{prom}`) is no longer declared in any metric source"
+        );
     }
 }

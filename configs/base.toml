@@ -109,11 +109,13 @@ stream = "default"
 auth_token = ""           # env only: SANVI__TELEMETRY__OTLP__AUTH_TOKEN
 
 [telemetry.sampling]
-# TASK-020 (platform.tail_sampling): head sampling decides at span start
-# and is the fallback when the collector is down; tail sampling additionally
-# keeps every error span and every span slower than latency_threshold_ms.
-# Off by default: it changes what reaches OpenObserve, so it ships behind
-# its flag like every other default-off switch.
+# TASK-020 (platform.tail_sampling). Off: head sampling keeps `head_ratio`
+# of traces at span start and is the whole policy. On: the tail processor
+# decides instead — it keeps every error span and every span slower than
+# latency_threshold_ms, and applies head_ratio as a per-trace coin to the
+# rest, so a trace is exported whole or dropped whole. Off by default: it
+# changes what reaches OpenObserve, so it ships behind its flag like every
+# other default-off switch.
 head_ratio = 1.0
 tail_sampling = false
 latency_threshold_ms = 1000

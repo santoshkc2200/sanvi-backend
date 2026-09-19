@@ -107,14 +107,24 @@ pub(crate) fn build_otlp_tracer(config: &TelemetryConfig) -> Result<Option<SdkTr
         .with_metadata(otlp_metadata(&config.otlp)?)
         .build()
         .context("failed to build OTLP span exporter")?;
-    // Head sampling always decides at span start; it is the fallback when
-    // the collector is unavailable, and the per-trace baseline the tail
-    // processor refines when it is on.
+    // Sampling composition (TASK-020 step 5). With tail sampling off, head
+    // sampling decides at span start and is the whole policy. With it on,
+    // the SDK sampler must be `AlwaysOn`: a head sampler drops non-sampled
+    // spans before any processor sees them (`on_end` is never called), so
+    // the tail processor's promise to keep every error and latency outlier
+    // would only hold inside head-sampled traces. The processor applies
+    // `head_ratio` itself as the per-trace coin for ordinary spans; in a
+    // single-service monolith there is no cross-service sampled-flag
+    // consistency for a dropped head decision to preserve.
     let head_ratio = config.sampling.head_ratio;
     let mut builder = SdkTracerProvider::builder()
-        .with_sampler(opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
-            opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(head_ratio),
-        )))
+        .with_sampler(if config.sampling.tail_sampling {
+            opentelemetry_sdk::trace::Sampler::AlwaysOn
+        } else {
+            opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
+                opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(head_ratio),
+            ))
+        })
         .with_resource(build_resource(config));
     if config.sampling.tail_sampling {
         builder = builder.with_span_processor(sampling::TailSamplingProcessor::new(

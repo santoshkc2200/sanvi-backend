@@ -77,11 +77,12 @@ pub struct TelemetryConfig {
     pub sampling: SamplingConfig,
 }
 
-/// Sampling policy. Head sampling (`head_ratio`) decides at span start and
-/// is always in effect — it is the fallback when the collector is down.
-/// Tail sampling (`tail_sampling`, the task's `platform.tail_sampling`
-/// flag) additionally keeps every error span and every span slower than
-/// `latency_threshold_ms` even when the head coin dropped their trace.
+/// Sampling policy. With `tail_sampling` off, head sampling (`head_ratio`)
+/// decides at span start and is the whole policy. With it on, the tail
+/// processor is the sole decider (the SDK sampler is `AlwaysOn`): it keeps
+/// every error span and every span slower than `latency_threshold_ms`, and
+/// applies `head_ratio` as a per-trace coin to ordinary spans — a trace is
+/// exported whole or dropped whole.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SamplingConfig {
