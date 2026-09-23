@@ -50,6 +50,30 @@ kind of claim NFR-1101 exists to prevent.
 
 ## Steps
 
+### Step 0: Close the baseline's measurement gaps
+
+**Files:** Modify `docker-compose.yml`, `crates/platform/persistence/**`; Create
+`benchmarks/baseline-<date>.md`
+
+**Do:** `benchmarks/baseline-2026-09-17.md` (TASK-019) is not yet a sound input for steps 2, 3 and 5,
+and its own record hands these fixes to this task:
+
+- **Statements.** It tracks 16 statements, not the 50 TASK-019 asked for, and two of those are the
+  capture's own (`CREATE EXTENSION`, `SELECT count(*) FROM pg_stat_statements`). Enable
+  `pg_stat_statements` permanently in the compose Postgres instead of by `ALTER SYSTEM` per capture,
+  and widen the capture using the reset procedure the baseline records. If the real query surface is
+  still under 50, record why rather than padding it.
+- **Pool saturation.** The API exports no sqlx pool gauges, so the baseline's pool section is empty.
+  Export size, idle and acquire-wait for both `apps/api` and `apps/worker`; step 5 sizes pools from
+  these.
+- **Build profile.** The API was measured from the debug build because the release profile fails to
+  link on the capture host (`sqlx_macros` dylib). Fix the link or capture on a host where release
+  links; debug-build latencies are not a basis for capacity numbers.
+
+**Verify:** a new baseline names a release build, fills the pool section for both processes, and lists
+at least 50 application statements or records why the surface is smaller. Steps 2, 3 and 5 take their
+before-numbers from it, not from the 2026-09-17 capture.
+
 ### Step 1: Enforce cursor pagination and statement timeouts, contract first
 
 **Files:** Modify `api/*.yaml`, `crates/platform/{http,persistence}/**`; Test: `tests/perf/**`

@@ -64,10 +64,10 @@ carries the scoped commands to run **in that session**. The task is done when th
 
 | Slice | Steps | Shape | Scoped verification for the session |
 | --- | --- | --- | --- |
-| **11.1a** conventions & the coverage gate, red | 1–2 | small, design-led | `just check`, `cargo nextest run -p sanvi-http`, `just openapi`, then `just trace-coverage` → **must fail**, listing the unspanned use cases |
+| **11.1a** conventions & the coverage gate, red | 1–2 | small, design-led | `just check`, `scripts/test.sh -p sanvi-http`, `just openapi`, then `just trace-coverage` → **must fail**, listing the unspanned use cases |
 | **11.1b** instrument to green | 3 | **bulk, mechanical — delegatable** | `just trace-coverage` → passes; falsify with a throwaway unspanned use case; `just test-fast` |
-| **11.1c** log PII corpus & scanner | 4 | small, self-contained | `cargo nextest run -p sanvi-telemetry`, `just log-pii-scan` in both directions (catches every corpus value with redaction removed from one type; zero findings clean) |
-| **11.1d** field standardisation & tail sampling | 5 | small, flagged | `cargo nextest run -p sanvi-telemetry`, plus the collector-unavailable fallback test |
+| **11.1c** log PII corpus & scanner | 4 | small, self-contained | `scripts/test.sh -p sanvi-telemetry`, `just log-pii-scan` in both directions (catches every corpus value with redaction removed from one type; zero findings clean) |
+| **11.1d** field standardisation & tail sampling | 5 | small, flagged | `scripts/test.sh -p sanvi-telemetry`, plus the collector-unavailable fallback test |
 | **11.1e** budgets, alert rules & the runbook loop | 6–8 | medium, artifact-led | `just alert-rules-test`, `just runbook-xref` + the deliberately orphaned rule |
 | **11.1f** execute every runbook, then close the task | 9 | wall-clock, no code | the full `## Verification` block, once |
 

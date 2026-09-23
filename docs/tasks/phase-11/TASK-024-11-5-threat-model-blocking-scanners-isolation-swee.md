@@ -84,11 +84,11 @@ carries the scoped commands to run **in that session**. The task is done when th
 | Slice | Steps | Shape | Scoped verification for the session |
 | --- | --- | --- | --- |
 | **11.5a** route matrix generator & gate, red | 2 | small, enumerator | `just check`, then `just route-matrix` → **must fail** on any unmapped route; falsify with a throwaway unmapped route |
-| **11.5b** IDOR sweep derived from the matrix | 4 | **bulk, mechanical — delegatable** | `cargo nextest run -p sanvi-api`, `just test-idor` |
-| **11.5c** RLS matrix to the full schema, partitions by name | 3 | medium, database-led | `cargo nextest run -p sanvi-api`, `just rls-matrix`, then drop one child partition's policy in a scratch database and confirm the failure names that partition |
-| **11.5d** security headers, specified not inherited | 5 | small, snapshot | `cargo nextest run -p sanvi-http -p sanvi-api`; remove one header and confirm the snapshot fails |
-| **11.5e** abuse controls in shadow mode | 6 | medium, measurement-led | `cargo nextest run -p sanvi-http`, then the 3×-peak harness run; commit the would-have-blocked rate |
-| **11.5f** secrets inventory, redaction enumeration & dependency policy | 7–8 | small, inventory-led | `cargo nextest run -p sanvi-telemetry`, `just audit` with a past-expiry acceptance planted, `just sbom` |
+| **11.5b** IDOR sweep derived from the matrix | 4 | **bulk, mechanical — delegatable** | `scripts/test.sh -p sanvi-api`, `just test-idor` |
+| **11.5c** RLS matrix to the full schema, partitions by name | 3 | medium, database-led | `scripts/test.sh -p sanvi-api`, `just rls-matrix`, then drop one child partition's policy in a scratch database and confirm the failure names that partition |
+| **11.5d** security headers, specified not inherited | 5 | small, snapshot | `scripts/test.sh -p sanvi-http -p sanvi-api`; remove one header and confirm the snapshot fails |
+| **11.5e** abuse controls in shadow mode | 6 | medium, measurement-led | `scripts/test.sh -p sanvi-http`, then the 3×-peak harness run; commit the would-have-blocked rate |
+| **11.5f** secrets inventory, redaction enumeration & dependency policy | 7–8 | small, inventory-led | `scripts/test.sh -p sanvi-telemetry`, `just audit` with a past-expiry acceptance planted, `just sbom` |
 | **11.5g** threat model, then close the task | 1 | judgement, no code | the full `## Verification` block, once |
 
 **Order and parallelism.** 11.5a → 11.5b is a hard edge: the sweep enumerates *from* the committed

@@ -32,9 +32,10 @@ TASK-020 and TASK-024 carry the tables today; the rest are sliced as they are pi
 
 **Two-tier verification.** A slice runs only its own scoped commands; the task's full `## Verification`
 block runs **once**, in its final slice. The cheap tier is `just check` (type-check only), `just
-test-fast` (lib and bin targets, no database) and `cargo nextest run -p <crate>` — note that
-`scripts/test.sh -p <crate>` still passes `--workspace`, so scope with `cargo nextest` directly. The
-expensive tier is `just test` / `just ci-quiet`, which links every test binary.
+test-fast` (lib and bin targets, no database) and `scripts/test.sh -p <crate>` — the wrapper drops
+`--workspace` when given `-p`, and starts the shared test Postgres first. Do not call `cargo nextest
+run` directly: without the shared server every test process starts its own container and leaves it
+running. The expensive tier is `just test` / `just ci-quiet`, which links every test binary.
 
 **Exempt the host before the first cold run.** On a macOS host without developer mode, Gatekeeper
 scans every freshly linked test binary: ~15 of a ~16-minute cold suite is scanning, not testing.
@@ -65,8 +66,9 @@ Two standing rules follow it:
 
 ## The phase splits in two
 
-Backend phase 10 is still in flight: TASK-016 is uncommitted, TASK-017 and TASK-018 are open. Under the
-original "depends on phases 00–10" edge, every phase 11 task was blocked and none could start.
+When phase 11 was rescoped, backend phase 10 was still in flight; its current state is in
+[`backlog.md`](../backlog.md), which is the only place task status is recorded. Under the original
+"depends on phases 00–10" edge, every phase 11 task was blocked until phase 10 merged.
 
 The gate tasks do not need feature completeness, because they **enumerate** rather than audit: a check
 that fails when a use case has no span does not care how many use cases exist, and it is worth more
@@ -153,9 +155,9 @@ After TASK-031 the gate tasks are independent of each other and of phase 10. In 
 
 ## Cross-track coordination
 
-`sanvi-frontend` runs a task of the same number for the same slice. **The frontend is two phases
-behind**: its phase 09 is 3/8 done and its phase 10 has not started, so frontend phase 11 is
-unreachable until those land. Backend gate tasks do not wait on it. Backend TASK-030 does — it cannot
+`sanvi-frontend` runs a task of the same number for the same slice. Its GA half depends on its phases
+09 and 10 shipping; their status is in `sanvi-frontend/docs/tasks/backlog.md`, not repeated here.
+Backend gate tasks do not wait on it. Backend TASK-030 does — it cannot
 tag `v1.0.0` until frontend TASK-030 is done, and that is the one cross-repo edge running
 frontend-to-backend.
 
