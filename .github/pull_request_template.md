@@ -11,6 +11,11 @@
 - [ ] Migrations are reversible (down migration provided)
 - [ ] Secrets never added to config files; `.env.example` updated only with placeholders
 - [ ] Threat model reviewed when security-relevant (`docs/security/threat-model.md`)
+- [ ] Route matrix diff reviewed and explicitly acknowledged below when `docs/security/route-matrix.md` changes (permissions, tenant scoping, and rate-limit classes)
+
+## Route matrix changes
+
+<!-- If the route matrix changed, acknowledge its diff here and explain any added routes or weakened permissions, tenant scoping, or rate-limit classes. Otherwise write "Not applicable". -->
 
 ## Rollback
 

@@ -235,6 +235,18 @@ jobs:
           python -m pip install --quiet "semgrep==1.176.1"
           semgrep scan --config .semgrep/rust.yaml --error --metrics=off
 
+  route-matrix:
+    name: Route security matrix (+ mutation tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python3 -m pip install 'PyYAML==6.0.3'
+      - run: ./scripts/generate-route-matrix.sh
+      - run: ./scripts/generate-route-matrix.sh --self-test
+
   openapi:
     name: OpenAPI contract drift
     runs-on: ubuntu-latest

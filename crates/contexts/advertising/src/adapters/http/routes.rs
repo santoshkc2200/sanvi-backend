@@ -229,7 +229,7 @@ pub fn advertising_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
 pub fn advertising_platform_routes(cfg: &mut web::ServiceConfig) {
     let read = require_permission!("platform.tenant.read", platform);
     cfg.service(
-        web::resource("/ads/health")
+        web::resource("/api/v1/platform/ads/health")
             .app_data(PermissionMap::new(vec![(Method::GET, read)]))
             .route(web::get().to(get_platform_ads_health)),
     );

@@ -1,0 +1,3132 @@
+{
+  "routes": [
+    {
+      "method": "DELETE",
+      "path": "/api/v1/me/sessions/{session_id}",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::revoke_session",
+      "permission": "identity.session.revoke",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/platform/features/{key}",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::deprecate_feature",
+      "permission": "platform.feature.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/platform/impersonations/{id}",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::revoke_impersonation",
+      "permission": "platform.impersonate",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/platform/privacy/subprocessors/{name}",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::remove_subprocessor",
+      "permission": "platform.privacy.governance.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/platform/tenants/{id}/application-fee",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::disable_application_fee",
+      "permission": "platform.entitlement.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/platform/tenants/{id}/entitlements/{feature}",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::revoke_entitlement_override",
+      "permission": "platform.entitlement.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/platform/tenants/{id}/subscription/override",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::revoke_subscription_override",
+      "permission": "platform.subscription.override",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/ads/connections/{connection_id}",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::delete_connection",
+      "permission": "advertising.connect",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/ads/creatives/{creative_id}",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::delete_creative",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/domains/{id}",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::remove_custom_domain",
+      "permission": "tenant.domains.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/invitations/{invitation_id}",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::revoke_invitation",
+      "permission": "identity.invitation.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/media/v1/assets/{asset_id}",
+      "handler": "crates/contexts/media/src/adapters/http/handlers.rs::delete_media_asset",
+      "permission": "media.assets.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/media/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant/media",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/media\").configure(media_routes::media_tenant_scope_routes)"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/members/{user_id}",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::remove_member",
+      "permission": "identity.member.remove",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/payments/connections/{id}",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::delete_payment_connection",
+      "permission": "payments.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/roles/{id}",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::delete_role",
+      "permission": "access.role.delete",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/tenant/theme/assets/{kind}",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::remove_brand_asset",
+      "permission": "tenant.theming.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/access/permissions",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::list_permissions",
+      "permission": "access.permission.list",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/me",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::get_me",
+      "permission": "identity.profile.read",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/me/sessions",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::list_sessions",
+      "permission": "identity.session.list",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/admin/tenants",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::search_tenant_admin_views",
+      "permission": "platform.tenant.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/admin/tenants/{id}",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::get_tenant_admin_view",
+      "permission": "platform.tenant.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/ads/health",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_platform_ads_health",
+      "permission": "platform.tenant.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/approvals",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::list_pending_approvals",
+      "permission": "platform.approval.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/audit",
+      "handler": "crates/contexts/audit/src/adapters/http/handlers.rs::list_audit",
+      "permission": "platform.audit.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/audit/src/adapters/http/catalog.rs",
+        "crates/contexts/audit/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/domains",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::list_platform_domains",
+      "permission": "platform.domain.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/features",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::list_features",
+      "permission": "platform.feature.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/impersonations",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::list_impersonations",
+      "permission": "platform.impersonate",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/localization/translations",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::get_platform_translations",
+      "permission": "platform.localization.translations.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/plans",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::list_plans",
+      "permission": "platform.plan.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/activities",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_activities",
+      "permission": "platform.privacy.governance.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/appeals",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_appeals",
+      "permission": "platform.privacy.appeal.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/assessments",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_assessments",
+      "permission": "platform.privacy.governance.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/holds",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_holds",
+      "permission": "platform.privacy.hold.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/incidents",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_incidents",
+      "permission": "platform.privacy.incident.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/incidents/{id}/obligations",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_obligations",
+      "permission": "platform.privacy.incident.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/jurisdictions",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_jurisdictions",
+      "permission": "platform.privacy.jurisdiction.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/requests",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_dsrs",
+      "permission": "platform.privacy.request.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/retention-rules",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_retention_rules",
+      "permission": "platform.privacy.governance.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/privacy/subprocessors",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_subprocessors",
+      "permission": "platform.privacy.governance.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/roles",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::list_roles_platform",
+      "permission": "platform.role.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/tenants",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::list_tenants",
+      "permission": "platform.tenant.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/tenants/{id}",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::get_tenant",
+      "permission": "platform.tenant.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/tenants/{id}/application-fee",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::get_application_fee",
+      "permission": "platform.tenant.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/tenants/{id}/entitlements",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::list_entitlement_overrides",
+      "permission": "platform.entitlement.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/themes",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::list_platform_themes",
+      "permission": "platform.theme.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/themes/{key}/versions",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::list_platform_theme_versions",
+      "permission": "platform.theme.read",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/privacy/consents",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::get_consents",
+      "permission": "privacy.consent.read",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/privacy/directives",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::get_directives",
+      "permission": "privacy.directive.read",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/privacy/requests/{id}",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::get_dsr_status",
+      "permission": "exempt: owning session or challenge token",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/privacy/requests/{id}/download",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::download_export",
+      "permission": "exempt: download token and passphrase",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/locales",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::get_public_locales",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/handlers.rs",
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/messages/{domain}",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::get_public_messages",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/handlers.rs",
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/plans",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::list_public_plans",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/handlers.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/privacy/metrics",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::get_public_metrics",
+      "permission": "exempt: public disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/privacy/notice",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::get_privacy_notice",
+      "permission": "exempt: public disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/privacy/notice-at-collection",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::get_notice_at_collection",
+      "permission": "exempt: public disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/slug-availability",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::slug_availability",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/handlers.rs",
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/subprocessors",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_public_subprocessors",
+      "permission": "exempt: public disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/tenant-context",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::public_tenant_context",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "host resolved explicitly by public_tenant_context",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/handlers.rs",
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/theme",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::get_public_theme",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "optional public host/tenant lookup; published theme only",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/handlers.rs",
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/build",
+      "handler": "crates/contexts/system/src/adapters/http/handlers.rs::build",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/system/src/adapters/http/handlers.rs",
+        "crates/contexts/system/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/system",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/system\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/version",
+      "handler": "crates/contexts/system/src/adapters/http/handlers.rs::version",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/system/src/adapters/http/handlers.rs",
+        "crates/contexts/system/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/system",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/system\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/audiences",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::list_audiences",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/budget-alerts",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_budget_alerts",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/budget-caps",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_budget_caps",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/campaigns",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::list_campaigns",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_campaign",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_campaign_budget_cap",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/changes",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::list_campaign_changes",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/connections",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::list_connections",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/connections/{platform}/oauth/callback",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::oauth_callback",
+      "permission": "advertising.connect",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/conversions",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::list_conversions",
+      "permission": "advertising.metrics.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/conversions/{id}/diagnostics",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::get_conversion_diagnostics",
+      "permission": "advertising.metrics.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/creatives",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::list_creatives",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/creatives/{creative_id}",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_creative",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/creatives/{creative_id}/previews",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_creative_previews",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/metrics",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_ads_metrics",
+      "permission": "advertising.metrics.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/metrics/export",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_ads_metrics_export",
+      "permission": "advertising.metrics.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/metrics/freshness",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_ads_metrics_freshness",
+      "permission": "advertising.metrics.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/metrics/summary",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_ads_metrics_summary",
+      "permission": "advertising.metrics.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/platforms",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::list_ad_platforms",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/spend-status",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::get_spend_status",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ads/tracking/settings",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::get_tracking_settings",
+      "permission": "advertising.connect",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/billing/invoices",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::list_invoices",
+      "permission": "billing.invoice.read",
+      "tenant": "TenantContext from HttpRequest extensions",
+      "rate_limit": "global-config-dependent +tenant-optional",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/billing/subscription",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::get_subscription",
+      "permission": "billing.subscription.read",
+      "tenant": "TenantContext from HttpRequest extensions",
+      "rate_limit": "global-config-dependent +tenant-optional",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/checkout/config",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout_config",
+      "permission": "payments.checkout",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/checkout/{id}",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout",
+      "permission": "payments.checkout",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/context",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::get_context",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/handlers.rs",
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/domains",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::list_custom_domains",
+      "permission": "tenant.domains.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/domains/orders",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::list_domain_orders",
+      "permission": "tenant.domains.purchase",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/domains/search",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::search_domains",
+      "permission": "tenant.domains.purchase",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/domains/{id}/instructions",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::get_domain_instructions",
+      "permission": "tenant.domains.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/entitlements",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::list_tenant_entitlements",
+      "permission": "tenant.entitlement.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/invitations",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::list_invitations",
+      "permission": "identity.member.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/localization/overrides",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::get_localization_overrides",
+      "permission": "tenant.localization.overrides.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/localization/settings",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::get_localization_settings",
+      "permission": "tenant.localization.settings.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/media/v1/assets/{asset_id}",
+      "handler": "crates/contexts/media/src/adapters/http/handlers.rs::get_media_asset",
+      "permission": "media.assets.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/media/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant/media",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/media\").configure(media_routes::media_tenant_scope_routes)"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/members",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::list_members",
+      "permission": "identity.member.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_payments",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments/connections/{id}",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_payment_connection",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments/disputes",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_disputes",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments/export",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::export_payments",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments/payouts",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_payouts",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments/providers",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_payment_providers",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments/tax-settings",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_tax_settings",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/payments/{id}",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_payment",
+      "permission": "payments.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/privacy/requests",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::list_tenant_dsrs",
+      "permission": "tenant.privacy.request.read",
+      "tenant": "TenantContext from HttpRequest extensions",
+      "rate_limit": "global-config-dependent +tenant-optional",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/roles",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::list_roles_tenant",
+      "permission": "access.role.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/settings",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::get_settings",
+      "permission": "tenancy.settings.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/theme/draft",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::get_tenant_theme_draft",
+      "permission": "tenant.theming.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/theme/preview",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::preview_tenant_theme",
+      "permission": "tenant.theming.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/themes/available",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::list_available_themes",
+      "permission": "tenant.theming.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "handler": "crates/contexts/system/src/adapters/http/handlers.rs::healthz",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/system/src/adapters/http/handlers.rs",
+        "crates/contexts/system/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/internal/tls/authorize",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::tls_authorize",
+      "permission": "exempt: internal shared secret and optional IP allow-list",
+      "tenant": "domain hostname lookup after internal guard",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/handlers.rs",
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/readyz",
+      "handler": "crates/contexts/system/src/adapters/http/handlers.rs::readyz",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/system/src/adapters/http/handlers.rs",
+        "crates/contexts/system/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/platform/features/{key}",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::update_feature",
+      "permission": "platform.feature.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/platform/plans/{id}",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::update_plan",
+      "permission": "platform.plan.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/privacy/requests/{id}/rectify",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::rectify_request",
+      "permission": "exempt: authenticated self-service (no permission key)",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::patch_campaign",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::update_ad_group",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads/{ad_id}",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::update_ad",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/tenant/members/{user_id}/roles",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::update_member_roles",
+      "permission": "identity.member.grant",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/tenant/roles/{id}",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::update_role",
+      "permission": "access.role.update",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/link/challenge",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::start_link_challenge",
+      "permission": "exempt: public challenge creation; ownership proof follows",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/handlers.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/link/complete",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::complete_link_challenge",
+      "permission": "exempt: authenticated self-service (no permission key)",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/handlers.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/approvals/{id}/approve",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::approve_request",
+      "permission": "platform.approval.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/approvals/{id}/reject",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::reject_request",
+      "permission": "platform.approval.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/domains/{id}/release",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::release_platform_domain",
+      "permission": "platform.domain.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/features",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::define_feature",
+      "permission": "platform.feature.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/impersonations",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::create_impersonation",
+      "permission": "platform.impersonate",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/plans",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::create_plan",
+      "permission": "platform.plan.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/plans/{id}/prices",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::add_plan_price",
+      "permission": "platform.plan.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/activities",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::upsert_activity",
+      "permission": "platform.privacy.governance.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/appeals/{id}/decision",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::decide_appeal",
+      "permission": "platform.privacy.appeal.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/assessments",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::upsert_assessment",
+      "permission": "platform.privacy.governance.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/holds",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::apply_hold",
+      "permission": "platform.privacy.hold.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/holds/{id}/release",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::release_hold",
+      "permission": "platform.privacy.hold.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/incidents",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::record_incident",
+      "permission": "platform.privacy.incident.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/incidents/{id}/notify",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::mark_obligation_notified",
+      "permission": "platform.privacy.incident.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/requests/{id}/extend",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::extend_dsr",
+      "permission": "platform.privacy.request.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/requests/{id}/reject",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::reject_dsr",
+      "permission": "platform.privacy.request.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/privacy/subprocessors",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::upsert_subprocessor",
+      "permission": "platform.privacy.governance.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/tenants",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::provision_tenant",
+      "permission": "platform.tenant.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/tenants/{id}/activate",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::activate_tenant",
+      "permission": "platform.tenant.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/tenants/{id}/archive",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::archive_tenant",
+      "permission": "platform.tenant.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/tenants/{id}/entitlements",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::grant_entitlement_override",
+      "permission": "platform.entitlement.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/tenants/{id}/resume",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::resume_tenant",
+      "permission": "platform.tenant.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/tenants/{id}/subscription/override",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::apply_subscription_override",
+      "permission": "platform.subscription.override",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/tenants/{id}/suspend",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::suspend_tenant",
+      "permission": "platform.tenant.manage",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/themes",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::install_theme_version",
+      "permission": "platform.theme.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/platform/themes/{key}/versions/{version}/yank",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::yank_theme_version",
+      "permission": "platform.theme.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/privacy/limit-sensitive",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::limit_sensitive_use",
+      "permission": "exempt: authenticated subject required in handler (catalog labels Public)",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/privacy/opt-out",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::record_opt_out",
+      "permission": "exempt: user or device self-service opt-out",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/privacy/requests",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::submit_dsr",
+      "permission": "exempt: public self-service submission; identity verification follows",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/privacy/requests/{id}/appeal",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::appeal_request",
+      "permission": "exempt: authenticated self-service (no permission key)",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/privacy/requests/{id}/verify",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::verify_dsr",
+      "permission": "exempt: single-use verification challenge token",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/handlers.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/public/track",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::public_track_conversion",
+      "permission": "exempt: signed X-Site-Key bound to Origin; bot filter",
+      "tenant": "tenant derived from verified site key and Origin",
+      "rate_limit": "global-config-dependent + tracking per-IP and per-Origin in-process buckets",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs",
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/audiences",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::create_audience",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/audiences/{id}/refresh",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::refresh_audience",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::acknowledge_budget_alert",
+      "permission": "advertising.budget.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::create_campaign",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::add_ad_group",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/ad-groups/{ad_group_id}/ads",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::add_ad",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/drift",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::resolve_campaign_drift",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/pause",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::pause_campaign",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/publish",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::publish_campaign",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/resume",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::resume_campaign",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/review-status",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::poll_campaign_review_status",
+      "permission": "advertising.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/validate",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::validate_campaign",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/connections",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::create_connection",
+      "permission": "advertising.connect",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/connections/{platform}/oauth/start",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::start_oauth",
+      "permission": "advertising.connect",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/conversions/{id}/retry",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::retry_conversion",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/creatives",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::create_creative",
+      "permission": "advertising.campaign.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ads/tracking/test-event",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::test_tracking_event",
+      "permission": "advertising.metrics.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/billing/checkout-session",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::create_checkout_session",
+      "permission": "billing.subscription.create",
+      "tenant": "TenantContext from HttpRequest extensions",
+      "rate_limit": "global-config-dependent +tenant-optional",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/billing/portal-session",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::create_portal_session",
+      "permission": "billing.subscription.update",
+      "tenant": "TenantContext from HttpRequest extensions",
+      "rate_limit": "global-config-dependent +tenant-optional",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/checkout",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::create_tenant_checkout",
+      "permission": "payments.checkout",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional + checkout tenant/client/customer-reference limiter",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/domains",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::claim_custom_domain",
+      "permission": "tenant.domains.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/domains/orders",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::place_domain_order",
+      "permission": "tenant.domains.purchase",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/domains/orders/{id}/auto-renew",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::set_order_auto_renew",
+      "permission": "tenant.domains.purchase",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/domains/{id}/promote",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::promote_primary_domain",
+      "permission": "tenant.domains.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/domains/{id}/verify",
+      "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::request_domain_verification",
+      "permission": "tenant.domains.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/domains/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/invitations",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::invite_member",
+      "permission": "identity.member.invite",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/invitations/accept",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::accept_invitation",
+      "permission": "identity.membership.claim",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/invitations/{invitation_id}/resend",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::resend_invitation",
+      "permission": "identity.invitation.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/media/v1/assets",
+      "handler": "crates/contexts/media/src/adapters/http/handlers.rs::create_media_asset",
+      "permission": "media.assets.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/media/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant/media",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/media\").configure(media_routes::media_tenant_scope_routes)"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/media/v1/assets/{asset_id}/complete",
+      "handler": "crates/contexts/media/src/adapters/http/handlers.rs::complete_media_asset_upload",
+      "permission": "media.assets.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/media/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant/media",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/media\").configure(media_routes::media_tenant_scope_routes)"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/media/v1/assets/{asset_id}/delivery",
+      "handler": "crates/contexts/media/src/adapters/http/handlers.rs::create_media_asset_delivery",
+      "permission": "media.assets.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/media/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant/media",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/media\").configure(media_routes::media_tenant_scope_routes)"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/media/v1/assets/{asset_id}/parts",
+      "handler": "crates/contexts/media/src/adapters/http/handlers.rs::presign_media_asset_parts",
+      "permission": "media.assets.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/media/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant/media",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/media\").configure(media_routes::media_tenant_scope_routes)"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/members",
+      "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::grant_member",
+      "permission": "identity.member.grant",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/catalog.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/payments/connections",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection",
+      "permission": "payments.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/payments/connections/{id}/session",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection_session",
+      "permission": "payments.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/payments/{id}/refund",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::refund_payment",
+      "permission": "payments.refund",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/privacy/requests",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::submit_tenant_dsr",
+      "permission": "tenant.privacy.request.write",
+      "tenant": "TenantContext from HttpRequest extensions",
+      "rate_limit": "global-config-dependent +tenant-optional",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/roles",
+      "handler": "crates/contexts/access/src/adapters/http/handlers.rs::create_role",
+      "permission": "access.role.create",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/access/src/adapters/http/catalog.rs",
+        "crates/contexts/access/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/theme/assets",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::upload_brand_asset",
+      "permission": "tenant.theming.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/theme/preview-token",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::mint_theme_preview_token",
+      "permission": "tenant.theming.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/theme/publish",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::publish_tenant_theme",
+      "permission": "tenant.theming.publish",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/theme/rollback",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::rollback_tenant_theme",
+      "permission": "tenant.theming.publish",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/platform/localization/translations",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::put_platform_translations",
+      "permission": "platform.localization.translations.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/platform/plans/{id}/entitlements",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::set_plan_entitlements",
+      "permission": "platform.plan.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/catalog.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/platform/privacy/jurisdictions",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::upsert_jurisdiction",
+      "permission": "platform.privacy.jurisdiction.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/platform/privacy/retention-rules",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::upsert_retention_rule",
+      "permission": "platform.privacy.governance.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/platform/tenants/{id}/application-fee",
+      "handler": "crates/contexts/platform_admin/src/adapters/http/handlers.rs::set_application_fee",
+      "permission": "platform.entitlement.write",
+      "tenant": "platform cross-tenant administration; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/platform_admin/src/adapters/http/catalog.rs",
+        "crates/contexts/platform_admin/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/privacy/consents",
+      "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::update_consents",
+      "permission": "privacy.consent.update",
+      "tenant": "user/session or self-service credential scope; no tenant resolution",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/privacy/src/adapters/http/catalog.rs",
+        "crates/contexts/privacy/src/adapters/http/routes.rs"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/ads/budget-caps",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::put_budget_cap",
+      "permission": "advertising.budget.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap",
+      "handler": "crates/contexts/advertising/src/adapters/http/handlers.rs::put_campaign_budget_cap",
+      "permission": "advertising.budget.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/ads/tracking/settings",
+      "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::put_tracking_settings",
+      "permission": "advertising.connect",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/advertising/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "permission_declaration": "direct"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/localization/overrides",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::put_localization_overrides",
+      "permission": "tenant.localization.overrides.update",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/localization/settings",
+      "handler": "crates/contexts/localization/src/adapters/http/handlers.rs::put_localization_settings",
+      "permission": "tenant.localization.settings.update",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/localization/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/payments/tax-settings",
+      "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::put_tax_settings",
+      "permission": "payments.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/settings",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::put_settings",
+      "permission": "tenancy.settings.update",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/theme/draft",
+      "handler": "crates/contexts/theming/src/adapters/http/handlers.rs::put_tenant_theme_draft",
+      "permission": "tenant.theming.write",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/theming/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "handler": "apps/api/src/lib.rs::metrics",
+      "permission": "exempt: public metrics; deployment perimeter required",
+      "tenant": "not tenant-scoped: aggregate metrics",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "apps/api/src/lib.rs"
+      ],
+      "openapi_exemption": "operational endpoint"
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "handler": "apps/api/src/lib.rs::openapi_json",
+      "permission": "exempt: public API contract",
+      "tenant": "not tenant-scoped: contract",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "apps/api/src/lib.rs"
+      ],
+      "openapi_exemption": "operational endpoint"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/webhooks/stripe/platform",
+      "handler": "crates/contexts/billing/src/adapters/http/handlers.rs::stripe_platform_webhook",
+      "permission": "exempt: Stripe signature and IP allow-list",
+      "tenant": "tenant selected from verified webhook processing",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/billing/src/adapters/http/handlers.rs",
+        "crates/contexts/billing/src/adapters/http/routes.rs"
+      ],
+      "openapi_exemption": "internal webhook"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/webhooks/stripe/connect",
+      "handler": "crates/contexts/payments/src/adapters/http/webhooks.rs::stripe_connect_webhook",
+      "permission": "exempt: Connect Stripe signature and IP allow-list",
+      "tenant": "connected account from verified webhook processing",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/payments/src/adapters/http/webhooks.rs",
+        "crates/contexts/payments/src/adapters/http/routes.rs"
+      ],
+      "openapi_exemption": "internal webhook"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/kratos/registration",
+      "handler": "crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration",
+      "permission": "exempt: Kratos shared secret and IP allow-list",
+      "tenant": "identity event; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/webhooks.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "openapi_exemption": "internal webhook"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/kratos/login",
+      "handler": "crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_login",
+      "permission": "exempt: Kratos shared secret and IP allow-list",
+      "tenant": "identity event; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/webhooks.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "openapi_exemption": "internal webhook"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/kratos/settings",
+      "handler": "crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_settings",
+      "permission": "exempt: Kratos shared secret and IP allow-list",
+      "tenant": "identity event; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/webhooks.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "openapi_exemption": "internal webhook"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/kratos/logout",
+      "handler": "crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_logout",
+      "permission": "exempt: Kratos shared secret and IP allow-list",
+      "tenant": "identity event; no tenant resolver scope",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/identity/src/adapters/http/webhooks.rs",
+        "crates/contexts/identity/src/adapters/http/routes.rs"
+      ],
+      "openapi_exemption": "internal webhook"
+    }
+  ]
+}

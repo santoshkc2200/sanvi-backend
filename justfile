@@ -254,6 +254,16 @@ check:
 clippy-quiet:
     cargo k
 
+# TASK-024 slice 11.5a: complete reviewed route inventory and committed freshness.
+route-matrix:
+    ./scripts/generate-route-matrix.sh
+
+route-matrix-write:
+    ./scripts/generate-route-matrix.sh --write
+
+route-matrix-self-test:
+    ./scripts/generate-route-matrix.sh --self-test
+
 openapi:
     ./scripts/check-openapi.sh
 
@@ -266,7 +276,7 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test openapi i18n ga-checklist-check trace-coverage log-pii-scan runbook-xref alert-rules-test
+ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan runbook-xref alert-rules-test
 
 # TASK-019 (FR-1103): run the k6 load shapes against a running API and
 # write benchmarks/<scenario>/<tag>.json. Point PERF_BASE_URL at the API
@@ -343,4 +353,4 @@ ga-checklist-check:
     ./scripts/check-ga-checklist.sh
 
 # `ci` with the low-noise variants of the two chattiest gates.
-ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi i18n ga-checklist-check trace-coverage log-pii-scan runbook-xref alert-rules-test
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan runbook-xref alert-rules-test

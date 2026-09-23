@@ -1,6 +1,6 @@
 # TASK-024: 11.5 Threat model, route matrix & isolation sweep
 
-**Phase:** 11 · **Status:** todo · **Size:** L
+**Phase:** 11 · **Status:** in-progress · **Size:** L
 **Requirement(s):** FR-1116, FR-1117, NFR-1108, NFR-1109, NFR-1113, NFR-1114
 **Depends on:** TASK-031
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -106,6 +106,42 @@ machine oracle: issue every ID-bearing request with a wrong-tenant session, asse
 `just test-idor` say whether the enumeration is complete. Review is reading a diff. Every other slice
 turns on judgement — what the blast radius of a secret is, which surface deserves a quota, whether a
 403 leaked existence through its timing.
+
+
+### Slice 11.5a record — 2026-09-24
+
+Completed the route inventory and blocking freshness/completeness gate in this
+slice's commit (`security(http): gate route security matrix`). The generated
+matrix includes 213 OpenAPI operations and eight explicitly documented runtime
+endpoints outside OpenAPI. Reviewed handler metadata names permissions or
+reasoned exemptions, tenant scope, rate class, and evidence paths. Registration,
+handler, catalog, and shared enforcement fingerprints expose source changes in
+the committed diff; this is declaration review, not proof of runtime isolation.
+Identity-disabled permission bypass, optional/configuration-dependent limiters,
+and public/credential-bound exemptions remain explicit limitations.
+
+Verification: `just check` passed (all targets); `just route-matrix` and
+`just route-matrix-self-test` passed. Mutation tests fail on an added unmapped
+OpenAPI route, an undocumented runtime handler, missing security fields, removal
+of a permission extractor/declaration, duplicate registration/OpenAPI keys, and
+stale committed output. The PR template requires matrix-diff acknowledgment;
+no PR has been opened, so the combined Definition of done item below remains
+unchecked until that acknowledgment exists. Later slices remain unstarted.
+
+Runner: Codex on the local macOS development host. Independent review found
+method/path drift, unsupported registration discovery, and deleted shared-key
+permission declarations that the first version missed. Regression mutations now
+cover all three, nested modules, production items following test modules, and
+Actix TRACE macros. Unsupported macro registrations fail closed.
+
+The stronger gate found an existing routing defect: advertising health was
+registered directly on the app at `/ads/health`, although its handler annotation,
+permission catalog, and OpenAPI contract specify `/api/v1/platform/ads/health`.
+The registration now uses the documented full path. The gate failed with
+`runtime route differs from metadata: GET /ads/health` before that correction.
+Clients using the undocumented old path must use the documented URL. No schema
+or OpenAPI change was needed. Permission-table omissions on older direct
+registrations are explicitly classified in metadata rather than silently accepted.
 
 ## Steps
 
