@@ -167,6 +167,11 @@ fn build_cors(config: &CorsConfig) -> actix_cors::Cors {
             header::HeaderName::from_static("x-tenant-id"),
             header::HeaderName::from_static("idempotency-key"),
             header::ACCEPT_LANGUAGE,
+            // Sent by @sanvi/api-client on *every* request (TASK-020 trace
+            // context) — a preflight requesting a header missing here fails,
+            // so omitting these breaks all cross-origin browser calls.
+            header::HeaderName::from_static("traceparent"),
+            header::HeaderName::from_static("tracestate"),
         ])
         .max_age(config.max_age_secs as usize)
         .supports_credentials()
@@ -239,6 +244,22 @@ mod cors_tests {
                 "/api/v1/tenant/ads/conversions",
                 "https://console.example.com",
                 "content-type"
+            )
+            .await,
+            200
+        );
+    }
+
+    /// `@sanvi/api-client` sends a W3C `traceparent` on every request
+    /// (TASK-020 trace context); a preflight that requests it must pass, or
+    /// every cross-origin browser call dies before reaching a handler.
+    #[actix_web::test]
+    async fn the_trace_context_headers_pass_preflight() {
+        assert_eq!(
+            preflight(
+                "/api/v1/tenant/ads/conversions",
+                "https://console.example.com",
+                "content-type,authorization,traceparent,tracestate"
             )
             .await,
             200
