@@ -264,6 +264,15 @@ route-matrix-write:
 route-matrix-self-test:
     ./scripts/generate-route-matrix.sh --self-test
 
+# TASK-024 slice 11.5b: the cross-tenant IDOR sweep over the route
+# matrix. Scoped to the one test binary; `just test` runs it as part of
+# the workspace suite anyway.
+test-idor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p sanvi-api --test integration idor_sweep
+
 openapi:
     ./scripts/check-openapi.sh
 

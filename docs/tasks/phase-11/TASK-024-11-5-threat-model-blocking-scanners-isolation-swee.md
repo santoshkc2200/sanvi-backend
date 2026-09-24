@@ -143,6 +143,71 @@ Clients using the undocumented old path must use the documented URL. No schema
 or OpenAPI change was needed. Permission-table omissions on older direct
 registrations are explicitly classified in metadata rather than silently accepted.
 
+### Slice 11.5b record — 2026-09-24
+
+Completed the IDOR sweep in this slice's commit
+(`test(security): sweep cross-tenant isolation over the route matrix`).
+The enumeration is derived from the committed matrix:
+`apps/api/tests/integration/idor_sweep.rs` loads `route-metadata.json` at
+test time and drives every request from it, so routes phase 10+ land are
+covered as they appear. This is the first test that runs the fully
+assembled app (`build_app` with tenancy, identity, access, audit,
+platform_admin, localization, theming, domains, payments, advertising and
+the media gateway mounted) against a real `test_db()` Postgres; Kratos,
+Keto and the hitox media upstream are stubbed on ephemeral ports. The Keto
+stub allows exactly the attacker's tenant-A role objects (roles seeded per
+tenant granting every `CurrentTenant` permission the matrix declares), so
+a 403 is the membership denial, not a backend outage — an unreachable Keto
+would surface as 503 and fail. Three sweeps run: all 108 `CurrentTenant`
+routes under a foreign host (tenant B resolved, attacker session) must
+403 unless the permission is `Authenticated`-scope or an explicit matrix
+exemption (those must not 5xx or leak); every id-bearing tenant route is
+re-issued on the attacker's own host with tenant B's *real* seeded ids
+(advertising connections/campaigns/ad groups/ads/creatives/audiences/
+conversion events/budget alerts, payments connections/checkouts/payments,
+domains, invitations, members, roles, media assets) and must answer
+403/404 — a 204 is accepted only for idempotent `DELETE`s whose foreign
+row is then verified intact through a tenant-scoped probe — and a
+nonexistent-id twin must answer with the same status, closing the
+existence-oracle hole; and every mounted platform route must 403 for a
+tenant-scoped session. Tenant B's rows all carry a marker string no
+response may echo. A coverage test pins the enumeration: every
+`CurrentTenant` route in the matrix is swept, and id-bearing ones are in
+sweep 2 unless named in the reasoned `SHAPE_A_EXCLUSIONS` list (OAuth
+start/callback and theme assets: enum slots, not entity ids). Billing and
+privacy platform routes are excluded by handler context because those
+contexts are deliberately not mounted; their own suites cover them.
+
+One finding, fixed in the same commit: `PUT
+/api/v1/tenant/ads/campaigns/{campaign_id}/budget-cap` with a foreign
+campaign id answered **500** — `PutBudgetCap::execute` never resolved the
+campaign inside the tenant, so the cap upsert hit the
+`budget_caps → campaigns` foreign key and surfaced as a storage error.
+The use case now checks campaign existence in the tenant scope first and
+answers `CampaignNotFound` (404); `BudgetCapRepository` gained the
+`campaign_exists` probe. The sweep fails against the vulnerable commit —
+it is the finding's regression test.
+
+Harness facts recorded here because they shape every later slice:
+actix extracts `Json`/`Query` before `RequiredPermission` on many
+handlers, so the sweep maintains per-route valid bodies and query
+parameters keyed by the matrix pattern (a bodyless or paramless request
+400s before the gate and would silently weaken any assertion); payments
+validates `Idempotency-Key` as a UUID; snowflake ids deserialize from
+decimal strings; and tenant-row existence probes must run through
+`TxManager::begin_for` — a bare app-pool query has no tenant GUC and
+reports every row missing. Per-request timing comparison is not
+attempted (flaky in CI); the twin-id status comparison is the automatable
+half of the no-existence-leak requirement, and the timing half belongs to
+the parked penetration test.
+
+Verification: `just check` and workspace-scoped clippy clean;
+`cargo fmt --all`; `scripts/test.sh -p sanvi-api` 46/46;
+`scripts/test.sh -p sanvi-advertising` 259/259 (the budget-cap fix's
+crate); `just route-matrix` complete and current (domain/adapter files
+are not fingerprinted, and handlers.rs is unchanged);
+`just test-idor` 4/4.
+
 ## Steps
 
 ### Step 1 · slice 11.5g: Refresh the threat model

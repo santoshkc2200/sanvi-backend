@@ -56,7 +56,7 @@ Statuses: `todo` · `in-progress` · `blocked` · `done`
 | TASK-021 | 11 | 11.2 Backend performance, load testing & capacity | todo | TASK-019, TASK-020, phase 10 merged | GA half |
 | TASK-022 | 11 | 11.3 SSR response cache, cache headers & compression | todo | TASK-020, phase 10 merged | GA half |
 | TASK-023 | 11 | 11.4 Resilience, degradation & zero-downtime restarts | todo | TASK-021, phase 10 merged | GA half; game days replaced by an injection test per dependency-matrix row |
-| TASK-024 | 11 | 11.5 Threat model, route matrix & isolation sweep | in-progress | TASK-031 | 11.5a complete: `security(http): gate route security matrix`; 11.5b–g pending; pen test remains parked |
+| TASK-024 | 11 | 11.5 Threat model, route matrix & isolation sweep | in-progress | TASK-031 | 11.5a–b complete: 11.5a `security(http): gate route security matrix`; 11.5b `test(security): sweep cross-tenant isolation over the route matrix` — matrix-driven IDOR sweep on the assembled app + real DB (foreign-host, cross-tenant-id and platform sweeps; 108 tenant routes, ~44 id-bearing with seeded foreign rows, ~52 platform routes), plus the budget-cap foreign-id 500→404 fix it caught; 11.5c–g pending; pen test remains parked |
 | TASK-025 | 11 | 11.6 Recovery drills, secret rotation & health probes | todo | TASK-023, TASK-024, phase 10 merged | GA half; scoped to docker-compose, on-call and status page parked |
 | TASK-026 | 11 | 11.7 API v1 freeze, deprecation machinery, rate limits & quotas | todo | TASK-021, TASK-023, phase 10 merged | GA half |
 | TASK-027 | 11 | 11.8 Error addressability, collection ordering & template accessibility | todo | TASK-022, phase 10 merged | GA half |

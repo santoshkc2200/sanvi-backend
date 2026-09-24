@@ -720,6 +720,16 @@ pub trait BudgetCapRepository: Send + Sync {
         period: BudgetPeriod,
     ) -> Result<Option<BudgetCap>, AdvertisingError>;
 
+    /// The cap table's campaign foreign key would surface a foreign id as
+    /// a storage error on write; the use case resolves existence first so
+    /// a wrong-tenant campaign answers not-found instead.
+    async fn campaign_exists(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<bool, AdvertisingError>;
+
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,

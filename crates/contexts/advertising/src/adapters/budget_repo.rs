@@ -170,6 +170,23 @@ impl BudgetCapRepository for SqlxBudgetCapRepository {
         row.map(TryInto::try_into).transpose()
     }
 
+    async fn campaign_exists(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        campaign_id: CampaignId,
+    ) -> Result<bool, AdvertisingError> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM advertising.campaigns WHERE tenant_id = $1 AND id = $2)",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(campaign_id.as_i64())
+        .fetch_one(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(exists)
+    }
+
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,

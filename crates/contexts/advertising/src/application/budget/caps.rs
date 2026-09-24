@@ -257,6 +257,19 @@ impl PutBudgetCap {
             .await
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
 
+        // A cap names a campaign inside this tenant: a foreign id must
+        // answer not-found here, not surface as a foreign-key storage
+        // error from the upsert below.
+        if let Some(cid) = campaign_id {
+            let exists = self
+                .caps
+                .campaign_exists(&mut scope, tenant_id, cid)
+                .await?;
+            if !exists {
+                return Err(AdvertisingError::CampaignNotFound);
+            }
+        }
+
         let existing = match campaign_id {
             Some(cid) => {
                 self.caps
