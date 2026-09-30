@@ -1077,7 +1077,7 @@ async fn main() -> ExitCode {
     let billing_stripe: std::sync::Arc<dyn StripeClient> =
         std::sync::Arc::new(HttpStripeClient::new(
             config.billing.stripe_api_base.clone(),
-            config.billing.stripe_api_key.clone(),
+            config.billing.stripe_api_key.expose_secret().clone(),
             config.billing.stripe_api_version.clone(),
             Some(stripe_metrics),
         ));
@@ -1150,9 +1150,13 @@ async fn main() -> ExitCode {
             .register(std::sync::Arc::new(
                 sanvi_payments::adapters::StripeConnectProvider::new(
                     config.payments.connect_api_base.clone(),
-                    config.payments.connect_api_key.clone(),
+                    config.payments.connect_api_key.expose_secret().clone(),
                     config.payments.stripe_api_version.clone(),
-                    config.payments.connect_webhook_secret.clone(),
+                    config
+                        .payments
+                        .connect_webhook_secret
+                        .expose_secret()
+                        .clone(),
                     config.payments.webhook_tolerance_secs,
                 ),
             ))
@@ -1436,13 +1440,13 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(Sha256Hasher::new(if config.privacy.kek.is_empty() {
             "dev-pepper-insecure".to_string()
         } else {
-            config.privacy.kek.clone()
+            config.privacy.kek.expose_secret().clone()
         }));
     let privacy_crypto: std::sync::Arc<dyn EnvelopeCrypto> = if config.privacy.encryption_enabled()
     {
         let kek: [u8; 32] = base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
-            &config.privacy.kek,
+            config.privacy.kek.expose_secret(),
         )
         .expect("validated by PrivacyConfig")
         .try_into()

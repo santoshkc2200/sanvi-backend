@@ -1,5 +1,6 @@
 //! Theming context configuration.
 
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -31,7 +32,7 @@ pub struct ThemingConfig {
 
     /// HMAC secret for preview tokens (base64). Without a secret, preview
     /// token signing fails closed.
-    pub preview_token_secret: String,
+    pub preview_token_secret: Redacted<String>,
 }
 
 impl Default for ThemingConfig {
@@ -43,7 +44,7 @@ impl Default for ThemingConfig {
             asset_base_url: "/assets/theming".to_string(),
             artifact_dir: "artifacts/theming".to_string(),
             preview_token_ttl_secs: 300,
-            preview_token_secret: String::new(),
+            preview_token_secret: Redacted::default(),
         }
     }
 }
@@ -77,7 +78,7 @@ impl ThemingConfig {
         if !self.preview_token_secret.is_empty()
             && !base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
-                &self.preview_token_secret,
+                self.preview_token_secret.expose_secret(),
             )
             .map(|bytes| bytes.len() >= 32)
             .unwrap_or(false)
@@ -102,7 +103,7 @@ mod tests {
     #[test]
     fn rejects_weak_secrets_and_bad_urls() {
         let config = ThemingConfig {
-            preview_token_secret: "short".to_string(),
+            preview_token_secret: Redacted::new("short".to_string()),
             ..ThemingConfig::default()
         };
         assert!(config.validate().is_err());

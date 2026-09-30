@@ -152,7 +152,7 @@ pub async fn get_public_theme(
         .json(resolved))
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Clone, Serialize, ToSchema)]
 pub struct PreviewTokenView {
     pub token: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
@@ -187,7 +187,7 @@ pub async fn mint_theme_preview_token(
         .json(view))
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct PreviewThemeQuery {
     pub token: String,
     pub locale: Option<String>,
@@ -247,7 +247,7 @@ fn preview_secret(state: &ThemingState) -> Result<Vec<u8>, ApiError> {
     }
     base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
-        &state.config.preview_token_secret,
+        state.config.preview_token_secret.expose_secret(),
     )
     .map_err(|err| {
         tracing::error!(error = %err, "preview token secret is not valid base64");

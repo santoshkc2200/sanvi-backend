@@ -15,3 +15,7 @@ lcov.info
 docker-compose.override.yml
 # Local artifact/brand-asset storage (phase 07).
 /artifacts/
+
+# generated SBOMs (cargo-cyclonedx); published with the release tag, never committed
+*.cdx.json
+*.cdx.json.sha256

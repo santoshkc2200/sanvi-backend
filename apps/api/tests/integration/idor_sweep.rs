@@ -756,11 +756,13 @@ fn sweep_config(kratos_url: String, keto_url: String, media_url: String) -> AppC
     config.ory.keto_read_url = keto_url.clone();
     config.ory.keto_write_url = keto_url;
     config.advertising.tracking_site_key_signing_secret =
-        "idor-sweep-tracking-secret-0123456789".into();
-    config.advertising.oauth_state_signing_secret = "idor-sweep-oauth-secret-0123456789ab".into();
+        sanvi_telemetry::Redacted::new("idor-sweep-tracking-secret-0123456789".to_string());
+    config.advertising.oauth_state_signing_secret =
+        sanvi_telemetry::Redacted::new("idor-sweep-oauth-secret-0123456789ab".to_string());
     // 32 zero bytes, standard base64 — `token_kek_bytes()` wants exactly
     // 32 decoded bytes; the KEK never protects anything real here.
-    config.advertising.token_kek = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string();
+    config.advertising.token_kek =
+        sanvi_telemetry::Redacted::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
     config.media.base_url = media_url;
     config.media.service_api_key = "idor-sweep-media-key".into();
     config

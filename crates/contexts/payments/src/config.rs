@@ -5,6 +5,7 @@
 //! platform key (`billing.stripe_api_key`), carrying only Connect-related
 //! permissions — the composition root validates both distinctions at boot.
 
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -72,8 +73,9 @@ pub struct PaymentsConfig {
     /// Stripe restricted API key (`rk_`) for Connect operations —
     /// Connect permissions only, distinct from the phase-04 platform key.
     /// Empty disables provider calls (the catalog still answers). Secrets
-    /// come from the environment, never config files.
-    pub connect_api_key: String,
+    /// come from the environment, never config files. `Redacted` so a
+    /// derived `Debug` or a config serialization can never emit the key.
+    pub connect_api_key: Redacted<String>,
     /// Pinned Stripe API version for Connect calls; kept in lockstep with
     /// `billing.stripe_api_version` per environment (drift here means
     /// webhook payloads and API shapes disagree).
@@ -82,7 +84,7 @@ pub struct PaymentsConfig {
     /// `/internal/webhooks/stripe/connect` — MUST differ from
     /// `billing.stripe_webhook_secret` (validated at boot). Empty rejects
     /// all Connect webhooks.
-    pub connect_webhook_secret: String,
+    pub connect_webhook_secret: Redacted<String>,
     /// How far a webhook timestamp may drift from now (seconds).
     pub webhook_tolerance_secs: i64,
     /// Client IPs allowed to POST Connect webhooks (defence in depth on
@@ -122,9 +124,9 @@ impl Default for PaymentsConfig {
         Self {
             entitlement_key: "payments.stripe_connect".to_string(),
             connect_api_base: "https://api.stripe.com".to_string(),
-            connect_api_key: String::new(),
+            connect_api_key: Redacted::default(),
             stripe_api_version: "2026-06-24.dahlia".to_string(),
-            connect_webhook_secret: String::new(),
+            connect_webhook_secret: Redacted::default(),
             webhook_tolerance_secs: 300,
             webhook_allowed_clients: vec![],
             requirement_keys: default_requirement_keys(),
@@ -175,13 +177,13 @@ mod tests {
     #[test]
     fn validation_rejects_wrong_key_shapes() {
         let config = PaymentsConfig {
-            connect_api_key: "sk_live_oops".to_string(),
+            connect_api_key: Redacted::new("sk_live_oops".to_string()),
             ..PaymentsConfig::default()
         };
         assert!(config.validate().is_err());
 
         let config = PaymentsConfig {
-            connect_webhook_secret: "not-a-secret".to_string(),
+            connect_webhook_secret: Redacted::new("not-a-secret".to_string()),
             ..PaymentsConfig::default()
         };
         assert!(config.validate().is_err());

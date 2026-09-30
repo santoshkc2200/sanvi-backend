@@ -353,7 +353,7 @@ pub struct CreateConnectionRequest {
 
 /// A short-lived Account Session for the embedded onboarding component.
 /// Fetched per render; never persisted, never logged, single-render.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Clone, Serialize, ToSchema)]
 pub struct ConnectionSessionView {
     #[schema(value_type = String)]
     pub connection_id: ConnectionId,

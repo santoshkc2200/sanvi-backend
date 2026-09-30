@@ -126,11 +126,44 @@ pub struct ProviderAccount {
 /// An ephemeral session credential for the provider's embedded onboarding
 /// component (Stripe Account Session client secrets — but said
 /// provider-agnostically).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderAccountSession {
     pub external_account_id: String,
     pub client_secret: String,
     pub expires_at: DateTime<Utc>,
+}
+
+// TASK-024 11.5f: manual Debug so the one-time Connect `client_secret`
+// renders redacted anywhere the domain type is Debug-formatted (tests,
+// errors) while the field still delivers to the owner via the API DTO.
+impl std::fmt::Debug for ProviderAccountSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderAccountSession")
+            .field("external_account_id", &self.external_account_id)
+            .field("client_secret", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod provider_account_session_tests {
+    use super::*;
+    use chrono::Utc;
+
+    /// TASK-024 11.5f regression: the one-time Connect client_secret never
+    /// renders, and the domain type no longer implements Serialize at all.
+    #[test]
+    fn client_secret_never_renders() {
+        let session = ProviderAccountSession {
+            external_account_id: "acct_demo".to_string(),
+            client_secret: "cs_demo_do_not_render".to_string(),
+            expires_at: Utc::now(),
+        };
+        let debug = format!("{session:?}");
+        assert!(!debug.contains("do_not_render"), "Debug leaked: {debug}");
+        assert!(debug.contains("[REDACTED]"));
+    }
 }
 
 /// The authoritative account state as of a fetch/sync. `status_hint` is

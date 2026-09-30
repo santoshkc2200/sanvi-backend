@@ -376,7 +376,7 @@ impl GoogleAdsAdapter {
             http,
             developer_token,
             client_id: config.google_ads_client_id.clone(),
-            client_secret: config.google_ads_client_secret.clone(),
+            client_secret: config.google_ads_client_secret.expose_secret().clone(),
             api_version,
             auth_base_url,
             token_url,
@@ -1430,7 +1430,7 @@ impl GoogleConversionSink {
                         "google conversion sink http client: {err}"
                     ))
                 })?,
-            developer_token: config.google_ads_developer_token.clone(),
+            developer_token: config.google_ads_developer_token.expose_secret().clone(),
             api_version: config.google_ads_api_version.clone(),
             api_base_url,
             access_tokens,
@@ -1650,7 +1650,7 @@ impl GoogleAudienceSync {
                         "google audience sink http client: {err}"
                     ))
                 })?,
-            developer_token: config.google_ads_developer_token.clone(),
+            developer_token: config.google_ads_developer_token.expose_secret().clone(),
             api_version: config.google_ads_api_version.clone(),
             api_base_url,
             access_tokens,
@@ -1817,7 +1817,7 @@ impl GoogleRefreshTokenGrant {
         Ok(Self {
             http,
             client_id: config.google_ads_client_id.clone(),
-            client_secret: config.google_ads_client_secret.clone(),
+            client_secret: config.google_ads_client_secret.expose_secret().clone(),
             token_url,
         })
     }
@@ -1894,6 +1894,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+    use sanvi_telemetry::Redacted;
 
     #[derive(Clone)]
     struct RecordedRequest {
@@ -2005,9 +2006,9 @@ mod tests {
 
     fn test_config() -> AdvertisingConfig {
         AdvertisingConfig {
-            google_ads_developer_token: "test_dev_token_123".to_string(),
+            google_ads_developer_token: Redacted::new("test_dev_token_123".to_string()),
             google_ads_client_id: "test_client_id_456".to_string(),
-            google_ads_client_secret: "test_client_secret_789".to_string(),
+            google_ads_client_secret: Redacted::new("test_client_secret_789".to_string()),
             google_ads_api_version: "v22".to_string(),
             ..AdvertisingConfig::default()
         }
@@ -2039,7 +2040,7 @@ mod tests {
     #[test]
     fn construction_fails_cleanly_on_empty_developer_token() {
         let config = AdvertisingConfig {
-            google_ads_developer_token: "   ".to_string(),
+            google_ads_developer_token: Redacted::new("   ".to_string()),
             ..test_config()
         };
         let err = GoogleAdsAdapter::new(&config, stub_tokens("ya29.unused"))

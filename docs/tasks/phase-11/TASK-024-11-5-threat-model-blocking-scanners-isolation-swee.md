@@ -397,6 +397,117 @@ invisible to the caller. The other surfaces recorded honest zeros with
 the reason (the lab cannot authenticate; counting is live, the driver is
 missing, not the control).
 
+### Slice 11.5f record — 2026-09-30
+
+Completed steps 7–8 in this slice's commit (`security(telemetry): secret
+field enumeration gate, redaction fixes, dated advisory acceptances`).
+**Step 7 — the gate.** `crates/platform/telemetry/tests/secret_inventory.rs`
+enumerates secret-shaped struct/enum fields **from the source tree** (walks
+`crates/`+`apps/` `src` trees, declaration bodies only — function parameters
+and struct-literal constructions cannot match — skipping `#[cfg(test)]`
+modules and `tests/` paths). Today's tree yields 68 fields; **15 are
+`Redacted<String>`-wrapped config fields**, and **53 carry reasoned
+exemptions** in `tests/secret-exemptions.txt` (17 runtime-carrier, 9
+capability-input, 8 manual-redaction, 4 ciphertext, 3 wire-out, 3 wire-in,
+3 public-by-design, 2 capability-delivery, 2 config-carrier, 2
+not-a-secret). Every class has a mechanical rule the scanner verifies per
+field (e.g. `config-carrier`/`runtime-carrier`: owning struct derives
+neither `Debug` nor `Serialize`; `wire-out`/`capability-delivery`: no
+`Debug`; `manual-redaction`: a same-file manual redacting `Debug` plus a
+serde guard — the existing `DatabaseConfig`/`OtlpConfig`/`MediaConfig`
+house pattern is honoured, not rewritten). Unclassified fields, class-rule
+violations, and stale exemption entries all fail. `just secret-scan`
+(script `scripts/check-secret-scan.sh`) is wired into `just ci`/`ci-quiet`
+and pr.yml (`secret-scan` job). Falsified three ways: the always-on
+fixture test (planted unclassified field, rule-violating exemption, stale
+entry, clean wrapped/exempted controls — each asserted by name);
+`--self-test` plants a brand-new unredacted `webhook_secret` field in a
+real src tree and expects the failure naming it; and a vacuity guard
+(fewer than 25 findings = broken parser, not clean tree) after the
+prototype scanner initially reported zero because of a workspace-root
+path bug.
+
+**Step 7 — findings fixed (each with a regression test).** (1)
+**`Redacted<T>` serialized its plaintext**: `Serialize` forwarded the inner
+value while Debug/Display redacted — the one render path a wrapped secret
+could still leak through. `Serialize` now emits `<redacted>`; `Deserialize`
+still accepts real values (secrets flow in from config, never out through
+a serializer); `all_four_render_paths_redact` fails on the vulnerable
+commit. `Default` and `FromStr` impls added for config/clap shapes. (2)
+**Every secret-bearing config struct derived Debug and/or Serialize on
+plaintext fields** — billing (Stripe key + webhook secret), payments
+(Connect key + webhook secret), privacy (KEK), identity (Kratos webhook
+secret), domains (internal secret), theming (preview secret), advertising
+(six fields incl. the token KEK), and tenancy's `SigningKey.secret`
+(the internal-header HMAC key: `Debug + Serialize + PartialEq` on the
+secret itself). All wrapped in `Redacted<String>` / `Redacted<BTreeMap<..>>`
+so the struct derives stay and render `<redacted>`; use sites expose via
+`expose_secret()`. (3) `ExchangedAuthorization` derived an unused
+`Serialize` over a raw ad refresh token — removed (compiler-enforced). (4)
+Kratos `Credentials` got a manual redacting `Debug` (hashed credential
+config could render through the identity wire structs' derived Debug);
+`credentials_never_render` proves it nested. (5)
+`ProviderAccountSession.client_secret` (Connect one-time secret) — manual
+redacting Debug + `client_secret_never_render`. (6) Unused `Debug` derives
+dropped from the capability-token DTOs (DSR verification/download tokens,
+passphrase headers/commands, theming preview view/query, invitation
+acceptance). `docs/security/secrets-inventory.md` records every secret
+class with storage, rotation path (feeding TASK-025's drills), blast
+radius, and the render-safety mechanism with its proof.
+
+**Step 8 — scanner set.** `deny.toml` `[advisories]` is now a dated
+acceptance ledger: every structured `ignore` entry's reason must end with
+`expires:YYYY-MM-DD`; `scripts/check-audit-acceptances.sh` fails the build
+on a missing, unparsable, or expired date (self-test covers past/missing/
+unparsable/future; comment lines excluded after the first falsification
+run caught the header's own example). `just audit` = `cargo audit` +
+`cargo deny check` + the expiry check; `just sbom` mirrors CI's cyclonedx
+command; pr.yml's audit job runs the expiry check (+ self-test), and the
+new `.github/workflows/release.yml` rebuilds the SBOM **from the tagged
+commit**, checksums it, re-runs the advisory gates on that tree, and
+attaches SBOM+checksum to the GitHub release on every `v*` tag.
+Advisory state on the tree: h2 0.4.15→0.4.19, rustls 0.23.43→0.23.45,
+yanked chacha20→0.10.2 (patch bumps); RUSTSEC-2026-0258 remains on the h2
+0.3 copy actix-http 3.x pins — **accepted with expiry 2026-11-15**
+(no 0.3.x fix exists; HTTP/2 terminates at the edge; actix's h2-0.4 line
+is a migration, not a bump), mirrored in `.cargo/audit.toml` with
+deny.toml documented as the ledger. Two latent pr.yml defects found by
+*running* the commands: the sbom job used a `--output-format` flag
+cargo-cyclonedx 0.5.x does not have, and its artifact glob
+(`*.cdx.json` at the root) missed the per-crate documents — both fixed;
+`just sbom` now produces 25 valid CycloneDX 1.3 documents.
+`docs/security/dependency-policy.md` written: add-a-dependency rules,
+license allowlist rationale, the acceptance lifecycle, update cadence,
+SBOM provenance, scanner-coverage table.
+
+**Verification.** `cargo fmt --check` clean; workspace clippy passed with
+only the new telemetry-test lints, which were fixed and re-verified
+(`-p sanvi-telemetry --all-targets` clean); `cargo nextest run -p
+sanvi-telemetry` 33/33 + doctests; sanvi-payments + sanvi-identity lib
+tests 158/158 green after the regression tests; `just secret-scan` +
+`--self-test` green; `just audit` green and the expiry gate falsified by
+planting a past date into the real entry (exit 1 naming it) then restored;
+`just sbom` green; route-matrix regenerated (`just route-matrix-write`) —
+diff is exactly six fingerprint rows (api config/lib/main, payments/
+privacy/theming handlers), **no route rows changed**; acknowledged here
+per the 11.5a rule; `--self-test` green. **Blocked on the host:** the
+full-workspace clippy/test re-run cannot link — `sqlx_macros`' proc-macro
+dylib is born corrupt ("mis-aligned LINKEDIT string pool", same offset
+every time) on every fresh link, including after a full `cargo clean`;
+`codesign` validates the file and a trivial proc-macro links fine, so
+this is the large-dylib linker flakiness this host already exhibited in
+TASK-019's release build, resurfacing now that the Cargo.lock bump forced
+a relink. All Rust source in this slice compiled and its unit tests ran
+green before the corruption began; the task's full `## Verification`
+block (including `just test`) runs in 11.5g, which must resolve or
+escalate the host issue first. Also observed, not silently fixed: the
+four TASK-020 gates (trace-coverage, log-pii-scan, runbook-xref,
+alert-rules-test) are in `just ci` but **not** in pr.yml — recorded here
+because this slice's gate followed the route-matrix/layering precedent of
+also wiring into pr.yml; TASK-020's CI wiring is that slice's decision to
+revisit. CI has still never run on any of this (no git remote — same
+caveat as TASK-031/019).
+
 ## Steps
 
 ### Step 1 · slice 11.5g: Refresh the threat model
@@ -512,8 +623,19 @@ only as a CI artifact. Write the dependency review policy.
       notification sends. Password reset has no backend surface (Kratos recovery flow) — recorded in
       the 11.5e slice record, not silently counted elsewhere. Rates in
       `benchmarks/abuse-shadow-2026-09-30.md`.*
-- [ ] Redaction tests enumerate secret-bearing types automatically and fail on a new unredacted type.
-- [ ] All scanners block; an expired finding acceptance fails the build; the SBOM publishes with the tag.
+- [x] Redaction tests enumerate secret-bearing types automatically and fail on a new unredacted type.
+      *`just secret-scan` (`scripts/check-secret-scan.sh` → `tests/secret_inventory.rs`) walks the
+      source tree: 68 secret-shaped fields, 15 `Redacted`-wrapped, 53 reasoned exemptions, class rules
+      verified mechanically; unclassified fields, rule violations and stale entries all fail. Self-test
+      plants an unredacted field in a real src tree and expects the named failure. In `just ci` and
+      pr.yml.*
+- [x] All scanners block; an expired finding acceptance fails the build; the SBOM publishes with the tag.
+      *`just audit` = cargo audit + cargo deny + `check-audit-acceptances.sh` (dated ledger in
+      deny.toml, falsified with a planted past expiry); pr.yml audit job runs the check; release.yml
+      rebuilds the SBOM from the tagged commit and attaches it + checksum to the GitHub release.
+      CI has never run (no git remote) — workflow correctness verified by running the same commands
+      locally (`just sbom` produced 25 valid documents after fixing two latent flag/glob defects in
+      the pr.yml job).*
 - [ ] **Every finding from this task has a regression test that fails against the vulnerable commit.**
 
 ## Verification

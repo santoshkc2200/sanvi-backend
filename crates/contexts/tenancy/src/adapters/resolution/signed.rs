@@ -13,6 +13,7 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use sanvi_kernel::TenantId;
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -24,7 +25,7 @@ const VERSION: &str = "v1";
 #[serde(rename_all = "snake_case")]
 pub struct SigningKey {
     pub id: String,
-    pub secret: String,
+    pub secret: Redacted<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -46,8 +47,8 @@ pub fn mint(key: &SigningKey, tenant_id: TenantId, now: DateTime<Utc>) -> String
     let ts = now.timestamp();
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tenant_id.to_string());
     let mac_input = format!("{VERSION}.{}.{b64}.{ts}", key.id);
-    let mut mac =
-        HmacSha256::new_from_slice(key.secret.as_bytes()).expect("hmac accepts keys of any length");
+    let mut mac = HmacSha256::new_from_slice(key.secret.expose_secret().as_bytes())
+        .expect("hmac accepts keys of any length");
     mac.update(mac_input.as_bytes());
     let signature = hex_encode(&mac.finalize().into_bytes());
     format!("{mac_input}.{signature}")
@@ -84,8 +85,8 @@ pub fn verify(
     }
 
     let mac_input = format!("{VERSION}.{key_id}.{b64}.{ts}");
-    let mut mac =
-        HmacSha256::new_from_slice(key.secret.as_bytes()).expect("hmac accepts keys of any length");
+    let mut mac = HmacSha256::new_from_slice(key.secret.expose_secret().as_bytes())
+        .expect("hmac accepts keys of any length");
     mac.update(mac_input.as_bytes());
     // Constant-time comparison (HMAC verify).
     mac.verify_slice(&hex_decode(signature).map_err(|_| SignedTokenError::Malformed)?)
@@ -121,7 +122,7 @@ mod tests {
     fn key() -> SigningKey {
         SigningKey {
             id: "k1".to_string(),
-            secret: "secret-material".to_string(),
+            secret: Redacted::new("secret-material".to_string()),
         }
     }
 
@@ -160,7 +161,7 @@ mod tests {
     fn unknown_key_is_rejected() {
         let other = SigningKey {
             id: "k2".to_string(),
-            secret: "other".to_string(),
+            secret: Redacted::new("other".to_string()),
         };
         let token = mint(&key(), TenantId::try_from(103_i64).unwrap(), now());
         assert!(matches!(
@@ -190,7 +191,7 @@ mod tests {
     fn rotation_accepts_both_keys() {
         let new_key = SigningKey {
             id: "k2".to_string(),
-            secret: "rotated".to_string(),
+            secret: Redacted::new("rotated".to_string()),
         };
         let old_token = mint(&key(), TenantId::try_from(106_i64).unwrap(), now());
         let new_token = mint(&new_key, TenantId::try_from(107_i64).unwrap(), now());

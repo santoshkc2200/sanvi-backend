@@ -228,7 +228,7 @@ pub struct AuthorizationExchange {
 /// the accounts it can see, for the picker. The exchange endpoint of every
 /// platform this port supports returns both in one round trip, so this is
 /// one port method rather than two.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ExchangedAuthorization {
     pub refresh_token: String,
     pub granted_scopes: Vec<String>,

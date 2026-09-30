@@ -201,7 +201,7 @@ pub async fn submit_dsr(
     Ok(HttpResponse::Created().json(output))
 }
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Clone, Deserialize, ToSchema)]
 pub struct VerifyRequestRequest {
     pub token: String,
     pub code: String,
@@ -237,7 +237,7 @@ pub async fn verify_dsr(
     Ok(HttpResponse::Ok().json(output))
 }
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Clone, Deserialize, ToSchema)]
 pub struct GetRequestQuery {
     pub token: Option<String>,
 }
@@ -270,12 +270,12 @@ pub async fn get_dsr_status(
     Ok(HttpResponse::Ok().json(output))
 }
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Clone, Deserialize, ToSchema)]
 pub struct DownloadQuery {
     pub token: String,
 }
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Clone, Deserialize, ToSchema)]
 pub struct DownloadHeaders {
     #[serde(rename = "x-export-passphrase")]
     pub passphrase: String,

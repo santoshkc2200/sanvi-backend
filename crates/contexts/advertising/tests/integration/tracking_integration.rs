@@ -995,7 +995,7 @@ fn create_test_advertising_state(
     ));
 
     let config = AdvertisingConfig {
-        tracking_site_key_signing_secret: secret.to_string(),
+        tracking_site_key_signing_secret: sanvi_telemetry::Redacted::new(secret.to_string()),
         ..Default::default()
     };
 

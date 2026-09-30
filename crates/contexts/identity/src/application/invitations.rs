@@ -28,7 +28,7 @@ pub struct InviteMemberCommand {
     pub role_ids: Vec<RoleId>,
 }
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Clone, Deserialize, ToSchema)]
 pub struct AcceptInvitationCommand {
     #[schema(example = "64-hex-chars")]
     pub token: String,

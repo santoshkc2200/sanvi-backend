@@ -1,5 +1,6 @@
 //! Billing context configuration.
 
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -9,12 +10,13 @@ pub struct BillingConfig {
     pub stripe_api_base: String,
     /// Stripe restricted API key (`rk_`), least-privilege scopes. Empty
     /// disables Stripe calls (checkout/portal return errors); secrets come
-    /// from the environment, never config files.
-    pub stripe_api_key: String,
+    /// from the environment, never config files. `Redacted` so a derived
+    /// `Debug` or a config serialization can never emit the key.
+    pub stripe_api_key: Redacted<String>,
     /// Pinned Stripe API version (single, current version per environment).
     pub stripe_api_version: String,
     /// Webhook signing secret (`whsec_`). Empty rejects all webhooks.
-    pub stripe_webhook_secret: String,
+    pub stripe_webhook_secret: Redacted<String>,
     /// Default success/cancel URLs for Checkout (per-request values win).
     pub success_url: String,
     pub cancel_url: String,
@@ -40,9 +42,9 @@ impl Default for BillingConfig {
     fn default() -> Self {
         Self {
             stripe_api_base: "https://api.stripe.com".to_string(),
-            stripe_api_key: String::new(),
+            stripe_api_key: Redacted::default(),
             stripe_api_version: "2026-06-24.dahlia".to_string(),
-            stripe_webhook_secret: String::new(),
+            stripe_webhook_secret: Redacted::default(),
             success_url: "http://localhost:5173/billing/success".to_string(),
             cancel_url: "http://localhost:5173/pricing".to_string(),
             portal_return_url: "http://localhost:5173/billing".to_string(),
@@ -104,7 +106,7 @@ mod tests {
     #[test]
     fn rejects_bad_api_key_prefix() {
         let config = BillingConfig {
-            stripe_api_key: "nope".to_string(),
+            stripe_api_key: Redacted::new("nope".to_string()),
             ..BillingConfig::default()
         };
         assert!(config.validate().is_err());
@@ -116,10 +118,24 @@ mod tests {
         // (gitleaks scans source for Stripe key patterns).
         let key = format!("{}{}", "rk_", "live_sanvi_test_only");
         let config = BillingConfig {
-            stripe_api_key: key.clone(),
+            stripe_api_key: Redacted::new(key),
             ..BillingConfig::default()
         };
         config.validate().unwrap();
         assert!(config.stripe_enabled());
+    }
+
+    /// TASK-024 11.5f: the key never survives any render path of the config.
+    #[test]
+    fn secrets_never_render_through_debug_or_serde() {
+        let config = BillingConfig {
+            stripe_api_key: Redacted::new("rk_live_do_not_render".to_string()),
+            stripe_webhook_secret: Redacted::new("whsec_do_not_render".to_string()),
+            ..BillingConfig::default()
+        };
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("do_not_render"), "Debug leaked: {debug}");
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("do_not_render"), "serde leaked: {json}");
     }
 }

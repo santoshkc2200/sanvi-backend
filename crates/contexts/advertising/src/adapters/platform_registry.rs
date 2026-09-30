@@ -256,6 +256,7 @@ mod tests {
     use super::*;
     use crate::domain::{AdvertisingError, ConnectionHandle};
     use async_trait::async_trait;
+    use sanvi_telemetry::Redacted;
 
     struct StubTokenProvider;
 
@@ -335,7 +336,7 @@ mod tests {
         let config = AdvertisingConfig {
             real_platform_adapters: true,
             google_ads_client_id: "google-client-id".to_string(),
-            google_ads_developer_token: String::new(),
+            google_ads_developer_token: Redacted::default(),
             ..AdvertisingConfig::default()
         };
         let mut token_providers: HashMap<PlatformKey, Arc<dyn ConnectionAccessTokenProvider>> =

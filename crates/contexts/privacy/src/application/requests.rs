@@ -67,7 +67,7 @@ pub struct SubmitDsrCommand {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Clone, Serialize, ToSchema)]
 pub struct SubmitDsrOutput {
     #[schema(value_type = String)]
     pub request_id: DsrId,
@@ -482,7 +482,7 @@ fn generate_otp(digits: u32) -> String {
     format!("{code:0width$}", width = digits as usize)
 }
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Clone, Deserialize, ToSchema)]
 pub struct VerifyRequestCommand {
     #[schema(value_type = String)]
     pub request_id: DsrId,

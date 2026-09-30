@@ -121,10 +121,19 @@ pub struct VerifiableAddress {
     status: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct Credentials {
     #[serde(default)]
     oidc: Option<OidcCredentials>,
+}
+
+// TASK-024 11.5f: Kratos credential material (provider identifiers, hashed
+// credential config in real payloads) must never render. Manual Debug so any
+// containing struct's derived Debug shows the redaction marker instead.
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Credentials([REDACTED])")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -560,5 +569,30 @@ mod tests {
             "ory_st_opaque"
         );
         assert!(request.headers().get(header::COOKIE).is_none());
+    }
+}
+
+#[cfg(test)]
+mod credentials_redaction_tests {
+    use super::*;
+    use crate::adapters::kratos_client_impl::WebhookIdentity;
+
+    /// TASK-024 11.5f regression: Kratos credential material never renders,
+    /// directly or through a containing identity Debug.
+    #[test]
+    fn credentials_never_render() {
+        let credentials = Credentials { oidc: None };
+        assert_eq!(format!("{credentials:?}"), "Credentials([REDACTED])");
+        let identity = WebhookIdentity {
+            id: "id_demo".to_string(),
+            traits: Default::default(),
+            verifiable_addresses: vec![],
+            credentials: Some(credentials),
+        };
+        let debug = format!("{identity:?}");
+        assert!(
+            debug.contains("Credentials([REDACTED])"),
+            "nested render lost the marker: {debug}"
+        );
     }
 }

@@ -358,7 +358,7 @@ async fn main() -> ExitCode {
                     Arc::new(sanvi_billing::adapters::SqlxWebhookEventRepository::new()),
                     Arc::new(sanvi_billing::adapters::HttpStripeClient::new(
                         config.billing.stripe_api_base.clone(),
-                        config.billing.stripe_api_key.clone(),
+                        config.billing.stripe_api_key.expose_secret().clone(),
                         config.billing.stripe_api_version.clone(),
                         None,
                     )),

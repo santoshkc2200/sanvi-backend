@@ -662,7 +662,7 @@ pub fn build_identity_state(
     let webhook = Arc::new(sanvi_identity::adapters::http::WebhookState {
         sync,
         logout,
-        secret: config.webhook_secret.clone(),
+        secret: config.webhook_secret.expose_secret().clone(),
         allowed_clients: config.webhook_allowed_clients.clone(),
     });
 
@@ -1579,14 +1579,16 @@ pub fn build_privacy_state(
     let hasher: Arc<dyn Hasher> = Arc::new(Sha256Hasher::new(if config.kek.is_empty() {
         "dev-pepper-insecure".to_string()
     } else {
-        config.kek.clone()
+        config.kek.expose_secret().clone()
     }));
     let crypto: Arc<dyn EnvelopeCrypto> = if config.encryption_enabled() {
-        let kek: [u8; 32] =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &config.kek)
-                .expect("validated by PrivacyConfig")
-                .try_into()
-                .expect("validated length");
+        let kek: [u8; 32] = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            config.kek.expose_secret(),
+        )
+        .expect("validated by PrivacyConfig")
+        .try_into()
+        .expect("validated length");
         Arc::new(SqlxEnvelopeCrypto::new(
             tx_manager.clone(),
             keys.clone(),
@@ -1965,7 +1967,7 @@ pub fn build_billing_state(
     let stripe_metrics = StripeMetrics::new(registry);
     let stripe: Arc<dyn StripeClient> = Arc::new(HttpStripeClient::new(
         config.stripe_api_base.clone(),
-        config.stripe_api_key.clone(),
+        config.stripe_api_key.expose_secret().clone(),
         config.stripe_api_version.clone(),
         Some(stripe_metrics),
     ));
@@ -2069,7 +2071,7 @@ pub fn build_billing_state(
             tx_manager,
             webhook_events,
             clock,
-            config.stripe_webhook_secret.clone(),
+            config.stripe_webhook_secret.expose_secret().clone(),
             config.webhook_tolerance_secs,
             config.webhook_allowed_clients.clone(),
         )),
@@ -2655,9 +2657,9 @@ pub fn build_payments_state(
             .register(std::sync::Arc::new(
                 sanvi_payments::adapters::StripeConnectProvider::new(
                     config.connect_api_base.clone(),
-                    config.connect_api_key.clone(),
+                    config.connect_api_key.expose_secret().clone(),
                     config.stripe_api_version.clone(),
-                    config.connect_webhook_secret.clone(),
+                    config.connect_webhook_secret.expose_secret().clone(),
                     config.webhook_tolerance_secs,
                 ),
             ))
@@ -2716,9 +2718,9 @@ pub fn build_payments_state(
         {
             std::sync::Arc::new(sanvi_payments::adapters::StripeConnectProvider::new(
                 config.connect_api_base.clone(),
-                config.connect_api_key.clone(),
+                config.connect_api_key.expose_secret().clone(),
                 config.stripe_api_version.clone(),
-                config.connect_webhook_secret.clone(),
+                config.connect_webhook_secret.expose_secret().clone(),
                 config.webhook_tolerance_secs,
             ))
         } else if environment == RuntimeEnvironment::NonProduction {
@@ -2917,8 +2919,10 @@ pub async fn build_advertising_state(
     let token_kek = config.token_kek_bytes()?;
     let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
-    let oauth_state =
-        OAuthStateManager::with_store(&config.oauth_state_signing_secret, oauth_store);
+    let oauth_state = OAuthStateManager::with_store(
+        config.oauth_state_signing_secret.expose_secret(),
+        oauth_store,
+    );
     let token_vault = std::sync::Arc::new(TokenVault::new(
         std::sync::Arc::new(SqlxTenantEnvelopeCrypto::new(
             token_kek,

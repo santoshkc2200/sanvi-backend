@@ -225,7 +225,7 @@ impl MetaAdsAdapter {
         Ok(Self {
             http,
             client_id,
-            client_secret: config.meta_client_secret.clone(),
+            client_secret: config.meta_client_secret.expose_secret().clone(),
             api_version,
             auth_base_url,
             graph_base_url,
@@ -1738,7 +1738,7 @@ impl MetaRefreshTokenGrant {
         Ok(Self {
             http,
             client_id,
-            client_secret: config.meta_client_secret.clone(),
+            client_secret: config.meta_client_secret.expose_secret().clone(),
             graph_base_url,
         })
     }
@@ -1811,6 +1811,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+    use sanvi_telemetry::Redacted;
 
     #[derive(Clone)]
     struct RecordedRequest {
@@ -1920,7 +1921,7 @@ mod tests {
     fn test_config() -> AdvertisingConfig {
         AdvertisingConfig {
             meta_client_id: "test_meta_client_123".to_string(),
-            meta_client_secret: "test_meta_secret_456".to_string(),
+            meta_client_secret: Redacted::new("test_meta_secret_456".to_string()),
             meta_api_version: "v24.0".to_string(),
             ..AdvertisingConfig::default()
         }

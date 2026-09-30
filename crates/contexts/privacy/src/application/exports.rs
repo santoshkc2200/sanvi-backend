@@ -15,7 +15,7 @@ use crate::domain::{
     ExportArtifactRepository, Hasher, IdGenerator, PrivacyError,
 };
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Clone, Deserialize, ToSchema)]
 pub struct DownloadExportCommand {
     #[schema(value_type = String)]
     pub request_id: DsrId,

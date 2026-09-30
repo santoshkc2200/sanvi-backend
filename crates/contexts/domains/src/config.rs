@@ -7,6 +7,7 @@
 //! authorization request.
 
 use anyhow::Context;
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 
 /// Pricing for one TLD in the sandbox registrar's catalog.
@@ -127,7 +128,7 @@ pub struct DomainsConfig {
     /// Shared secret the edge presents on `/internal/tls/authorize`.
     /// Empty means the gate fails closed.
     #[serde(default)]
-    pub internal_secret: String,
+    pub internal_secret: Redacted<String>,
     /// Optional CIDR allow-list for `/internal` domains routes.
     #[serde(default)]
     pub internal_allowed_ips: Vec<String>,
@@ -251,7 +252,7 @@ impl Default for DomainsConfig {
             cert_renewal_before_days: default_renewal_before(),
             cert_expiry_warning_days: default_expiry_warnings(),
             host_cache_ttl_secs: default_host_cache_ttl(),
-            internal_secret: String::new(),
+            internal_secret: Redacted::default(),
             internal_allowed_ips: Vec::new(),
             prober_timeout_secs: default_probe_timeout(),
             prober_user_agent: default_probe_ua(),

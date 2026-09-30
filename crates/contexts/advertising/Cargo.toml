@@ -24,6 +24,7 @@ sanvi-kernel.workspace = true
 sanvi-messaging.workspace = true
 sanvi-payments.workspace = true
 sanvi-persistence.workspace = true
+sanvi-telemetry.workspace = true
 sanvi-privacy.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::resolution::SigningKey;
@@ -20,7 +21,7 @@ pub struct TenancyConfig {
     /// `SANVI__TENANCY__SIGNING_KEYS__K1=…` environment overrides work.
     /// Keys with an empty secret are ignored (channel disabled per key).
     #[serde(default)]
-    pub signing_keys: BTreeMap<String, String>,
+    pub signing_keys: Redacted<BTreeMap<String, String>>,
     /// Which key id signs newly minted tokens (newest key first during
     /// rotation; verification accepts every key with a secret).
     #[serde(default)]
@@ -32,7 +33,7 @@ impl Default for TenancyConfig {
         Self {
             base_domain: "platform.sanvi.app".to_string(),
             resolution_cache_ttl_secs: 60,
-            signing_keys: BTreeMap::new(),
+            signing_keys: Redacted::default(),
             active_key_id: String::new(),
         }
     }
@@ -54,7 +55,7 @@ impl TenancyConfig {
         if self.resolution_cache_ttl_secs == 0 {
             problems.push("tenancy.resolution_cache_ttl_secs must be >= 1".to_string());
         }
-        for (id, secret) in &self.signing_keys {
+        for (id, secret) in self.signing_keys.expose_secret() {
             if id.is_empty() || id.len() > 64 {
                 problems.push("tenancy.signing_keys keys must be 1..=64 characters".to_string());
             }
@@ -64,7 +65,12 @@ impl TenancyConfig {
                 ));
             }
         }
-        if !self.active_key_id.is_empty() && !self.signing_keys.contains_key(&self.active_key_id) {
+        if !self.active_key_id.is_empty()
+            && !self
+                .signing_keys
+                .expose_secret()
+                .contains_key(&self.active_key_id)
+        {
             problems.push(format!(
                 "tenancy.active_key_id '{}' is not in tenancy.signing_keys",
                 self.active_key_id
@@ -84,11 +90,12 @@ impl TenancyConfig {
     pub fn usable_keys(&self) -> Vec<SigningKey> {
         let mut keys: Vec<SigningKey> = self
             .signing_keys
+            .expose_secret()
             .iter()
             .filter(|(_, secret)| !secret.is_empty())
             .map(|(id, secret)| SigningKey {
                 id: id.clone(),
-                secret: secret.clone(),
+                secret: Redacted::new(secret.clone()),
             })
             .collect();
         // Stable order: active key first, then the rest by id (rotation
@@ -125,7 +132,7 @@ mod tests {
     #[test]
     fn empty_secrets_disable_the_internal_header() {
         let config = TenancyConfig {
-            signing_keys: [("k1".to_string(), String::new())].into(),
+            signing_keys: Redacted::new([("k1".to_string(), String::new())].into()),
             active_key_id: "k1".to_string(),
             ..TenancyConfig::default()
         };
@@ -135,11 +142,13 @@ mod tests {
     #[test]
     fn active_key_sorts_first_for_minting() {
         let config = TenancyConfig {
-            signing_keys: [
-                ("k1".to_string(), "old-secret-value".to_string()),
-                ("k2".to_string(), "new-secret-value".to_string()),
-            ]
-            .into(),
+            signing_keys: Redacted::new(
+                [
+                    ("k1".to_string(), "old-secret-value".to_string()),
+                    ("k2".to_string(), "new-secret-value".to_string()),
+                ]
+                .into(),
+            ),
             active_key_id: "k2".to_string(),
             ..TenancyConfig::default()
         };
@@ -151,7 +160,9 @@ mod tests {
     #[test]
     fn active_key_must_exist() {
         let config = TenancyConfig {
-            signing_keys: [("k1".to_string(), "a-long-enough-secret".to_string())].into(),
+            signing_keys: Redacted::new(
+                [("k1".to_string(), "a-long-enough-secret".to_string())].into(),
+            ),
             active_key_id: "ghost".to_string(),
             ..TenancyConfig::default()
         };

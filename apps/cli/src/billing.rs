@@ -75,7 +75,7 @@ async fn build_stack(
     ));
     let stripe: Arc<dyn StripeClient> = Arc::new(HttpStripeClient::new(
         config.stripe_api_base.clone(),
-        config.stripe_api_key.clone(),
+        config.stripe_api_key.expose_secret().clone(),
         config.stripe_api_version.clone(),
         None,
     ));

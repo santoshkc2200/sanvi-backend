@@ -1,5 +1,6 @@
 //! Identity context configuration.
 
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 
 /// Identity & session configuration.
@@ -21,7 +22,7 @@ pub struct IdentityConfig {
     pub session_cookie_name: String,
     /// Shared secret every Kratos webhook must present (constant-time
     /// compared). Empty disables the webhook endpoints entirely.
-    pub webhook_secret: String,
+    pub webhook_secret: Redacted<String>,
     /// Client IPs (exact or CIDR) allowed to call `/internal/kratos/*`.
     /// Empty = fail closed.
     pub webhook_allowed_clients: Vec<String>,
@@ -44,7 +45,7 @@ impl Default for IdentityConfig {
             link_intent_ttl_secs: 600,
             invitation_ttl_days: 7,
             session_cookie_name: "ory_kratos_session".to_string(),
-            webhook_secret: String::new(),
+            webhook_secret: Redacted::default(),
             webhook_allowed_clients: vec!["127.0.0.1".to_string(), "::1".to_string()],
             trusted_email_verified_providers: vec!["google".to_string(), "microsoft".to_string()],
             app_base_url: default_app_base_url(),

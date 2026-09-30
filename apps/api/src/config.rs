@@ -228,7 +228,8 @@ impl AppConfig {
         // signing secret — a leaked one must not forge events for the
         // other (the cross-secret unit tests live in sanvi-payments).
         if !self.billing.stripe_webhook_secret.is_empty()
-            && self.billing.stripe_webhook_secret == self.payments.connect_webhook_secret
+            && self.billing.stripe_webhook_secret.expose_secret()
+                == self.payments.connect_webhook_secret.expose_secret()
         {
             problems.push(
                 "billing.stripe_webhook_secret and payments.connect_webhook_secret must differ \
@@ -314,13 +315,14 @@ mod tests {
 
     #[test]
     fn shared_webhook_secrets_are_rejected_at_boot() {
+        use sanvi_telemetry::Redacted;
         let config = AppConfig {
             billing: sanvi_billing::BillingConfig {
-                stripe_webhook_secret: "whsec_same".to_string(),
+                stripe_webhook_secret: Redacted::new("whsec_same".to_string()),
                 ..sanvi_billing::BillingConfig::default()
             },
             payments: PaymentsConfig {
-                connect_webhook_secret: "whsec_same".to_string(),
+                connect_webhook_secret: Redacted::new("whsec_same".to_string()),
                 ..PaymentsConfig::default()
             },
             ..AppConfig::default()
@@ -331,7 +333,7 @@ mod tests {
         // Distinct secrets (and the unset/unset case) pass.
         let config = AppConfig {
             payments: PaymentsConfig {
-                connect_webhook_secret: "whsec_connect".to_string(),
+                connect_webhook_secret: Redacted::new("whsec_connect".to_string()),
                 ..PaymentsConfig::default()
             },
             ..AppConfig::default()

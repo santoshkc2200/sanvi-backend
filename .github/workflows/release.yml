@@ -1,0 +1,49 @@
+name: release — publish SBOM with the tag
+
+# TASK-024 (FR-1117): the SBOM ships WITH the release tag, not only as a
+# CI artifact on untagged commits. Every `v*` tag builds the CycloneDX
+# document from exactly the tagged commit, proves the advisory gates on
+# that same tree, and attaches the SBOM plus its checksum to the GitHub
+# release. A tag whose SBOM cannot be produced is a tag that cannot ship.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # creating the release and uploading assets
+
+jobs:
+  sbom-with-tag:
+    name: SBOM attached to the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
+      - uses: Swatinem/rust-cache@v2
+      - name: install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+      - name: generate SBOM from the tagged commit
+        run: cargo cyclonedx --all --format json
+      - name: checksum the SBOMs
+        run: |
+          find . -name '*.cdx.json' -not -path './target/*' -print0 |
+            while IFS= read -r -d '' f; do
+              shasum -a 256 "$f" > "$f.sha256"
+            done
+      # Re-run the advisory gates against the tagged tree so the release
+      # assets and the audit verdict describe the same commit; an accepted
+      # finding whose expiry has passed blocks the release, not just the PR.
+      - name: advisory gates on the tagged tree
+        run: |
+          cargo deny check
+          ./scripts/check-audit-acceptances.sh
+      # Pinned to a major tag, matching the repo's action-pinning practice
+      # for workflow-level actions (see pr.yml's gitleaks/rust-cache pins).
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            **/*.cdx.json
+            **/*.cdx.json.sha256
+          generate_release_notes: true

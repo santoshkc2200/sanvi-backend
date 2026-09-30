@@ -1,11 +1,16 @@
 use std::fmt;
 
-/// Wrapper that guarantees a value never appears in logs or traces.
+/// Wrapper that guarantees a value never appears in logs, traces, or
+/// serialized output.
 ///
-/// `Display` and `Debug` always render as `<redacted>`, so the wrapped secret
-/// survives serialization for legitimate use (forwarding to another service,
-/// storing in a secret manager) but can never leak into an error message or
-/// structured log line. Use it for authorization headers, API keys, tokens.
+/// `Display`, `Debug` **and `Serialize`** always render as `<redacted>`, so
+/// the wrapped secret can never leak into an error message, a structured log
+/// line, or any JSON the type is serialized into (a response DTO, a persisted
+/// document, a config dump). Deserialization still accepts the real value —
+/// that asymmetry is deliberate: secrets flow *in* from configuration, never
+/// *out* through a serializer. Code that legitimately needs the value (a
+/// provider client, a crypto module) calls [`Redacted::expose_secret`].
+/// Use it for authorization headers, API keys, tokens, passwords, keys.
 ///
 /// ```
 /// use sanvi_telemetry::Redacted;
@@ -13,6 +18,7 @@ use std::fmt;
 /// let token = Redacted::new("sk_live_1234567890".to_string());
 /// assert_eq!(token.to_string(), "<redacted>");
 /// assert_eq!(format!("{token:?}"), "<redacted>");
+/// assert_eq!(serde_json::to_string(&token).unwrap(), "\"<redacted>\"");
 /// assert_eq!(token.expose_secret(), "sk_live_1234567890");
 /// ```
 pub struct Redacted<T> {
@@ -59,12 +65,14 @@ where
 
 impl<T> Copy for Redacted<T> where T: Copy {}
 
-impl<T> serde::Serialize for Redacted<T>
-where
-    T: serde::Serialize,
-{
+impl<T> serde::Serialize for Redacted<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.inner.serialize(serializer)
+        // TASK-024 11.5f finding: this impl previously forwarded the inner
+        // value, so any `Redacted` field inside a serializable struct
+        // (response DTO, persisted document, config dump) emitted the secret
+        // in the clear while every other render path redacted it. Serialize
+        // now emits the same `<redacted>` marker as Debug/Display.
+        serializer.serialize_str("<redacted>")
     }
 }
 
@@ -101,9 +109,30 @@ impl<T: PartialEq> PartialEq for Redacted<T> {
 
 impl<T: Eq> Eq for Redacted<T> {}
 
+impl<T: Default> Default for Redacted<T> {
+    fn default() -> Self {
+        Self {
+            inner: T::default(),
+        }
+    }
+}
+
+impl std::str::FromStr for Redacted<String> {
+    type Err = std::convert::Infallible;
+
+    /// Lets CLI argument parsers (clap) hold secrets in `Redacted` directly,
+    /// so `--db-password` never renders through a derived `Debug`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(s.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+    use tracing_subscriber::layer::{Layer as _, SubscriberExt as _};
 
     #[test]
     fn display_and_debug_never_reveal_the_secret() {
@@ -143,8 +172,78 @@ mod tests {
     fn serde_roundtrip_preserves_value() {
         let secret = Redacted::new("keep-me".to_string());
         let json = serde_json::to_string(&secret).unwrap();
-        assert_eq!(json, "\"keep-me\"");
-        let back: Redacted<String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(json, "\"<redacted>\"");
+        // Deserialization still accepts the real value: secrets flow in from
+        // configuration, the asymmetry with Serialize is the design.
+        let back: Redacted<String> = serde_json::from_str("\"keep-me\"").unwrap();
         assert_eq!(back.expose_secret(), "keep-me");
+    }
+
+    /// TASK-024 11.5f: the four render paths a secret-bearing struct can
+    /// meet — Debug, Display, serde, and tracing capture — must never emit
+    /// the inner value. This is the regression test for the Serialize
+    /// passthrough finding: against the vulnerable commit (Serialize
+    /// forwarding the inner value) the serde assertion fails.
+    #[test]
+    fn all_four_render_paths_redact() {
+        #[derive(Debug, serde::Serialize)]
+        struct Carrier {
+            label: String,
+            api_key: Redacted<String>,
+        }
+        let carrier = Carrier {
+            label: "stripe".to_string(),
+            api_key: Redacted::new("sk_live_do_not_render".to_string()),
+        };
+
+        // Debug (direct and nested-in-struct).
+        assert!(!format!("{carrier:?}").contains("do_not_render"));
+        // Display.
+        assert!(!carrier.api_key.to_string().contains("do_not_render"));
+        // serde — the path this gate exists for.
+        let json = serde_json::to_string(&carrier).unwrap();
+        assert!(!json.contains("do_not_render"), "serde leaked: {json}");
+        assert!(json.contains("<redacted>"));
+
+        // tracing capture: the emitter sees only what Debug/Display render.
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        #[derive(Clone)]
+        struct Buf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().write(b)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let writer = {
+            let buffer = buffer.clone();
+            move || Buf(buffer.clone())
+        };
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(writer)
+                .with_ansi(false)
+                .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+        );
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::info!(carrier = ?carrier, key = %carrier.api_key, "render probe");
+        let captured = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert!(
+            !captured.contains("do_not_render"),
+            "tracing leaked: {captured}"
+        );
+        assert!(captured.matches("<redacted>").count() >= 2);
+    }
+
+    #[test]
+    fn default_and_fromstr_support_config_and_cli_shapes() {
+        let unset: Redacted<String> = Redacted::default();
+        assert!(unset.expose_secret().is_empty());
+        let parsed: Redacted<String> = "hunter2".parse().unwrap();
+        assert_eq!(parsed.expose_secret(), "hunter2");
+        assert_eq!(parsed.to_string(), "<redacted>");
     }
 }

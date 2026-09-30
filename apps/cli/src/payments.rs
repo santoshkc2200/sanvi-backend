@@ -50,9 +50,9 @@ fn build_registry(
             .register(Arc::new(
                 sanvi_payments::adapters::StripeConnectProvider::new(
                     config.connect_api_base.clone(),
-                    config.connect_api_key.clone(),
+                    config.connect_api_key.expose_secret().clone(),
                     config.stripe_api_version.clone(),
-                    config.connect_webhook_secret.clone(),
+                    config.connect_webhook_secret.expose_secret().clone(),
                     config.webhook_tolerance_secs,
                 ),
             ))

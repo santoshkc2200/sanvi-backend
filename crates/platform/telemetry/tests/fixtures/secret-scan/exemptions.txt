@@ -1,0 +1,5 @@
+# Fixture exemptions for the secret-scan self-test. One deliberately
+# violating entry (LeakyCarrier) and one deliberately stale entry (Ghost).
+config-carrier | crates/fake/src/violating.rs | LeakyCarrier | client_secret | planted: listed under a class its struct violates
+config-carrier | crates/fake/src/exempted.rs | FineConfig | internal_secret | planted: clean exemption satisfying the class rule
+config-carrier | crates/fake/src/missing.rs | Ghost | api_key | planted: stale entry matching nothing

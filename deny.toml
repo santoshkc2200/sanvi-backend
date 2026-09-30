@@ -1,7 +1,32 @@
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Accepted advisories live here as structured entries. EVERY entry's reason
+# MUST end with an expiry: `expires:YYYY-MM-DD` — the date by which the
+# acceptance must be re-justified, migrated, or escalated. An expired or
+# expiry-less acceptance fails `just audit` via
+# scripts/check-audit-acceptances.sh (which also fails on an unparsable
+# date), and that check runs in CI beside cargo-audit/cargo-deny themselves.
+# An acceptance is a loan, not a pardon: prefer "no fixed version yet;
+# revisit on <date>" over open-ended reasons, and keep the window short
+# (weeks for anything reachable from a request path).
+#
+# Example:
+#   ignore = [
+#     { id = "RUSTSEC-2026-0000", reason = "dev-dependency only, no fixed release; expires:2026-11-15" },
+#   ]
+ignore = [
+    # RUSTSEC-2026-0258 (h2 unbounded empty DATA frames) on the h2 0.3 copy
+    # that actix-http 3.x pins — no fixed 0.3.x exists and the actix-web 4 →
+    # h2-0.4 line is a framework migration, not a patch bump. Accepted with
+    # a bounded window because the deployed topology terminates HTTP/2 at
+    # the edge proxy; the backend negotiates h2 only on direct-ALPN
+    # deployments, which the compose stack and staging do not use. On
+    # expiry: either actix-http ships h2 0.4 (upgrade), or the acceptance is
+    # re-justified in writing. Mirrored in .cargo/audit.toml for cargo-audit;
+    # THIS file is the ledger the expiry gate reads.
+    { id = "RUSTSEC-2026-0258", reason = "h2 0.3 via actix-http 3.x, no 0.3.x fix; h2 terminated at the edge; expires:2026-11-15" },
+]
 
 [licenses]
 version = 2

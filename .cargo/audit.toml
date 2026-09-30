@@ -1,0 +1,9 @@
+# cargo-audit's ignore list. deny.toml is the AUTHORITATIVE acceptance
+# ledger: every id here must appear there as a structured ignore entry whose
+# reason ends with `expires:YYYY-MM-DD`, and scripts/check-audit-acceptances.sh
+# fails the build when that expiry passes. This file exists only because
+# cargo-audit does not read deny.toml.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0258", # h2 0.3 via actix-http 3.x; see deny.toml for the dated rationale
+]

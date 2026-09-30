@@ -235,6 +235,17 @@ jobs:
           python -m pip install --quiet "semgrep==1.176.1"
           semgrep scan --config .semgrep/rust.yaml --error --metrics=off
 
+  secret-scan:
+    name: Secret field enumeration (+ self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install pinned toolchain (rust-toolchain.toml)
+        run: cargo --version
+      - uses: taiki-e/install-action@nextest
+      - run: ./scripts/check-secret-scan.sh
+      - run: ./scripts/check-secret-scan.sh --self-test
+
   route-matrix:
     name: Route security matrix (+ mutation tests)
     runs-on: ubuntu-latest
@@ -268,13 +279,18 @@ jobs:
       - run: cargo run -p sanvi-cli -- i18n check
 
   audit:
-    name: cargo audit
+    name: cargo audit (+ accepted-finding expiry)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+      # TASK-024: an accepted advisory is a loan with a due date. deny.toml
+      # is the ledger; this check fails when an acceptance is missing its
+      # expires: date or the date has passed. Bash-only, no toolchain needed.
+      - run: ./scripts/check-audit-acceptances.sh
+      - run: ./scripts/check-audit-acceptances.sh --self-test
 
   deny:
     name: cargo deny (licenses, bans, advisories)
@@ -310,11 +326,13 @@ jobs:
       - name: generate SBOM
         run: |
           cargo install cargo-cyclonedx --locked
-          cargo cyclonedx --all --format json --output-format json
+          cargo cyclonedx --all --format json
       - uses: actions/upload-artifact@v7
         with:
           name: sbom
-          path: "*.cdx.json"
+          # cargo-cyclonedx writes one document per crate, next to each
+          # Cargo.toml -- not into the repo root.
+          path: "**/*.cdx.json"
 
   trivy:
     name: trivy filesystem scan

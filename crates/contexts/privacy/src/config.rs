@@ -1,5 +1,6 @@
 //! Privacy context configuration.
 
+use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -10,7 +11,7 @@ pub struct PrivacyConfig {
     /// (`SANVI__PRIVACY__KEK`), never config files. Empty disables envelope
     /// encryption (export packaging and crypto-shredding refuse to run —
     /// fail closed).
-    pub kek: String,
+    pub kek: Redacted<String>,
     /// KEK identifier recorded alongside wrapped DEKs (rotation adds a key,
     /// not a replacement).
     pub kek_id: String,
@@ -52,7 +53,7 @@ pub struct PrivacyConfig {
 impl Default for PrivacyConfig {
     fn default() -> Self {
         Self {
-            kek: String::new(),
+            kek: Redacted::default(),
             kek_id: "kek-1".to_string(),
             verification_ttl_secs: 600,
             verification_max_attempts: 5,
@@ -75,9 +76,11 @@ impl Default for PrivacyConfig {
 impl PrivacyConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.kek.is_empty() {
-            let decoded =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &self.kek)
-                    .map_err(|err| anyhow::anyhow!("privacy.kek is not valid base64: {err}"))?;
+            let decoded = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                self.kek.expose_secret(),
+            )
+            .map_err(|err| anyhow::anyhow!("privacy.kek is not valid base64: {err}"))?;
             if decoded.len() != 32 {
                 anyhow::bail!("privacy.kek must decode to exactly 32 bytes (AES-256)");
             }
@@ -148,7 +151,7 @@ mod tests {
     fn a_32_byte_kek_is_accepted() {
         let key = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [7u8; 32]);
         let config = PrivacyConfig {
-            kek: key,
+            kek: Redacted::new(key),
             ..PrivacyConfig::default()
         };
         config.validate().unwrap();
@@ -158,13 +161,16 @@ mod tests {
     #[test]
     fn rejects_short_or_garbled_keks() {
         let config = PrivacyConfig {
-            kek: "not base64 !!".to_string(),
+            kek: Redacted::new("not base64 !!".to_string()),
             ..PrivacyConfig::default()
         };
         assert!(config.validate().is_err());
 
         let config = PrivacyConfig {
-            kek: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8; 16]),
+            kek: Redacted::new(base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                [1u8; 16],
+            )),
             ..PrivacyConfig::default()
         };
         assert!(config.validate().is_err());

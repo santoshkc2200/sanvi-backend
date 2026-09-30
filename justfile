@@ -161,6 +161,34 @@ log-pii-scan:
 log-pii-scan-self-test:
     ./scripts/check-log-pii.sh --self-test
 
+# TASK-024 (FR-1116): every secret-shaped struct field is Redacted/SecretRef
+# wrapped or carries a reasoned, rule-satisfying exemption. `--self-test`
+# plants an unredacted field in a real src tree and expects the gate to
+# fail naming it.
+secret-scan:
+    ./scripts/check-secret-scan.sh
+
+secret-scan-self-test:
+    ./scripts/check-secret-scan.sh --self-test
+
+# TASK-024 (FR-1117): dependency advisory gate. Accepted findings live in
+# deny.toml (the ledger) with an `expires:` date in each reason; the
+# acceptance check fails the build on a missing or expired date.
+audit:
+    cargo audit
+    cargo deny check
+    ./scripts/check-audit-acceptances.sh
+
+audit-acceptances-self-test:
+    ./scripts/check-audit-acceptances.sh --self-test
+
+# TASK-024 (FR-1117): CycloneDX SBOM for the whole workspace. The release
+# workflow publishes the artifact with the tag (.github/workflows/release.yml);
+# this recipe is the local form of the same command.
+sbom:
+    @command -v cargo-cyclonedx >/dev/null 2>&1 || { echo "cargo-cyclonedx not installed; run: cargo install cargo-cyclonedx --locked" >&2; exit 1; }
+    cargo cyclonedx --all --format json
+
 # TASK-020 (FR-1106): the alert registry evaluated against recorded
 # series — a ten-minute outage fires, a single failed request does not,
 # and every rule fires on its own synthetic breach.
@@ -294,7 +322,7 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan runbook-xref alert-rules-test
+ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test
 
 # TASK-019 (FR-1103): run the k6 load shapes against a running API and
 # write benchmarks/<scenario>/<tag>.json. Point PERF_BASE_URL at the API
@@ -371,4 +399,4 @@ ga-checklist-check:
     ./scripts/check-ga-checklist.sh
 
 # `ci` with the low-noise variants of the two chattiest gates.
-ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan runbook-xref alert-rules-test
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test
