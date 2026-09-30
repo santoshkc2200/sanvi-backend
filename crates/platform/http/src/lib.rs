@@ -33,7 +33,10 @@ pub use authn::{
 pub use authz::{
     Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,
 };
-pub use config::{CorsConfig, RateLimitConfig, ServerConfig, TenantPolicyConfig};
+pub use config::{
+    CorsConfig, HstsConfig, RateLimitConfig, SecurityHeadersConfig, ServerConfig,
+    TenantPolicyConfig,
+};
 pub use error::{ApiError, PROBLEM_TYPE_BASE, ProblemDetail, ProblemTranslator};
 pub use features::{FeatureGate, RequiredAnyFeature, RequiredFeature};
 pub use impersonation::{

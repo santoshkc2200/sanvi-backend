@@ -262,6 +262,79 @@ crate); `just route-matrix` complete and current (domain/adapter files
 are not fingerprinted, and handlers.rs is unchanged);
 `just test-idor` 4/4.
 
+### Slice 11.5d record — 2026-09-30
+
+Completed the specified security-header set and its per-surface snapshot
+in this slice's commit (`security(http): specify the security-header set
+and snapshot it`). **One finding, fixed in the same commit: HSTS was dead
+code.** The middleware gated the header on `config.host` not being
+`localhost`/`0.0.0.0` — but `server.host` is the *bind* address, and
+every environment (base plus all overlays) binds `0.0.0.0`, so no
+deployment, staging and production included, has ever emitted
+`Strict-Transport-Security`. Exactly NFR-1114's "incidental rather than
+specified" defect; the header existed in code and in the loose contract
+assertion while being absent in every real response.
+
+The specification now has two halves. The five headers with no
+per-environment variance (CSP `default-src 'none'; frame-ancestors
+'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`,
+permissions-policy, nosniff — values unchanged from the previous
+middleware) are pinned as code constants in `SecurityHeaders`, on the
+stated principle that configuring them invites quiet per-environment
+weakening. HSTS is the one switch: `server.security.hsts`
+(`HstsConfig`: max-age, includeSubDomains, preload) with startup
+validation — max-age ≥ 1, and a preload directive that cannot qualify
+for the preload list (needs includeSubDomains and max-age ≥ 31536000) is
+rejected as the typo it is. Base config documents the off default
+(plain-HTTP local dev); the staging and production overlays enable
+`max-age=31536000; includeSubDomains` (preload deliberately off —
+submission is an ops decision, recorded in the config comment).
+
+The snapshot (`apps/api/tests/integration/headers_snapshot.rs`): the
+backend ships one HTTP app, so "per app" is every *serving surface* of
+it — liveness probe, public API JSON, the 404 error path, `/openapi.json`,
+`/metrics`, and the cross-origin tracking path — each requested from the
+fully assembled app and compared for **exact map equality** against the
+committed six-header snapshot, in both postures (local: no HSTS;
+TLS: the overlay directive). A duplicate of any governed header fails
+(duplicates can hide a weakened value behind a correct one);
+`server`/`x-powered-by` must stay absent on every surface. One designed
+non-coverage is pinned rather than left implicit: CORS **preflight**
+responses carry none of the headers, because actix-cors short-circuits
+`OPTIONS` outside the security-headers middleware — correct (a preflight
+has no renderable body), and asserted so a future stack reorder is a
+conscious snapshot update. The middleware unit tests pin the same set at
+unit level; the loose `responses_carry_security_headers_and_request_id`
+contract test stays as a redundant guard. The contract-test harness
+(`test_config`/`test_app_with`) became `pub(crate)` for the snapshot
+rather than duplicating a hundred lines of wiring.
+
+Falsified three ways: deleting the `X-Frame-Options` insertion fails the
+snapshot naming that header on `/healthz`; simulating a wiring regression
+that drops the configured HSTS fails the TLS-posture snapshot naming
+`strict-transport-security` (this is also the regression test for the
+finding — against the old heuristic commit, the configured-directive
+assertion cannot pass); and the API binary itself refuses to start under
+`SANVI_ENV=production` with `max_age_secs=0`, exiting 2 with
+`server.security.hsts.max_age_secs must be >= 1`, while the real
+staging/production overlays pass startup validation and serve. Note for
+later slices: the CLI's `config` command validates only its own config
+slice (no `server` section), so `just config-check` does **not** cover
+server-side security config — the API/worker startup path is the gate.
+
+`just route-matrix` correctly caught this slice: its fingerprints include
+`crates/platform/http/src/{config,lib,middleware}.rs` (the middleware
+carve excludes only the header/CSS block, keeping the `stack()` wiring
+change visible). Regenerated with `just route-matrix-write`; the diff is
+the three hash rows and nothing else — to be acknowledged in the PR
+description per the 11.5a review-substitute rule.
+
+Verification: `cargo c`; `cargo fmt --check`; `cargo clippy -p
+sanvi-http -p sanvi-api --all-targets` clean; `scripts/test.sh --quiet
+-p sanvi-http -p sanvi-api` 110/110 (six new unit tests, three snapshot
+tests); `just route-matrix` complete and current. The task's full
+`## Verification` block still waits for slice 11.5g.
+
 ## Steps
 
 ### Step 1 · slice 11.5g: Refresh the threat model
@@ -370,7 +443,7 @@ only as a CI artifact. Write the dependency review policy.
       with a dropped policy.
 - [ ] `just test-idor` enumerates from the route matrix and passes; every wrong-tenant request returns
       404 or 403 with no existence leak.
-- [ ] Security header snapshots pass per app and fail on a removed header.
+- [x] Security header snapshots pass per app and fail on a removed header.
 - [ ] Abuse controls count on every named surface; the tracking endpoint enforces and holds under a
       flood; the would-have-blocked rate is committed.
 - [ ] Redaction tests enumerate secret-bearing types automatically and fail on a new unredacted type.

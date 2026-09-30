@@ -15,6 +15,8 @@ pub struct ServerConfig {
     pub cors: CorsConfig,
     pub rate_limit: RateLimitConfig,
     pub tenant: TenantPolicyConfig,
+    #[serde(default)]
+    pub security: SecurityHeadersConfig,
 }
 
 impl Default for ServerConfig {
@@ -30,6 +32,7 @@ impl Default for ServerConfig {
             cors: CorsConfig::default(),
             rate_limit: RateLimitConfig::default(),
             tenant: TenantPolicyConfig::default(),
+            security: SecurityHeadersConfig::default(),
         }
     }
 }
@@ -60,6 +63,9 @@ impl ServerConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.tenant.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.security.validate() {
             problems.push(err.to_string());
         }
         if !problems.is_empty() {
@@ -134,6 +140,79 @@ impl TenantPolicyConfig {
         self.suspended_allowlist
             .iter()
             .any(|prefix| path.starts_with(prefix))
+    }
+}
+
+/// Security response headers (NFR-1114): specified, not inherited from
+/// framework defaults.
+///
+/// The five headers that never vary per environment (CSP, frame protection,
+/// referrer policy, permissions policy, MIME sniffing protection) are pinned
+/// as code constants in [`crate::middleware`]'s `SecurityHeaders` — making
+/// them configurable invites weakening them per environment. HSTS is the one
+/// explicit switch: it is meaningless without TLS, which local development
+/// does not run, so it is absent (`None`) by default and enabled by the
+/// staging and production overlays.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SecurityHeadersConfig {
+    /// The `Strict-Transport-Security` directive. `None` emits no header.
+    #[serde(default)]
+    pub hsts: Option<HstsConfig>,
+}
+
+impl SecurityHeadersConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(hsts) = &self.hsts {
+            hsts.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// One HSTS directive, rendered verbatim as the header value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HstsConfig {
+    pub max_age_secs: u64,
+    #[serde(default)]
+    pub include_sub_domains: bool,
+    /// Directs browsers to submit the host to the preload list. Opting in
+    /// is an operations decision (removal from the preload list takes
+    /// months), so no overlay sets this yet.
+    #[serde(default)]
+    pub preload: bool,
+}
+
+impl HstsConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.max_age_secs == 0 {
+            anyhow::bail!("server.security.hsts.max_age_secs must be >= 1");
+        }
+        // Preload-list submission requirements: a preload directive that
+        // cannot qualify is a typo that silently opts into nothing.
+        if self.preload {
+            if !self.include_sub_domains {
+                anyhow::bail!("server.security.hsts.preload requires include_sub_domains");
+            }
+            if self.max_age_secs < 31_536_000 {
+                anyhow::bail!("server.security.hsts.preload requires max_age_secs >= 31536000");
+            }
+        }
+        Ok(())
+    }
+
+    /// The `Strict-Transport-Security` value:
+    /// `max-age=N[; includeSubDomains][; preload]`.
+    pub fn header_value(&self) -> String {
+        let mut value = format!("max-age={}", self.max_age_secs);
+        if self.include_sub_domains {
+            value.push_str("; includeSubDomains");
+        }
+        if self.preload {
+            value.push_str("; preload");
+        }
+        value
     }
 }
 
@@ -223,6 +302,77 @@ mod tests {
 
     #[test]
     fn defaults_are_valid() {
+        ServerConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn hsts_directive_renders_only_the_set_parts() {
+        let base = HstsConfig {
+            max_age_secs: 31_536_000,
+            include_sub_domains: false,
+            preload: false,
+        };
+        assert_eq!(base.header_value(), "max-age=31536000");
+        assert_eq!(
+            HstsConfig {
+                include_sub_domains: true,
+                ..base.clone()
+            }
+            .header_value(),
+            "max-age=31536000; includeSubDomains"
+        );
+        assert_eq!(
+            HstsConfig {
+                include_sub_domains: true,
+                preload: true,
+                ..base
+            }
+            .header_value(),
+            "max-age=31536000; includeSubDomains; preload"
+        );
+    }
+
+    #[test]
+    fn hsts_validation_rejects_impossible_directives() {
+        let err = HstsConfig {
+            max_age_secs: 0,
+            include_sub_domains: false,
+            preload: false,
+        }
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("max_age_secs"));
+
+        // Preload that cannot qualify for the list is rejected at startup,
+        // not silently ignored by every browser that reads it.
+        let err = HstsConfig {
+            max_age_secs: 31_536_000,
+            include_sub_domains: false,
+            preload: true,
+        }
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("include_sub_domains"));
+
+        let err = HstsConfig {
+            max_age_secs: 60,
+            include_sub_domains: true,
+            preload: true,
+        }
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("31536000"));
+    }
+
+    #[test]
+    fn security_section_defaults_to_no_hsts_and_stays_valid() {
+        assert_eq!(
+            ServerConfig::default().security,
+            SecurityHeadersConfig { hsts: None }
+        );
         ServerConfig::default().validate().unwrap();
     }
 

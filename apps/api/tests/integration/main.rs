@@ -1,4 +1,5 @@
 mod feature_catalog;
+mod headers_snapshot;
 mod http_contract;
 mod idor_sweep;
 mod permission_catalog;

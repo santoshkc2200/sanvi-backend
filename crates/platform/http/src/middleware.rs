@@ -97,7 +97,13 @@ where
 {
     let cors = build_cors(&config.cors);
     let limiter = Arc::new(RateLimiter::new(&config.rate_limit, redis.clone()));
-    let hsts = config.host != "localhost" && config.host != "0.0.0.0";
+    // The directive is digits and fixed ASCII by construction, so rendering
+    // it cannot fail; HSTS is enabled by the staging/production overlays
+    // and absent in plain-HTTP local development.
+    let hsts = config.security.hsts.as_ref().map(|hsts| {
+        header::HeaderValue::from_str(&hsts.header_value())
+            .expect("hsts directive renders to a valid header value")
+    });
 
     // The per-tenant limiter uses its own bucket namespace but the same
     // Redis backend as the per-IP limiter.
@@ -805,12 +811,18 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Security headers.
+// Security headers (NFR-1114): the specified set, pinned here and asserted
+// per serving surface by `apps/api/tests/integration/headers_snapshot.rs`.
+// Every value is a code constant on purpose — the set has no per-environment
+// variance, and making it configurable would invite weakening it quietly.
+// HSTS is the one exception: it varies (TLS versus local HTTP), so it comes
+// from `server.security.hsts` rather than a host-name heuristic.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 struct SecurityHeaders {
-    hsts: bool,
+    /// Precomputed `Strict-Transport-Security` value; `None` emits no header.
+    hsts: Option<header::HeaderValue>,
 }
 
 impl<S, B> actix_web::dev::Transform<S, ServiceRequest> for SecurityHeaders
@@ -831,14 +843,14 @@ where
     fn new_transform(&self, service: S) -> Self::Future {
         std::future::ready(Ok(SecurityHeadersService {
             service,
-            hsts: self.hsts,
+            hsts: self.hsts.clone(),
         }))
     }
 }
 
 struct SecurityHeadersService<S> {
     service: S,
-    hsts: bool,
+    hsts: Option<header::HeaderValue>,
 }
 
 impl<S, B> actix_web::dev::Service<ServiceRequest> for SecurityHeadersService<S>
@@ -857,7 +869,7 @@ where
     actix_web::dev::forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let hsts = self.hsts;
+        let hsts = self.hsts.clone();
         let fut = self.service.call(req);
         Box::pin(async move {
             let mut res = fut.await?;
@@ -884,13 +896,104 @@ where
                 header::CONTENT_SECURITY_POLICY,
                 header::HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
             );
-            if hsts {
-                headers.insert(
-                    header::STRICT_TRANSPORT_SECURITY,
-                    header::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
-                );
+            if let Some(value) = hsts {
+                headers.insert(header::STRICT_TRANSPORT_SECURITY, value);
             }
             Ok(res)
         })
+    }
+}
+
+#[cfg(test)]
+mod security_headers_tests {
+    use actix_web::{App, HttpResponse, test, web};
+
+    use super::*;
+
+    async fn response_headers(
+        hsts: Option<&crate::config::HstsConfig>,
+    ) -> actix_web::dev::ServiceResponse<BoxBody> {
+        let hsts_value = hsts.map(|hsts| {
+            header::HeaderValue::from_str(&hsts.header_value())
+                .expect("hsts directive renders to a valid header value")
+        });
+        let app = test::init_service(App::new().wrap(SecurityHeaders { hsts: hsts_value }).route(
+            "/probe",
+            web::get().to(|| async { HttpResponse::Ok().json(serde_json::json!({})) }),
+        ))
+        .await;
+        let req = test::TestRequest::get().uri("/probe").to_request();
+        test::call_service(&app, req).await
+    }
+
+    /// The five fixed headers, exactly; nothing else security-shaped may
+    /// appear or disappear unnoticed. The full per-surface snapshot lives
+    /// in `apps/api/tests/integration/headers_snapshot.rs`; this is the
+    /// unit-level pin of the middleware itself.
+    #[actix_web::test]
+    async fn the_five_fixed_headers_are_exactly_as_specified() {
+        let res = response_headers(None).await;
+        assert_eq!(res.status().as_u16(), 200);
+        let observed: Vec<(String, String)> = [
+            "x-content-type-options",
+            "referrer-policy",
+            "x-frame-options",
+            "permissions-policy",
+            "content-security-policy",
+            "strict-transport-security",
+        ]
+        .iter()
+        .filter_map(|name| {
+            res.headers()
+                .get(*name)
+                .map(|value| (name.to_string(), value.to_str().unwrap().to_string()))
+        })
+        .collect();
+        assert_eq!(
+            observed,
+            vec![
+                ("x-content-type-options".to_string(), "nosniff".to_string()),
+                ("referrer-policy".to_string(), "same-origin".to_string()),
+                ("x-frame-options".to_string(), "DENY".to_string()),
+                (
+                    "permissions-policy".to_string(),
+                    "camera=(), microphone=(), geolocation=(), interest-cohort=()".to_string()
+                ),
+                (
+                    "content-security-policy".to_string(),
+                    "default-src 'none'; frame-ancestors 'none'".to_string()
+                ),
+            ]
+        );
+        // No framework fingerprint headers either.
+        assert!(res.headers().get("server").is_none());
+        assert!(res.headers().get("x-powered-by").is_none());
+    }
+
+    /// Local development posture: no TLS, no HSTS header at all — a browser
+    /// must not cache a year-long HTTPS-only rule for a loopback host.
+    #[actix_web::test]
+    async fn without_hsts_config_the_header_is_absent() {
+        let res = response_headers(None).await;
+        assert!(res.headers().get("strict-transport-security").is_none());
+    }
+
+    /// The staging/production posture: the configured directive verbatim.
+    #[actix_web::test]
+    async fn hsts_config_renders_the_directive_verbatim() {
+        let res = response_headers(Some(&crate::config::HstsConfig {
+            max_age_secs: 31_536_000,
+            include_sub_domains: true,
+            preload: false,
+        }))
+        .await;
+        assert_eq!(
+            res.headers()
+                .get("strict-transport-security")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "max-age=31536000; includeSubDomains"
+        );
     }
 }

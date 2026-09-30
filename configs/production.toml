@@ -21,6 +21,13 @@ burst = 120
 per_second = 20
 fail_open = false
 
+# NFR-1114: HSTS on the API host (and its subdomains — none exist today,
+# so the directive costs nothing) for a year. Preload submission is an
+# operations decision and stays off.
+[server.security.hsts]
+max_age_secs = 31536000
+include_sub_domains = true
+
 [telemetry]
 log_format = "json"
 environment = "production"

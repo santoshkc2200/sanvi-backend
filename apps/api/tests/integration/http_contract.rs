@@ -22,7 +22,9 @@ fn pool_stub() -> sanvi_persistence::PgPool {
         .expect("lazy pool construction never connects")
 }
 
-fn test_config() -> AppConfig {
+/// Shared with `headers_snapshot.rs`: the snapshot needs the same assembled
+/// app, and duplicating a hundred lines of wiring would drift.
+pub(crate) fn test_config() -> AppConfig {
     let mut config = AppConfig::default();
     config.telemetry.service_name = "sanvi-api-test".to_string();
     config.server.rate_limit.enabled = false;
@@ -54,7 +56,9 @@ fn test_app_with_tenancy(
 /// `features.identity` on, session verification dials the (unreachable
 /// in tests) Kratos URL, which is exactly the incident posture some
 /// contracts are about.
-fn test_app_with(
+///
+/// Shared with `headers_snapshot.rs` (see `test_config`).
+pub(crate) fn test_app_with(
     config: AppConfig,
 ) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<

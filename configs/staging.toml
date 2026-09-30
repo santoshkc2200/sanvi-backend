@@ -9,6 +9,12 @@ node_id = 101
 [server.cors]
 allowed_origins = ["https://app.staging.sanvi.dev", "https://admin.staging.sanvi.dev"]
 
+# NFR-1114: same HSTS posture as production, so staging rehearses the
+# header browsers will actually receive.
+[server.security.hsts]
+max_age_secs = 31536000
+include_sub_domains = true
+
 [database]
 ssl_mode = "require"
 max_connections = 25

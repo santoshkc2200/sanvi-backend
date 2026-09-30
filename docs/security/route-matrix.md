@@ -312,14 +312,14 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/theming/src/adapters/http/state.rs | `fa4f295dd62d8c296a608e3fb5576fbe5bdb8d724742458f361ba4f0486a1e60` |
 | crates/platform/http/src/authn.rs | `5986cd946d5e42e793685dee62ecf3333378221ff7b4df468adf65f74a05f310` |
 | crates/platform/http/src/authz.rs | `8be9c7e3310b376ece017a02f1f526397d2054088d154b815658c217e6389e36` |
-| crates/platform/http/src/config.rs | `9727b911e64b0203c3ab8e703d484b92b747caecf3ac257ea3fce1ea43ac1b89` |
+| crates/platform/http/src/config.rs | `87f5bb47f23c11c5105b10bb1a3df9e318ce235c1405cdd665a1c2cbec981000` |
 | crates/platform/http/src/error.rs | `b911fbc5d5dab4ed0dd4eb4d3394b6d0cf84e9f59c0501e24ace6662684bf9e8` |
 | crates/platform/http/src/features.rs | `fc8d560cac864dff057446f468a3514f443ba5f46344d5885becec32e93c9109` |
 | crates/platform/http/src/impersonation.rs | `54e109462b3223b13a98242c208e3fd010673f6bbc5a8848111aa4b41accdb7e` |
-| crates/platform/http/src/lib.rs | `27c55b58bc39d683370d0ca9bb57181fc2c4062d1a4d6ccb2131d7428d14a4cf` |
+| crates/platform/http/src/lib.rs | `778abf1d58c915c76cd5c676f300edf8a7ca5cda2532b8b1dba84a7970e6b10e` |
 | crates/platform/http/src/locale.rs | `a1d1658851376c3d1944209351f29582f335dde199c71b1a3474f2ffc7818628` |
 | crates/platform/http/src/metrics.rs | `6a29178bdf1ede4fd8e579f742686da31d8002f01d03e331c40a9455b38d2a96` |
-| crates/platform/http/src/middleware.rs | `fcf1a8446619b60400335f4ecae2d47627791ac6cb903bf1d66804d8b62dd94d` |
+| crates/platform/http/src/middleware.rs | `f42e5d082771c93a19f1603601e1a9a75fdc98327b93ab6be223e17619bf4d2f` |
 | crates/platform/http/src/openapi.rs | `5f93e77d3369274b5335cf42a61da457220417caf78e0d6911f501430140fd55` |
 | crates/platform/http/src/rate_limit.rs | `8033cdd6d22a2f1e80ff96cc850beff64da35f7be59f3eccef36da9cd1657479` |
 | crates/platform/http/src/server.rs | `77cf573ccea37750c5c64b1494588af99107b8dd8ac425b292b928bda12daff8` |

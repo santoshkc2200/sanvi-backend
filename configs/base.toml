@@ -61,6 +61,14 @@ per_second = 20
 fail_open = true
 exempt_paths = []
 
+# Security response headers (NFR-1114). The five fixed headers (CSP,
+# frame-ancestors, referrer, permissions, nosniff) are code constants.
+# Only HSTS is configurable: it is meaningless without TLS, so local
+# development (plain HTTP) leaves it off and the staging/production
+# overlays enable it.
+[server.security]
+# hsts absent = the Strict-Transport-Security header is not emitted.
+
 [tenancy]
 # Suffix under which tenant subdomains live. Local development overrides
 # this to "localhost" (see configs/local.toml).
