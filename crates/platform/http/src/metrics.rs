@@ -109,6 +109,48 @@ impl TenantResolutionInstruments {
     }
 }
 
+/// Abuse-quota instruments (TASK-024, FR-1117). One series per counted
+/// dimension: `surface` (tracking / invitation / domain_purchase / signup /
+/// notifications), `key_kind` (ip / origin / tenant), `outcome` — `counted`
+/// within quota, `would_block` over quota in shadow mode, `blocked` over
+/// quota while enforcing. The would-have-blocked *rate* for a surface is
+/// read off these series; a request over quota on two dimensions counts
+/// twice, so the rate is per-dimension rather than per-request.
+#[derive(Clone)]
+pub struct AbuseInstruments {
+    events: opentelemetry::metrics::Counter<u64>,
+}
+
+impl AbuseInstruments {
+    pub fn build() -> Self {
+        let meter = opentelemetry::global::meter("sanvi.abuse");
+        Self {
+            events: meter
+                .u64_counter("abuse_quota_events")
+                .with_description("Abuse-quota counting events by surface, key kind and outcome")
+                .build(),
+        }
+    }
+
+    /// Process-wide instance: the middleware layer and the notification
+    /// gateway both count without carrying metric state.
+    pub fn process() -> &'static Self {
+        static INSTRUMENTS: std::sync::OnceLock<AbuseInstruments> = std::sync::OnceLock::new();
+        INSTRUMENTS.get_or_init(AbuseInstruments::build)
+    }
+
+    pub fn record(&self, surface: &str, key_kind: &str, outcome: &str) {
+        self.events.add(
+            1,
+            &[
+                KeyValue::new("surface", surface.to_string()),
+                KeyValue::new("key_kind", key_kind.to_string()),
+                KeyValue::new("outcome", outcome.to_string()),
+            ],
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

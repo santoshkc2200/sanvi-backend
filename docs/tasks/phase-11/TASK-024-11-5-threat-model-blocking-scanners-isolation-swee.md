@@ -335,6 +335,68 @@ sanvi-http -p sanvi-api --all-targets` clean; `scripts/test.sh --quiet
 tests); `just route-matrix` complete and current. The task's full
 `## Verification` block still waits for slice 11.5g.
 
+### Slice 11.5e record — 2026-09-30
+
+Completed the abuse controls in this slice's commit (`feat(http): abuse
+quotas in shadow mode, tracking enforced (TASK-024 11.5e)`). The
+mechanism is one platform module: `crates/platform/http/src/abuse.rs`
+holds a fixed-window `AbuseCounter` (Redis `INCR` + `EXPIRE … NX` Lua,
+one round trip; an in-process bounded window whenever Redis is absent or
+errors — shadow data must not depend on infrastructure health, and an
+enforced quota that failed closed would let anyone take the beacon down
+by killing Redis) and the `AbuseQuota` gate. Surface membership is code
+constants, not config — which route belongs to which quota is a security
+decision; thresholds under `server.abuse` are config, so the
+needs-humans tuning promise (config change, not code change) holds.
+Counting is live by default on every FR-1117 surface the backend owns
+and cannot be disabled by omission (validation rejects a quota-less
+surface). The gate sits *inside* the security-headers layer and answers
+an over-quota beacon with the handler's own uniform empty `202` — a
+blocked beacon must not be distinguishable from an accepted one by
+status, body, or header set; non-tracking surfaces deny with the
+platform's standard `429` + `Retry-After` (the future config-flip path,
+unit-tested; nothing ships with it on). Invitation `accept` is excluded
+from the invitation quota (a join is not a send), and per-tenant keys
+come from the resolved `TenantContext`, so counting runs
+post-authentication by design.
+
+Two FR-1117 findings recorded rather than papered over: **password
+reset has no backend surface to count** (it is a Kratos recovery flow;
+the backend owns no route), and **signup's backend surface is the
+internal `/internal/kratos/registration` webhook** (shared-secret +
+IP-allow-listed), which is what the signup quota counts. Outbound
+notification sends count at the gateway port itself —
+`HttpNotificationGateway::with_abuse_counter` counts per tenant on both
+lanes (API Lane B and worker Lane A share the Redis key namespace) —
+with **no enforcement path by design**: dropping delivered invitation or
+DSR credential mail is a policy decision the would-block rate informs,
+and none of the shipped config can trigger it.
+
+Verification: `cargo c`; `cargo fmt --check`; clippy clean on
+sanvi-http/-notifications/-api/-worker; `scripts/test.sh -p sanvi-http`
+70/70 (50 lib incl. the flood-holds test: beyond a 5-cap, 50 requests →
+handler invoked exactly 5×, every response the byte-identical 202;
+shadow pass-through; window reset; per-key isolation; the 429 flip
+path); `scripts/test.sh -p sanvi-api` 56/56 (new `abuse_quotas.rs`:
+enforcement decides *before* the router on the assembled app — within
+quota falls through to 404, over quota is answered 202 by the gate;
+shadow changes nothing; `configs/base.toml` parses through the binary's
+figment chain into the shipping posture; startup validation names the
+offending `server.abuse.*` key; the Redis path shares one window across
+two counter instances with the window TTL proven present);
+sanvi-notifications 18/18 (sends count per tenant, are never blocked,
+and a gateway without a counter still sends); `just route-matrix` +
+self-test green (six metadata rows now name their abuse quota; preamble
+documents the shadow posture); `just layering`; `just config-check`.
+The 3×-peak measurement is committed as
+`benchmarks/abuse-shadow-2026-09-30.md`: 9,000-beacon flood at 150 rps —
+per-IP blocked 97.3 % (run A, enforced) vs would_block 98.7 % (run B,
+`enforce=false`, window phase, not behaviour); both postures 9,000/9,000
+iterations, 0 failed, 0 dropped, p95 2.846 ms vs 2.845 ms — the flip is
+invisible to the caller. The other surfaces recorded honest zeros with
+the reason (the lab cannot authenticate; counting is live, the driver is
+missing, not the control).
+
 ## Steps
 
 ### Step 1 · slice 11.5g: Refresh the threat model
@@ -444,8 +506,12 @@ only as a CI artifact. Write the dependency review policy.
 - [ ] `just test-idor` enumerates from the route matrix and passes; every wrong-tenant request returns
       404 or 403 with no existence leak.
 - [x] Security header snapshots pass per app and fail on a removed header.
-- [ ] Abuse controls count on every named surface; the tracking endpoint enforces and holds under a
+- [x] Abuse controls count on every named surface; the tracking endpoint enforces and holds under a
       flood; the would-have-blocked rate is committed.
+      *Counted surfaces: tracking, invitation (create/resend), domain purchase, signup webhook,
+      notification sends. Password reset has no backend surface (Kratos recovery flow) — recorded in
+      the 11.5e slice record, not silently counted elsewhere. Rates in
+      `benchmarks/abuse-shadow-2026-09-30.md`.*
 - [ ] Redaction tests enumerate secret-bearing types automatically and fail on a new unredacted type.
 - [ ] All scanners block; an expired finding acceptance fails the build; the SBOM publishes with the tag.
 - [ ] **Every finding from this task has a regression test that fails against the vulnerable commit.**

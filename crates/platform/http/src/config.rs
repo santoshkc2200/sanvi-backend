@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::abuse::AbuseSurface;
+
 /// HTTP server settings. All values are validated together at startup.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +19,8 @@ pub struct ServerConfig {
     pub tenant: TenantPolicyConfig,
     #[serde(default)]
     pub security: SecurityHeadersConfig,
+    #[serde(default)]
+    pub abuse: AbuseControlsConfig,
 }
 
 impl Default for ServerConfig {
@@ -33,6 +37,7 @@ impl Default for ServerConfig {
             rate_limit: RateLimitConfig::default(),
             tenant: TenantPolicyConfig::default(),
             security: SecurityHeadersConfig::default(),
+            abuse: AbuseControlsConfig::default(),
         }
     }
 }
@@ -66,6 +71,9 @@ impl ServerConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.security.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.abuse.validate() {
             problems.push(err.to_string());
         }
         if !problems.is_empty() {
@@ -296,6 +304,195 @@ impl RateLimitConfig {
     }
 }
 
+/// Abuse quotas (TASK-024, FR-1117). The shipping posture is shadow mode:
+/// counting is live on every surface with `would_block` metrics recorded,
+/// and only the public tracking beacon enforces — it already answers an
+/// indistinguishable empty `202` to everything, so enforcing there changes
+/// no observable contract. Tuning thresholds against real traffic is a
+/// configuration change, not a code change (`docs/release/needs-humans.md`).
+///
+/// Serde shape (every section optional; absent means [`Default`], which is
+/// this posture):
+///
+/// ```toml
+/// [server.abuse.tracking]
+/// enforce = true
+/// per_ip = { limit = 120, window_secs = 60 }
+/// per_origin = { limit = 600, window_secs = 60 }
+/// ```
+///
+/// A section that is present overrides that surface; a section that is
+/// absent keeps the shipping posture — naming one surface must not
+/// silently turn counting off on the others, and `SurfaceAbuseConfig`'s
+/// empty default fails validation ("no quota dimension"), so counting
+/// cannot be disabled by omission. To effectively retire a quota, raise
+/// its limit and keep counting.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AbuseControlsConfig {
+    #[serde(default = "default_tracking_surface")]
+    pub tracking: SurfaceAbuseConfig,
+    #[serde(default = "default_invitation_surface")]
+    pub invitation: SurfaceAbuseConfig,
+    #[serde(default = "default_domain_purchase_surface")]
+    pub domain_purchase: SurfaceAbuseConfig,
+    #[serde(default = "default_signup_surface")]
+    pub signup: SurfaceAbuseConfig,
+}
+
+fn default_tracking_surface() -> SurfaceAbuseConfig {
+    SurfaceAbuseConfig {
+        enforce: true,
+        per_ip: Some(WindowQuota {
+            limit: 120,
+            window_secs: 60,
+        }),
+        per_origin: Some(WindowQuota {
+            limit: 600,
+            window_secs: 60,
+        }),
+        per_tenant: None,
+    }
+}
+
+fn default_invitation_surface() -> SurfaceAbuseConfig {
+    SurfaceAbuseConfig {
+        enforce: false,
+        per_ip: Some(WindowQuota {
+            limit: 30,
+            window_secs: 3600,
+        }),
+        per_origin: None,
+        per_tenant: Some(WindowQuota {
+            limit: 60,
+            window_secs: 3600,
+        }),
+    }
+}
+
+fn default_domain_purchase_surface() -> SurfaceAbuseConfig {
+    SurfaceAbuseConfig {
+        enforce: false,
+        per_ip: Some(WindowQuota {
+            limit: 20,
+            window_secs: 3600,
+        }),
+        per_origin: None,
+        per_tenant: Some(WindowQuota {
+            limit: 30,
+            window_secs: 3600,
+        }),
+    }
+}
+
+fn default_signup_surface() -> SurfaceAbuseConfig {
+    SurfaceAbuseConfig {
+        enforce: false,
+        per_ip: Some(WindowQuota {
+            limit: 60,
+            window_secs: 3600,
+        }),
+        per_origin: None,
+        per_tenant: None,
+    }
+}
+
+/// The shipped posture rather than an all-zero derive: counting on for
+/// every FR-1117 surface the backend owns, enforcement on for tracking
+/// only. Password reset has no backend surface to count (it is a Kratos
+/// recovery flow); signup counts the internal registration webhook.
+impl Default for AbuseControlsConfig {
+    fn default() -> Self {
+        Self {
+            tracking: default_tracking_surface(),
+            invitation: default_invitation_surface(),
+            domain_purchase: default_domain_purchase_surface(),
+            signup: default_signup_surface(),
+        }
+    }
+}
+
+impl AbuseControlsConfig {
+    pub fn for_surface(&self, surface: AbuseSurface) -> &SurfaceAbuseConfig {
+        match surface {
+            AbuseSurface::Tracking => &self.tracking,
+            AbuseSurface::Invitation => &self.invitation,
+            AbuseSurface::DomainPurchase => &self.domain_purchase,
+            AbuseSurface::Signup => &self.signup,
+        }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let mut problems: Vec<String> = Vec::new();
+        for (name, surface) in [
+            ("tracking", &self.tracking),
+            ("invitation", &self.invitation),
+            ("domain_purchase", &self.domain_purchase),
+            ("signup", &self.signup),
+        ] {
+            if surface.per_ip.is_none()
+                && surface.per_origin.is_none()
+                && surface.per_tenant.is_none()
+            {
+                problems.push(format!("server.abuse.{name} has no quota dimension"));
+                continue;
+            }
+            for (dimension, quota) in [
+                ("per_ip", surface.per_ip),
+                ("per_origin", surface.per_origin),
+                ("per_tenant", surface.per_tenant),
+            ] {
+                if let Some(quota) = quota {
+                    problems.extend(quota.problems(&format!("server.abuse.{name}.{dimension}")));
+                }
+            }
+        }
+        if !problems.is_empty() {
+            anyhow::bail!(
+                "invalid server configuration:\n  - {}",
+                problems.join("\n  - ")
+            );
+        }
+        Ok(())
+    }
+}
+
+/// One surface's controls. `enforce = false` is shadow mode: counting and
+/// `would_block` metrics only, the response is never touched.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SurfaceAbuseConfig {
+    #[serde(default)]
+    pub enforce: bool,
+    #[serde(default)]
+    pub per_ip: Option<WindowQuota>,
+    #[serde(default)]
+    pub per_origin: Option<WindowQuota>,
+    #[serde(default)]
+    pub per_tenant: Option<WindowQuota>,
+}
+
+/// One fixed window: at most `limit` events per `window_secs` per key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WindowQuota {
+    pub limit: u64,
+    pub window_secs: u64,
+}
+
+impl WindowQuota {
+    fn problems(&self, prefix: &str) -> Vec<String> {
+        let mut problems = Vec::new();
+        if self.limit == 0 {
+            problems.push(format!("{prefix}.limit must be >= 1"));
+        }
+        if self.window_secs == 0 {
+            problems.push(format!("{prefix}.window_secs must be >= 1"));
+        }
+        problems
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +500,92 @@ mod tests {
     #[test]
     fn defaults_are_valid() {
         ServerConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn abuse_defaults_are_shadow_everywhere_except_tracking() {
+        let config = AbuseControlsConfig::default();
+        assert!(config.tracking.enforce, "tracking enforces from the start");
+        assert!(!config.invitation.enforce);
+        assert!(!config.domain_purchase.enforce);
+        assert!(!config.signup.enforce);
+        // Counting is live on every surface the backend owns.
+        assert!(config.tracking.per_ip.is_some());
+        assert!(config.invitation.per_ip.is_some());
+        assert!(config.domain_purchase.per_ip.is_some());
+        assert!(config.signup.per_ip.is_some());
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn abuse_validation_names_the_offending_key() {
+        let config = AbuseControlsConfig {
+            tracking: SurfaceAbuseConfig {
+                enforce: true,
+                per_ip: Some(WindowQuota {
+                    limit: 0,
+                    window_secs: 60,
+                }),
+                per_origin: None,
+                per_tenant: None,
+            },
+            ..Default::default()
+        };
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("server.abuse.tracking.per_ip.limit"), "{err}");
+
+        let empty = AbuseControlsConfig {
+            invitation: SurfaceAbuseConfig::default(),
+            ..Default::default()
+        };
+        let err = empty.validate().unwrap_err().to_string();
+        assert!(err.contains("server.abuse.invitation"), "{err}");
+
+        let zero_window = AbuseControlsConfig {
+            signup: SurfaceAbuseConfig {
+                enforce: false,
+                per_ip: Some(WindowQuota {
+                    limit: 10,
+                    window_secs: 0,
+                }),
+                per_origin: None,
+                per_tenant: None,
+            },
+            ..Default::default()
+        };
+        let err = zero_window.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("server.abuse.signup.per_ip.window_secs"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn abuse_section_deserializes_partial_overrides_over_the_posture() {
+        // A config that names only the tracking section: the named surface
+        // takes the given values, everything else keeps the shipping
+        // posture. (Committed-config parsing end to end is covered by the
+        // apps/api integration suite, which loads base.toml through the
+        // same figment path as the binary.)
+        let config: AbuseControlsConfig = serde_json::from_str(
+            r#"{
+                "tracking": {
+                    "enforce": false,
+                    "per_ip": { "limit": 10, "window_secs": 30 }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(!config.tracking.enforce);
+        assert_eq!(
+            config.tracking.per_ip,
+            Some(WindowQuota {
+                limit: 10,
+                window_secs: 30
+            })
+        );
+        assert!(config.invitation.per_tenant.is_some());
+        config.validate().unwrap();
     }
 
     #[test]

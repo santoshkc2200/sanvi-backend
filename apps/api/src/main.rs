@@ -161,12 +161,20 @@ async fn main() -> ExitCode {
     // Delivery for the two credential-bearing (Lane B) senders: invitations
     // and DSR verification/export mail. Everything else is delivered by the
     // worker's outbox consumers. An empty base_url leaves this `None` and
-    // those adapters fall back to logging.
+    // those adapters fall back to logging. The gateway counts every send
+    // against the tenant's abuse window (TASK-024, FR-1117); the API and
+    // worker gateways share the Redis key namespace, so both lanes count
+    // into the same window.
     let notification_gateway: Option<Arc<dyn sanvi_notifications::NotificationGatewayPort>> =
         if config.features.notifications && !config.notification.base_url.is_empty() {
-            Some(Arc::new(sanvi_notifications::HttpNotificationGateway::new(
-                config.notification.clone(),
-            )))
+            Some(Arc::new(
+                sanvi_notifications::HttpNotificationGateway::new(config.notification.clone())
+                    .with_abuse_counter(
+                        Arc::new(sanvi_http::abuse::AbuseCounter::new(redis.clone())),
+                        config.notification.send_quota_limit,
+                        config.notification.send_quota_window_secs,
+                    ),
+            ))
         } else {
             tracing::info!("notification service not configured; Lane B mail is logged only");
             None

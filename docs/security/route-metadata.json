@@ -2150,7 +2150,7 @@
       "handler": "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::public_track_conversion",
       "permission": "exempt: signed X-Site-Key bound to Origin; bot filter",
       "tenant": "tenant derived from verified site key and Origin",
-      "rate_limit": "global-config-dependent + tracking per-IP and per-Origin in-process buckets",
+      "rate_limit": "global-config-dependent + enforced per-IP/per-Origin fixed-window abuse quota (server.abuse.tracking) + in-process per-IP and per-Origin concurrency buckets",
       "evidence": [
         "crates/contexts/advertising/src/adapters/http/tracking_handlers.rs",
         "crates/contexts/advertising/src/adapters/http/routes.rs"
@@ -2495,7 +2495,7 @@
       "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::place_domain_order",
       "permission": "tenant.domains.purchase",
       "tenant": "CurrentTenant",
-      "rate_limit": "global-config-dependent+tenant-optional",
+      "rate_limit": "global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.domain_purchase)",
       "evidence": [
         "crates/contexts/domains/src/adapters/http/routes.rs"
       ],
@@ -2559,7 +2559,7 @@
       "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::invite_member",
       "permission": "identity.member.invite",
       "tenant": "CurrentTenant",
-      "rate_limit": "global-config-dependent+tenant-optional",
+      "rate_limit": "global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.invitation)",
       "evidence": [
         "crates/contexts/identity/src/adapters/http/catalog.rs",
         "crates/contexts/identity/src/adapters/http/routes.rs"
@@ -2576,7 +2576,7 @@
       "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::accept_invitation",
       "permission": "identity.membership.claim",
       "tenant": "CurrentTenant",
-      "rate_limit": "global-config-dependent+tenant-optional",
+      "rate_limit": "global-config-dependent+tenant-optional (invitation abuse quota covers sends, not joins)",
       "evidence": [
         "crates/contexts/identity/src/adapters/http/catalog.rs",
         "crates/contexts/identity/src/adapters/http/routes.rs"
@@ -2593,7 +2593,7 @@
       "handler": "crates/contexts/identity/src/adapters/http/handlers.rs::resend_invitation",
       "permission": "identity.invitation.manage",
       "tenant": "CurrentTenant",
-      "rate_limit": "global-config-dependent+tenant-optional",
+      "rate_limit": "global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.invitation)",
       "evidence": [
         "crates/contexts/identity/src/adapters/http/catalog.rs",
         "crates/contexts/identity/src/adapters/http/routes.rs"
@@ -3082,7 +3082,7 @@
       "handler": "crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration",
       "permission": "exempt: Kratos shared secret and IP allow-list",
       "tenant": "identity event; no tenant resolver scope",
-      "rate_limit": "global-config-dependent",
+      "rate_limit": "global-config-dependent + shadow per-IP abuse quota (server.abuse.signup)",
       "evidence": [
         "crates/contexts/identity/src/adapters/http/webhooks.rs",
         "crates/contexts/identity/src/adapters/http/routes.rs"

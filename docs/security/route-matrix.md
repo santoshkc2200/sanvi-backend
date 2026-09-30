@@ -9,6 +9,12 @@ controlled by enabled/exempt_paths/fail_open configuration. `+tenant-optional`
 means tenant policy may add a limiter after resolution; neither implies a
 dedicated abuse quota. Additional controls are named explicitly in metadata.
 
+Abuse quotas (TASK-024, FR-1117): fixed per-IP/per-tenant windows under
+`server.abuse` count every money/reputation surface (tracking, invitation,
+domain purchase, signup webhook; notification sends count at the gateway);
+enforcement ships on for the public tracking beacon only — everywhere else
+the quota shadows and records would-block.
+
 Source hashes below make handler, registration, and middleware changes visible
 in this committed diff. Review metadata whenever these change; acknowledge
 the matrix diff in the PR description. Permission enforcement can be bypassed
@@ -114,7 +120,7 @@ Routes: 221 (213 OpenAPI operations).
 | GET | /api/v1/public/subprocessors | crates/contexts/privacy/src/adapters/http/handlers.rs::list_public_subprocessors | exempt: public disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | GET | /api/v1/public/tenant-context | crates/contexts/tenancy/src/adapters/http/handlers.rs::public_tenant_context | exempt: public bootstrap/disclosure endpoint (no permission key) | host resolved explicitly by public_tenant_context | global-config-dependent | OpenAPI |
 | GET | /api/v1/public/theme | crates/contexts/theming/src/adapters/http/handlers.rs::get_public_theme | exempt: public bootstrap/disclosure endpoint (no permission key) | optional public host/tenant lookup; published theme only | global-config-dependent | OpenAPI |
-| POST | /api/v1/public/track | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::public_track_conversion | exempt: signed X-Site-Key bound to Origin; bot filter | tenant derived from verified site key and Origin | global-config-dependent + tracking per-IP and per-Origin in-process buckets | OpenAPI |
+| POST | /api/v1/public/track | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::public_track_conversion | exempt: signed X-Site-Key bound to Origin; bot filter | tenant derived from verified site key and Origin | global-config-dependent + enforced per-IP/per-Origin fixed-window abuse quota (server.abuse.tracking) + in-process per-IP and per-Origin concurrency buckets | OpenAPI |
 | GET | /api/v1/system/build | crates/contexts/system/src/adapters/http/handlers.rs::build | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | GET | /api/v1/system/version | crates/contexts/system/src/adapters/http/handlers.rs::version | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | GET | /api/v1/tenant/ads/audiences | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::list_audiences | advertising.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -174,7 +180,7 @@ Routes: 221 (213 OpenAPI operations).
 | GET | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/handlers.rs::list_custom_domains | tenant.domains.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/handlers.rs::claim_custom_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/domains/orders | crates/contexts/domains/src/adapters/http/handlers.rs::list_domain_orders | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/domains/orders | crates/contexts/domains/src/adapters/http/handlers.rs::place_domain_order | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/domains/orders | crates/contexts/domains/src/adapters/http/handlers.rs::place_domain_order | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.domain_purchase) | OpenAPI |
 | POST | /api/v1/tenant/domains/orders/{id}/auto-renew | crates/contexts/domains/src/adapters/http/handlers.rs::set_order_auto_renew | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/domains/search | crates/contexts/domains/src/adapters/http/handlers.rs::search_domains | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | DELETE | /api/v1/tenant/domains/{id} | crates/contexts/domains/src/adapters/http/handlers.rs::remove_custom_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -183,10 +189,10 @@ Routes: 221 (213 OpenAPI operations).
 | POST | /api/v1/tenant/domains/{id}/verify | crates/contexts/domains/src/adapters/http/handlers.rs::request_domain_verification | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/entitlements | crates/contexts/access/src/adapters/http/handlers.rs::list_tenant_entitlements | tenant.entitlement.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/invitations | crates/contexts/identity/src/adapters/http/handlers.rs::list_invitations | identity.member.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/invitations | crates/contexts/identity/src/adapters/http/handlers.rs::invite_member | identity.member.invite | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/invitations/accept | crates/contexts/identity/src/adapters/http/handlers.rs::accept_invitation | identity.membership.claim | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/invitations | crates/contexts/identity/src/adapters/http/handlers.rs::invite_member | identity.member.invite | CurrentTenant | global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.invitation) | OpenAPI |
+| POST | /api/v1/tenant/invitations/accept | crates/contexts/identity/src/adapters/http/handlers.rs::accept_invitation | identity.membership.claim | CurrentTenant | global-config-dependent+tenant-optional (invitation abuse quota covers sends, not joins) | OpenAPI |
 | DELETE | /api/v1/tenant/invitations/{invitation_id} | crates/contexts/identity/src/adapters/http/handlers.rs::revoke_invitation | identity.invitation.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/invitations/{invitation_id}/resend | crates/contexts/identity/src/adapters/http/handlers.rs::resend_invitation | identity.invitation.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/invitations/{invitation_id}/resend | crates/contexts/identity/src/adapters/http/handlers.rs::resend_invitation | identity.invitation.manage | CurrentTenant | global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.invitation) | OpenAPI |
 | GET | /api/v1/tenant/localization/overrides | crates/contexts/localization/src/adapters/http/handlers.rs::get_localization_overrides | tenant.localization.overrides.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | PUT | /api/v1/tenant/localization/overrides | crates/contexts/localization/src/adapters/http/handlers.rs::put_localization_overrides | tenant.localization.overrides.update | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/localization/settings | crates/contexts/localization/src/adapters/http/handlers.rs::get_localization_settings | tenant.localization.settings.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -234,7 +240,7 @@ Routes: 221 (213 OpenAPI operations).
 | GET | /healthz | crates/contexts/system/src/adapters/http/handlers.rs::healthz | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | POST | /internal/kratos/login | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_login | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
 | POST | /internal/kratos/logout | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_logout | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
-| POST | /internal/kratos/registration | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
+| POST | /internal/kratos/registration | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent + shadow per-IP abuse quota (server.abuse.signup) | internal webhook |
 | POST | /internal/kratos/settings | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_settings | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
 | GET | /internal/tls/authorize | crates/contexts/domains/src/adapters/http/handlers.rs::tls_authorize | exempt: internal shared secret and optional IP allow-list | domain hostname lookup after internal guard | global-config-dependent | OpenAPI |
 | POST | /internal/webhooks/stripe/connect | crates/contexts/payments/src/adapters/http/webhooks.rs::stripe_connect_webhook | exempt: Connect Stripe signature and IP allow-list | connected account from verified webhook processing | global-config-dependent | internal webhook |
@@ -251,7 +257,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | --- | --- |
 | apps/api/src/config.rs | `39ed1e8754dfbd723f8292492d0b5fa1f8ab97238751783e309c674da1bacc7a` |
 | apps/api/src/lib.rs | `0a3370c01a44777b35410d80614d56692be26aabd8dfcff2c4d1f2af2111a85b` |
-| apps/api/src/main.rs | `28afc4098d0f176b9d45feaaa089dc8c18373ac0d0893cf70ea0e3bc38b161ab` |
+| apps/api/src/main.rs | `c3268358ca7b2b1ac42f7a0985bad57894a34da38815eb44727bd4a96e81190c` |
 | apps/api/src/openapi.rs | `e670e3fcd80b81848b483782582ed3f23da22d7a3bd1c0c14053b4c42b347586` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `dbffd028d17f71f56e6e95dccdd6a7aeff94ec91a693d46448741172da3c3855` |
@@ -310,16 +316,17 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/theming/src/adapters/http/mod.rs | `70aca86decb43fa5a0998600d858406e58d607db624c84200298158bfaef5738` |
 | crates/contexts/theming/src/adapters/http/routes.rs | `768cbdada50486910864a6adac7f3d6de734192b7c2e546dfd01e04c52e7c7b0` |
 | crates/contexts/theming/src/adapters/http/state.rs | `fa4f295dd62d8c296a608e3fb5576fbe5bdb8d724742458f361ba4f0486a1e60` |
+| crates/platform/http/src/abuse.rs | `fe3b7ff287754bdd2326b13f3a8d96abdd726d15a3578c2271394c40298c7ff3` |
 | crates/platform/http/src/authn.rs | `5986cd946d5e42e793685dee62ecf3333378221ff7b4df468adf65f74a05f310` |
 | crates/platform/http/src/authz.rs | `8be9c7e3310b376ece017a02f1f526397d2054088d154b815658c217e6389e36` |
-| crates/platform/http/src/config.rs | `87f5bb47f23c11c5105b10bb1a3df9e318ce235c1405cdd665a1c2cbec981000` |
+| crates/platform/http/src/config.rs | `d81696a773dd6a42508e1bae5e85990db48c4825053be570e99a085d852b461a` |
 | crates/platform/http/src/error.rs | `b911fbc5d5dab4ed0dd4eb4d3394b6d0cf84e9f59c0501e24ace6662684bf9e8` |
 | crates/platform/http/src/features.rs | `fc8d560cac864dff057446f468a3514f443ba5f46344d5885becec32e93c9109` |
 | crates/platform/http/src/impersonation.rs | `54e109462b3223b13a98242c208e3fd010673f6bbc5a8848111aa4b41accdb7e` |
-| crates/platform/http/src/lib.rs | `778abf1d58c915c76cd5c676f300edf8a7ca5cda2532b8b1dba84a7970e6b10e` |
+| crates/platform/http/src/lib.rs | `b960b167b79b913ebec7ded9dce21083e376048fbcde63c2f3c802390fc25981` |
 | crates/platform/http/src/locale.rs | `a1d1658851376c3d1944209351f29582f335dde199c71b1a3474f2ffc7818628` |
-| crates/platform/http/src/metrics.rs | `6a29178bdf1ede4fd8e579f742686da31d8002f01d03e331c40a9455b38d2a96` |
-| crates/platform/http/src/middleware.rs | `f42e5d082771c93a19f1603601e1a9a75fdc98327b93ab6be223e17619bf4d2f` |
+| crates/platform/http/src/metrics.rs | `21834d557e2491e57b774012a4885cb77ee8060a61405edb16189bb497a6d9f7` |
+| crates/platform/http/src/middleware.rs | `6e0208fff293f254bfd8d83f65205ecd5cb5818394bd741cf81ceed401d82020` |
 | crates/platform/http/src/openapi.rs | `5f93e77d3369274b5335cf42a61da457220417caf78e0d6911f501430140fd55` |
 | crates/platform/http/src/rate_limit.rs | `8033cdd6d22a2f1e80ff96cc850beff64da35f7be59f3eccef36da9cd1657479` |
 | crates/platform/http/src/server.rs | `77cf573ccea37750c5c64b1494588af99107b8dd8ac425b292b928bda12daff8` |

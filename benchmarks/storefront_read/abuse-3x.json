@@ -1,0 +1,34 @@
+{
+  "scenario": "storefront_read",
+  "tag": "abuse-3x",
+  "seed": "1",
+  "offered_rate_rps": 150,
+  "duration": "60s",
+  "machine_profile": {
+    "cores": 10,
+    "mem_gb": 16,
+    "os": "Darwin 27.0.0",
+    "arch": "arm64"
+  },
+  "build": {
+    "environment": "local",
+    "version": "0.10.0",
+    "built_at": "unknown",
+    "commit": "unknown"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 3.017,
+    "http_req_duration_p95_ms": 1248.9317999999998,
+    "http_req_duration_p99_ms": 3608.1613199999983,
+    "http_req_duration_avg_ms": 185.7236325933575,
+    "http_reqs_total": 17433,
+    "http_req_failed_rate": 0,
+    "iterations_total": 8716,
+    "dropped_iterations_total": 284
+  },
+  "notes": [
+    "lab: anonymous storefront SSR bootstrap (tenant-context + public theme)",
+    "journey budget from the plan: p95 <= 200 ms"
+  ]
+}

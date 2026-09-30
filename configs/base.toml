@@ -69,6 +69,41 @@ exempt_paths = []
 [server.security]
 # hsts absent = the Strict-Transport-Security header is not emitted.
 
+# Abuse quotas (TASK-024, FR-1117): per-tenant and per-IP fixed windows on
+# the surfaces that cost money or reputation. Counting is always live and
+# records abuse_quota_events_total{surface,key_kind,outcome} — including
+# would_block, the rate an enforcement flip would have blocked. Only the
+# public tracking beacon enforces (it already answers an indistinguishable
+# empty 202 to everything, so enforcing changes no observable contract);
+# every other surface ships in shadow mode until real traffic justifies
+# flipping enforce (docs/release/needs-humans.md). Password reset has no
+# backend surface to count — it is a Kratos recovery flow. Signup counts
+# the internal Kratos registration webhook, the backend's only signup
+# surface. Outbound notification sends count at the notification gateway
+# ([notification].send_quota_*), shared across the API and worker lanes.
+# A section that is absent keeps the values below; counting cannot be
+# disabled by omission (validation rejects a quota-less surface).
+[server.abuse.tracking]
+enforce = true
+per_ip = { limit = 120, window_secs = 60 }
+per_origin = { limit = 600, window_secs = 60 }
+
+[server.abuse.invitation]
+# Invitation create and resend (accept is a join, not a send).
+enforce = false
+per_ip = { limit = 30, window_secs = 3600 }
+per_tenant = { limit = 60, window_secs = 3600 }
+
+[server.abuse.domain_purchase]
+enforce = false
+per_ip = { limit = 20, window_secs = 3600 }
+per_tenant = { limit = 30, window_secs = 3600 }
+
+[server.abuse.signup]
+# The internal Kratos registration webhook, keyed by the calling IP.
+enforce = false
+per_ip = { limit = 60, window_secs = 3600 }
+
 [tenancy]
 # Suffix under which tenant subdomains live. Local development overrides
 # this to "localhost" (see configs/local.toml).
@@ -473,3 +508,9 @@ base_url = ""
 send_api_key = ""
 read_api_key = ""
 max_event_age_secs = 86400
+# Outbound-send abuse quota (TASK-024, FR-1117): counting only, per tenant,
+# shared across the API (Lane B) and worker (Lane A) gateways via Redis.
+# No enforcement path exists by design — dropping delivered invitation or
+# DSR credential mail is a policy decision the would-block rate informs.
+send_quota_limit = 1000
+send_quota_window_secs = 3600

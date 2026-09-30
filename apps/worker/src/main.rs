@@ -1409,12 +1409,17 @@ async fn main() -> ExitCode {
     };
 
     // Delivery for privacy Lane B (export credentials). `None` leaves the
-    // adapter logging instead of sending.
+    // adapter logging instead of sending. Sends count against the tenant's
+    // abuse window (TASK-024), shared with the API's gateway via Redis.
     let privacy_notification_gateway: Option<std::sync::Arc<dyn NotificationGatewayPort>> =
         if notifications_enabled {
-            Some(std::sync::Arc::new(HttpNotificationGateway::new(
-                config.notification.clone(),
-            )))
+            Some(std::sync::Arc::new(
+                HttpNotificationGateway::new(config.notification.clone()).with_abuse_counter(
+                    std::sync::Arc::new(sanvi_http::abuse::AbuseCounter::new(Some(redis.clone()))),
+                    config.notification.send_quota_limit,
+                    config.notification.send_quota_window_secs,
+                ),
+            ))
         } else {
             None
         };
@@ -3032,7 +3037,13 @@ async fn main() -> ExitCode {
     let notif_tasks: Vec<tokio::task::JoinHandle<()>> = if !notifications_enabled {
         Vec::new()
     } else {
-        let notif_gateway = Arc::new(HttpNotificationGateway::new(config.notification.clone()));
+        let notif_gateway = Arc::new(
+            HttpNotificationGateway::new(config.notification.clone()).with_abuse_counter(
+                Arc::new(sanvi_http::abuse::AbuseCounter::new(Some(redis.clone()))),
+                config.notification.send_quota_limit,
+                config.notification.send_quota_window_secs,
+            ),
+        );
         let notif_directory = Arc::new(WorkerRecipientDirectory {
             tx_manager: tx_manager.clone(),
             memberships: Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),

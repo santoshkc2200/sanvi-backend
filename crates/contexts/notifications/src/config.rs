@@ -4,6 +4,14 @@ fn default_max_event_age_secs() -> u64 {
     86_400
 }
 
+fn default_send_quota_limit() -> u64 {
+    1_000
+}
+
+fn default_send_quota_window_secs() -> u64 {
+    3_600
+}
+
 /// Standalone notification-service connection. All fields are deployment
 /// secrets / endpoints — set from env (`SANVI__NOTIFICATION__BASE_URL`,
 /// `SANVI__NOTIFICATION__SEND_API_KEY`, `SANVI__NOTIFICATION__READ_API_KEY`),
@@ -20,6 +28,14 @@ pub struct NotificationConfig {
     pub read_api_key: String,
     #[serde(default = "default_max_event_age_secs")]
     pub max_event_age_secs: u64,
+    /// Outbound-send abuse quota (TASK-024, FR-1117): counting only. The
+    /// two numbers are the fixed window every tenant's sends are counted
+    /// against; the would-block rate is recorded in
+    /// `abuse_quota_events_total{surface="notifications"}`.
+    #[serde(default = "default_send_quota_limit")]
+    pub send_quota_limit: u64,
+    #[serde(default = "default_send_quota_window_secs")]
+    pub send_quota_window_secs: u64,
 }
 
 impl Default for NotificationConfig {
@@ -29,6 +45,8 @@ impl Default for NotificationConfig {
             send_api_key: String::new(),
             read_api_key: String::new(),
             max_event_age_secs: default_max_event_age_secs(),
+            send_quota_limit: default_send_quota_limit(),
+            send_quota_window_secs: default_send_quota_window_secs(),
         }
     }
 }
@@ -40,6 +58,8 @@ impl std::fmt::Debug for NotificationConfig {
             .field("send_api_key", &"[REDACTED]")
             .field("read_api_key", &"[REDACTED]")
             .field("max_event_age_secs", &self.max_event_age_secs)
+            .field("send_quota_limit", &self.send_quota_limit)
+            .field("send_quota_window_secs", &self.send_quota_window_secs)
             .finish()
     }
 }
@@ -50,11 +70,13 @@ impl serde::Serialize for NotificationConfig {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("NotificationConfig", 4)?;
+        let mut state = serializer.serialize_struct("NotificationConfig", 6)?;
         state.serialize_field("base_url", &self.base_url)?;
         state.serialize_field("send_api_key", "[REDACTED]")?;
         state.serialize_field("read_api_key", "[REDACTED]")?;
         state.serialize_field("max_event_age_secs", &self.max_event_age_secs)?;
+        state.serialize_field("send_quota_limit", &self.send_quota_limit)?;
+        state.serialize_field("send_quota_window_secs", &self.send_quota_window_secs)?;
         state.end()
     }
 }
@@ -67,6 +89,12 @@ impl NotificationConfig {
             }
             reqwest::Url::parse(&self.base_url)
                 .map_err(|e| anyhow::anyhow!("notification.base_url is not a valid URL: {e}"))?;
+        }
+        if self.send_quota_limit == 0 {
+            anyhow::bail!("notification.send_quota_limit must be >= 1");
+        }
+        if self.send_quota_window_secs == 0 {
+            anyhow::bail!("notification.send_quota_window_secs must be >= 1");
         }
         Ok(())
     }
@@ -87,17 +115,13 @@ mod tests {
     fn valid_http_and_https_urls_pass_validation() {
         let http_cfg = NotificationConfig {
             base_url: "http://127.0.0.1:8080".to_string(),
-            send_api_key: "secret".to_string(),
-            read_api_key: "secret".to_string(),
-            max_event_age_secs: 86400,
+            ..Default::default()
         };
         http_cfg.validate().expect("http URL validates");
 
         let https_cfg = NotificationConfig {
             base_url: "https://notifications.example.com".to_string(),
-            send_api_key: "secret".to_string(),
-            read_api_key: "secret".to_string(),
-            max_event_age_secs: 86400,
+            ..Default::default()
         };
         https_cfg.validate().expect("https URL validates");
     }
@@ -106,17 +130,13 @@ mod tests {
     fn invalid_urls_fail_validation() {
         let ftp_cfg = NotificationConfig {
             base_url: "ftp://notifications.example.com".to_string(),
-            send_api_key: "secret".to_string(),
-            read_api_key: "secret".to_string(),
-            max_event_age_secs: 86400,
+            ..Default::default()
         };
         assert!(ftp_cfg.validate().is_err());
 
         let malformed_cfg = NotificationConfig {
             base_url: "http://[invalid-ipv6".to_string(),
-            send_api_key: "secret".to_string(),
-            read_api_key: "secret".to_string(),
-            max_event_age_secs: 86400,
+            ..Default::default()
         };
         assert!(malformed_cfg.validate().is_err());
     }
@@ -126,8 +146,7 @@ mod tests {
         let config = NotificationConfig {
             base_url: "http://localhost:8080".to_string(),
             send_api_key: "super-secret-send-key".to_string(),
-            read_api_key: "super-secret-read-key".to_string(),
-            max_event_age_secs: 86400,
+            ..Default::default()
         };
         let debug_str = format!("{config:?}");
         assert!(!debug_str.contains("super-secret-send-key"));
@@ -141,13 +160,37 @@ mod tests {
         let config = NotificationConfig {
             base_url: "http://localhost:8080".to_string(),
             send_api_key: "super-secret-send-key".to_string(),
-            read_api_key: "super-secret-read-key".to_string(),
-            max_event_age_secs: 86400,
+            ..Default::default()
         };
         let serialized = serde_json::to_string(&config).unwrap();
         assert!(!serialized.contains("super-secret-send-key"));
         assert!(!serialized.contains("super-secret-read-key"));
         assert!(serialized.contains("[REDACTED]"));
         assert!(serialized.contains("http://localhost:8080"));
+    }
+
+    #[test]
+    fn send_quota_defaults_are_counting_live_and_valid() {
+        let config = NotificationConfig::default();
+        assert_eq!(config.send_quota_limit, 1_000);
+        assert_eq!(config.send_quota_window_secs, 3_600);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn send_quota_validation_rejects_zero_dimensions() {
+        let zero_limit = NotificationConfig {
+            send_quota_limit: 0,
+            ..Default::default()
+        };
+        let err = zero_limit.validate().unwrap_err().to_string();
+        assert!(err.contains("send_quota_limit"), "{err}");
+
+        let zero_window = NotificationConfig {
+            send_quota_window_secs: 0,
+            ..Default::default()
+        };
+        let err = zero_window.validate().unwrap_err().to_string();
+        assert!(err.contains("send_quota_window_secs"), "{err}");
     }
 }

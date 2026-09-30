@@ -10,6 +10,7 @@
 //!   single place where domain errors map to HTTP status codes.
 //! - [`openapi`] hosts the generated OpenAPI document and Scalar UI.
 
+pub mod abuse;
 pub mod authn;
 pub mod authz;
 pub mod config;
@@ -26,6 +27,7 @@ pub mod tenancy;
 pub mod trace_context;
 pub mod tracing;
 
+pub use abuse::{AbuseCounter, AbuseSurface, QuotaVerdict};
 pub use authn::{
     AuthnMiddleware, CurrentSubject, FreshAal2Policy, FreshAal2Required, OptionalSubject,
     SessionChannel, SessionToken, SessionVerifier, Subject,
@@ -34,8 +36,8 @@ pub use authz::{
     Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,
 };
 pub use config::{
-    CorsConfig, HstsConfig, RateLimitConfig, SecurityHeadersConfig, ServerConfig,
-    TenantPolicyConfig,
+    AbuseControlsConfig, CorsConfig, HstsConfig, RateLimitConfig, SecurityHeadersConfig,
+    ServerConfig, SurfaceAbuseConfig, TenantPolicyConfig, WindowQuota,
 };
 pub use error::{ApiError, PROBLEM_TYPE_BASE, ProblemDetail, ProblemTranslator};
 pub use features::{FeatureGate, RequiredAnyFeature, RequiredFeature};
@@ -47,7 +49,7 @@ pub use locale::{
     CurrentLocale, LocaleContext, LocaleMiddleware, LocaleResolutionInput, LocaleResolver,
     LocaleSource,
 };
-pub use metrics::{HttpInstruments, TenantResolutionInstruments};
+pub use metrics::{AbuseInstruments, HttpInstruments, TenantResolutionInstruments};
 pub use middleware::RequestId;
 pub use server::{bind, bind_without_run, run, shutdown_signal};
 pub use tenancy::{

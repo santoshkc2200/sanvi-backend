@@ -53,7 +53,8 @@ const PUBLIC_CROSS_ORIGIN_PATHS: &[&str] = &["/api/v1/public/track"];
 /// metrics → request id → tracing span → traceparent header → concurrency
 /// limit → panic catch → rate limit → tenant resolution → authentication →
 /// impersonation → locale negotiation → tenant rate limit → request timeout
-/// → body normalize → CORS → security headers → error handlers.
+/// → body normalize → CORS → security headers → abuse quota → error
+/// handlers.
 ///
 /// `tenant` is `None` until the tenancy context is wired (phase 01+); without
 /// it every route behaves as a public route. `authn` is `None` until the
@@ -111,10 +112,19 @@ where
         .as_ref()
         .and_then(|parts| parts.policy.tenant_rate_limit.as_ref())
         .filter(|rate_config| rate_config.enabled)
-        .map(|rate_config| Arc::new(RateLimiter::new(rate_config, redis)));
+        .map(|rate_config| Arc::new(RateLimiter::new(rate_config, redis.clone())));
 
     app.wrap(crate::error::ErrorHandlersLayer)
         .wrap(SecurityHeaders { hsts })
+        // Inside the security headers on purpose: a beacon the abuse quota
+        // drops must be indistinguishable from one the handler accepted —
+        // same status, body, and header set — or the headers become the
+        // existence oracle the uniform 202 exists to deny. Tenant context
+        // is already in the request extensions at this depth.
+        .wrap(crate::abuse::AbuseQuotaLayer::new(
+            std::sync::Arc::new(crate::abuse::AbuseCounter::new(redis.clone())),
+            config.abuse.clone(),
+        ))
         .wrap(cors)
         .wrap(NormalizeBody)
         .wrap(RequestTimeout {

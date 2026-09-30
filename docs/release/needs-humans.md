@@ -74,7 +74,7 @@ criterion was unsatisfiable as written.
 | Field Core Web Vitals at p75 over a week on the new build | frontend TASK-022, NFR-1101 | Real traffic. Replaced by pinned-profile Lighthouse and bundle budgets, which regress-guard the same work. |
 | RUM segmentation queryable by tenant, locale, device class, theme revision | frontend TASK-020 | Real traffic and a collector endpoint. The client-side collector is still built, so that turning it on later is configuration rather than a project. |
 | Backwards-compatibility replay suite built from recorded staging requests | TASK-026, FR-1126 | Real client traffic. Replaced by a replay corpus generated from the contract and e2e suites, which is smaller but is a real compatibility gate. |
-| Per-tenant and per-IP abuse thresholds tuned against observed false-positive rates | TASK-024 | Real traffic. Thresholds ship in shadow mode with counting live, so the tuning is a configuration change later rather than a code change. |
+| Per-tenant and per-IP abuse thresholds tuned against observed false-positive rates | TASK-024 | Real traffic. Thresholds ship in shadow mode with counting live (`server.abuse` in `configs/base.toml`, would-block rates in `abuse_quota_events_total`), so the tuning is a configuration change later rather than a code change. The one exception shipped enforcing: the public tracking beacon, whose response contract is already an indistinguishable empty 202. Flipping enforcement for the other surfaces is likewise a config change (`enforce = true`). |
 
 ## What this costs
 
