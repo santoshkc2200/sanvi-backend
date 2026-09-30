@@ -273,6 +273,15 @@ test-idor:
     eval "$(./scripts/test-db.sh up)"
     cargo nextest run -p sanvi-api --test integration idor_sweep
 
+# TASK-024 slice 11.5c: the schema-wide RLS matrix — every tenant-scoped
+# table catalog-enumerated, every child partition asserted by name. Same
+# scoping convention as test-idor: the workspace suite runs it too.
+rls-matrix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p sanvi-api --test integration rls_matrix
+
 openapi:
     ./scripts/check-openapi.sh
 

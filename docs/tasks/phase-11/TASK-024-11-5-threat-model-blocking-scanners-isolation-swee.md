@@ -143,6 +143,60 @@ Clients using the undocumented old path must use the documented URL. No schema
 or OpenAPI change was needed. Permission-table omissions on older direct
 registrations are explicitly classified in metadata rather than silently accepted.
 
+### Slice 11.5c record — 2026-09-30
+
+Completed the schema-wide RLS matrix in this slice's commit
+(`test(security): assert the schema-wide RLS matrix with partitions by
+name`). `apps/api/tests/integration/rls_matrix.rs` enumerates the **live
+catalog** rather than listing tables: every table with a `tenant_id`
+column must carry ENABLE + FORCE ROW LEVEL SECURITY and exactly one
+canonical `tenant_isolation` policy, matched **exactly** (whitespace
+normalized) against the deparse `platform.enable_tenant_rls` produces — so
+a quietly weakened predicate, a second permissive policy OR-ed in, or a
+policy scoped away from `{public}` all fail naming the `schema.table`.
+`sanvi_app` staying `NOBYPASSRLS` is asserted first, because a flipped bit
+there makes every policy decoration. Tables that are RLS-forced without a
+`tenant_id` column must be classified: only `localization.translations`
+is, and its nine-policy shared-catalog set is pinned by name with every
+predicate required to stay bound to the `sanvi.*` GUCs. One reasoned
+exemption exists, frozen to a column allowlist:
+`domains.live_hostnames` (public-DNS resolution hot path, deliberately
+readable unscoped per `migrations/20260822000000_domains_core.sql`) — the
+column freeze is what keeps the exemption from silently widening. The
+matrix found the schema clean: all 55 tenant tables + 2 partitioned
+parents + 4 children conform; no new finding.
+
+Partitions are asserted **by name**: every child of every partitioned
+parent (via `pg_inherits`) must itself appear in the tenant-table
+enumeration, and a parent with zero children fails rather than passing
+vacuously. The behavioural half re-runs the phase-01 proof against both
+partitioned parents through the parent *and* the directly-named child
+(current month resolved at runtime; `ensure_monthly_partitions` invoked
+first through the application role, which is itself the worker's daily
+path and the only role granted EXECUTE): scoped reads see only the
+caller's tenant on both access paths, an explicit foreign `tenant_id`
+parameter leaks nothing, cross-tenant INSERTs are rejected by `WITH
+CHECK` as SQLSTATE 42501 row-level-security violations (each in its own
+transaction, since a rejected statement aborts it — as it would a
+request), a `conversion_events` UPDATE aimed at the foreign tenant touches
+zero rows (that table deliberately has no DELETE grant; retention drops
+partitions), a `metrics_daily` DELETE through parent and child stops at
+the caller's own rows, and the audited platform scope still sees and
+counts everything with its audit rows written.
+
+Falsified both ways against a mutated template (the database every test
+clones, so the drill reaches the real test binary, then dropped to
+rebuild from migrations): dropping `tenant_isolation` from
+`advertising.conversion_events_202609` failed the structural test naming
+that partition; a table with `tenant_id` and no RLS at all
+(`rls_drill.leaky`) failed naming that table with the remediation in the
+message.
+
+Verification: `cargo c`, `cargo fmt --all`, `cargo clippy -p sanvi-api
+--all-targets` clean; `scripts/test.sh -p sanvi-api` 48/48; `just
+rls-matrix` green (recipe added, mirroring `test-idor`'s scoping: the
+workspace suite runs it under `just test` too).
+
 ### Slice 11.5b record — 2026-09-24
 
 Completed the IDOR sweep in this slice's commit
