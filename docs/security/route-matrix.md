@@ -257,7 +257,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | --- | --- |
 | apps/api/src/config.rs | `dd05b221fc5b034a10962a616674e7920227dc10f2a07fdcd387e216c0587892` |
 | apps/api/src/lib.rs | `ea90f08199b7897d04799817ab9e4367592a641bd2643fe9403422a152c5e13e` |
-| apps/api/src/main.rs | `26f5b5528d6bf8048f58fe3756c7496a5de21fab7b357ae19adc2e8306952adb` |
+| apps/api/src/main.rs | `c2f548c0b8492a91e86fcb75e91d0e905520a65a2063321f45593c9b10c71251` |
 | apps/api/src/openapi.rs | `e670e3fcd80b81848b483782582ed3f23da22d7a3bd1c0c14053b4c42b347586` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `dbffd028d17f71f56e6e95dccdd6a7aeff94ec91a693d46448741172da3c3855` |

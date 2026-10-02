@@ -101,6 +101,13 @@ async fn main() -> ExitCode {
         }
     };
 
+    // TASK-021 step 0: pool gauges plus the 1 Hz acquire probe, so pool
+    // saturation is measured (step 5 sizes the pools from these numbers).
+    let pool_metrics = std::sync::Arc::new(sanvi_persistence::PoolMetrics::new(
+        metrics.prometheus_registry(),
+    ));
+    pool_metrics.spawn_sampler(pool.clone());
+
     let redis = match connect_redis(&config.redis).await {
         Ok(manager) => Some(manager),
         Err(err) => {

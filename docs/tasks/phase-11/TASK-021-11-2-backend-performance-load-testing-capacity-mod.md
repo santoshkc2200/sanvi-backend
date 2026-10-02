@@ -1,6 +1,6 @@
 # TASK-021: 11.2 Backend performance, load testing & capacity
 
-**Phase:** 11 · **Status:** todo · **Size:** L
+**Phase:** 11 · **Status:** in-progress · **Size:** L
 **Requirement(s):** FR-1108, FR-1109, FR-1110, NFR-1101, NFR-1104
 **Depends on:** TASK-019, TASK-020, **phase 10 merged (TASK-016, TASK-017, TASK-018)**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -47,6 +47,40 @@ kind of claim NFR-1101 exists to prevent.
 - `tests/perf/**` — `EXPLAIN` assertions, statement-count guards
 - `benchmarks/**`, `docs/runbooks/capacity.md`
 - the thirteen `api/*.yaml` where a list endpoint is still unbounded
+
+## Execution slices
+
+Ten steps in one session means one context, one compaction, and re-reads of work already done. The
+slices below are the commit boundaries; each is one agent session with a fresh context, and each
+carries the scoped commands to run **in that session**. The task is done when the last slice is.
+`just` may be absent on some hosts — the `scripts/*.sh` equivalents are the portable form (the same
+convention 11.5g ran under).
+
+| Slice | Steps | Shape | Scoped verification for the session |
+| --- | --- | --- | --- |
+| **11.2a** close the baseline's measurement gaps | 0 | measurement-led, environment-heavy | `scripts/test.sh -p sanvi-persistence`; a new `benchmarks/baseline-<date>.md` naming a release build, pool section filled for both processes, ≥50 application statements or the reason recorded |
+| **11.2b** cursor pagination + statement timeouts, contract first | 1 | contract-led, wide | the unbounded-collection test fails before and passes after; `scripts/check-openapi.sh`; `scripts/test.sh -p sanvi-api` |
+| **11.2c** profile the top 20 endpoints | 2 | measurement-led | twenty `benchmarks/profiles/<endpoint>.md`, each citing a committed artifact for its before-number |
+| **11.2d** query/index review, RLS cost, EXPLAIN assertions | 3 | database-led, judgement | `just test-perf` green; drop one asserted index in a scratch database and confirm the failure names the plan flip |
+| **11.2e** N+1 elimination with statement-count guards | 4 | **bulk, mechanical — delegatable** | `scripts/test.sh -p <changed crates>`; deliberately reintroduce one loop and confirm the count test fails |
+| **11.2f** pool sizing from measurement | 5 | small, config | `scripts/test.sh -p sanvi-persistence -p sanvi-api`; the commit records prior values and the measurement each new value came from |
+| **11.2g** cache review incl. tenant-key audit | 6 | judgement-led | stampede protection holds at 500 concurrent misses; a tenant-less key fails a unit test by construction; `scripts/test.sh -p sanvi-cache` |
+| **11.2h** transport tuning | 7 | small | `scripts/test.sh -p sanvi-http`; the compression-floor test proves no compression below the floor and none over already-compressed payloads |
+| **11.2i** load, spike, soak + the capacity model | 8–9 | measurement-led, long | 3×/10× artifacts committed; soak log; `docs/runbooks/capacity.md` with every constant cited |
+| **11.2j** close the task | — | no code | the full `## Verification` block, once, then the status flip in this file and `../backlog.md` |
+
+**Order and parallelism.** 11.2a → 11.2c is a hard edge: the top-20 ranking reads (requests ×
+latency) off the baseline, and a debug-build baseline is not a basis for ranking. 11.2a → 11.2d and
+11.2a → 11.2f are hard edges too: statements and pool gauges come from the same capture. 11.2e
+follows 11.2d — index work changes plans, and a statement count frozen before it goes stale
+immediately. 11.2b, 11.2g and 11.2h are independent of all of these and may run concurrently in
+separate sessions. 11.2i runs last; it needs every budget in place.
+
+**Why 11.2e is the delegation candidate.** It is the only slice whose work is bulk-mechanical with a
+machine oracle: assert a statement count per read model and let the count test say whether the
+enumeration is complete — deliberately reintroducing a loop fails it. Review is reading a diff. Every
+other slice turns on judgement: which pagination key a contract can freeze, whether a TTL is
+justified, whether a compression floor is honest at the payload sizes this API actually serves.
 
 ## Steps
 
@@ -215,3 +249,48 @@ A production capacity model and 3×-peak numbers that mean anything about produc
 record status in the **same commit** in both places — the `**Status:**` line at the top of this file
 and this task's row in [`../backlog.md`](../backlog.md), with the PR or commit as the note. The two
 must never disagree.*
+
+### Slice 11.2a record — 2026-10-02
+
+Step 0 closed on a fresh Windows host. `PoolMetrics` (`crates/platform/persistence`
+`pool_metrics.rs`) exports `db_pool_size_gauge`, `db_pool_idle_gauge`,
+`db_pool_acquire_seconds` and `db_pool_acquire_failures_total` from the process
+Prometheus registry (the direct-registration pattern `PaymentsMetrics` uses),
+wired into both `apps/api/src/main.rs` and `apps/worker/src/main.rs` after
+`build_pool`. sqlx has no acquire-wait hook and read paths check connections
+out directly, so the acquire number is a 1 Hz **probe** — one real acquire per
+interval, timing the wait; under saturation it waits behind the queue. The
+probe semantics, the four instruments and the failure counter are unit-tested
+(16/16 `scripts/test.sh -p sanvi-persistence`); clippy, fmt and layering clean
+over the changed crates.
+
+`pg_stat_statements` is permanent in the compose Postgres: preload via the
+compose `command`, extension created on fresh volumes by
+`scripts/db/init/02_pg_stat_statements.sql` — including `template1`, so every
+database created later inherits it (the 2026-09-17 capture missed this and
+paid a per-capture `CREATE EXTENSION`). The release profile **links on this
+host** — the build-profile gap that invalidated the old capture is closed.
+
+New baseline `benchmarks/baseline-2026-10-02.md`: seed-1 post-erratum
+(checksum `22e2bac8…`, the plan's 5,748 payments), release build, machine
+profile 20-core/16 GB x86_64 Windows. Statement union across the five k6
+shapes is **13 distinct statements** — under 50, and the doc records why
+rather than padding: three of five shapes stop at the 401/signature boundary
+(no Kratos locally), and the two deep journeys are Redis-cached by design;
+steps 3–4 cover the full surface per use case instead. The old baseline's
+empty pool section is filled: at the offered rates the API pool sat at size
+3–4 of 10 with every probe wait under 5 ms and zero failures. Artifacts
+committed as `benchmarks/<scenario>/rc0.json` (all five 0 failed, 0 dropped;
+the abuse-quota metric confirms all 3,000 beacons `counted`, none `blocked` —
+the lab run raises the tracking quota via config so the shape measures the
+beacon path, not the counter).
+
+Host notes for the next slice: k6 upgraded to v2.3.0 (scoop's 0.51 bundle
+cannot parse the harness's optional catch binding); `docker-compose.override.yml`
+(gitignored, host-local) publishes Postgres on **5433** because another
+Docker allocation holds 5432; the lab API env is spelled out in the baseline
+document. The worker registers the same gauges on its scrape registry as
+every other worker metric — the worker has no HTTP scraper of its own, which
+is the pre-existing export posture all worker metrics share (unchanged here).
+Route-matrix diff acknowledged: two fingerprint rows only
+(`apps/api/src/main.rs`, `apps/worker/src/main.rs`), no route rows.

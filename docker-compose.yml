@@ -18,6 +18,14 @@ name: sanvi
 services:
   postgres:
     image: postgres:18
+    # pg_stat_statements is preload-only: it has to be in
+    # shared_preload_libraries at server start (TASK-021 step 0), so the
+    # statement capture never needs a per-capture ALTER SYSTEM + restart
+    # again. The extension itself is created by
+    # scripts/db/init/02_pg_stat_statements.sql on a fresh volume; a volume
+    # that predates it needs a one-off `CREATE EXTENSION
+    # pg_stat_statements;` run by hand.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres-local-dev

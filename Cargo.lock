@@ -3718,6 +3718,7 @@ name = "sanvi-persistence"
 version = "0.10.0"
 dependencies = [
  "anyhow",
+ "prometheus",
  "sanvi-kernel",
  "sanvi-testsupport",
  "serde",
