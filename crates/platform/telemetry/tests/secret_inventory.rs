@@ -451,13 +451,18 @@ fn rust_sources(root: &Path) -> Vec<String> {
                     if name != "target" && name != "tests" {
                         stack.push(path);
                     }
-                } else if name.ends_with(".rs") && path.to_string_lossy().contains("/src/") {
-                    out.push(
-                        path.strip_prefix(root)
-                            .unwrap()
-                            .to_string_lossy()
-                            .to_string(),
-                    );
+                } else if name.ends_with(".rs") {
+                    // Windows read_dir yields `\` separators; normalize so the
+                    // `/src/` filter and the rendered findings match the
+                    // forward-slash exemption entries on every host.
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    if rel.contains("/src/") {
+                        out.push(rel);
+                    }
                 }
             }
         }

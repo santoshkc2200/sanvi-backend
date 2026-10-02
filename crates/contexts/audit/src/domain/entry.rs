@@ -5,7 +5,7 @@
 
 use std::net::IpAddr;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use sanvi_kernel::{SnowflakeId, TenantId, UserId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -114,6 +114,13 @@ impl AuditEntry {
         if data.action.trim().is_empty() {
             return Err(AuditError::InvalidAction(data.action));
         }
+        // Postgres `timestamptz` stores microseconds, so the seal truncates
+        // `occurred_at` to the precision storage keeps: the hash must cover
+        // exactly what is stored, or the verifier — which recomputes over the
+        // stored value — would reject every entry sealed on a host whose clock
+        // ticks finer than 1 µs.
+        let mut data = data;
+        data.occurred_at = data.occurred_at.trunc_subsecs(6);
         let hash = compute_hash(&data, &prev_hash, id);
         Ok(Self {
             seq: 0,
@@ -303,5 +310,25 @@ mod tests {
             assert_eq!(ActorType::parse(raw).unwrap().as_str(), raw);
         }
         assert!(ActorType::parse("root").is_err());
+    }
+
+    #[test]
+    fn sub_microsecond_timestamps_survive_the_storage_round_trip() {
+        let mut d = data("tenancy.suspend");
+        d.occurred_at = DateTime::parse_from_rfc3339("2026-01-01T00:00:00.123456789Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut entry = AuditEntry::new(test_id(1), d, GENESIS_HASH).unwrap();
+        assert_eq!(
+            entry.occurred_at.timestamp_subsec_nanos(),
+            123_456_000,
+            "the seal truncates occurred_at to the microsecond precision Postgres stores"
+        );
+        entry.occurred_at = entry.occurred_at.trunc_subsecs(6);
+        assert!(
+            entry.verify(),
+            "verification recomputes over the stored value; a hash over a finer \
+             timestamp than storage keeps makes every such entry unverifiable"
+        );
     }
 }

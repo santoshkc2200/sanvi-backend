@@ -225,12 +225,21 @@ is_accepted_cross_schema_exception() {
 
 VIOLATIONS=0
 
+# rg emits platform separators (backslashes below the search root on
+# Windows); the exception matchers compare forward-slash paths, so every
+# file must be normalized before matching.
+rel_path() {
+    local p="${1#./}"
+    printf "%s" "${p//\\//}"
+}
+
 check_domain_layering() {
     for crate in "${FORBIDDEN[@]}"; do
         local pattern="use +${crate}|(^|[^A-Za-z0-9_])${crate}::|extern crate +${crate}"
         while IFS=: read -r file line match; do
             [[ -z "$file" ]] && continue
-            local rel_file="${file#./}"
+            local rel_file
+            rel_file="$(rel_path "$file")"
             if ! is_accepted_domain_infra_exception "$rel_file" "$crate"; then
                 echo "DOMAIN PURITY VIOLATION: $rel_file:$line imports infrastructure crate '$crate'" >&2
                 echo "  $match" >&2
@@ -243,7 +252,8 @@ check_domain_layering() {
 check_context_ownership() {
     while IFS=: read -r file line match; do
         [[ -z "$file" ]] && continue
-        local rel_file="${file#./}"
+        local rel_file
+        rel_file="$(rel_path "$file")"
         if [[ "$rel_file" =~ ^crates/contexts/([a-zA-Z0-9_]+)/src/ ]]; then
             local ctx="${BASH_REMATCH[1]}"
         else
@@ -265,7 +275,8 @@ check_context_ownership() {
 check_app_adapter_direction() {
     while IFS=: read -r file line match; do
         [[ -z "$file" ]] && continue
-        local rel_file="${file#./}"
+        local rel_file
+        rel_file="$(rel_path "$file")"
         if ! is_accepted_app_adapter_exception "$rel_file"; then
             echo "HEXAGONAL DIRECTION VIOLATION: $rel_file:$line in application layer depends on adapters" >&2
             echo "  $match" >&2
@@ -277,7 +288,8 @@ check_app_adapter_direction() {
 check_cross_schema_sql() {
     while IFS=: read -r file line match; do
         [[ -z "$file" ]] && continue
-        local rel_file="${file#./}"
+        local rel_file
+        rel_file="$(rel_path "$file")"
         if [[ "$rel_file" =~ ^crates/contexts/([a-zA-Z0-9_]+)/src/ ]]; then
             local ctx="${BASH_REMATCH[1]}"
         else

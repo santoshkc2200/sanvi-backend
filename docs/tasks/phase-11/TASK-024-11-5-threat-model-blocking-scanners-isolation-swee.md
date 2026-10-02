@@ -1,9 +1,9 @@
 # TASK-024: 11.5 Threat model, route matrix & isolation sweep
 
-**Phase:** 11 · **Status:** in-progress · **Size:** L
+**Phase:** 11 · **Status:** done · **Size:** L
 **Requirement(s):** FR-1116, FR-1117, NFR-1108, NFR-1109, NFR-1113, NFR-1114
 **Depends on:** TASK-031
-**Created:** 2026-08-21 · **Rewritten:** 2026-09-01
+**Created:** 2026-08-21 · **Rewritten:** 2026-09-01 · **Closed:** 2026-10-02
 **Flag:** none — findings-driven
 
 > **For agentic workers:** REQUIRED SUB-SKILL — `superpowers:subagent-driven-development`.
@@ -397,6 +397,91 @@ invisible to the caller. The other surfaces recorded honest zeros with
 the reason (the lab cannot authenticate; counting is live, the driver is
 missing, not the control).
 
+### Slice 11.5g record — 2026-10-02
+
+Completed the threat-model refresh and closed the task in this slice's
+commit. **Step 1 — the threat model.** `docs/security/threat-model.md` is
+rewritten from a phase-by-phase threat list into **v1: STRIDE per trust
+boundary** — sixteen boundaries (public edge; host→tenant resolution;
+Kratos; authorization; RLS row isolation; Stripe webhooks; Stripe keys;
+ad-platform OAuth; the public tracking beacon; impersonation; DSR/privacy;
+telemetry/secret render paths; async outbox/worker; TLS issuance/egress
+probes; media/notification egress; CI/CD supply chain) with the phase
+08–10 surfaces the step names explicitly covered: subdomain/hostname
+takeover (T46), forged TLS authorize (T47), beacon flood (T48), raw PII to
+ad platforms (T49), consent bypass (T50), OAuth state forgery (T51), token
+theft at rest (T52), impersonation abuse (T53), plus T54–T62 for the
+existence oracle, the HSTS dead-config class, render-path leaks, gate
+truth, acceptance rot, undeclared routes, the forged internal tenant
+header, media namespace crossover and notification floods. Threat ids
+T1–T45 are preserved from v0 (the duplicated phase-02 residual section is
+gone); every boundary carries at least one mitigation resolving to a test
+file path or CI gate (mechanically checked: every TB section names 2+ artifact
+paths), and a coverage map pins all fifteen context crates + three apps to
+boundaries and evidence. Named residuals added: the runtime
+`x-sanvi-impersonate` read-only clamp has no assembled-app test;
+`notifications`/`media` ship no `tests/` dir; the registrar runs
+hard-validated sandbox mode.
+
+**Step 2 — the verification block, which found four real defects.** The
+11.5f host blockage (macOS `sqlx_macros` dylib corruption) is resolved by
+host change, not by fixing macOS: this slice ran on a fresh Windows host
+(pinned toolchain 1.97.1 auto-installed; nextest/cargo-audit/cargo-deny/
+cargo-cyclonedx installed for it; `just` absent — the script equivalents
+ran). The block's first pass was 1217/1223 tests, layering FAILED, fmt
+FAILED; each defect fixed with its proof:
+
+1. **Audit chain seal hashed a timestamp Postgres cannot store — the
+   significant find.** `AuditEntry::new` hashed `occurred_at` via
+   `to_rfc3339()` at nanosecond precision while the writer binds it into a
+   `timestamptz` (microseconds), so the verifier — recomputing over the
+   stored value — rejected every entry whose clock had non-zero sub-µs
+   digits ("entry hash does not match its content"). macOS's ~1 µs clock
+   granularity masked it for eleven phases; Windows 100 ns ticks exposed
+   it; production Linux (ns clocks) would have failed `audit-verify`
+   everywhere. Fix: the seal truncates `occurred_at` to microseconds
+   (`trunc_subsecs(6)` — truncation, because Postgres truncates; rounding
+   would re-break it) so the hash covers exactly what storage keeps;
+   regression test `sub_microsecond_timestamps_survive_the_storage_round_trip`
+   fails against the vulnerable commit, and the three integration chain
+   tests are the behavioural proof. `just audit-verify` over the seed
+   corpus is unaffected (fixed-base µs timestamps; truncation a no-op).
+2. **The layering gate silently matched no exception on Windows.** `rg`
+   emits backslash separators below the search root, and every exception
+   matcher compares forward-slash literals — so the accepted
+   `ScopedTx`-in-domain-ports pattern (a documented exception in every
+   context) reported as violations. `rel_path()` normalizes separators in
+   all four checks; check and self-test green; on macOS the change is a
+   no-op.
+3. **The secret scanner enumerated zero fields on Windows.** The same
+   separator class: the `/src/` filter and the rendered finding paths
+   broke, tripping the scanner's own vacuity guard (`< 25 findings`) —
+   the guard doing exactly its job. `rust_sources` now normalizes paths;
+   33/33 telemetry tests green with the real 68-field enumeration.
+4. **Two clock/precision test defects:** the advertising reconnect test
+   compared in-memory `Utc::now()` against DB-stored timestamps (µs) —
+   the test now captures `now` pre-truncated; and `pii_corpus.rs` had one
+   stale rustfmt formatting (line length; the only `cargo fmt --check`
+   diff).
+
+**Full Verification block, final state (each command run and passed):**
+`just fmt` → `cargo fmt --check` clean; `just clippy` → workspace
+`--all-targets -D warnings` finished clean (changed crates re-verified
+after the fixes); `just layering` → OK + self-test; `just test` →
+`scripts/test.sh --quiet` **1224/1224** (the +1 is the new audit
+regression test); `just openapi` → 14 contexts OK; `just route-matrix` →
+complete and current (this commit touches no fingerprinted source, so no
+matrix diff — nothing to acknowledge; prior slices' diffs were
+acknowledged in their records); `just rls-matrix` → green; `just
+test-idor` → green; `just audit` → cargo audit + cargo deny +
+acceptance-expiry check all OK; `just sbom` → 25 documents (gitignored;
+release.yml publishes them with the tag). CI has still never run — no git
+remote (unchanged caveat from TASK-031/019/11.5f).
+
+Definition of done: all eight items checked. The parked pen test remains
+the largest unmitigated gap, named in `needs-humans.md` and in the threat
+model's residual section.
+
 ### Slice 11.5f record — 2026-09-30
 
 Completed steps 7–8 in this slice's commit (`security(telemetry): secret
@@ -609,13 +694,24 @@ only as a CI artifact. Write the dependency review policy.
 
 ## Definition of done
 
-- [ ] The threat model covers the phases 08–10 surfaces, each mitigation resolving to a test or a gate.
-- [ ] `just route-matrix` is green and fails on an unmapped route; the matrix is committed and its diff
+- [x] The threat model covers the phases 08–10 surfaces, each mitigation resolving to a test or a gate.
+      *v1 2026-10-02: STRIDE per trust boundary, sixteen boundaries; every TB section names 2+
+      artifact paths (mechanically checked); all fifteen context crates mapped with evidence;
+      phases 08–10 surfaces explicit (T46–T53).*
+- [x] `just route-matrix` is green and fails on an unmapped route; the matrix is committed and its diff
       is acknowledged in the PR.
-- [ ] `just rls-matrix` covers every table and every child partition by name, and fails on a partition
+      *Green + mutation self-tests (unmapped route, undocumented handler, missing fields, dropped
+      extractor, stale output — 11.5a). No PR has ever been possible (no git remote); each slice
+      that regenerated the matrix (11.5c/d/e/f) acknowledged its diff in its slice record, and the
+      closing commit changes no fingerprinted source, so no matrix diff exists to acknowledge.*
+- [x] `just rls-matrix` covers every table and every child partition by name, and fails on a partition
       with a dropped policy.
-- [ ] `just test-idor` enumerates from the route matrix and passes; every wrong-tenant request returns
+      *11.5c: catalog-enumerated, exact policy match, partitions via `pg_inherits` by name, both
+      falsification drills fail naming the offender.*
+- [x] `just test-idor` enumerates from the route matrix and passes; every wrong-tenant request returns
       404 or 403 with no existence leak.
+      *11.5b: matrix-driven (`route-metadata.json` at test time), three sweeps + nonexistent-id twin;
+      timing comparison explicitly parked.*
 - [x] Security header snapshots pass per app and fail on a removed header.
 - [x] Abuse controls count on every named surface; the tracking endpoint enforces and holds under a
       flood; the would-have-blocked rate is committed.
@@ -636,7 +732,16 @@ only as a CI artifact. Write the dependency review policy.
       CI has never run (no git remote) — workflow correctness verified by running the same commands
       locally (`just sbom` produced 25 valid documents after fixing two latent flag/glob defects in
       the pr.yml job).*
-- [ ] **Every finding from this task has a regression test that fails against the vulnerable commit.**
+- [x] **Every finding from this task has a regression test that fails against the vulnerable commit.**
+      *Findings and their failing tests: `/ads/health` path defect → the route-matrix gate (11.5a);
+      budget-cap foreign-id 500 → the IDOR sweep (11.5b); HSTS dead code → the TLS-posture snapshot
+      (11.5d); `Redacted::Serialize` plaintext + eight config structs' derived Debug/Serialize → the
+      four-render-paths test + the source-enumeration gate (11.5f); audit chain hashing nanosecond
+      timestamps → `sub_microsecond_timestamps_survive_the_storage_round_trip` + the three chain
+      integration tests (11.5g, found by running the verification block on a second platform);
+      Windows path-separator blindness in the layering gate and the secret scanner → their self-tests
+      plus green runs on a `\`-separator host (11.5g). The verification-block clock-precision test
+      fix (advertising reconnect) is itself the regression test for the test defect.*
 
 ## Verification
 

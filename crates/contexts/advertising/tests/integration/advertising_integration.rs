@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, SubsecRound, Utc};
 use sanvi_advertising::domain::{ConnectionId, CreativeId};
 use sanvi_advertising::{
     AdvertisingConnection, AdvertisingConnectionRepository, OAuthStateClaims, OAuthStateError,
@@ -400,7 +400,9 @@ async fn reconnect_reuses_the_original_connection_row() {
     let tenant_id = seed_tenant(&pool, "advertising-reconnect").await;
     let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
     let repository = SqlxAdvertisingConnectionRepository::new();
-    let now = Utc::now();
+    // Postgres keeps microseconds; a finer host clock (Windows 100 ns ticks)
+    // stores truncated timestamps that never equal the in-memory ones.
+    let now = Utc::now().trunc_subsecs(6);
 
     let first = AdvertisingConnection::new(
         ConnectionId::from_snowflake(sanvi_testsupport::test_ids().next_id().expect("test id")),

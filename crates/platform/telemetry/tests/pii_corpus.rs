@@ -32,7 +32,10 @@ const CORPUS: &[(&str, &str)] = &[
         "bearer_token",
         "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
     ),
-    ("stripe_secret_key", concat!("sk_", "live_51H8xQYdEvJ9l2pqAAAAAAAAAA00")),
+    (
+        "stripe_secret_key",
+        concat!("sk_", "live_51H8xQYdEvJ9l2pqAAAAAAAAAA00"),
+    ),
     ("stripe_webhook_secret", "whsec_a1b2c3d4e5f6g7h8i9j0"),
     ("oauth_refresh_token", "1//0aB3cD4eF5gH6iJ7kL8mN9oP-refresh"),
     ("card_pan", "4242 4242 4242 4242"),
