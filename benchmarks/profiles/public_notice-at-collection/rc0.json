@@ -1,0 +1,34 @@
+{
+  "scenario": "profiles/public_notice-at-collection",
+  "tag": "rc0",
+  "seed": "1",
+  "offered_rate_rps": 20,
+  "duration": "30s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 15,
+    "os": "Microsoft Windows 11 Pro 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 5.5446,
+    "http_req_duration_p95_ms": 12.8383,
+    "http_req_duration_p99_ms": 15.8756,
+    "http_req_duration_avg_ms": 6.34747171381032,
+    "http_reqs_total": 601,
+    "http_req_failed_rate": 0,
+    "iterations_total": 600,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "probe: GET /api/v1/public/privacy/notice-at-collection",
+    "TASK-021 step 2: per-endpoint before-number artifact"
+  ]
+}

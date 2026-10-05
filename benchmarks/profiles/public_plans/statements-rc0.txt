@@ -1,0 +1,16 @@
+# pg_stat_statements during the public_plans probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../public_plans/rc0.json
+ calls | total_ms | mean_ms |                                                                  statement                                                                   
+-------+----------+---------+----------------------------------------------------------------------------------------------------------------------------------------------
+  1803 |   40.100 |   0.022 | SELECT feature_key, enabled, "limit" FROM billing.plan_entitlements WHERE plan_id = $1 ORDER BY feature_key
+   601 |   26.539 |   0.044 | INSERT INTO platform.audit_log (id, actor, action, reason, detail) VALUES ($1, $2, $4, $3, $5::jsonb)
+   601 |   17.044 |   0.028 | SELECT id, key, name, tier, stripe_product_id, visibility, sort_order, created_at, updated_at FROM billing.plans WHERE visibility = $1 ORDER
+  1803 |   15.653 |   0.009 | SELECT id, plan_id, stripe_price_id, currency, interval, unit_amount_minor, trial_days, active, created_at FROM billing.plan_prices WHERE pl
+   601 |    5.149 |   0.009 | SELECT set_config('sanvi.platform_scope', 'on', true)
+   601 |    0.594 |   0.001 | BEGIN
+   601 |    0.333 |   0.001 | COMMIT
+     1 |    0.056 |   0.056 | SELECT pg_stat_statements_reset()
+     1 |    0.035 |   0.035 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+     1 |    0.015 |   0.015 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = 'platform'
+(10 rows)
+

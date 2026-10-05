@@ -275,7 +275,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/billing/src/adapters/http/catalog.rs | `c13f7d217e65540525e9f562d7569df9190bf3868e587d91a71d01ea49db72d2` |
 | crates/contexts/billing/src/adapters/http/handlers.rs | `f3cfadaf8e0268f907145ac4d956f4df28b86170e7d2cf8d37b0ef1ae29a7b12` |
 | crates/contexts/billing/src/adapters/http/mod.rs | `d047c5489142bdc7d3faa160d7dc5e7a1060342465521f439d5ad68fb14d148d` |
-| crates/contexts/billing/src/adapters/http/routes.rs | `3e28fe120155aaa6233c9f7bb1e92aab4c27515cae67605924b23ac46a1e9c62` |
+| crates/contexts/billing/src/adapters/http/routes.rs | `2079c9d01db138285102ed334b4051f62614f003998c877c16768dbb35d27afa` |
 | crates/contexts/domains/src/adapters/http/handlers.rs | `9b109de8656a55d83da8c73bc4945997a3b0eae5cbef5b37b50a741c9c903748` |
 | crates/contexts/domains/src/adapters/http/mod.rs | `618ea8888cb33ad073c7e6e6085b2a478ea16a5c0e97374c3aa04f9ee068180f` |
 | crates/contexts/domains/src/adapters/http/routes.rs | `a5a84a557fac8f0bcf40e8c3cf4afe20a99443c2564f7b6e93ed37b0900c013f` |
@@ -305,7 +305,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/privacy/src/adapters/http/catalog.rs | `d74f6d02c7ae2a7f2587b3ade73416c52431c861291408d3d69336cc8a520ef4` |
 | crates/contexts/privacy/src/adapters/http/handlers.rs | `bca078db29bfb85f776ae25b839b01fe746c3380cf33e621c998b001b1eb4719` |
 | crates/contexts/privacy/src/adapters/http/mod.rs | `0648fb98d081c026c56fe9ea1d1db4c388baae095a589f8514477d7a51cbf105` |
-| crates/contexts/privacy/src/adapters/http/routes.rs | `5df78546d89ba248ef47303302a8dd0f8bec316227560f6227749477201810a5` |
+| crates/contexts/privacy/src/adapters/http/routes.rs | `0fbbe18c262ab0aadf7e2a27f2ba41415b9f028cf62b85f9ce88cb6e625152dc` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `3474779403232c277d5e69c8da5365300ae2789a960fce47f9719c34c086cb84` |
 | crates/contexts/system/src/adapters/http/mod.rs | `2fc9c5477342635537f444fd0264d12176f5162963aa3f783279422974136ed7` |
 | crates/contexts/system/src/adapters/http/routes.rs | `fda8ec141cc6e759d3d925e71d6a773ff59b1b83802aa8219a2fc2791893fd8c` |

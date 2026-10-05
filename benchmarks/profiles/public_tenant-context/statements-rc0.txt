@@ -1,0 +1,15 @@
+# pg_stat_statements during the public_tenant-context probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../public_tenant-context/rc0.json
+ calls | total_ms | mean_ms |                                                                  statement                                                                   
+-------+----------+---------+----------------------------------------------------------------------------------------------------------------------------------------------
+   601 |   15.775 |   0.026 | SELECT normalized_hostname, tenant_id, status FROM domains.live_hostnames WHERE normalized_hostname = $1
+     1 |    0.141 |   0.141 | INSERT INTO platform.audit_log (id, actor, action, reason, detail) VALUES ($1, $2, $4, $3, $5::jsonb)
+     1 |    0.057 |   0.057 | SELECT pg_stat_statements_reset()
+     2 |    0.055 |   0.027 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+     1 |    0.039 |   0.039 | SELECT id, slug, display_name, status, region, default_locale, suspended_reason, created_at, updated_at, archived_at, purge_requested_at FRO
+     2 |    0.028 |   0.014 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = 'platform'
+     1 |    0.008 |   0.008 | SELECT set_config('sanvi.platform_scope', 'on', true)
+     1 |    0.001 |   0.001 | COMMIT
+     1 |    0.001 |   0.001 | BEGIN
+(9 rows)
+

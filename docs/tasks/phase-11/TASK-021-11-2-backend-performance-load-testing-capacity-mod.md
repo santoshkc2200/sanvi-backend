@@ -384,3 +384,81 @@ timeout test, billing 38 incl. the new keyset/clamp test); workspace
 `clippy --all-targets -D warnings` and `cargo fmt --check` clean;
 layering OK; route-matrix regenerated (15 fingerprint rows only, no route
 rows); ga-checklist OK. Full-suite re-run recorded in the commit.
+
+### Slice 11.2c record — 2026-10-05
+
+Step 2 closed on the same Windows host as 11.2a (20 cores/16 GB), release
+build rebuilt from current main first so the numbers include 11.2b's
+pagination and timeout work.
+
+**The ranking input, measured.** The 2026-10-02 baseline's five k6 shapes
+are per-shape, not per-endpoint, so the slice first measured per-endpoint
+artifacts: new `tests/load/profile_probe.js` (one endpoint per run,
+configured by `PERF_PROBE_*` env, reusing lib.js's stats_version-2
+summary so the artifacts carry machine profile + build stamp + expected
+status mix) and `scripts/profile-probes.sh` (32 candidate endpoints ×
+20 rps × 30 s ≈ 600 requests each, with `pg_stat_statements` reset
+before each probe and the top-15-by-total-time capture committed next to
+the latency artifact). Candidates cover every public surface the lab can
+reach, the operational surfaces, and 401-boundary representatives across
+the tenant contexts. Ranking is (requests × avg latency) over the
+committed artifacts; the cut at #20 is clean (#20 2,811 vs #21 2,547, no
+ranking-method choice moves it). Outputs: `benchmarks/profiles/README.md`
+(method, full 32-row ranking, named gaps) and twenty
+`benchmarks/profiles/<endpoint>.md` records, each citing its committed
+artifact as its before-number.
+
+**What the profiles say (inputs for steps 3, 4, 6, 7).** The two heaviest
+endpoints are in-process, zero-SQL: `GET /metrics` (28.5 ms avg, widest
+spread, p99 79.9 ms — Prometheus text render of the full registry) and
+`GET /openapi.json` (25.3 ms — rebuilds the merged 14-context document
+per request; ETag/caching is step 7's, contract-adjacent). `public_plans`
+is the set's N+1: one entitlements query and one prices query per plan
+row (1,803 calls each per 601 requests) — step 4's first target. The four
+privacy disclosure reads rebuild slow-moving content per request (step 6
+candidates). The live-hostnames resolution lookup tops every
+tenant-host probe (0.022–0.026 ms mean) — the baseline's dominant
+statement, unchanged. Public reads write an audit row per request
+(`platform_scope_begin` INSERTs ride slug-availability, the privacy
+disclosures, plans) — recorded as behaviour, not changed.
+
+**Named gaps.** CPU sampling: samply/ETW requires an elevated Windows
+host; this host has sudo disabled ("samply requires Administrator
+privileges for profiling on Windows"). tokio-console is not wired and its
+TUI cannot be captured headlessly. Attribution therefore stops at
+in-process vs database (statements captures) plus the latency
+distributions; the README records the elevated-host drill. Authenticated
+handlers: no Kratos locally, so ten of the twenty records measure the
+middleware front half (resolution + authn rejection, ~5 ms each) and say
+so — the baseline's standing caveat.
+
+**Defects found and fixed here (the slice's only behaviour change).**
+Smoke-testing every candidate path before probing surfaced a mount
+defect class the route/permission gates cannot see — actix commits a
+request to the first matching resource, and both privacy and billing
+registered one `web::resource` per catalog entry: every second method on
+a shared path answered 405 (all platform privacy writes, the tenant DSR
+list, `POST /api/v1/platform/plans`), and the privacy subject scope was
+mounted under `/api/v1/privacy` while registering full paths, doubling
+the prefix — the whole subject privacy surface (DSR submission, consents,
+directives, opt-out, …) answered 404 at its contracted paths. Fixed in
+`sanvi_privacy` (per-path grouped registration, `PermissionMap` for
+per-method permissions, subject paths relative to their mount) and
+`sanvi_billing` (same grouping), each with a regression test proven to
+fail naming the operation on the old registration. An OpenAPI-wide live
+sweep (all 210 operations, one request each) reports zero 405s after.
+Found alongside: the route-matrix self-test fixture used
+`str(Path.relative_to)`, which is backslash on Windows and failed the
+gate's POSIX handler-key lookup — same portability class 11.5g fixed in
+the layering and secret-scan gates; one-line `as_posix()` fix.
+
+**Verification (scoped, this session).** privacy+billing+api test tier
+166/166 (incl. the DB-backed IDOR sweep and the two new mount regression
+tests, each shown failing on the old registration); `cargo fmt`/clippy
+clean over the changed crates; route-matrix regenerated (two fingerprint
+rows only, `routes.rs` sources) and self-test green; `check-openapi.sh`
+clean over all 14 specs (no contract change); ga-checklist OK. k6 v2.3.0
+note for Windows hosts: run the probe script with `MSYS_NO_PATHCONV=1`
+(Git Bash path-converts leading-slash env args into
+`C:/Program Files/Git/...`; the first probe pass measured nothing for
+exactly this reason and was re-run).

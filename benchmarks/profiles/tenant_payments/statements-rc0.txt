@@ -1,0 +1,15 @@
+# pg_stat_statements during the tenant_payments probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../tenant_payments/rc0.json
+ calls | total_ms | mean_ms |                                                      statement                                                      
+-------+----------+---------+---------------------------------------------------------------------------------------------------------------------
+   601 |   15.682 |   0.026 | SELECT normalized_hostname, tenant_id, status FROM domains.live_hostnames WHERE normalized_hostname = $1
+     1 |    0.067 |   0.067 | SELECT pg_stat_statements_reset()
+     3 |    0.034 |   0.011 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = 'platform'
+     1 |    0.024 |   0.024 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+     3 |    0.020 |   0.007 | SELECT set_config('sanvi.tenant_id', $1, true)
+     1 |    0.018 |   0.018 | SELECT default_locale, enabled_locales, timezone, updated_at FROM localization.tenant_locales WHERE tenant_id = $1
+     2 |    0.008 |   0.004 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = $1
+     3 |    0.001 |   0.000 | BEGIN
+     3 |    0.001 |   0.000 | ROLLBACK
+(9 rows)
+

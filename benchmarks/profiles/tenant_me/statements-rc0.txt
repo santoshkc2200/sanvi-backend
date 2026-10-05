@@ -1,0 +1,9 @@
+# pg_stat_statements during the tenant_me probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../tenant_me/rc0.json
+ calls | total_ms | mean_ms |                                                      statement                                                      
+-------+----------+---------+---------------------------------------------------------------------------------------------------------------------
+     1 |    0.065 |   0.065 | SELECT pg_stat_statements_reset()
+     2 |    0.034 |   0.017 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = 'platform'
+     1 |    0.033 |   0.033 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+(3 rows)
+

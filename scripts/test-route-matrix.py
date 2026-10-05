@@ -26,7 +26,7 @@ class RouteMatrixTests(unittest.TestCase):
             api.write_text('openapi: 3.1.0\npaths:\n  /demo:\n    get:\n      operationId: demo\n')
             meta = root / "docs/security/route-metadata.json"
             meta.parent.mkdir(parents=True)
-            metadata = {"routes": [{"method": "GET", "path": "/demo", "handler": str(handler.relative_to(root)) + "::demo", "permission": "demo.read", "tenant": "CurrentTenant", "rate_limit": "global-config-dependent", "evidence": [str(routes.relative_to(root))]}]}
+            metadata = {"routes": [{"method": "GET", "path": "/demo", "handler": handler.relative_to(root).as_posix() + "::demo", "permission": "demo.read", "tenant": "CurrentTenant", "rate_limit": "global-config-dependent", "evidence": [routes.relative_to(root).as_posix()]}]}
             meta.write_text(json.dumps(metadata))
             output = gate.generate(root)
             self.assertIn("demo.read", output)

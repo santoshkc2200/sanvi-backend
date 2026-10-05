@@ -1,0 +1,9 @@
+# pg_stat_statements during the openapi_json probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../openapi_json/rc0.json
+ calls | total_ms | mean_ms |                                                      statement                                                      
+-------+----------+---------+---------------------------------------------------------------------------------------------------------------------
+     1 |    0.058 |   0.058 | SELECT pg_stat_statements_reset()
+     1 |    0.033 |   0.033 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+     1 |    0.016 |   0.016 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = 'platform'
+(3 rows)
+

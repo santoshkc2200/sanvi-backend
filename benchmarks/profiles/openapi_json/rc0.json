@@ -1,0 +1,34 @@
+{
+  "scenario": "profiles/openapi_json",
+  "tag": "rc0",
+  "seed": "1",
+  "offered_rate_rps": 20,
+  "duration": "30s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 15,
+    "os": "Microsoft Windows 11 Pro 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "version": "0.10.0",
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 24.5914,
+    "http_req_duration_p95_ms": 45.73014999999999,
+    "http_req_duration_p99_ms": 51.45387900000001,
+    "http_req_duration_avg_ms": 25.251039867109636,
+    "http_reqs_total": 602,
+    "http_req_failed_rate": 0,
+    "iterations_total": 601,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "probe: GET /openapi.json",
+    "TASK-021 step 2: per-endpoint before-number artifact"
+  ]
+}

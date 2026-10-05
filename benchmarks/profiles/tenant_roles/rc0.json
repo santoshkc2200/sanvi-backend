@@ -1,0 +1,34 @@
+{
+  "scenario": "profiles/tenant_roles",
+  "tag": "rc0",
+  "seed": "1",
+  "offered_rate_rps": 20,
+  "duration": "30s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 15,
+    "os": "Microsoft Windows 11 Pro 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0",
+    "built_at": "unknown"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 4.36975,
+    "http_req_duration_p95_ms": 10.767285000000001,
+    "http_req_duration_p99_ms": 14.649334000000001,
+    "http_req_duration_avg_ms": 5.154280730897011,
+    "http_reqs_total": 602,
+    "http_req_failed_rate": 0,
+    "iterations_total": 601,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "probe: GET /api/v1/tenant/roles (Host: scale-tail-1-003.localhost)",
+    "TASK-021 step 2: per-endpoint before-number artifact"
+  ]
+}

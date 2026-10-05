@@ -1092,7 +1092,11 @@ async fn invoice_pages_are_bounded_and_keyset_paginated() {
     let default_page = list.execute(tenant_id, None, None).await.unwrap();
     assert_eq!(default_page.len(), 7);
     let clamped = list.execute(tenant_id, Some(10_000), None).await.unwrap();
-    assert_eq!(clamped.len(), 7, "clamp to max 100, then reality: only 7 rows");
+    assert_eq!(
+        clamped.len(),
+        7,
+        "clamp to max 100, then reality: only 7 rows"
+    );
 
     // Keyset: first page newest-first, second page disjoint, union = all.
     let page_one = list.execute(tenant_id, Some(3), None).await.unwrap();

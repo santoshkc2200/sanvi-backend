@@ -1,0 +1,7 @@
+# pg_stat_statements during the system_version probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../system_version/rc0.json
+ calls | total_ms | mean_ms |             statement             
+-------+----------+---------+-----------------------------------
+     1 |    0.056 |   0.056 | SELECT pg_stat_statements_reset()
+(1 row)
+

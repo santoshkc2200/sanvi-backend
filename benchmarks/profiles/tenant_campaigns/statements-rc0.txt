@@ -1,0 +1,19 @@
+# pg_stat_statements during the tenant_campaigns probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../tenant_campaigns/rc0.json
+ calls | total_ms | mean_ms |                                                                  statement                                                                   
+-------+----------+---------+----------------------------------------------------------------------------------------------------------------------------------------------
+   600 |   15.532 |   0.026 | SELECT normalized_hostname, tenant_id, status FROM domains.live_hostnames WHERE normalized_hostname = $1
+     1 |    0.143 |   0.143 | INSERT INTO platform.audit_log (id, actor, action, reason, detail) VALUES ($1, $2, $4, $3, $5::jsonb)
+     1 |    0.055 |   0.055 | SELECT pg_stat_statements_reset()
+     3 |    0.033 |   0.011 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = $1
+     3 |    0.031 |   0.010 | SELECT set_config($2, $1, $3)
+     1 |    0.022 |   0.022 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+     1 |    0.021 |   0.021 | SELECT set_config($1, $2, $3)
+     2 |    0.017 |   0.008 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = $1
+     1 |    0.017 |   0.017 | SELECT default_locale, enabled_locales, timezone, updated_at FROM localization.tenant_locales WHERE tenant_id = $1
+     1 |    0.016 |   0.016 | SELECT id, slug, display_name, status, region, default_locale, suspended_reason, created_at, updated_at, archived_at, purge_requested_at FRO
+     4 |    0.003 |   0.001 | BEGIN
+     3 |    0.001 |   0.000 | ROLLBACK
+     1 |    0.000 |   0.000 | COMMIT
+(13 rows)
+

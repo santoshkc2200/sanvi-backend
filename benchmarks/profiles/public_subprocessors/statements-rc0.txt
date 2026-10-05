@@ -1,0 +1,14 @@
+# pg_stat_statements during the public_subprocessors probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../public_subprocessors/rc0.json
+ calls | total_ms | mean_ms |                                                                  statement                                                                   
+-------+----------+---------+----------------------------------------------------------------------------------------------------------------------------------------------
+   601 |   25.611 |   0.043 | INSERT INTO platform.audit_log (id, actor, action, reason, detail) VALUES ($1, $2, 'platform_scope_begin', $3, '{}'::jsonb)
+   601 |   19.903 |   0.033 | SELECT name, purpose, location, role, contract_terms, dpa_url, transfer_mechanism, added_at, removed_at FROM privacy.subprocessors WHERE rem
+   601 |    5.226 |   0.009 | SELECT set_config('sanvi.platform_scope', 'on', true)
+   601 |    0.599 |   0.001 | BEGIN
+   601 |    0.381 |   0.001 | COMMIT
+     1 |    0.055 |   0.055 | SELECT pg_stat_statements_reset()
+     1 |    0.026 |   0.026 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+     1 |    0.020 |   0.020 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = 'platform'
+(8 rows)
+

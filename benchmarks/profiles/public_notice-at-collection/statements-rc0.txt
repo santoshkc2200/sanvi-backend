@@ -1,0 +1,14 @@
+# pg_stat_statements during the public_notice-at-collection probe (reset immediately before; top 15 by total time)
+# offered rate 20 rps for 30s; lab numbers, machine profile in ../public_notice-at-collection/rc0.json
+ calls | total_ms | mean_ms |                                                                  statement                                                                   
+-------+----------+---------+----------------------------------------------------------------------------------------------------------------------------------------------
+   600 |   32.146 |   0.054 | SELECT data_class, sensitivity, basis, EXTRACT(EPOCH FROM period)::bigint / 86400 AS period_days, action, disclosed_in_notice FROM privacy.r
+   600 |   24.827 |   0.041 | INSERT INTO platform.audit_log (id, actor, action, reason, detail) VALUES ($1, $2, 'platform_scope_begin', $3, '{}'::jsonb)
+   600 |    5.215 |   0.009 | SELECT set_config('sanvi.platform_scope', 'on', true)
+   600 |    0.638 |   0.001 | BEGIN
+   600 |    0.380 |   0.001 | COMMIT
+     1 |    0.049 |   0.049 | SELECT pg_stat_statements_reset()
+     1 |    0.043 |   0.043 | SELECT code, name_native, name_en, sort_order FROM localization.supported_locales WHERE enabled ORDER BY sort_order
+     1 |    0.016 |   0.016 | SELECT scope, key, locale, value, updated_by, updated_at FROM localization.translations WHERE scope = 'platform'
+(8 rows)
+
