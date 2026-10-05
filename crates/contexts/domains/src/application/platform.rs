@@ -23,8 +23,10 @@ impl PlatformListDomains {
     pub async fn execute(
         &self,
         query: &str,
-        limit: u32,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<CustomDomainView>, DomainsError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 50, 100);
         let mut scope = self
             .tx
             .begin_unscoped("domains.platform.search", "platform_admin")
@@ -32,7 +34,7 @@ impl PlatformListDomains {
             .map_err(storage)?;
         let domains = self
             .domains
-            .platform_search(&mut scope, query.trim(), limit.min(100))
+            .platform_search(&mut scope, query.trim(), limit, after_id)
             .await?;
         scope.commit().await.map_err(storage)?;
         Ok(domains.iter().map(CustomDomainView::of).collect())

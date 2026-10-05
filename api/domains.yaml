@@ -11,20 +11,32 @@ paths:
     get:
       operationId: list_platform_domains
       parameters:
-      - description: Hostname substring
+      - description: Hostname substring.
         in: query
         name: q
-        required: true
+        required: false
         schema:
           type: string
-      - description: Result cap (default 50)
-        in: query
+      - in: query
         name: limit
-        required: true
+        required: false
         schema:
+          default: 50
+          description: Page size, clamped to 1..=100; 50 when absent.
+          examples:
+          - 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
+      - description: |-
+          Cursor: the id of the last domain of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -34,6 +46,18 @@ paths:
                   $ref: '#/components/schemas/CustomDomainView'
                 type: array
           description: Domains across tenants
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/platform/domains`.'
       tags:
       - domains
@@ -76,6 +100,27 @@ paths:
   /api/v1/tenant/domains:
     get:
       operationId: list_custom_domains
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last domain of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -85,6 +130,18 @@ paths:
                   $ref: '#/components/schemas/CustomDomainView'
                 type: array
           description: The tenant's domains
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/tenant/domains`.'
       tags:
       - domains
@@ -127,6 +184,27 @@ paths:
   /api/v1/tenant/domains/orders:
     get:
       operationId: list_domain_orders
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last domain of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -136,6 +214,18 @@ paths:
                   $ref: '#/components/schemas/OrderView'
                 type: array
           description: The tenant's domain orders
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/tenant/domains/orders`.'
       tags:
       - domains

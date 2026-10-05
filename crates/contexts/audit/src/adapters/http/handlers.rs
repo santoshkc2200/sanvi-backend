@@ -7,7 +7,7 @@ use sanvi_http::{ApiError, CurrentSubject, RequiredPermission};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::application::{AuditPage, ListAuditLog, list_audit::DEFAULT_PAGE_LIMIT};
+use crate::application::{AuditPage, ListAuditLog};
 use crate::domain::{AuditCursor, AuditEntry, AuditError, AuditFilters};
 
 /// Application state visible to this context's handlers.
@@ -28,21 +28,36 @@ pub fn api_error(err: AuditError) -> ApiError {
         },
         AuditError::Storage(detail) => {
             tracing::error!(error = %detail, "audit storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
     }
 }
 
 /// Audit query parameters (all optional filters + cursor pagination).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AuditQuery {
+    /// Restrict to one tenant (decimal Snowflake).
+    #[param(value_type = Option<String>)]
     pub tenant_id: Option<sanvi_kernel::TenantId>,
+    /// Restrict to one actor (decimal Snowflake).
+    #[param(value_type = Option<String>)]
     pub actor_id: Option<sanvi_kernel::UserId>,
+    /// Exact action name, e.g. tenancy.suspend.
     pub action: Option<String>,
+    /// Inclusive lower bound.
     pub since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Exclusive upper bound.
     pub until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Cursor: seq of the last entry of the previous page.
     pub after: Option<i64>,
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = audit_limit_schema)]
     pub limit: Option<u32>,
+}
+
+fn audit_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 50).build()
 }
 
 /// One page of audit entries.
@@ -71,19 +86,12 @@ impl From<AuditPage> for AuditPageView {
     get,
     path = "/api/v1/platform/audit",
     tag = "audit",
-    params(
-        ("tenant_id" = Option<String>, Query, description = "Restrict to one tenant (decimal Snowflake)"),
-        ("actor_id" = Option<String>, Query, description = "Restrict to one actor (decimal Snowflake)"),
-        ("action" = Option<String>, Query, description = "Exact action name, e.g. tenancy.suspend"),
-        ("since" = Option<chrono::DateTime<chrono::Utc>>, Query, description = "Inclusive lower bound"),
-        ("until" = Option<chrono::DateTime<chrono::Utc>>, Query, description = "Exclusive upper bound"),
-        ("after" = Option<i64>, Query, description = "Cursor: seq of the last entry of the previous page"),
-        ("limit" = Option<u32>, Query, description = "Page size (1..=200, default 50)")
-    ),
+    params(AuditQuery),
     responses(
         (status = 200, description = "One page of audit entries, newest first", body = AuditPageView),
         (status = 400, description = "Invalid filter value", body = sanvi_http::ProblemDetail),
-        (status = 403, description = "Missing platform.audit.read", body = sanvi_http::ProblemDetail)
+        (status = 403, description = "Missing platform.audit.read", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_audit(
@@ -102,7 +110,7 @@ pub async fn list_audit(
     let after = query.after.map(|seq| AuditCursor { seq });
     let page = state
         .list
-        .execute(filters, after, query.limit.unwrap_or(DEFAULT_PAGE_LIMIT))
+        .execute(filters, after, query.limit)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(AuditPageView::from(page)))

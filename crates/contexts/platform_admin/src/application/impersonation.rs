@@ -238,8 +238,10 @@ impl ListImpersonations {
     pub async fn execute(
         &self,
         tenant_id: Option<TenantId>,
-        limit: u32,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<ImpersonationGrantView>, PlatformAdminError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 100, MAX_PAGE_LIMIT);
         let mut scope = self
             .tx_manager
             .begin_unscoped("list_impersonations", "platform-admin")
@@ -247,12 +249,7 @@ impl ListImpersonations {
             .map_err(storage)?;
         let grants = self
             .grants
-            .list_active(
-                &mut scope,
-                tenant_id,
-                self.clock.now(),
-                limit.clamp(1, MAX_PAGE_LIMIT),
-            )
+            .list_active(&mut scope, tenant_id, self.clock.now(), limit, after_id)
             .await?;
         scope.commit().await.map_err(storage)?;
         Ok(grants.iter().map(ImpersonationGrantView::from).collect())

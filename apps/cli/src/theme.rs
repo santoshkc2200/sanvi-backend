@@ -143,7 +143,7 @@ pub async fn versions(environment: &str, key: &str) -> anyhow::Result<()> {
     let themes: std::sync::Arc<dyn ThemeRepository> =
         std::sync::Arc::new(SqlxThemeRepository::new());
     let views = ListThemeVersionsAdmin::new(themes, pool)
-        .execute(key)
+        .execute(key, None, None)
         .await
         .context("failed to read the theme versions")?;
     println!("{}", serde_json::to_string_pretty(&views)?);

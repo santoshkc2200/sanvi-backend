@@ -324,7 +324,7 @@ pub async fn impersonation_list(
         Arc::new(SqlxImpersonationGrantRepository::new()),
         Arc::new(SystemClock),
     );
-    let grants = use_case.execute(tenant_id, 100).await?;
+    let grants = use_case.execute(tenant_id, Some(100), None).await?;
     for grant in &grants {
         println!(
             "{}: actor={} target={} tenant={} mode={} expires={} reason={}",
@@ -405,7 +405,7 @@ pub async fn audit_list(
                 until: None,
             },
             None,
-            limit,
+            Some(limit),
         )
         .await?;
     for entry in &page.entries {
@@ -442,7 +442,7 @@ pub async fn approval_list(environment: &str, ids: Arc<dyn RawIdGenerator>) -> a
         TxManager::new(pool, ids),
         Arc::new(SqlxPendingApprovalRepository::new()),
     );
-    let approvals = use_case.execute(100).await?;
+    let approvals = use_case.execute(Some(100), None).await?;
     for approval in &approvals {
         println!(
             "{}\t{}\trequested_by={}\tpayload={}",

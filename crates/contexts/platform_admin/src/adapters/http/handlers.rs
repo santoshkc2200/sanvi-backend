@@ -75,7 +75,7 @@ pub fn api_error(err: PlatformAdminError) -> ApiError {
         },
         PlatformAdminError::Storage(detail) => {
             tracing::error!(error = %detail, "platform_admin storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         PlatformAdminError::IdGeneration(detail) => {
             tracing::error!(error = %detail, "platform_admin ID generation failure");
@@ -90,13 +90,25 @@ pub fn api_error(err: PlatformAdminError) -> ApiError {
 // Tenant admin views
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct TenantSearchQuery {
+    /// Substring match on slug/display name.
     pub query: Option<String>,
+    /// Tenant status filter.
     pub status: Option<String>,
+    /// Cursor: created_at of the last row.
     pub after_created_at: Option<DateTime<Utc>>,
+    /// Cursor: tenant id of the last row.
+    #[param(value_type = Option<String>)]
     pub after_id: Option<TenantId>,
+    /// Page size, clamped to 1..=100.
+    #[param(schema_with = admin_limit_schema)]
     pub limit: Option<u32>,
+}
+
+fn admin_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(100, 25).build()
 }
 
 /// One page of the operator tenant search.
@@ -119,13 +131,7 @@ pub struct TenantViewCursorView {
     path = "/api/v1/platform/admin/tenants",
     tag = "platform_admin",
     operation_id = "search_tenant_admin_views",
-    params(
-        ("query" = Option<String>, Query, description = "Substring match on slug/display name"),
-        ("status" = Option<String>, Query, description = "Tenant status filter"),
-        ("after_created_at" = Option<DateTime<Utc>>, Query, description = "Cursor: created_at of the last row"),
-        ("after_id" = Option<String>, Query, description = "Cursor: tenant id of the last row"),
-        ("limit" = Option<u32>, Query, description = "Page size (1..=100, default 25)")
-    ),
+    params(TenantSearchQuery),
     responses(
         (status = 200, description = "One page of tenant views", body = TenantAdminPageView),
         (status = 400, description = "Invalid filter", body = sanvi_http::ProblemDetail),
@@ -156,9 +162,7 @@ pub async fn search_tenant_admin_views(
             query: query.query.clone(),
             status: query.status.clone(),
             after,
-            limit: query
-                .limit
-                .unwrap_or(crate::application::tenant_views::DEFAULT_PAGE_LIMIT),
+            limit: query.limit,
         })
         .await
         .map_err(api_error)?;
@@ -258,10 +262,22 @@ pub async fn create_impersonation(
     Ok(HttpResponse::Created().json(grant))
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListImpersonationsQuery {
+    /// Restrict to one tenant.
+    #[param(value_type = Option<String>)]
     pub tenant_id: Option<TenantId>,
+    /// Page size, clamped to 1..=100.
+    #[param(schema_with = impersonation_limit_schema)]
     pub limit: Option<u32>,
+    /// Cursor: the id of the last grant of the previous page. Absent for the
+    /// first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn impersonation_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(100, 100).build()
 }
 
 /// `GET /api/v1/platform/impersonations` — active grants.
@@ -270,13 +286,12 @@ pub struct ListImpersonationsQuery {
     path = "/api/v1/platform/impersonations",
     tag = "platform_admin",
     operation_id = "list_impersonations",
-    params(
-        ("tenant_id" = Option<String>, Query, description = "Restrict to one tenant"),
-        ("limit" = Option<u32>, Query, description = "Maximum grants (default 100)")
-    ),
+    params(ListImpersonationsQuery),
     responses(
         (status = 200, description = "Active grants", body = Vec<ImpersonationGrantView>),
-        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_impersonations(
@@ -285,9 +300,15 @@ pub async fn list_impersonations(
     _subject: CurrentSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let grants = state
         .list_impersonations
-        .execute(query.tenant_id, query.limit.unwrap_or(100))
+        .execute(query.tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(grants))
@@ -492,22 +513,52 @@ pub async fn revoke_entitlement_override(
 // ---------------------------------------------------------------------------
 
 /// `GET /api/v1/platform/approvals` — pending four-eyes requests.
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ListApprovalsQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = approval_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last approval of the previous page. Absent for
+    /// the first page; the queue is ordered oldest first.
+    pub after: Option<String>,
+}
+
+fn approval_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 200).build()
+}
+
+/// `GET /api/v1/platform/approvals` — pending four-eyes requests.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/approvals",
     tag = "platform_admin",
     operation_id = "list_pending_approvals",
+    params(ListApprovalsQuery),
     responses(
         (status = 200, description = "Pending requests", body = Vec<crate::application::approvals::ApprovalView>),
-        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_pending_approvals(
     state: web::Data<PlatformAdminState>,
+    query: web::Query<ListApprovalsQuery>,
     _subject: CurrentSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
-    let approvals = state.list_approvals.execute(100).await.map_err(api_error)?;
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
+    let approvals = state
+        .list_approvals
+        .execute(query.limit, after_id)
+        .await
+        .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(approvals))
 }
 

@@ -157,7 +157,7 @@ pub async fn list(
     };
     let page = services
         .list_tenants
-        .execute(after, limit, status)
+        .execute(after, Some(limit), status)
         .await
         .context("listing tenants failed")?;
     println!("{}", serde_json::to_string_pretty(&page)?);

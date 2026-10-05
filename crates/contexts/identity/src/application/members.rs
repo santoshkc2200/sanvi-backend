@@ -61,7 +61,13 @@ impl ListMembers {
     }
 
     #[tracing::instrument(name = "identity.list_members", skip_all, fields(tenant_id = %tenant_id))]
-    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<MemberView>, IdentityError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+        limit: Option<u32>,
+        after_user_id: Option<i64>,
+    ) -> Result<Vec<MemberView>, IdentityError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_for(tenant_id.as_i64())
@@ -69,7 +75,7 @@ impl ListMembers {
             .map_err(storage)?;
         let rows = self
             .memberships
-            .list_with_emails(&mut scope, tenant_id)
+            .list_with_emails(&mut scope, tenant_id, limit, after_user_id)
             .await?;
         scope.commit().await.map_err(storage)?;
         Ok(rows

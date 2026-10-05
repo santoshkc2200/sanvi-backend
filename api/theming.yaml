@@ -62,6 +62,26 @@ paths:
         required: true
         schema:
           type: string
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last version of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -71,12 +91,24 @@ paths:
                   $ref: '#/components/schemas/ThemeVersionAdminView'
                 type: array
           description: The theme's version history
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '404':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown theme
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/platform/themes/{key}/versions`.'
       tags:
       - theming

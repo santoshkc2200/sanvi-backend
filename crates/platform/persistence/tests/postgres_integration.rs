@@ -4,7 +4,9 @@
 use std::time::Duration;
 
 use sanvi_kernel::SnowflakeId;
-use sanvi_persistence::{DatabaseConfig, Migrator, TxManager, build_pool, check_database};
+use sanvi_persistence::{
+    DatabaseConfig, Migrator, TxManager, build_pool, check_database, is_statement_timeout,
+};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
@@ -155,4 +157,52 @@ async fn health_probe_degrades_when_database_is_gone() {
         result.is_err(),
         "probe must fail once the database is unreachable"
     );
+}
+
+/// TASK-021 (FR-1110): the pool-level statement cap cancels a runaway query
+/// and the failure carries the classification the HTTP layer turns into the
+/// `request-timeout` problem — a request outside its budget fails loudly
+/// instead of holding its connection.
+#[tokio::test]
+async fn statement_timeout_cancels_runaway_queries() {
+    let node = Postgres::default()
+        .start()
+        .await
+        .expect("failed to start postgres");
+    let port = node.get_host_port_ipv4(5432).await.expect("postgres port");
+    let config = DatabaseConfig {
+        statement_timeout_ms: 1_000,
+        ..config_for(port, "postgres", "postgres")
+    };
+    let pool = build_pool(&config).await.unwrap();
+
+    let started = std::time::Instant::now();
+    let result = sqlx::query("SELECT pg_sleep(30)").execute(&pool).await;
+    let elapsed = started.elapsed();
+
+    let err = result.expect_err("pg_sleep(30) must be cancelled by the 1 s cap");
+    assert!(
+        is_statement_timeout(&err),
+        "classified as a statement timeout: {err}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(20),
+        "cancelled near the cap, not after the full sleep: {elapsed:?}"
+    );
+
+    // The rendered message is what adapters flatten into Storage(String);
+    // the HTTP classification matches this exact phrase, so pin the join.
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("canceling statement due to statement timeout"),
+        "rendered message carries the Postgres wording: {rendered}"
+    );
+
+    // The connection survives: the cap cancels statements, not sessions, so
+    // the pool serves the next query without a recycle.
+    let alive: i32 = sqlx::query_scalar("SELECT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("pool still serves after a cancelled statement");
+    assert_eq!(alive, 1);
 }

@@ -41,7 +41,7 @@ pub fn api_error(err: LocalizationError) -> ApiError {
         }
         LocalizationError::Storage(detail) => {
             tracing::error!(error = %detail, "localization storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         LocalizationError::Outbox(detail) => {
             tracing::error!(error = %detail, "localization outbox failure");
@@ -384,13 +384,13 @@ async fn begin_platform_scope<'a>(
 async fn commit_scope(scope: ScopedTx<'_>) -> Result<(), ApiError> {
     scope.commit().await.map_err(|err| {
         tracing::error!(error = %err, "failed to commit localization transaction");
-        ApiError::internal("storage failure")
+        ApiError::from_storage_detail(&err.to_string())
     })
 }
 
 async fn commit_scope_platform(scope: PlatformScope<'_>) -> Result<(), ApiError> {
     scope.commit().await.map_err(|err| {
         tracing::error!(error = %err, "failed to commit localization transaction");
-        ApiError::internal("storage failure")
+        ApiError::from_storage_detail(&err.to_string())
     })
 }

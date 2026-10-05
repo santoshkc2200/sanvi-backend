@@ -158,55 +158,59 @@ paths:
     get:
       operationId: list_tenant_payments
       parameters:
-      - description: Filter by payment status
+      - description: Filter by payment status.
         in: query
         name: status
         required: false
         schema:
           type: string
-      - description: Filter by payout status
+      - description: Filter by payout status.
         in: query
         name: payout_status
         required: false
         schema:
           type: string
-      - description: Filter by currency (ISO-4217)
+      - description: Filter by currency (ISO-4217).
         in: query
         name: currency
         required: false
         schema:
           type: string
-      - description: Filter by customer reference substring
+      - description: Filter by customer reference substring.
         in: query
         name: customer
         required: false
         schema:
           type: string
-      - description: Filter by created_at >= (RFC3339)
+      - description: Filter by created_at >= (RFC3339).
         in: query
         name: date_from
         required: false
         schema:
           type: string
-      - description: Filter by created_at <= (RFC3339)
+      - description: Filter by created_at <= (RFC3339).
         in: query
         name: date_to
         required: false
         schema:
           type: string
-      - description: Pagination cursor (opaque)
+      - description: Pagination cursor (opaque).
         in: query
         name: cursor
         required: false
         schema:
           type: string
-      - description: Page size (1-100, default 20)
-        in: query
+      - in: query
         name: limit
         required: false
         schema:
+          default: 20
+          description: Page size, clamped to 1..=100; 20 when absent.
+          examples:
+          - 20
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       responses:
         '200':
@@ -227,6 +231,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout — the request exceeded its budget
       summary: |-
         `GET /api/v1/tenant/payments` — every documented filter combinable,
         cursor-paginated, tenant-scoped by RLS and indexed for the filter set.
@@ -470,43 +480,47 @@ paths:
     get:
       operationId: list_tenant_disputes
       parameters:
-      - description: Filter by dispute status
+      - description: Filter by dispute status.
         in: query
         name: status
         required: false
         schema:
           type: string
-      - description: Filter by currency
+      - description: Filter by currency (ISO-4217).
         in: query
         name: currency
         required: false
         schema:
           type: string
-      - description: Filter by created_at >= (RFC3339)
+      - description: Filter by created_at >= (RFC3339).
         in: query
         name: date_from
         required: false
         schema:
           type: string
-      - description: Filter by created_at <= (RFC3339)
+      - description: Filter by created_at <= (RFC3339).
         in: query
         name: date_to
         required: false
         schema:
           type: string
-      - description: Pagination cursor
+      - description: Pagination cursor (opaque).
         in: query
         name: cursor
         required: false
         schema:
           type: string
-      - description: Page size
-        in: query
+      - in: query
         name: limit
         required: false
         schema:
+          default: 20
+          description: Page size, clamped to 1..=100; 20 when absent.
+          examples:
+          - 20
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
       responses:
         '200':
@@ -521,6 +535,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout — the request exceeded its budget
       summary: |-
         `GET /api/v1/tenant/payments/disputes` — disputes for this tenant,
         cursor-paginated.

@@ -59,6 +59,8 @@ pub trait CustomDomainRepository: Send + Sync {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<CustomDomain>, DomainsError>;
 
     async fn find_primary(
@@ -152,6 +154,7 @@ pub trait CustomDomainRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         query: &str,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<CustomDomain>, DomainsError>;
 
     /// Platform admin: read one domain across tenants.
@@ -197,6 +200,8 @@ pub trait DomainOrderRepository: Send + Sync {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<DomainOrder>, DomainsError>;
 
     async fn update(

@@ -79,6 +79,14 @@ pub trait CampaignRepository: Send + Sync {
     /// Newest-first. Callers needing a specific connection or platform filter
     /// client-side; the list is tenant-bounded and expected to stay small
     /// enough for one page until phase 10.7 adds pagination alongside metrics.
+    async fn list_by_tenant_page(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<StoredCampaign>, AdvertisingError>;
+
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -134,6 +142,7 @@ pub trait CampaignRepository: Send + Sync {
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         campaign_id: CampaignId,
-        limit: i64,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<CampaignChange>, AdvertisingError>;
 }

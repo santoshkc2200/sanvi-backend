@@ -174,6 +174,29 @@ impl ThemeRepository for SqlxThemeRepository {
         Ok(())
     }
 
+    async fn list_versions_page(
+        &self,
+        pool: &PgPool,
+        theme_id: ThemeId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<ThemeVersion>, ThemingError> {
+        let rows: Vec<ThemeVersionRow> = sqlx::query_as(
+            "SELECT id, theme_id, semver, theme_api_ranges, manifest, tokens, artifact_uri,
+                    artifact_digest, published_at, yanked_at
+             FROM theming.theme_versions
+             WHERE theme_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
+        )
+        .bind(theme_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
+        .fetch_all(pool)
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(version_from_row).collect()
+    }
+
     async fn list_versions(
         &self,
         pool: &PgPool,

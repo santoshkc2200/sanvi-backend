@@ -62,13 +62,21 @@ impl ListPendingApprovals {
     }
 
     #[tracing::instrument(name = "platform_admin.list_pending_approvals", skip_all)]
-    pub async fn execute(&self, limit: u32) -> Result<Vec<ApprovalView>, PlatformAdminError> {
+    pub async fn execute(
+        &self,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<ApprovalView>, PlatformAdminError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("list_approvals", "platform-admin")
             .await
             .map_err(storage)?;
-        let approvals = self.approvals.list_pending(&mut scope, limit).await?;
+        let approvals = self
+            .approvals
+            .list_pending(&mut scope, limit, after_id)
+            .await?;
         scope.commit().await.map_err(storage)?;
         Ok(approvals.iter().map(ApprovalView::from).collect())
     }

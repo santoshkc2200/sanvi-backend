@@ -157,7 +157,11 @@ async fn grants_are_created_listed_and_revoked_immediately() {
     assert!(grant.revoked_at.is_none());
 
     // Active grants list includes it.
-    let active = wired.list.execute(Some(tenant), 100).await.unwrap();
+    let active = wired
+        .list
+        .execute(Some(tenant), Some(100), None)
+        .await
+        .unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].id, grant.id);
 
@@ -167,7 +171,11 @@ async fn grants_are_created_listed_and_revoked_immediately() {
         .execute(UserId::try_from(104_i64).unwrap(), None, grant.id)
         .await
         .expect("revoke");
-    let active = wired.list.execute(Some(tenant), 100).await.unwrap();
+    let active = wired
+        .list
+        .execute(Some(tenant), Some(100), None)
+        .await
+        .unwrap();
     assert!(active.is_empty());
 
     // Idempotent: revoking again succeeds.
@@ -302,7 +310,7 @@ async fn impersonation_into_a_privacy_locked_tenant_is_refused() {
         .await
         .unwrap();
     let active = grants
-        .list_active(&mut scope, Some(tenant), chrono::Utc::now(), 100)
+        .list_active(&mut scope, Some(tenant), chrono::Utc::now(), 100, None)
         .await
         .unwrap();
     assert!(active.is_empty());

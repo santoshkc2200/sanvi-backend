@@ -346,6 +346,28 @@ impl CampaignRepository for SqlxCampaignRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    async fn list_by_tenant_page(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, CampaignRow>(
+            "SELECT id, tenant_id, connection_id, platform, external_id, revision, intent, remote_snapshot, publishing_mutation_id
+             FROM advertising.campaigns
+             WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -461,19 +483,22 @@ impl CampaignRepository for SqlxCampaignRepository {
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         campaign_id: CampaignId,
-        limit: i64,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<CampaignChange>, AdvertisingError> {
         sqlx::query_as::<_, CampaignChangeRow>(
             "SELECT id, tenant_id, campaign_id, revision, mutation_id, actor_id, attribution, source,
                     changed_fields, before_state, after_state, metadata, created_at
              FROM advertising.campaign_changes
              WHERE tenant_id=$1 AND campaign_id=$2
-             ORDER BY created_at DESC, id DESC
+               AND ($4::bigint IS NULL OR id < $4)
+             ORDER BY id DESC
              LIMIT $3",
         )
         .bind(tenant_id.as_i64())
         .bind(campaign_id.as_i64())
-        .bind(limit)
+        .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?
@@ -907,6 +932,31 @@ impl ConversionEventRepository for SqlxCampaignRepository {
         Ok(())
     }
 
+    async fn list_page(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, ConversionEventRow>(
+            "SELECT id, tenant_id, event_id, dedupe_key, name, occurred_at, value_minor, currency,
+                    value_source, order_ref, click_ids, hashed_ids, consent, upload_states, subject_key
+             FROM advertising.conversion_events
+             WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC
+             LIMIT $3",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        rows.into_iter().map(row_to_conversion_event).collect()
+    }
+
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -1175,6 +1225,31 @@ impl AudienceRepository for SqlxCampaignRepository {
         row.map(row_to_audience).transpose()
     }
 
+    async fn list_page(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<Audience>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, AudienceRow>(
+            "SELECT id, tenant_id, platform, name, status, failure_reason, external_ref,
+                    included_identifiers, last_synced_at, created_at, updated_at
+             FROM advertising.audiences
+             WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC
+             LIMIT $3",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
+
+        rows.into_iter().map(row_to_audience).collect()
+    }
+
     async fn list(
         &self,
         scope: &mut sanvi_persistence::PlatformScope<'_>,
@@ -1428,14 +1503,18 @@ impl CreativeRepository for SqlxCreativeRepository {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<StoredCreative>, AdvertisingError> {
         let rows = sqlx::query_as::<_, CreativeRow>(
             "SELECT id, tenant_id, external_id, specification, created_at, updated_at
              FROM advertising.creatives
-             WHERE tenant_id = $1
-             ORDER BY created_at DESC",
+             WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
         )
         .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;

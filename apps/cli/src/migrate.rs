@@ -19,6 +19,10 @@ pub async fn run(
     if let Some(password) = password {
         cli_config.database.password = password;
     }
+    // DDL against scale data (index builds, backfills) legitimately outlives
+    // any request-shaped statement budget; migrations run uncapped regardless
+    // of what the served processes use (TASK-021, FR-1110).
+    cli_config.database.statement_timeout_ms = 0;
 
     let pool = sanvi_persistence::build_pool(&cli_config.database)
         .await

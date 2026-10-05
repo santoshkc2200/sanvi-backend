@@ -99,7 +99,7 @@ pub fn api_error(err: PaymentsError) -> ApiError {
         }
         PaymentsError::Storage(detail) => {
             tracing::error!(error = %detail, "payments storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         PaymentsError::IdGeneration(detail) => {
             tracing::error!(error = %detail, "payments id generation failure");
@@ -1318,35 +1318,57 @@ pub struct DisputeListView {
 }
 
 /// Query for `GET /api/v1/tenant/payments`.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PaymentListQuery {
+    /// Filter by payment status.
     pub status: Option<String>,
+    /// Filter by payout status.
     pub payout_status: Option<String>,
+    /// Filter by currency (ISO-4217).
     pub currency: Option<String>,
+    /// Filter by customer reference substring.
     pub customer: Option<String>,
+    /// Filter by created_at >= (RFC3339).
     #[serde(default)]
-    #[schema(value_type = Option<String>)]
+    #[param(value_type = Option<String>)]
     pub date_from: Option<DateTime<Utc>>,
+    /// Filter by created_at <= (RFC3339).
     #[serde(default)]
-    #[schema(value_type = Option<String>)]
+    #[param(value_type = Option<String>)]
     pub date_to: Option<DateTime<Utc>>,
+    /// Pagination cursor (opaque).
     pub cursor: Option<String>,
+    /// Page size, clamped to 1..=100.
+    #[param(schema_with = payment_limit_schema)]
     pub limit: Option<u32>,
 }
 
 /// Query for `GET /api/v1/tenant/payments/disputes`.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct DisputeListQuery {
+    /// Filter by dispute status.
     pub status: Option<String>,
+    /// Filter by currency (ISO-4217).
     pub currency: Option<String>,
+    /// Filter by created_at >= (RFC3339).
     #[serde(default)]
-    #[schema(value_type = Option<String>)]
+    #[param(value_type = Option<String>)]
     pub date_from: Option<DateTime<Utc>>,
+    /// Filter by created_at <= (RFC3339).
     #[serde(default)]
-    #[schema(value_type = Option<String>)]
+    #[param(value_type = Option<String>)]
     pub date_to: Option<DateTime<Utc>>,
+    /// Pagination cursor (opaque).
     pub cursor: Option<String>,
+    /// Page size, clamped to 1..=100.
+    #[param(schema_with = payment_limit_schema)]
     pub limit: Option<u32>,
+}
+
+fn payment_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(100, 20).build()
 }
 
 /// Body for `POST /api/v1/tenant/payments/{id}/refund`.
@@ -1376,20 +1398,12 @@ pub struct RefundAmount {
     path = "/api/v1/tenant/payments",
     tag = "payments",
     operation_id = "list_tenant_payments",
-    params(
-        ("status" = Option<String>, Query, description = "Filter by payment status"),
-        ("payout_status" = Option<String>, Query, description = "Filter by payout status"),
-        ("currency" = Option<String>, Query, description = "Filter by currency (ISO-4217)"),
-        ("customer" = Option<String>, Query, description = "Filter by customer reference substring"),
-        ("date_from" = Option<String>, Query, description = "Filter by created_at >= (RFC3339)"),
-        ("date_to" = Option<String>, Query, description = "Filter by created_at <= (RFC3339)"),
-        ("cursor" = Option<String>, Query, description = "Pagination cursor (opaque)"),
-        ("limit" = Option<u32>, Query, description = "Page size (1-100, default 20)")
-    ),
+    params(PaymentListQuery),
     responses(
         (status = 200, description = "One page of payments", body = PaymentListView),
         (status = 403, description = "Missing payments.read permission or the entitlement", body = ProblemDetail),
-        (status = 400, description = "Malformed filter (unknown status, bad currency)", body = ProblemDetail)
+        (status = 400, description = "Malformed filter (unknown status, bad currency)", body = ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_payments(
@@ -1587,17 +1601,11 @@ pub async fn refund_payment(
     path = "/api/v1/tenant/payments/disputes",
     tag = "payments",
     operation_id = "list_tenant_disputes",
-    params(
-        ("status" = Option<String>, Query, description = "Filter by dispute status"),
-        ("currency" = Option<String>, Query, description = "Filter by currency"),
-        ("date_from" = Option<String>, Query, description = "Filter by created_at >= (RFC3339)"),
-        ("date_to" = Option<String>, Query, description = "Filter by created_at <= (RFC3339)"),
-        ("cursor" = Option<String>, Query, description = "Pagination cursor"),
-        ("limit" = Option<u32>, Query, description = "Page size")
-    ),
+    params(DisputeListQuery),
     responses(
         (status = 200, description = "One page of disputes", body = DisputeListView),
-        (status = 403, description = "Missing payments.read permission or the entitlement", body = ProblemDetail)
+        (status = 403, description = "Missing payments.read permission or the entitlement", body = ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_disputes(

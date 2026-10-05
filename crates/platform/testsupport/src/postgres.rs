@@ -59,6 +59,10 @@ fn config(port: u16, name: &str, user: &str, password: &str) -> DatabaseConfig {
         max_connections: POOL_MAX_CONNECTIONS,
         min_connections: 0,
         migrations_dir: migrations_dir(),
+        // The template bootstrap and the migrator suites run DDL through
+        // these pools; the request-shaped statement budget would cancel it.
+        // Tests exercising the timeout build their own config with it set.
+        statement_timeout_ms: 0,
         ..DatabaseConfig::default()
     }
 }

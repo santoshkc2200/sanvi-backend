@@ -39,10 +39,10 @@ impl ListTenants {
     pub async fn execute(
         &self,
         after: Option<TenantId>,
-        limit: u32,
+        limit: Option<u32>,
         status: Option<TenantStatus>,
     ) -> Result<TenantListView, TenancyError> {
-        let limit = limit.clamp(1, 100);
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 20, 100);
         let mut scope = self
             .tx_manager
             .begin_unscoped("tenant_list", ACTOR)

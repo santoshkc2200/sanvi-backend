@@ -33,6 +33,7 @@ pub trait ImpersonationGrantRepository: Send + Sync {
         tenant_id: Option<TenantId>,
         now: DateTime<Utc>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError>;
 
     /// Phase-05: grants a user created as the impersonating actor.
@@ -95,6 +96,7 @@ pub trait PendingApprovalRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<PendingApproval>, PlatformAdminError>;
 
     /// Phase-05: approvals requested by a user.

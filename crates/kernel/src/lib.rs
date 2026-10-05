@@ -22,4 +22,4 @@ pub use ids::{
 };
 pub use mode::CapabilityMode;
 pub use notifications::{Audience, IntentArg, NotificationIntent};
-pub use pagination::{Page, PageRequest};
+pub use pagination::{Page, PageRequest, clamp_page_size};

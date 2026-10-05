@@ -477,18 +477,22 @@ async fn list_tenants_paginates_by_cursor_and_filters_by_status() {
     }
 
     let list = ListTenants::new(tx_manager, tenants);
-    let page = list.execute(None, 2, None).await.unwrap();
+    let page = list.execute(None, Some(2), None).await.unwrap();
     assert_eq!(page.items.len(), 2);
     let cursor = page.next_cursor.expect("more pages expected");
     let page2 = list
-        .execute(Some(cursor.parse().unwrap()), 2, None)
+        .execute(Some(cursor.parse().unwrap()), Some(2), None)
         .await
         .unwrap();
     assert_eq!(page2.items.len(), 1);
     assert!(page2.next_cursor.is_none());
 
     let status_page = list
-        .execute(None, 10, Some(sanvi_tenancy::TenantStatus::Provisioning))
+        .execute(
+            None,
+            Some(10),
+            Some(sanvi_tenancy::TenantStatus::Provisioning),
+        )
         .await
         .unwrap();
     assert_eq!(status_page.items.len(), 3);

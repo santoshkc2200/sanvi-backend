@@ -35,7 +35,6 @@ use crate::{
 
 const DRIFT_IDEMPOTENCY_TTL: Duration = Duration::from_secs(10 * 60);
 const CAMPAIGN_IDEMPOTENCY_TTL: Duration = Duration::from_secs(10 * 60);
-const DEFAULT_CHANGES_LIMIT: i64 = 50;
 
 /// Stable envelope for the platform catalog. TASK-010 fills this only from
 /// registered capability matrices; no platform name is hard-coded here.
@@ -239,7 +238,7 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
         AdvertisingError::PlatformUnavailable(detail) => ApiError::ServiceUnavailable { detail },
         AdvertisingError::Storage(detail) => {
             tracing::error!(error = %detail, "advertising drift resolution storage failure");
-            ApiError::internal("advertising drift resolution failed")
+            ApiError::from_storage_detail(&detail)
         }
         AdvertisingError::StaleRevision => ApiError::Conflict {
             detail: "campaign revision is stale; refresh and resolve the latest drift".to_string(),
@@ -805,29 +804,57 @@ pub async fn create_campaign(
     Ok(HttpResponse::Created().json(view))
 }
 
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct AdsPageQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = ads_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last item of the previous page. Absent for the
+    /// first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn ads_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 200).build()
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/campaigns",
     tag = "advertising",
     operation_id = "list_campaigns",
+    params(AdsPageQuery),
     responses(
-        (status = 200, description = "Every campaign owned by the tenant, newest first", body = CampaignsView),
-        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+        (status = 200, description = "One page of the tenant's campaigns, newest first", body = CampaignsView),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_campaigns(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
+    query: web::Query<AdsPageQuery>,
     _permission: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = parse_cursor(&query.after)?;
     let campaigns = state
         .list_campaigns
-        .execute(tenant.0.tenant_id)
+        .execute(tenant.0.tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(CampaignsView {
         campaigns: campaigns.into_iter().map(CampaignView::from).collect(),
     }))
+}
+
+fn parse_cursor(after: &Option<String>) -> Result<Option<i64>, ApiError> {
+    after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))
 }
 
 #[utoipa::path(
@@ -1141,22 +1168,29 @@ pub async fn resume_campaign(
     path = "/api/v1/tenant/ads/campaigns/{campaign_id}/changes",
     tag = "advertising",
     operation_id = "list_campaign_changes",
-    params(("campaign_id" = String, Path, description = "Campaign UUID")),
+    params(
+        ("campaign_id" = String, Path, description = "Campaign UUID"),
+        AdsPageQuery
+    ),
     responses(
         (status = 200, description = "Newest-first attributed change log: actor, source (sanvi|platform), before/after state", body = CampaignChangesView),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
         (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
-        (status = 404, description = "Campaign not found", body = ProblemDetail)
+        (status = 404, description = "Campaign not found", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_campaign_changes(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
     path: web::Path<CampaignId>,
+    query: web::Query<AdsPageQuery>,
     _permission: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = parse_cursor(&query.after)?;
     let changes = state
         .list_campaign_changes
-        .execute(tenant.0.tenant_id, path.into_inner(), DEFAULT_CHANGES_LIMIT)
+        .execute(tenant.0.tenant_id, path.into_inner(), query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(CampaignChangesView { changes }))
@@ -2002,22 +2036,27 @@ pub async fn get_creative(
     path = "/api/v1/tenant/ads/creatives",
     tag = "advertising",
     operation_id = "list_creatives",
+    params(AdsPageQuery),
     responses(
-        (status = 200, description = "Every creative on an entitled platform", body = CreativesView),
-        (status = 403, description = "Missing advertising.read permission or advertising platform entitlement", body = ProblemDetail)
+        (status = 200, description = "One page of the tenant's creatives on entitled platforms", body = CreativesView),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission or advertising platform entitlement", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_creatives(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
+    query: web::Query<AdsPageQuery>,
     _permission: RequiredPermission,
     _entitlement: RequiredAnyFeature,
     feature_gate: web::Data<Arc<dyn sanvi_http::FeatureGate>>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let tenant_id = tenant.0.tenant_id;
+    let after_id = parse_cursor(&query.after)?;
     let creatives = state
         .list_creatives
-        .execute(tenant_id)
+        .execute(tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     let mut visible = Vec::new();
@@ -2731,7 +2770,16 @@ pub struct ListBudgetAlertsQuery {
     #[param(value_type = Option<String>)]
     pub campaign_id: Option<CampaignId>,
     pub unacknowledged_only: Option<bool>,
-    pub limit: Option<i64>,
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = budget_alert_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last alert of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn budget_alert_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 50).build()
 }
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
@@ -2745,20 +2793,25 @@ pub struct SpendStatusQuery {
     path = "/api/v1/tenant/ads/budget-caps",
     tag = "advertising",
     operation_id = "get_budget_caps",
+    params(AdsPageQuery),
     responses(
-        (status = 200, description = "All budget caps defined for this tenant", body = BudgetCapsView),
-        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+        (status = 200, description = "One page of the budget caps defined for this tenant", body = BudgetCapsView),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn get_budget_caps(
     state: web::Data<AdvertisingState>,
     tenant: CurrentTenant,
+    query: web::Query<AdsPageQuery>,
     _permission: RequiredPermission,
     _feature: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = parse_cursor(&query.after)?;
     let caps = state
         .get_budget_caps
-        .execute(tenant.0.tenant_id)
+        .execute(tenant.0.tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(BudgetCapsView { caps }))
@@ -2887,7 +2940,9 @@ pub async fn put_campaign_budget_cap(
     ),
     responses(
         (status = 200, description = "Budget alerts history", body = BudgetAlertsView),
-        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn get_budget_alerts(
@@ -2897,6 +2952,7 @@ pub async fn get_budget_alerts(
     _permission: RequiredPermission,
     _feature: RequiredAnyFeature,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = parse_cursor(&query.after)?;
     let alerts = state
         .list_budget_alerts
         .execute(
@@ -2904,6 +2960,7 @@ pub async fn get_budget_alerts(
             query.campaign_id,
             query.unacknowledged_only.unwrap_or(false),
             query.limit,
+            after_id,
         )
         .await
         .map_err(api_error)?;

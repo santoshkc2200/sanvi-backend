@@ -334,13 +334,22 @@ impl ListAudiences {
     }
 
     #[tracing::instrument(name = "advertising.list_audiences", skip_all, fields(tenant_id = %tenant_id))]
-    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<Audience>, AdvertisingError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<Audience>, AdvertisingError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx
             .begin_unscoped("advertising_list_audiences", ACTOR)
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let list = self.repo.list(&mut scope, tenant_id).await?;
+        let list = self
+            .repo
+            .list_page(&mut scope, tenant_id, limit, after_id)
+            .await?;
         scope
             .commit()
             .await

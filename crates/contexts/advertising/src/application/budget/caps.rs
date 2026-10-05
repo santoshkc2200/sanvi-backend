@@ -63,13 +63,22 @@ impl GetBudgetCaps {
     }
 
     #[tracing::instrument(name = "advertising.get_budget_caps", skip_all, fields(tenant_id = %tenant_id))]
-    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<BudgetCap>, AdvertisingError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<BudgetCap>, AdvertisingError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx
             .begin_for(tenant_id.as_i64())
             .await
             .map_err(|e| AdvertisingError::Storage(e.to_string()))?;
-        let result = self.caps.list_by_tenant(&mut scope, tenant_id).await?;
+        let result = self
+            .caps
+            .list_by_tenant_page(&mut scope, tenant_id, limit, after_id)
+            .await?;
         scope
             .commit()
             .await

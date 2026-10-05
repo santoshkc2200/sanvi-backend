@@ -405,24 +405,49 @@ pub async fn test_tracking_event(
     }))
 }
 
+#[derive(Debug, Clone, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ConversionListQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = conversion_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last conversion of the previous page. Absent
+    /// for the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn conversion_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 200).build()
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/conversions",
     tag = "advertising",
     operation_id = "list_conversions",
+    params(ConversionListQuery),
     responses(
         (status = 200, description = "Captured conversion events, newest first", body = [ConversionEvent]),
-        (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.metrics.read permission", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_conversions(
     tenant: CurrentTenant,
     _permission: RequiredPermission,
     state: web::Data<AdvertisingState>,
+    query: web::Query<ConversionListQuery>,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let events = state
         .list_conversions
-        .execute(tenant.0.tenant_id)
+        .execute(tenant.0.tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(events))
@@ -491,24 +516,45 @@ pub struct CreateAudienceRequest {
     pub platform: PlatformKey,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct AudienceListQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = conversion_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last audience of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/audiences",
     tag = "advertising",
     operation_id = "list_audiences",
+    params(AudienceListQuery),
     responses(
-        (status = 200, description = "Every audience owned by the tenant", body = Vec<Audience>),
-        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail)
+        (status = 200, description = "One page of the tenant's audiences", body = Vec<Audience>),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.read permission", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_audiences(
     tenant: CurrentTenant,
     _permission: RequiredPermission,
     state: web::Data<AdvertisingState>,
+    query: web::Query<AudienceListQuery>,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let audiences = state
         .list_audiences
-        .execute(tenant.0.tenant_id)
+        .execute(tenant.0.tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(audiences))

@@ -255,12 +255,15 @@ pub trait InvoiceRepository: Send + Sync {
         event_created: DateTime<Utc>,
     ) -> Result<bool, BillingError>;
 
-    /// The tenant's invoices, newest first (RLS sees only them).
+    /// The tenant's invoices, newest first (RLS sees only them), keyset-
+    /// paginated on the Snowflake id: `after_id` is the id of the last
+    /// invoice of the previous page, `None` for the first page.
     async fn list_for_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<InvoiceRef>, BillingError>;
 
     /// The same rows, read under the audited platform scope.
@@ -269,6 +272,7 @@ pub trait InvoiceRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         tenant_id: TenantId,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<InvoiceRef>, BillingError>;
 
     async fn find_by_stripe_invoice_id(

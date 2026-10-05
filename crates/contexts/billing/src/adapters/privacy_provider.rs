@@ -114,7 +114,7 @@ impl PersonalDataProvider for BillingPrivacyProvider {
         }
         for invoice in self
             .invoices
-            .list_for_tenant_platform(&mut scope, tenant_id, 100)
+            .list_for_tenant_platform(&mut scope, tenant_id, 100, None)
             .await
             .map_err(storage)?
         {

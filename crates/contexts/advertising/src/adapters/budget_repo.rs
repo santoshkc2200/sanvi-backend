@@ -187,6 +187,31 @@ impl BudgetCapRepository for SqlxBudgetCapRepository {
         Ok(exists)
     }
 
+    async fn list_by_tenant_page(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<BudgetCap>, AdvertisingError> {
+        let rows = sqlx::query_as::<_, BudgetCapRow>(
+            "SELECT id, tenant_id, campaign_id, period, amount_minor, currency,
+                    declared_fx_basis, fx_rate_date, auto_pause, auto_resume_on_rollover,
+                    version, created_at, updated_at
+             FROM advertising.budget_caps
+             WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -496,7 +521,8 @@ impl BudgetAlertRepository for SqlxBudgetAlertRepository {
         tenant_id: TenantId,
         campaign_id: Option<CampaignId>,
         unacknowledged_only: bool,
-        limit: i64,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<BudgetAlert>, AdvertisingError> {
         let rows = sqlx::query_as::<_, BudgetAlertRow>(
             "SELECT id, tenant_id, cap_id, campaign_id, period, period_start, threshold,
@@ -506,13 +532,15 @@ impl BudgetAlertRepository for SqlxBudgetAlertRepository {
              WHERE tenant_id = $1
                AND ($2::bigint IS NULL OR campaign_id = $2)
                AND (NOT $3 OR acknowledged_at IS NULL)
-             ORDER BY created_at DESC, id DESC
+               AND ($5::bigint IS NULL OR id < $5)
+             ORDER BY id DESC
              LIMIT $4",
         )
         .bind(tenant_id.as_i64())
         .bind(campaign_id.map(|id| id.as_i64()))
         .bind(unacknowledged_only)
-        .bind(limit)
+        .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;

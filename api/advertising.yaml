@@ -42,6 +42,27 @@ paths:
   /api/v1/tenant/ads/audiences:
     get:
       operationId: list_audiences
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last audience of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -50,13 +71,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/Audience'
                 type: array
-          description: Every audience owned by the tenant
+          description: One page of the tenant's audiences
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - advertising
     post:
@@ -145,8 +178,22 @@ paths:
         name: limit
         required: false
         schema:
-          format: int64
+          default: 50
+          description: Page size, clamped to 1..=200; 50 when absent.
+          examples:
+          - 50
+          format: int32
+          maximum: 200
+          minimum: 1
           type: integer
+      - description: |-
+          Cursor: the id of the last alert of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -154,12 +201,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/BudgetAlertsView'
           description: Budget alerts history
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - advertising
   /api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge:
@@ -196,19 +255,52 @@ paths:
   /api/v1/tenant/ads/budget-caps:
     get:
       operationId: get_budget_caps
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BudgetCapsView'
-          description: All budget caps defined for this tenant
+          description: One page of the budget caps defined for this tenant
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - advertising
     put:
@@ -252,19 +344,52 @@ paths:
   /api/v1/tenant/ads/campaigns:
     get:
       operationId: list_campaigns
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CampaignsView'
-          description: Every campaign owned by the tenant, newest first
+          description: One page of the tenant's campaigns, newest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - advertising
     post:
@@ -852,6 +977,26 @@ paths:
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -859,6 +1004,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/CampaignChangesView'
           description: 'Newest-first attributed change log: actor, source (sanvi|platform), before/after state'
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
@@ -871,6 +1022,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - advertising
   /api/v1/tenant/ads/campaigns/{campaign_id}/drift:
@@ -1394,6 +1551,27 @@ paths:
   /api/v1/tenant/ads/conversions:
     get:
       operationId: list_conversions
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last conversion of the previous page. Absent
+          for the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -1403,12 +1581,24 @@ paths:
                   $ref: '#/components/schemas/ConversionEvent'
                 type: array
           description: Captured conversion events, newest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - advertising
   /api/v1/tenant/ads/conversions/{id}/diagnostics:
@@ -1490,19 +1680,52 @@ paths:
   /api/v1/tenant/ads/creatives:
     get:
       operationId: list_creatives
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreativesView'
-          description: Every creative on an entitled platform
+          description: One page of the tenant's creatives on entitled platforms
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission or advertising platform entitlement
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - advertising
     post:

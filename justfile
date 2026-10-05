@@ -310,6 +310,16 @@ rls-matrix:
     eval "$(./scripts/test-db.sh up)"
     cargo nextest run -p sanvi-api --test integration rls_matrix
 
+# TASK-021 (FR-1108/FR-1110): the perf test target — the bounded-collections
+# contract gate today; EXPLAIN assertions (11.2d) and statement-count guards
+# (11.2e) join it as their slices land. Same scoping convention as
+# test-idor: the workspace suite runs it too.
+test-perf:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p sanvi-api --test perf
+
 openapi:
     ./scripts/check-openapi.sh
 
@@ -322,7 +332,7 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test
+ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test
 
 # TASK-019 (FR-1103): run the k6 load shapes against a running API and
 # write benchmarks/<scenario>/<tag>.json. Point PERF_BASE_URL at the API
@@ -399,4 +409,4 @@ ga-checklist-check:
     ./scripts/check-ga-checklist.sh
 
 # `ci` with the low-noise variants of the two chattiest gates.
-ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test

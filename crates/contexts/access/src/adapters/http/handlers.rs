@@ -82,7 +82,7 @@ pub fn api_error(err: AccessError) -> ApiError {
         }
         AccessError::Storage(detail) => {
             tracing::error!(error = %detail, "access storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         AccessError::IdGeneration(detail) => {
             tracing::error!(error = %detail, "access ID generation failure");

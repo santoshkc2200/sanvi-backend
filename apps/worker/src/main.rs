@@ -188,7 +188,7 @@ impl RecipientDirectory for WorkerRecipientDirectory {
 
                 let members = self
                     .memberships
-                    .list_with_emails(&mut scope, *tenant_id)
+                    .list_with_emails(&mut scope, *tenant_id, 200, None)
                     .await
                     .map_err(|err| NotificationError::Unavailable {
                         detail: err.to_string(),

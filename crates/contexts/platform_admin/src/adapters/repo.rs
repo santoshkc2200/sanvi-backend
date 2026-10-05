@@ -125,6 +125,7 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
         tenant_id: Option<TenantId>,
         now: DateTime<Utc>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<ImpersonationGrant>, PlatformAdminError> {
         let rows: Vec<GrantRow> = sqlx::query_as(
             "SELECT id, actor_id, tenant_id, target_user_id, reason, mode,
@@ -132,11 +133,13 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
              FROM platform_admin.impersonation_grants
              WHERE revoked_at IS NULL AND expires_at > $1
                AND ($2::bigint IS NULL OR tenant_id = $2)
-             ORDER BY created_at DESC LIMIT $3",
+               AND ($4::bigint IS NULL OR id < $4)
+             ORDER BY id DESC LIMIT $3",
         )
         .bind(now)
         .bind(tenant_id.map(TenantId::as_i64))
         .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -364,16 +367,19 @@ impl PendingApprovalRepository for SqlxPendingApprovalRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<PendingApproval>, PlatformAdminError> {
         let rows: Vec<ApprovalRow> = sqlx::query_as(
             "SELECT id, requested_by, action_type, payload, status, requested_at,
                     decided_by, decided_at
              FROM platform_admin.pending_approvals
              WHERE status = 'pending'
-             ORDER BY requested_at
+               AND ($2::bigint IS NULL OR id > $2)
+             ORDER BY id
              LIMIT $1",
         )
         .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -442,7 +448,9 @@ impl TenantAdminViewRepository for SqlxTenantAdminViewRepository {
                         created_at: cursor.created_at,
                         id: cursor.tenant_id,
                     }),
-                    limit: search.limit,
+                    limit: search
+                        .limit
+                        .unwrap_or(crate::application::tenant_views::DEFAULT_PAGE_LIMIT),
                 },
             )
             .await

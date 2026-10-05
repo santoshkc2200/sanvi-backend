@@ -27,8 +27,11 @@ impl ListCustomDomains {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<CustomDomainView>, DomainsError> {
-        let domains = self.domains.list(scope, tenant_id).await?;
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
+        let domains = self.domains.list(scope, tenant_id, limit, after_id).await?;
         let mut views = Vec::with_capacity(domains.len());
         for domain in &domains {
             let mut view = CustomDomainView::of(domain);
@@ -59,8 +62,11 @@ impl ListDomainOrders {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<OrderView>, DomainsError> {
-        let orders = self.orders.list(scope, tenant_id).await?;
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
+        let orders = self.orders.list(scope, tenant_id, limit, after_id).await?;
         Ok(orders.iter().map(OrderView::of).collect())
     }
 }

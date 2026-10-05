@@ -334,14 +334,26 @@ paths:
     get:
       operationId: list_invoices
       parameters:
-      - description: Page size (default 50)
-        in: query
+      - in: query
         name: limit
         required: false
         schema:
+          default: 50
+          description: Page size, clamped to 1..=100; 50 when absent.
+          examples:
+          - 50
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
+      - description: |-
+          Cursor: the id of the last invoice of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -350,13 +362,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/InvoiceView'
                 type: array
-          description: Invoices, newest first
+          description: Invoices, newest first (ordered by id, which encodes creation time)
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout — the request exceeded its budget
       summary: '`GET /api/v1/tenant/billing/invoices` — the tenant''s invoices.'
       tags:
       - billing

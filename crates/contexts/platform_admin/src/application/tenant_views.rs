@@ -31,7 +31,11 @@ impl SearchTenantAdminViews {
         search: &TenantViewSearch,
     ) -> Result<(Vec<TenantAdminView>, Option<TenantViewCursor>), PlatformAdminError> {
         let search = TenantViewSearch {
-            limit: search.limit.clamp(1, MAX_PAGE_LIMIT),
+            limit: Some(sanvi_kernel::pagination::clamp_page_size(
+                search.limit,
+                DEFAULT_PAGE_LIMIT,
+                MAX_PAGE_LIMIT,
+            )),
             ..search.clone()
         };
         let mut scope = self

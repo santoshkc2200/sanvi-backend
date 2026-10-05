@@ -25,9 +25,10 @@ impl ListBudgetAlerts {
         tenant_id: TenantId,
         campaign_id: Option<CampaignId>,
         unacknowledged_only: bool,
-        limit: Option<i64>,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<BudgetAlert>, AdvertisingError> {
-        let max_limit = limit.unwrap_or(50).clamp(1, 200);
+        let max_limit = sanvi_kernel::pagination::clamp_page_size(limit, 50, 200);
         let mut scope = self
             .tx
             .begin_for(tenant_id.as_i64())
@@ -42,6 +43,7 @@ impl ListBudgetAlerts {
                 campaign_id,
                 unacknowledged_only,
                 max_limit,
+                after_id,
             )
             .await?;
 

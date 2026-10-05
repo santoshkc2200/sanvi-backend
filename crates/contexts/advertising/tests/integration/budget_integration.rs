@@ -435,7 +435,11 @@ async fn test_budget_cap_crud_and_optimistic_locking() {
     assert_eq!(camp_cap.amount.amount_minor, 50_000);
 
     // 4. List Caps
-    let all_caps = harness.get_caps.execute(tenant_id).await.unwrap();
+    let all_caps = harness
+        .get_caps
+        .execute(tenant_id, None, None)
+        .await
+        .unwrap();
     assert_eq!(all_caps.len(), 2);
 
     // 5. Get Campaign Cap
@@ -576,7 +580,11 @@ async fn test_dry_run_simulation() {
     assert!(!sim.would_auto_pause);
 
     // Verify cap was NOT persisted
-    let caps = harness.get_caps.execute(tenant_id).await.unwrap();
+    let caps = harness
+        .get_caps
+        .execute(tenant_id, None, None)
+        .await
+        .unwrap();
     assert!(caps.is_empty());
 }
 
@@ -632,7 +640,7 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
 
     let alerts = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), false, None)
+        .execute(tenant_id, Some(camp_id), false, None, None)
         .await
         .unwrap();
     assert_eq!(alerts.len(), 1);
@@ -643,7 +651,7 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
     harness.evaluator.evaluate_tenant(tenant_id).await.unwrap();
     let alerts_after = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), false, None)
+        .execute(tenant_id, Some(camp_id), false, None, None)
         .await
         .unwrap();
     assert_eq!(alerts_after.len(), 1);
@@ -677,7 +685,7 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
 
     let alerts_100 = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), false, None)
+        .execute(tenant_id, Some(camp_id), false, None, None)
         .await
         .unwrap();
     let alert_100 = alerts_100
@@ -699,7 +707,7 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
 
     let changes = harness
         .campaigns_repo
-        .list_changes(&mut scope, tenant_id, camp_id, 10)
+        .list_changes(&mut scope, tenant_id, camp_id, 10, None)
         .await
         .unwrap();
     let pause_change = changes
@@ -780,7 +788,7 @@ async fn test_repeat_sweep_does_not_repause_an_already_paused_campaign() {
     let first_revision = first.revision;
     let first_changes = harness
         .campaigns_repo
-        .list_changes(&mut scope, tenant_id, camp_id, 10)
+        .list_changes(&mut scope, tenant_id, camp_id, 10, None)
         .await
         .unwrap();
     scope.commit().await.unwrap();
@@ -801,7 +809,7 @@ async fn test_repeat_sweep_does_not_repause_an_already_paused_campaign() {
     assert_eq!(second.revision, first_revision);
     let second_changes = harness
         .campaigns_repo
-        .list_changes(&mut scope, tenant_id, camp_id, 10)
+        .list_changes(&mut scope, tenant_id, camp_id, 10, None)
         .await
         .unwrap();
     scope.commit().await.unwrap();
@@ -810,7 +818,7 @@ async fn test_repeat_sweep_does_not_repause_an_already_paused_campaign() {
     // And the breach alert stays deduplicated to one record.
     let alerts = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), false, None)
+        .execute(tenant_id, Some(camp_id), false, None, None)
         .await
         .unwrap();
     assert_eq!(alerts.iter().filter(|a| a.threshold == 100).count(), 1);
@@ -883,7 +891,7 @@ async fn test_stale_data_guard_no_pause_on_stale_connections() {
 
     let alerts = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), false, None)
+        .execute(tenant_id, Some(camp_id), false, None, None)
         .await
         .unwrap();
     let alert = alerts
@@ -977,7 +985,7 @@ async fn test_stale_alert_does_not_suppress_later_settled_pause() {
     // Precondition: the stale guard fired and did not pause.
     let alerts = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), false, None)
+        .execute(tenant_id, Some(camp_id), false, None, None)
         .await
         .unwrap();
     let stale_alert = alerts
@@ -1090,7 +1098,7 @@ async fn test_daily_cap_pauses_at_one_hundred_percent() {
 
     let alerts = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), false, None)
+        .execute(tenant_id, Some(camp_id), false, None, None)
         .await
         .unwrap();
     let alert = alerts
@@ -1342,7 +1350,7 @@ async fn test_alert_acknowledgment() {
     // List unacknowledged -> contains alert
     let unacked = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), true, None)
+        .execute(tenant_id, Some(camp_id), true, None, None)
         .await
         .unwrap();
     assert_eq!(unacked.len(), 1);
@@ -1359,7 +1367,7 @@ async fn test_alert_acknowledgment() {
     // List unacknowledged -> empty now
     let unacked_after = harness
         .list_alerts
-        .execute(tenant_id, Some(camp_id), true, None)
+        .execute(tenant_id, Some(camp_id), true, None, None)
         .await
         .unwrap();
     assert!(unacked_after.is_empty());
@@ -1493,7 +1501,7 @@ async fn test_spend_anomaly_detector_persists_budget_alert_row_and_events() {
     // Verify alert row is persisted
     let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let alert_rows = alerts
-        .list_alerts(&mut scope, tenant_id, Some(campaign_id), false, 10)
+        .list_alerts(&mut scope, tenant_id, Some(campaign_id), false, 10, None)
         .await
         .unwrap();
     scope.commit().await.unwrap();
@@ -1533,7 +1541,7 @@ async fn test_spend_anomaly_detector_persists_budget_alert_row_and_events() {
 
     let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let alert_rows_after = alerts
-        .list_alerts(&mut scope, tenant_id, Some(campaign_id), false, 10)
+        .list_alerts(&mut scope, tenant_id, Some(campaign_id), false, 10, None)
         .await
         .unwrap();
     scope.commit().await.unwrap();

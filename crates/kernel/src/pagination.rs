@@ -5,6 +5,18 @@ pub const DEFAULT_PER_PAGE: u32 = 20;
 /// Hard ceiling on page size; larger requests are clamped, not rejected.
 pub const MAX_PER_PAGE: u32 = 100;
 
+/// Clamp a caller-supplied page size (TASK-021, FR-1108).
+///
+/// `None` means the caller sent no `limit` and gets the endpoint's documented
+/// default; whatever arrives is clamped into `1..=max` so the database never
+/// sees an unbounded page. The endpoint's OpenAPI `limit` schema
+/// (`sanvi_http::openapi::page_limit_schema`) declares the same `maximum` and
+/// `default` — keep the two in the same constants when an endpoint changes
+/// either, or the contract stops describing the clamping the code does.
+pub fn clamp_page_size(requested: Option<u32>, default: u32, max: u32) -> u32 {
+    requested.unwrap_or(default).clamp(1, max)
+}
+
 /// Normalised pagination request (1-based page numbers).
 ///
 /// Values are clamped at construction so an API can never force the
@@ -90,6 +102,15 @@ mod tests {
             PageRequest::new(0, 10_000),
             PageRequest::new(1, MAX_PER_PAGE)
         );
+    }
+
+    #[test]
+    fn clamp_page_size_defaults_and_clamps() {
+        assert_eq!(clamp_page_size(None, 50, 100), 50);
+        assert_eq!(clamp_page_size(Some(0), 50, 100), 1);
+        assert_eq!(clamp_page_size(Some(1), 50, 100), 1);
+        assert_eq!(clamp_page_size(Some(75), 50, 100), 75);
+        assert_eq!(clamp_page_size(Some(10_000), 50, 100), 100);
     }
 
     #[test]

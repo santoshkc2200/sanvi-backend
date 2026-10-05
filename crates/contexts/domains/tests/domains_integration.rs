@@ -637,7 +637,11 @@ async fn purchase_saga_ends_live_without_human_steps() {
     assert_eq!(report.issued, 1);
 
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
-    let domains = harness.domains.list(&mut scope, tenant_id).await.unwrap();
+    let domains = harness
+        .domains
+        .list(&mut scope, tenant_id, 200, None)
+        .await
+        .unwrap();
     assert!(domains.iter().any(|domain| {
         domain.hostname.as_str() == "acme-purchase.com"
             && domain.status == DomainStatus::Live
@@ -939,7 +943,7 @@ async fn tenant_isolation_hides_other_tenants_domains() {
     assert_eq!(
         harness
             .domains
-            .list(&mut scope_a, tenant_a)
+            .list(&mut scope_a, tenant_a, 200, None)
             .await
             .unwrap()
             .len(),
@@ -951,7 +955,7 @@ async fn tenant_isolation_hides_other_tenants_domains() {
     assert!(
         harness
             .domains
-            .list(&mut scope_b, tenant_b)
+            .list(&mut scope_b, tenant_b, 200, None)
             .await
             .unwrap()
             .is_empty()
@@ -959,7 +963,12 @@ async fn tenant_isolation_hides_other_tenants_domains() {
     // B cannot read A's domain row either (RLS + scoped find).
     let a_id = {
         let mut scope_a = harness.tx.begin_for(tenant_a.as_i64()).await.unwrap();
-        let id = harness.domains.list(&mut scope_a, tenant_a).await.unwrap()[0].id;
+        let id = harness
+            .domains
+            .list(&mut scope_a, tenant_a, 200, None)
+            .await
+            .unwrap()[0]
+            .id;
         scope_a.commit().await.unwrap();
         id
     };
@@ -1037,7 +1046,7 @@ async fn removal_revokes_the_certificate_and_closes_the_zone() {
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
     let domain_id = harness
         .domains
-        .list(&mut scope, tenant_id)
+        .list(&mut scope, tenant_id, 200, None)
         .await
         .unwrap()
         .into_iter()
@@ -1423,7 +1432,11 @@ async fn purchasing_a_hostname_the_tenant_already_claimed_supersedes_the_connect
     );
 
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
-    let domains = harness.domains.list(&mut scope, tenant_id).await.unwrap();
+    let domains = harness
+        .domains
+        .list(&mut scope, tenant_id, 200, None)
+        .await
+        .unwrap();
     scope.commit().await.unwrap();
     let purchased = domains
         .iter()

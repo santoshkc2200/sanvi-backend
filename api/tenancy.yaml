@@ -11,21 +11,25 @@ paths:
     get:
       operationId: list_tenants
       parameters:
-      - description: Page size (default 20, max 100)
-        in: query
+      - in: query
         name: limit
         required: false
         schema:
+          default: 20
+          description: Page size, clamped to 1..=100; 20 when absent.
+          examples:
+          - 20
           format: int32
-          minimum: 0
+          maximum: 100
+          minimum: 1
           type: integer
-      - description: 'Cursor: tenant id of the last item of the previous page'
+      - description: 'Cursor: tenant id of the last item of the previous page.'
         in: query
         name: after
         required: false
         schema:
           type: string
-      - description: Filter by tenant status
+      - description: Filter by tenant status.
         in: query
         name: status
         required: false
@@ -50,6 +54,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Internal error
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout — the request exceeded its budget
       summary: '`GET /api/v1/platform/tenants` — list tenants (cursor pagination).'
       tags:
       - tenancy

@@ -798,7 +798,14 @@ impl SpendAnomalyDetector {
 
                         let existing_alerts = self
                             .alerts
-                            .list_alerts(&mut alert_scope, tenant_id, Some(camp.id), false, 50)
+                            .list_alerts(
+                                &mut alert_scope,
+                                tenant_id,
+                                Some(camp.id),
+                                false,
+                                50,
+                                None,
+                            )
                             .await?;
 
                         let already_fired = existing_alerts.iter().any(|a| {

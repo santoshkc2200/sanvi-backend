@@ -186,6 +186,23 @@ impl ApiError {
             detail: detail.into(),
         }
     }
+
+    /// Map a storage-layer failure rendered by an adapter into the contract's
+    /// two shapes (TASK-021, FR-1110). Statement timeouts — Postgres cancels
+    /// the query with `canceling statement due to statement timeout` once
+    /// `database.statement_timeout_ms` elapses — surface as the same
+    /// `request-timeout` problem the request-budget middleware emits, so a
+    /// request that cannot finish inside its budget gets a problem-details
+    /// response instead of a held connection and an eventual 500. Everything
+    /// else stays the opaque internal class: infrastructure detail is for the
+    /// logs, not the client.
+    pub fn from_storage_detail(detail: &str) -> Self {
+        if detail.contains("canceling statement due to statement timeout") {
+            Self::RequestTimeout
+        } else {
+            Self::internal("storage failure")
+        }
+    }
 }
 
 impl ResponseError for ApiError {
@@ -461,6 +478,31 @@ mod tests {
         .error_response();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(response.headers().get("retry-after").unwrap(), "2");
+    }
+
+    #[test]
+    fn statement_timeouts_map_to_the_request_timeout_problem() {
+        // The exact message Postgres raises when statement_timeout cancels a
+        // query; pinned so a wording change upstream shows up here first.
+        let cancelled =
+            "error returned from database: canceling statement due to statement timeout";
+        let error = ApiError::from_storage_detail(cancelled);
+        assert_eq!(error.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(error.type_slug(), "request-timeout");
+
+        // Lock timeouts share SQLSTATE 57014 but a different budget; they are
+        // not this contract's class.
+        let lock = "error returned from database: canceling statement due to lock timeout";
+        assert_eq!(
+            ApiError::from_storage_detail(lock).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        let other = "error returned from database: relation does not exist";
+        assert_eq!(
+            ApiError::from_storage_detail(other).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[tokio::test]

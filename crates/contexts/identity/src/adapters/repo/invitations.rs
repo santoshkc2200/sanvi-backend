@@ -139,15 +139,21 @@ impl InvitationRepository for SqlxInvitationRepository {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<Invitation>, IdentityError> {
-        let rows = sqlx::query_as!(
-            InvitationRow,
+        let rows: Vec<InvitationRow> = sqlx::query_as(
             "SELECT id, tenant_id, email, role_ids, token_hash, invited_by, created_at,
                     expires_at, accepted_at
              FROM identity.invitations
-             WHERE tenant_id = $1 ORDER BY created_at",
-            tenant_id.as_i64(),
+             WHERE tenant_id = $1
+               AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC
+             LIMIT $3",
         )
+        .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| IdentityError::Storage(err.to_string()))?;

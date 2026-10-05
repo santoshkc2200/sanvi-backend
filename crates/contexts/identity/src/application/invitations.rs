@@ -451,13 +451,22 @@ impl ListInvitations {
     }
 
     #[tracing::instrument(name = "identity.list_invitations", skip_all, fields(tenant_id = %tenant_id))]
-    pub async fn execute(&self, tenant_id: TenantId) -> Result<Vec<InvitationView>, IdentityError> {
+    pub async fn execute(
+        &self,
+        tenant_id: TenantId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<InvitationView>, IdentityError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_for(tenant_id.as_i64())
             .await
             .map_err(storage)?;
-        let invitations = self.invitations.list(&mut scope, tenant_id).await?;
+        let invitations = self
+            .invitations
+            .list(&mut scope, tenant_id, limit, after_id)
+            .await?;
         scope.commit().await.map_err(storage)?;
         Ok(invitations
             .into_iter()

@@ -200,16 +200,15 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<CustomDomain>, DomainsError> {
-        let rows = sqlx::query_as!(
-            CustomDomainRow,
-            "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, \
-             challenge_token, challenge_type, challenge_created_at, challenge_expires_at, \
-             detected_registrar, verified_at, last_checked_at, next_check_at, \
-             verification_attempts, failure_code, failure_detail, created_at, updated_at \
-             FROM domains.custom_domains WHERE tenant_id = $1 ORDER BY created_at ASC",
-            tenant_id.as_i64()
+        let rows: Vec<CustomDomainRow> = sqlx::query_as(
+            "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status,              challenge_token, challenge_type, challenge_created_at, challenge_expires_at,              detected_registrar, verified_at, last_checked_at, next_check_at,              verification_attempts, failure_code, failure_detail, created_at, updated_at              FROM domains.custom_domains              WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)              ORDER BY id DESC LIMIT $3",
         )
+        .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -518,21 +517,16 @@ impl crate::domain::CustomDomainRepository for SqlxCustomDomainRepository {
         scope: &mut PlatformScope<'_>,
         query: &str,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<CustomDomain>, DomainsError> {
         let pattern = format!("%{query}%");
-        let rows = sqlx::query_as!(
-            CustomDomainRow,
-            "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status, \
-             challenge_token, challenge_type, challenge_created_at, challenge_expires_at, \
-             detected_registrar, verified_at, last_checked_at, next_check_at, \
-             verification_attempts, failure_code, failure_detail, created_at, updated_at \
-             FROM domains.custom_domains \
-             WHERE normalized_hostname LIKE $1 OR hostname ILIKE $2 \
-             ORDER BY created_at DESC LIMIT $3",
-            pattern,
-            pattern,
-            limit as i64
+        let rows: Vec<CustomDomainRow> = sqlx::query_as(
+            "SELECT id, tenant_id, hostname, normalized_hostname, kind, role, status,              challenge_token, challenge_type, challenge_created_at, challenge_expires_at,              detected_registrar, verified_at, last_checked_at, next_check_at,              verification_attempts, failure_code, failure_detail, created_at, updated_at              FROM domains.custom_domains              WHERE (normalized_hostname LIKE $1 OR hostname ILIKE $2)                AND ($4::bigint IS NULL OR id < $4)              ORDER BY id DESC LIMIT $3",
         )
+        .bind(pattern.clone())
+        .bind(pattern)
+        .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
@@ -737,16 +731,15 @@ impl crate::domain::DomainOrderRepository for SqlxDomainOrderRepository {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<DomainOrder>, DomainsError> {
-        let rows = sqlx::query_as!(
-            OrderRow,
-            "SELECT id, tenant_id, hostname, normalized_hostname, term_years, price_minor, \
-             currency, status, auto_renew, whois_privacy, registrant_contact, ordered_by, \
-             idempotency_key, external_order_ref, charge_id, registered_at, expires_at, \
-             renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at \
-             FROM domains.orders WHERE tenant_id = $1 ORDER BY created_at DESC",
-            tenant_id.as_i64()
+        let rows: Vec<OrderRow> = sqlx::query_as(
+            "SELECT id, tenant_id, hostname, normalized_hostname, term_years, price_minor,              currency, status, auto_renew, whois_privacy, registrant_contact, ordered_by,              idempotency_key, external_order_ref, charge_id, registered_at, expires_at,              renewal_attempts, next_renewal_at, failure_detail, created_at, updated_at              FROM domains.orders              WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)              ORDER BY id DESC LIMIT $3",
         )
+        .bind(tenant_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;

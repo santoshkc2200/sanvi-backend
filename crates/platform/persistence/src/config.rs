@@ -30,8 +30,26 @@ pub struct DatabaseConfig {
     pub acquire_timeout_secs: u64,
     pub idle_timeout_secs: u64,
     pub max_lifetime_secs: u64,
+    /// Server-side cap on any one statement, applied as a per-connection
+    /// startup parameter (TASK-021, FR-1110). A query that exceeds it is
+    /// cancelled by Postgres and surfaces through
+    /// [`crate::is_statement_timeout`] as the `request-timeout` problem, so a
+    /// request outside its budget fails loudly instead of holding a pool
+    /// connection. `0` disables the cap — the migration paths use that, since
+    /// DDL against scale data legitimately outlives any request-shaped
+    /// budget.
+    #[serde(default = "default_statement_timeout_ms")]
+    pub statement_timeout_ms: u64,
     pub ssl_mode: SslMode,
     pub migrations_dir: String,
+}
+
+/// 10 s by default: above every lab latency budget yet below the 30 s
+/// request-budget middleware, so the database cancels first and the client
+/// sees the statement-timeout problem rather than the middleware's generic
+/// one. Long-running jobs override it per deployment.
+fn default_statement_timeout_ms() -> u64 {
+    10_000
 }
 
 impl Default for DatabaseConfig {
@@ -47,6 +65,7 @@ impl Default for DatabaseConfig {
             acquire_timeout_secs: 10,
             idle_timeout_secs: 300,
             max_lifetime_secs: 1800,
+            statement_timeout_ms: default_statement_timeout_ms(),
             ssl_mode: SslMode::Disable,
             migrations_dir: "./migrations".to_string(),
         }
@@ -66,6 +85,7 @@ impl fmt::Debug for DatabaseConfig {
             .field("acquire_timeout_secs", &self.acquire_timeout_secs)
             .field("idle_timeout_secs", &self.idle_timeout_secs)
             .field("max_lifetime_secs", &self.max_lifetime_secs)
+            .field("statement_timeout_ms", &self.statement_timeout_ms)
             .field("ssl_mode", &self.ssl_mode)
             .field("migrations_dir", &self.migrations_dir)
             .finish()
@@ -167,6 +187,32 @@ mod tests {
         assert!(err.contains("database.port"));
         assert!(err.contains("database.max_connections"));
         assert!(err.contains("database.acquire_timeout_secs"));
+    }
+
+    #[test]
+    fn statement_timeout_defaults_when_the_config_omits_it() {
+        // Overlays (staging, production) carry only the keys they change; the
+        // field must not become required, or every one of them breaks.
+        let json = r#"{
+            "host": "db",
+            "port": 5432,
+            "name": "sanvi",
+            "user": "sanvi_app",
+            "max_connections": 10,
+            "min_connections": 1,
+            "acquire_timeout_secs": 10,
+            "idle_timeout_secs": 300,
+            "max_lifetime_secs": 1800,
+            "ssl_mode": "disable",
+            "migrations_dir": "./migrations"
+        }"#;
+        let config: DatabaseConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.statement_timeout_ms, 10_000);
+
+        let mut disabled: serde_json::Value = serde_json::from_str(json).unwrap();
+        disabled["statement_timeout_ms"] = serde_json::json!(0);
+        let disabled: DatabaseConfig = serde_json::from_value(disabled).unwrap();
+        assert_eq!(disabled.statement_timeout_ms, 0);
     }
 
     #[test]

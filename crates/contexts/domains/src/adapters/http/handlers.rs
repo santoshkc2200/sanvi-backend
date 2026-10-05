@@ -77,7 +77,7 @@ pub fn api_error(err: DomainsError) -> ApiError {
         },
         DomainsError::Storage(detail) => {
             tracing::error!(error = %detail, "domains storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         DomainsError::Cache(detail) => {
             tracing::error!(error = %detail, "domains cache failure");
@@ -116,7 +116,7 @@ async fn begin_tenant_scope<'a>(
 async fn commit_scope(scope: ScopedTx<'_>) -> Result<(), ApiError> {
     scope.commit().await.map_err(|err| {
         tracing::error!(error = %err, "failed to commit domains transaction");
-        ApiError::internal("storage failure")
+        ApiError::from_storage_detail(&err.to_string())
     })
 }
 
@@ -166,28 +166,53 @@ pub async fn claim_custom_domain(
     }
 }
 
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DomainListQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = domain_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last domain of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn domain_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 200).build()
+}
+
 /// `GET /api/v1/tenant/domains`.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/domains",
     tag = "domains",
     operation_id = "list_custom_domains",
+    params(DomainListQuery),
     responses(
-        (status = 200, description = "The tenant's domains", body = Vec<crate::application::CustomDomainView>)
+        (status = 200, description = "The tenant's domains", body = Vec<crate::application::CustomDomainView>),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_custom_domains(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
+    query: web::Query<DomainListQuery>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
         .list_domains
-        .execute(&mut scope, tenant_id)
+        .execute(&mut scope, tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     commit_scope(scope).await?;
@@ -414,22 +439,32 @@ pub async fn place_domain_order(
     path = "/api/v1/tenant/domains/orders",
     tag = "domains",
     operation_id = "list_domain_orders",
+    params(DomainListQuery),
     responses(
-        (status = 200, description = "The tenant's domain orders", body = Vec<OrderView>)
+        (status = 200, description = "The tenant's domain orders", body = Vec<OrderView>),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_domain_orders(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
+    query: web::Query<DomainListQuery>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
     let tenant_id = tenant.0.tenant_id;
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let mut scope = begin_tenant_scope(&state.tx, tenant_id)
         .await
         .map_err(api_error)?;
     let view = state
         .list_orders
-        .execute(&mut scope, tenant_id)
+        .execute(&mut scope, tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     commit_scope(scope).await?;
@@ -630,16 +665,24 @@ fn ip_in_prefix(address: IpAddr, network: IpAddr, prefix: u8) -> bool {
 // Platform.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct PlatformDomainsQuery {
+    /// Hostname substring.
     #[serde(default)]
     pub q: String,
-    #[serde(default = "default_limit")]
-    pub limit: u32,
+    /// Page size, clamped to 1..=100.
+    #[serde(default)]
+    #[param(schema_with = platform_domain_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last domain of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    #[serde(default)]
+    pub after: Option<String>,
 }
 
-fn default_limit() -> u32 {
-    50
+fn platform_domain_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(100, 50).build()
 }
 
 /// `GET /api/v1/platform/domains`.
@@ -648,12 +691,11 @@ fn default_limit() -> u32 {
     path = "/api/v1/platform/domains",
     tag = "domains",
     operation_id = "list_platform_domains",
-    params(
-        ("q" = String, Query, description = "Hostname substring"),
-        ("limit" = u32, Query, description = "Result cap (default 50)")
-    ),
+    params(PlatformDomainsQuery),
     responses(
-        (status = 200, description = "Domains across tenants", body = Vec<crate::application::CustomDomainView>)
+        (status = 200, description = "Domains across tenants", body = Vec<crate::application::CustomDomainView>),
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_platform_domains(
@@ -661,9 +703,15 @@ pub async fn list_platform_domains(
     query: web::Query<PlatformDomainsQuery>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let view = state
         .platform_list
-        .execute(&query.q, query.limit)
+        .execute(&query.q, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(view))

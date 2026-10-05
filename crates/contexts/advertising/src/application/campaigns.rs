@@ -305,13 +305,19 @@ impl ListCampaigns {
     pub async fn execute(
         &self,
         tenant_id: TenantId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<StoredCampaign>, AdvertisingError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx
             .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let campaigns = self.campaigns.list_by_tenant(&mut scope, tenant_id).await?;
+        let campaigns = self
+            .campaigns
+            .list_by_tenant_page(&mut scope, tenant_id, limit, after_id)
+            .await?;
         scope
             .rollback()
             .await
@@ -1862,8 +1868,10 @@ impl ListCampaignChanges {
         &self,
         tenant_id: TenantId,
         campaign_id: CampaignId,
-        limit: i64,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<CampaignChange>, AdvertisingError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 50, 200);
         let mut scope = self
             .tx
             .begin_for(tenant_id.as_i64())
@@ -1877,7 +1885,7 @@ impl ListCampaignChanges {
             .ok_or(AdvertisingError::CampaignNotFound)?;
         let changes = self
             .campaigns
-            .list_changes(&mut scope, tenant_id, campaign_id, limit)
+            .list_changes(&mut scope, tenant_id, campaign_id, limit, after_id)
             .await?;
         scope
             .rollback()

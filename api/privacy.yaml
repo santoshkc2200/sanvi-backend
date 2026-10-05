@@ -45,6 +45,27 @@ paths:
   /api/v1/platform/privacy/appeals:
     get:
       operationId: list_appeals
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -53,7 +74,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/Appeal'
                 type: array
-          description: Open appeals
+          description: One page of open appeals, oldest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/platform/privacy/appeals` — open appeals.'
       tags:
       - privacy
@@ -98,6 +137,27 @@ paths:
   /api/v1/platform/privacy/assessments:
     get:
       operationId: list_assessments
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -106,7 +166,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/RiskAssessment'
                 type: array
-          description: Assessments
+          description: One page of risk assessments, newest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: |-
         `GET /api/v1/platform/privacy/assessments` — risk assessments (DPIA +
         US state data-protection assessments).
@@ -133,6 +211,27 @@ paths:
   /api/v1/platform/privacy/holds:
     get:
       operationId: list_holds
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -141,7 +240,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/LegalHold'
                 type: array
-          description: Legal holds
+          description: One page of legal holds, newest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/platform/privacy/holds` — legal holds.'
       tags:
       - privacy
@@ -188,6 +305,27 @@ paths:
   /api/v1/platform/privacy/incidents:
     get:
       operationId: list_incidents
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -196,7 +334,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/BreachIncident'
                 type: array
-          description: Incidents
+          description: One page of incidents, newest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/platform/privacy/incidents` — breach incidents.'
       tags:
       - privacy
@@ -262,6 +418,26 @@ paths:
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last item of the previous page. Absent for the
+          first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -270,7 +446,25 @@ paths:
                 items:
                   $ref: '#/components/schemas/NotificationObligation'
                 type: array
-          description: Obligations
+          description: One page of the incident's obligations, newest first
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: |-
         `GET /api/v1/platform/privacy/incidents/{id}/obligations` — computed
         obligations.
@@ -311,12 +505,32 @@ paths:
     get:
       operationId: list_dsrs
       parameters:
-      - description: Filter by status
+      - description: Filter by status.
         in: query
         name: status
         required: false
         schema:
           $ref: '#/components/schemas/DsrStatus'
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last request of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -326,12 +540,24 @@ paths:
                   $ref: '#/components/schemas/RequestOperatorView'
                 type: array
           description: Requests
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       summary: '`GET /api/v1/platform/privacy/requests` — operator view.'
       tags:
       - privacy
@@ -856,12 +1082,32 @@ paths:
     get:
       operationId: list_tenant_dsrs
       parameters:
-      - description: Filter by status
+      - description: Filter by status.
         in: query
         name: status
         required: false
         schema:
           $ref: '#/components/schemas/DsrStatus'
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last request of the previous page. Absent for
+          the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -871,13 +1117,24 @@ paths:
                   $ref: '#/components/schemas/RequestOperatorView'
                 type: array
           description: Tenant's requests
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '403':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
-      summary: '`GET /api/v1/tenant/privacy/requests` — the tenant''s own requests.'
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout - the request exceeded its budget
       tags:
       - privacy
     post:

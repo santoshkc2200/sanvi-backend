@@ -24,13 +24,18 @@ impl ListConversions {
     pub async fn execute(
         &self,
         tenant_id: TenantId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<ConversionEvent>, AdvertisingError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx
             .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        self.repo.list(&mut scope, tenant_id).await
+        self.repo
+            .list_page(&mut scope, tenant_id, limit, after_id)
+            .await
     }
 }
 

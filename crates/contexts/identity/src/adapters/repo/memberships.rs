@@ -20,6 +20,19 @@ impl SqlxMembershipRepository {
     }
 }
 
+#[derive(sqlx::FromRow)]
+struct MembershipEmailRow {
+    /// Selected because every query is tenant-scoped; the domain mapping
+    /// takes the tenant from the caller.
+    #[allow(dead_code)]
+    tenant_id: i64,
+    user_id: i64,
+    status: String,
+    invited_by: Option<i64>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    primary_email: String,
+}
+
 #[async_trait]
 impl MembershipRepository for SqlxMembershipRepository {
     async fn save(
@@ -145,14 +158,21 @@ impl MembershipRepository for SqlxMembershipRepository {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_user_id: Option<i64>,
     ) -> Result<Vec<(Membership, Email)>, IdentityError> {
-        let rows = sqlx::query!(
+        let rows: Vec<MembershipEmailRow> = sqlx::query_as(
             "SELECT m.tenant_id, m.user_id, m.status, m.invited_by, m.created_at, u.primary_email
              FROM identity.memberships m
              JOIN identity.users u ON u.id = m.user_id
-             WHERE m.tenant_id = $1 ORDER BY m.created_at",
-            tenant_id.as_i64(),
+             WHERE m.tenant_id = $1
+               AND ($2::bigint IS NULL OR m.user_id < $2)
+             ORDER BY m.user_id DESC
+             LIMIT $3",
         )
+        .bind(tenant_id.as_i64())
+        .bind(after_user_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| IdentityError::Storage(err.to_string()))?;

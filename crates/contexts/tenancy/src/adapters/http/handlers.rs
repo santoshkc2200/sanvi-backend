@@ -70,7 +70,7 @@ pub fn api_error(err: TenancyError) -> ApiError {
         TenancyError::InvalidStatus(detail) => ApiError::internal(detail),
         TenancyError::Storage(detail) => {
             tracing::error!(error = %detail, "tenancy storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         TenancyError::IdGeneration(detail) => {
             tracing::error!(error = %detail, "tenancy ID generation failure");
@@ -175,15 +175,12 @@ pub async fn provision_tenant(
     path = "/api/v1/platform/tenants",
     tag = "tenancy",
     operation_id = "list_tenants",
-    params(
-        ("limit" = Option<u32>, Query, description = "Page size (default 20, max 100)"),
-        ("after" = Option<String>, Query, description = "Cursor: tenant id of the last item of the previous page"),
-        ("status" = Option<String>, Query, description = "Filter by tenant status"),
-    ),
+    params(ListQuery),
     responses(
         (status = 200, description = "Tenant page", body = TenantListView),
         (status = 400, description = "Invalid filter", body = ProblemDetail),
-        (status = 500, description = "Internal error", body = ProblemDetail)
+        (status = 500, description = "Internal error", body = ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_tenants(
@@ -208,11 +205,7 @@ pub async fn list_tenants(
         },
         None => None,
     };
-    match state
-        .list_tenants
-        .execute(after, query.limit.unwrap_or(20), status)
-        .await
-    {
+    match state.list_tenants.execute(after, query.limit, status).await {
         Ok(page) => HttpResponse::Ok().json(page),
         Err(err) => {
             let error = api_error(err);
@@ -221,11 +214,20 @@ pub async fn list_tenants(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
+    /// Page size, clamped to 1..=100.
+    #[param(schema_with = tenant_limit_schema)]
     pub limit: Option<u32>,
+    /// Cursor: tenant id of the last item of the previous page.
     pub after: Option<String>,
+    /// Filter by tenant status.
     pub status: Option<String>,
+}
+
+fn tenant_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(100, 20).build()
 }
 
 /// `GET /api/v1/platform/tenants/{id}` — tenant detail.

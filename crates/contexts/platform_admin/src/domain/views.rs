@@ -33,7 +33,7 @@ pub struct TenantViewSearch {
     pub query: Option<String>,
     pub status: Option<String>,
     pub after: Option<TenantViewCursor>,
-    pub limit: u32,
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -287,13 +287,19 @@ impl ListThemeVersionsAdmin {
     pub async fn execute(
         &self,
         theme_key: &str,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<ThemeVersionAdminView>, ThemingError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let theme = self
             .themes
             .get_by_key(&self.pool, theme_key)
             .await?
             .ok_or_else(|| ThemingError::UnknownTheme(theme_key.to_string()))?;
-        let versions = self.themes.list_versions(&self.pool, theme.id).await?;
+        let versions = self
+            .themes
+            .list_versions_page(&self.pool, theme.id, limit, after_id)
+            .await?;
         Ok(versions.iter().map(ThemeVersionAdminView::from).collect())
     }
 }

@@ -244,7 +244,7 @@ impl DecideAppeal {
             .begin_unscoped("privacy_appeal_decision", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let mut open = self.appeals.find_open(&mut scope, 10_000).await?;
+        let mut open = self.appeals.find_open(&mut scope, 10_000, None).await?;
         let Some(index) = open.iter().position(|a| a.id == command.appeal_id) else {
             return Err(PrivacyError::AppealNotFound(command.appeal_id.to_string()));
         };
@@ -344,13 +344,18 @@ impl ListOpenAppeals {
     }
 
     #[tracing::instrument(name = "privacy.list_open_appeals", skip_all)]
-    pub async fn execute(&self, limit: u32) -> Result<Vec<Appeal>, PrivacyError> {
+    pub async fn execute(
+        &self,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<Appeal>, PrivacyError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_appeal_list", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let appeals = self.appeals.find_open(&mut scope, limit.min(200)).await?;
+        let appeals = self.appeals.find_open(&mut scope, limit, after_id).await?;
         scope
             .commit()
             .await

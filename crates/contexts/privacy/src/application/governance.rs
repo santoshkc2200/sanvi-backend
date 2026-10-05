@@ -608,13 +608,18 @@ impl ListIncidents {
     }
 
     #[tracing::instrument(name = "privacy.list_incidents", skip_all)]
-    pub async fn execute(&self) -> Result<Vec<BreachIncident>, PrivacyError> {
+    pub async fn execute(
+        &self,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<BreachIncident>, PrivacyError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_breach_list", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let incidents = self.breaches.list(&mut scope).await?;
+        let incidents = self.breaches.list(&mut scope, limit, after_id).await?;
         scope
             .commit()
             .await
@@ -640,7 +645,10 @@ impl ListObligations {
     pub async fn execute(
         &self,
         incident_id: BreachIncidentId,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<NotificationObligation>, PrivacyError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_obligation_list", "privacy")
@@ -648,7 +656,7 @@ impl ListObligations {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let obligations = self
             .breaches
-            .list_obligations(&mut scope, incident_id)
+            .list_obligations(&mut scope, incident_id, limit, after_id)
             .await?;
         scope
             .commit()
@@ -861,13 +869,22 @@ impl ListHolds {
     }
 
     #[tracing::instrument(name = "privacy.list_holds", skip_all)]
-    pub async fn execute(&self, include_released: bool) -> Result<Vec<LegalHold>, PrivacyError> {
+    pub async fn execute(
+        &self,
+        include_released: bool,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<LegalHold>, PrivacyError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_hold_list", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let holds = self.holds.list(&mut scope, include_released).await?;
+        let holds = self
+            .holds
+            .list(&mut scope, include_released, limit, after_id)
+            .await?;
         scope
             .commit()
             .await
@@ -962,13 +979,18 @@ impl ListAssessments {
     }
 
     #[tracing::instrument(name = "privacy.list_assessments", skip_all)]
-    pub async fn execute(&self) -> Result<Vec<RiskAssessment>, PrivacyError> {
+    pub async fn execute(
+        &self,
+        limit: Option<u32>,
+        after_id: Option<i64>,
+    ) -> Result<Vec<RiskAssessment>, PrivacyError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_assessment_list", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let assessments = self.assessments.list(&mut scope).await?;
+        let assessments = self.assessments.list(&mut scope, limit, after_id).await?;
         scope
             .commit()
             .await

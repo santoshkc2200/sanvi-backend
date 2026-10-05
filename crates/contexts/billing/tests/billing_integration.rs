@@ -21,13 +21,13 @@ use sanvi_billing::{
     },
     application::{
         ApplySubscriptionOverride, ApplySubscriptionOverrideCommand, CreateCheckoutSession,
-        CreateCheckoutSessionCommand, DunningSweep, ReconcileSubscriptions, WebhookDispatcher,
-        WebhookReceiver,
+        CreateCheckoutSessionCommand, DunningSweep, ListInvoices, ReconcileSubscriptions,
+        WebhookDispatcher, WebhookReceiver,
     },
     domain::{
         BillingError, CheckoutSessionRequest, CheckoutSessionResult, Clock, CollectionState,
-        EntitlementSyncer, EventPublisher, IdGenerator, InvoiceRepository,
-        PlanEntitlementRepository, PlanId, PlanPriceRepository, PlanRepository,
+        EntitlementSyncer, EventPublisher, IdGenerator, InvoiceId, InvoiceRef, InvoiceRepository,
+        InvoiceStatus, PlanEntitlementRepository, PlanId, PlanPriceRepository, PlanRepository,
         PortalSessionRequest, PortalSessionResult, PriceId, StripeClient, StripeCustomer,
         StripeSubscriptionView, SubscriptionRepository, SubscriptionSource, SubscriptionStatus,
         TaxGate, TaxRegistration, TenantLifecycle, WebhookEventRepository,
@@ -1040,4 +1040,89 @@ async fn checkout_fails_loudly_without_tax_registration() {
         err,
         sanvi_billing::domain::BillingError::TaxRegistrationMissing
     ));
+}
+
+/// TASK-021 (FR-1108): the invoice list is bounded and keyset-paginated —
+/// the reference shape every converted collection endpoint follows. The page
+/// is newest-first by Snowflake id, `after` is the last row's id, and the
+/// use case clamps the requested size into the declared 1..=100 band with
+/// default 50.
+#[tokio::test]
+async fn invoice_pages_are_bounded_and_keyset_paginated() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let invoices: Arc<dyn InvoiceRepository> = Arc::new(SqlxInvoiceRepository::new());
+    let tenant_id = provision_tenant(&pool, "acme-pagination").await;
+
+    let mut scope = tx
+        .begin_unscoped("invoice_pagination_test", "platform")
+        .await
+        .unwrap();
+    let ids = sanvi_testsupport::test_ids();
+    let mut inserted = Vec::new();
+    for n in 0..7 {
+        let id = InvoiceId::try_from(ids.next_id().unwrap().as_i64()).unwrap();
+        let invoice = InvoiceRef::new(
+            id,
+            tenant_id,
+            format!("in_test_{n}"),
+            Some(format!("A1-000{n}")),
+            InvoiceStatus::Paid,
+            4900,
+            "usd".to_string(),
+            None,
+            None,
+            None,
+            Utc::now(),
+            Some(Utc::now()),
+        )
+        .unwrap();
+        invoices
+            .upsert(&mut scope, &invoice, Utc::now())
+            .await
+            .unwrap();
+        inserted.push(id.as_i64());
+    }
+    scope.commit().await.unwrap();
+
+    // Clamping: absent limit means the documented default; oversized requests
+    // are clamped to the declared maximum, never more rows than exist.
+    let list = ListInvoices::new(tx.clone(), invoices.clone());
+    let default_page = list.execute(tenant_id, None, None).await.unwrap();
+    assert_eq!(default_page.len(), 7);
+    let clamped = list.execute(tenant_id, Some(10_000), None).await.unwrap();
+    assert_eq!(clamped.len(), 7, "clamp to max 100, then reality: only 7 rows");
+
+    // Keyset: first page newest-first, second page disjoint, union = all.
+    let page_one = list.execute(tenant_id, Some(3), None).await.unwrap();
+    assert_eq!(page_one.len(), 3);
+    assert_eq!(page_one[0].invoice_id.as_i64(), *inserted.last().unwrap());
+    let last_id = page_one.last().unwrap().invoice_id.as_i64();
+    let page_two = list
+        .execute(tenant_id, Some(3), Some(last_id))
+        .await
+        .unwrap();
+    assert_eq!(page_two.len(), 3);
+    let seen: std::collections::BTreeSet<i64> = page_one
+        .iter()
+        .chain(page_two.iter())
+        .map(|view| view.invoice_id.as_i64())
+        .collect();
+    assert_eq!(seen.len(), 6, "the two pages are disjoint");
+    // The cursor chain reaches the tail: the third page is exactly the
+    // oldest row, and a fourth page is empty.
+    let last_of_two = page_two.last().unwrap().invoice_id.as_i64();
+    let page_three = list
+        .execute(tenant_id, Some(3), Some(last_of_two))
+        .await
+        .unwrap();
+    assert_eq!(page_three.len(), 1);
+    assert_eq!(page_three[0].invoice_id.as_i64(), inserted[0]);
+    let last_of_three = page_three.last().unwrap().invoice_id.as_i64();
+    let page_four = list
+        .execute(tenant_id, Some(3), Some(last_of_three))
+        .await
+        .unwrap();
+    assert!(page_four.is_empty(), "the cursor chain terminates");
 }

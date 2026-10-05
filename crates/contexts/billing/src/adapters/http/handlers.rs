@@ -87,7 +87,7 @@ pub fn api_error(err: BillingError) -> ApiError {
         }
         BillingError::Storage(detail) => {
             tracing::error!(error = %detail, "billing storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
     }
 }
@@ -226,9 +226,21 @@ pub async fn get_subscription(
     Ok(HttpResponse::Ok().json(view))
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Query for `GET /api/v1/tenant/billing/invoices` (TASK-021: bounded page
+/// size and a keyset cursor, declared in the contract).
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct InvoiceListQuery {
+    /// Page size, 1..=100, default 50.
+    #[param(schema_with = invoice_limit_schema)]
     pub limit: Option<u32>,
+    /// Cursor: the id of the last invoice of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn invoice_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(100, 50).build()
 }
 
 /// `GET /api/v1/tenant/billing/invoices` — the tenant's invoices.
@@ -237,10 +249,12 @@ pub struct InvoiceListQuery {
     path = "/api/v1/tenant/billing/invoices",
     tag = "billing",
     operation_id = "list_invoices",
-    params(("limit" = Option<u32>, Query, description = "Page size (default 50)")),
+    params(InvoiceListQuery),
     responses(
-        (status = 200, description = "Invoices, newest first", body = Vec<crate::application::InvoiceView>),
-        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+        (status = 200, description = "Invoices, newest first (ordered by id, which encodes creation time)", body = Vec<crate::application::InvoiceView>),
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_invoices(
@@ -251,9 +265,15 @@ pub async fn list_invoices(
     req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
     let tenant_id = current_tenant(&req)?;
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let invoices = state
         .list_invoices
-        .execute(tenant_id, query.limit.unwrap_or(50).min(100))
+        .execute(tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(invoices))

@@ -177,6 +177,7 @@ pub trait DsrRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         status: Option<super::types::DsrStatus>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError>;
     async fn list_tenant(
         &self,
@@ -184,6 +185,7 @@ pub trait DsrRepository: Send + Sync {
         tenant_id: TenantId,
         status: Option<super::types::DsrStatus>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError>;
     async fn set_status(
         &self,
@@ -264,6 +266,7 @@ pub trait AppealRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<Appeal>, PrivacyError>;
     async fn decide(
         &self,
@@ -530,6 +533,8 @@ pub trait LegalHoldRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         include_released: bool,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<LegalHold>, PrivacyError>;
     async fn release(
         &self,
@@ -572,6 +577,8 @@ pub trait BreachRepository: Send + Sync {
     async fn list(
         &self,
         scope: &mut PlatformScope<'_>,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<BreachIncident>, PrivacyError>;
     async fn save_obligation(
         &self,
@@ -583,6 +590,8 @@ pub trait BreachRepository: Send + Sync {
         &self,
         scope: &mut PlatformScope<'_>,
         incident_id: BreachIncidentId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<NotificationObligation>, PrivacyError>;
     async fn mark_notified(
         &self,
@@ -740,6 +749,8 @@ pub trait RiskAssessmentRepository: Send + Sync {
     async fn list(
         &self,
         scope: &mut PlatformScope<'_>,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<RiskAssessment>, PrivacyError>;
 }
 

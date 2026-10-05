@@ -778,8 +778,10 @@ impl ListRequestsOperator {
     pub async fn execute(
         &self,
         status: Option<DsrStatus>,
-        limit: u32,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<RequestOperatorView>, PrivacyError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_dsr_list", "privacy")
@@ -787,7 +789,7 @@ impl ListRequestsOperator {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let requests = self
             .requests
-            .list_operator(&mut scope, status, limit.min(200))
+            .list_operator(&mut scope, status, limit, after_id)
             .await?;
         scope
             .commit()
@@ -800,8 +802,10 @@ impl ListRequestsOperator {
         &self,
         tenant_id: TenantId,
         status: Option<DsrStatus>,
-        limit: u32,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<RequestOperatorView>, PrivacyError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 100, 200);
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_tenant_dsr_list", "privacy")
@@ -809,7 +813,7 @@ impl ListRequestsOperator {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         let requests = self
             .requests
-            .list_tenant(&mut scope, tenant_id, status, limit.min(200))
+            .list_tenant(&mut scope, tenant_id, status, limit, after_id)
             .await?;
         scope
             .commit()

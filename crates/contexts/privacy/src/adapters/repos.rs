@@ -604,14 +604,17 @@ impl DsrRepository for SqlxDsrRepository {
         scope: &mut PlatformScope<'_>,
         status: Option<DsrStatus>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError> {
         let rows: Vec<DsrRow> = sqlx::query_as(
             "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests
              WHERE ($1::text IS NULL OR status = $1)
-             ORDER BY received_at DESC LIMIT $2",
+               AND ($3::bigint IS NULL OR id < $3)
+             ORDER BY id DESC LIMIT $2",
         )
         .bind(status.map(|s| s.as_str().to_string()))
         .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -624,15 +627,18 @@ impl DsrRepository for SqlxDsrRepository {
         tenant_id: TenantId,
         status: Option<DsrStatus>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<DataSubjectRequest>, PrivacyError> {
         let rows: Vec<DsrRow> = sqlx::query_as(
             "SELECT id, tenant_id, subject_id, subject_ref, kind, status, received_at, acknowledged_at, verified_at, due_at, extended_to, completed_at, jurisdiction, submitted_by, agent_id, requester_ip, requester_note, rejection_reason, rejected_by, appeal_id, export_artifact_id FROM privacy.data_subject_requests
              WHERE tenant_id = $1 AND ($2::text IS NULL OR status = $2)
-             ORDER BY received_at DESC LIMIT $3",
+               AND ($4::bigint IS NULL OR id < $4)
+             ORDER BY id DESC LIMIT $3",
         )
         .bind(tenant_id.as_i64())
         .bind(status.map(|s| s.as_str().to_string()))
         .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -872,13 +878,17 @@ impl AppealRepository for SqlxAppealRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<Appeal>, PrivacyError> {
         let rows: Vec<AppealRow> = sqlx::query_as(
             "SELECT id, request_id, reason, received_at, due_at, outcome, decided_at, decided_by,
                     decision_reason, authority_notice
-             FROM privacy.request_appeals WHERE decided_at IS NULL ORDER BY received_at ASC LIMIT $1",
+             FROM privacy.request_appeals
+             WHERE decided_at IS NULL AND ($2::bigint IS NULL OR id > $2)
+             ORDER BY id LIMIT $1",
         )
         .bind(i64::from(limit))
+        .bind(after_id)
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -1862,14 +1872,19 @@ impl LegalHoldRepository for SqlxLegalHoldRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         include_released: bool,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<LegalHold>, PrivacyError> {
         let rows: Vec<HoldRow> = sqlx::query_as(
             "SELECT id, scope, reason, created_by, created_at, released_at, released_by
              FROM privacy.legal_holds
              WHERE ($1 OR released_at IS NULL)
-             ORDER BY created_at DESC",
+               AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
         )
         .bind(include_released)
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2051,6 +2066,9 @@ fn to_incident(row: IncidentRow) -> Result<BreachIncident, PrivacyError> {
 
 #[derive(Debug, Clone, FromRow)]
 struct ObligationRow {
+    /// Selected for the keyset predicate; not part of the domain mapping.
+    #[allow(dead_code)]
+    id: i64,
     jurisdiction: String,
     audience: String,
     due_at: DateTime<Utc>,
@@ -2118,12 +2136,18 @@ impl BreachRepository for SqlxBreachRepository {
     async fn list(
         &self,
         scope: &mut PlatformScope<'_>,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<BreachIncident>, PrivacyError> {
         let rows: Vec<IncidentRow> = sqlx::query_as(
             "SELECT id, discovered_at, contained_at, affected, data_classes, encrypted_at_rest,
                     notes, created_by
-             FROM privacy.breach_incidents ORDER BY discovered_at DESC",
+             FROM privacy.breach_incidents
+             WHERE ($1::bigint IS NULL OR id < $1)
+             ORDER BY id DESC LIMIT $2",
         )
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2163,12 +2187,18 @@ impl BreachRepository for SqlxBreachRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         incident_id: BreachIncidentId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<NotificationObligation>, PrivacyError> {
         let rows: Vec<ObligationRow> = sqlx::query_as(
-            "SELECT jurisdiction, audience, due_at, notified_at, artifact
-             FROM privacy.breach_obligations WHERE incident_id = $1 ORDER BY due_at",
+            "SELECT id, jurisdiction, audience, due_at, notified_at, artifact
+             FROM privacy.breach_obligations
+             WHERE incident_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
         )
         .bind(incident_id.as_i64())
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;
@@ -2862,12 +2892,18 @@ impl RiskAssessmentRepository for SqlxRiskAssessmentRepository {
     async fn list(
         &self,
         scope: &mut PlatformScope<'_>,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<RiskAssessment>, PrivacyError> {
         let rows: Vec<AssessmentRow> = sqlx::query_as(
             "SELECT id, activity_id, jurisdictions, trigger, status, findings, mitigations,
                         reviewed_by, reviewed_at, next_review_at, created_at
-                 FROM privacy.risk_assessments ORDER BY created_at DESC",
+                 FROM privacy.risk_assessments
+                 WHERE ($1::bigint IS NULL OR id < $1)
+                 ORDER BY id DESC LIMIT $2",
         )
+        .bind(after_id)
+        .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_db)?;

@@ -214,10 +214,12 @@ impl MembershipRepository for World {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_user_id: Option<i64>,
     ) -> Result<Vec<(Membership, Email)>, IdentityError> {
         let memberships = MembershipRepository::list(self, scope, tenant_id).await?;
         let memory = self.memory.lock().unwrap();
-        Ok(memberships
+        let mut rows: Vec<(Membership, Email)> = memberships
             .into_iter()
             .map(|m| {
                 let email = memory
@@ -228,6 +230,16 @@ impl MembershipRepository for World {
                     .expect("member must be a known user");
                 (m, email)
             })
+            .collect();
+        rows.sort_by_key(|(membership, _)| std::cmp::Reverse(membership.user_id().as_i64()));
+        Ok(rows
+            .into_iter()
+            .filter(|(membership, _)| {
+                after_user_id
+                    .map(|after| membership.user_id().as_i64() < after)
+                    .unwrap_or(true)
+            })
+            .take(limit as usize)
             .collect())
     }
 
@@ -432,8 +444,10 @@ impl InvitationRepository for World {
         &self,
         _scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<Invitation>, IdentityError> {
-        Ok(self
+        let mut invitations: Vec<Invitation> = self
             .memory
             .lock()
             .unwrap()
@@ -441,6 +455,16 @@ impl InvitationRepository for World {
             .iter()
             .filter(|i| i.tenant_id() == tenant_id)
             .cloned()
+            .collect();
+        invitations.sort_by_key(|invitation| std::cmp::Reverse(invitation.id().as_i64()));
+        Ok(invitations
+            .into_iter()
+            .filter(|invitation| {
+                after_id
+                    .map(|after| invitation.id().as_i64() < after)
+                    .unwrap_or(true)
+            })
+            .take(limit as usize)
             .collect())
     }
 

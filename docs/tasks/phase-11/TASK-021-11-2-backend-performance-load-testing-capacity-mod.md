@@ -294,3 +294,93 @@ every other worker metric — the worker has no HTTP scraper of its own, which
 is the pre-existing export posture all worker metrics share (unchanged here).
 Route-matrix diff acknowledged: two fingerprint rows only
 (`apps/api/src/main.rs`, `apps/worker/src/main.rs`), no route rows.
+
+### Slice 11.2b record — 2026-10-05
+
+Step 1 closed: cursor pagination and statement timeouts are contract-first,
+enforced by a gate that fails the build on an unbounded collection.
+
+**The gate.** New test target `apps/api/tests/perf` (`just test-perf`,
+wired into `just ci`/`ci-quiet`; the pr.yml integration job already runs
+`-p sanvi-api`, so CI coverage needed no workflow edit — the TASK-020 gap
+noted in 11.5f does not recur here). `bounded_collections.rs` walks the
+merged OpenAPI document (`sanvi_api::ApiDoc`, the same source
+`check-openapi.sh` pins to the committed `api/*.yaml`) and fails on every
+GET whose 2xx JSON response contains an array of objects unless the
+operation declares a `limit` query param with `minimum ≥ 1`, a `maximum`,
+and a `default` inside the band, or carries a reasoned line in
+`collection-exemptions.txt`. Stale exemptions (operation gone, or gained a
+bounded `limit`) and unknown names fail too, and a vacuity guard asserts
+the walker enumerated a non-empty set. Eight fixture tests prove each rule
+on synthetic documents. **Fails-before evidence:** the first run against
+the untouched contract listed 47 offenders (9 paginated endpoints whose
+`limit` had no declared maximum — every bound lived in a Rust clamp the
+client could not see — plus 38 unpaginated collections and single-entity
+surfaces); after the sweep it is 9/9 green.
+
+**The conversions.** 24 endpoints gained `limit` + `after` (keyset on the
+table's Snowflake id, `ORDER BY id DESC`, cursor = last row's id, 400
+`invalid cursor` on garbage): billing invoices; identity members (keyset
+`user_id`) and invitations; domains custom-domains, orders and the
+platform search; theming theme versions; advertising campaigns, campaign
+changes, creatives, conversions, audiences, budget caps and budget alerts;
+privacy platform/tenant DSRs, appeals (oldest-first queue: `id ASC`),
+holds, incidents, obligations and assessments; platform-admin
+impersonations and pending approvals (oldest-first). Five more
+(audit, tenancy, payments×2, the admin tenant search) were already
+cursor-paginated and only gained the declared bound
+(`schema_with` → `sanvi_http::openapi::page_limit_schema(max, default)`).
+Hidden caps became parameters with today's values as default: conversions
+and audiences (SQL `LIMIT 200`), DSRs (200/100), campaign changes (50).
+The kernel's dead offset machinery gained the one helper every clamp now
+routes through (`clamp_page_size`), so spec bounds and clamping share a
+shape. Previously-unbounded lists default to their maximum (200): the
+absent-limit response for a tenant with more members than that changes —
+that is the boundedness this slice exists to ship, recorded here rather
+than smuggled. Ordering notes: lists that ordered by `created_at` now
+order by `id` (Snowflakes encode creation time; deterministic and
+keyset-able — TASK-027 finalises ordering); internal sweeps that need
+unbounded reads (budget evaluator, rollover, status, metrics ingest,
+audience refresh, appeals decisioning) keep their original ports — the
+paginated HTTP reads are separate `_page`/page-variant methods, so no job
+was silently capped. `list_sessions` is exempted, not bounded: it returns
+only the caller's current Kratos session — a singleton by construction.
+41 exemption lines in total (catalogs/registries, bulk document-sync
+surfaces, reports, single-entity responses whose arrays are embedded
+children). Two changed `sqlx::query!` macros (identity members and
+invitations) were moved to the runtime-checked `query_as` form — the
+runtime form is already the majority style (122 vs 58) — so the `.sqlx`
+cache is untouched and no `prepare` was needed.
+
+**Statement timeouts (FR-1110).** `DatabaseConfig.statement_timeout_ms`
+(default 10 000, `0` disables) is applied per connection as a
+`statement_timeout` startup parameter in `build_pool`, under the 30 s
+request-budget middleware so the database cancels first. Migration paths
+run uncapped by construction: the CLI `migrate` command and every
+testsupport pool zero it (DDL on scale data legitimately outlives any
+request budget). Postgres's cancel surfaces as the contract's
+`request-timeout` problem (504): `ApiError::from_storage_detail` classifies
+the exact `canceling statement due to statement timeout` message (lock
+timeouts share SQLSTATE 57014 and stay 500s), and the 15 handler
+`Storage`/commit mapping sites across all contexts route through it;
+`sanvi_persistence::is_statement_timeout` is the typed form.
+`statement_timeout_cancels_runaway_queries` proves the behaviour against
+a real Postgres: `pg_sleep(30)` under a 1 s cap is cancelled near the cap,
+classifies correctly, and the pool serves the next query (statements die,
+sessions do not). Every converted endpoint's contract declares the 504.
+
+**Execution note.** The slice plan delegated the context sweep to parallel
+subagents; all four died within minutes on the account's 5-hour usage
+limit (reset 12:48) having touched nothing — the sweep was completed
+in-session, one context at a time, against the billing pattern.
+
+**Verification (scoped, this session).** The gate 9/9 after failing on 47
+named offenders; `check-openapi.sh` clean over all 14 specs after
+regeneration; `scripts/test.sh -p sanvi-api` 65/65 (idor sweep green —
+the new params changed no route surface); per-context suites green as
+landed (advertising 259, privacy/domains/theming/billing/audit/tenancy/
+payments 462, identity+platform-admin 69, persistence 18 incl. the new
+timeout test, billing 38 incl. the new keyset/clamp test); workspace
+`clippy --all-targets -D warnings` and `cargo fmt --check` clean;
+layering OK; route-matrix regenerated (15 fingerprint rows only, no route
+rows); ga-checklist OK. Full-suite re-run recorded in the commit.

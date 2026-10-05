@@ -132,7 +132,7 @@ pub fn api_error(err: IdentityError) -> ApiError {
         }
         IdentityError::Storage(detail) => {
             tracing::error!(error = %detail, "identity storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         IdentityError::IdGeneration(detail) => {
             tracing::error!(error = %detail, "identity ID generation failure");
@@ -356,25 +356,59 @@ pub struct LinkCompleteResponse {
     pub linked: bool,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MemberListQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = member_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the user id of the last member of the previous page. Absent
+    /// for the first page; the page is ordered newest member first.
+    pub after: Option<String>,
+}
+
+fn member_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 200).build()
+}
+
 /// `GET /api/v1/tenant/members` — the tenant's members.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/members",
     tag = "identity",
     operation_id = "list_members",
+    params(MemberListQuery),
     responses(
         (status = 200, description = "Members", body = Vec<crate::application::MemberView>),
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
         (status = 401, description = "Not authenticated", body = sanvi_http::ProblemDetail),
-        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_members(
     state: web::Data<IdentityState>,
     current: CurrentTenant,
+    query: web::Query<MemberListQuery>,
     _guard: RequiredPermission,
 ) -> impl Responder {
+    let after_user_id = match query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+    {
+        Ok(after) => after,
+        Err(_) => {
+            let error = ApiError::bad_request("invalid cursor");
+            return HttpResponse::BadRequest().json(error.problem());
+        }
+    };
     respond(
-        state.list_members.execute(current.0.tenant_id).await,
+        state
+            .list_members
+            .execute(current.0.tenant_id, query.limit, after_user_id)
+            .await,
         actix_web::http::StatusCode::OK,
     )
 }
@@ -490,24 +524,54 @@ pub async fn remove_member(
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct InvitationListQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = member_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last invitation of the previous page. Absent
+    /// for the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
 /// `GET /api/v1/tenant/invitations` — pending and accepted invitations.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/invitations",
     tag = "identity",
     operation_id = "list_invitations",
+    params(InvitationListQuery),
     responses(
         (status = 200, description = "Invitations", body = Vec<crate::application::InvitationView>),
-        (status = 401, description = "Not authenticated", body = sanvi_http::ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 401, description = "Not authenticated", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout — the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_invitations(
     state: web::Data<IdentityState>,
     current: CurrentTenant,
+    query: web::Query<InvitationListQuery>,
     _guard: RequiredPermission,
 ) -> impl Responder {
+    let after_id = match query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+    {
+        Ok(after) => after,
+        Err(_) => {
+            let error = ApiError::bad_request("invalid cursor");
+            return HttpResponse::BadRequest().json(error.problem());
+        }
+    };
     respond(
-        state.list_invitations.execute(current.0.tenant_id).await,
+        state
+            .list_invitations
+            .execute(current.0.tenant_id, query.limit, after_id)
+            .await,
         actix_web::http::StatusCode::OK,
     )
 }

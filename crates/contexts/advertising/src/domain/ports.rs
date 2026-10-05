@@ -442,6 +442,14 @@ pub trait ConversionEventRepository: Send + Sync {
         event: &super::model::ConversionEvent,
     ) -> Result<(), AdvertisingError>;
 
+    async fn list_page(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<super::model::ConversionEvent>, AdvertisingError>;
+
     async fn list(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -583,6 +591,8 @@ pub trait CreativeRepository: Send + Sync {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<StoredCreative>, AdvertisingError>;
 
     async fn delete(
@@ -627,6 +637,14 @@ pub trait AudienceRepository: Send + Sync {
         tenant_id: TenantId,
         id: AudienceId,
     ) -> Result<Option<Audience>, AdvertisingError>;
+    async fn list_page(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<Audience>, AdvertisingError>;
+
     async fn list(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -730,6 +748,14 @@ pub trait BudgetCapRepository: Send + Sync {
         campaign_id: CampaignId,
     ) -> Result<bool, AdvertisingError>;
 
+    async fn list_by_tenant_page(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<BudgetCap>, AdvertisingError>;
+
     async fn list_by_tenant(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -757,7 +783,8 @@ pub trait BudgetAlertRepository: Send + Sync {
         tenant_id: TenantId,
         campaign_id: Option<CampaignId>,
         unacknowledged_only: bool,
-        limit: i64,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<BudgetAlert>, AdvertisingError>;
 
     async fn find_by_id(

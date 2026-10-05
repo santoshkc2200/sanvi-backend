@@ -38,6 +38,14 @@ pub trait ThemeRepository: Send + Sync {
     ) -> Result<(), ThemingError>;
 
     /// The versions of one theme, newest first.
+    async fn list_versions_page(
+        &self,
+        pool: &PgPool,
+        theme_id: ThemeId,
+        limit: u32,
+        after_id: Option<i64>,
+    ) -> Result<Vec<ThemeVersion>, ThemingError>;
+
     async fn list_versions(
         &self,
         pool: &PgPool,

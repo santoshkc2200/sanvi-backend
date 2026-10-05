@@ -81,6 +81,8 @@ pub trait MembershipRepository: Send + Sync {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_user_id: Option<i64>,
     ) -> Result<Vec<(Membership, Email)>, IdentityError>;
 
     /// Delete a membership and its roles, returning the version the revocation
@@ -194,6 +196,8 @@ pub trait InvitationRepository: Send + Sync {
         &self,
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
+        limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<Invitation>, IdentityError>;
 
     /// Phase-05 erasure: delete invitations carrying this email address

@@ -781,7 +781,7 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
     assert!(draft.external_id.is_none());
     assert_eq!(draft.intent.status, CampaignStatus::Draft);
     assert_eq!(draft.revision, 1);
-    assert_eq!(list.execute(tenant_id).await.unwrap().len(), 1);
+    assert_eq!(list.execute(tenant_id, None, None).await.unwrap().len(), 1);
     assert_eq!(
         get.execute(tenant_id, draft.id).await.unwrap().intent.name,
         "Summer sale"
@@ -869,7 +869,10 @@ async fn campaign_lifecycle_draft_publish_patch_pause_resume_and_changes() {
         .unwrap();
     assert_eq!(resumed.intent.status, CampaignStatus::Active);
 
-    let history = changes.execute(tenant_id, draft.id, 50).await.unwrap();
+    let history = changes
+        .execute(tenant_id, draft.id, Some(50), None)
+        .await
+        .unwrap();
     assert!(
         history.len() >= 5,
         "expected create/publish/patch/pause/resume entries"
@@ -1570,7 +1573,7 @@ async fn creative_crud_and_matrix_validation_lifecycle() {
     assert_eq!(retrieved.creative.texts[0].headline, "Summer Launch");
 
     // 6. List Creatives
-    let all = list_creatives.execute(tenant_id).await.unwrap();
+    let all = list_creatives.execute(tenant_id, None, None).await.unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].id, valid_stored.id);
 
@@ -4493,7 +4496,10 @@ async fn publishing_intent_is_persisted_before_remote_call_and_reconciliation_wo
     assert!(redriven.publishing_mutation_id.is_none());
 
     // Verify the change record used the initial stable mutation id, NOT the retried one!
-    let campaign2_changes = changes.execute(tenant_id, draft2.id, 50).await.unwrap();
+    let campaign2_changes = changes
+        .execute(tenant_id, draft2.id, Some(50), None)
+        .await
+        .unwrap();
     let publish_change = campaign2_changes
         .iter()
         .find(|c| c.revision == redriven.revision)

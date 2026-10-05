@@ -32,9 +32,10 @@ impl ListAuditLog {
         &self,
         filters: AuditFilters,
         after: Option<AuditCursor>,
-        limit: u32,
+        limit: Option<u32>,
     ) -> Result<AuditPage, AuditError> {
-        let limit = limit.clamp(1, MAX_PAGE_LIMIT);
+        let limit =
+            sanvi_kernel::pagination::clamp_page_size(limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT);
         let mut scope = self
             .tx_manager
             .begin_unscoped("audit_list", "platform-admin")

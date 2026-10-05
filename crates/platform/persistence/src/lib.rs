@@ -16,7 +16,7 @@ pub use config::{DatabaseConfig, SslMode};
 pub use health::check_database;
 pub use idempotency::{IdempotencyHit, IdempotencyStore};
 pub use migrate::Migrator;
-pub use pool::build_pool;
+pub use pool::{build_pool, is_statement_timeout};
 pub use pool_metrics::{PoolMetrics, SAMPLE_INTERVAL};
 pub use tx::{PlatformScope, ScopedTx, Tx, TxManager};
 

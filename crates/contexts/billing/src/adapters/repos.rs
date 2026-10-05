@@ -957,13 +957,17 @@ impl crate::domain::InvoiceRepository for SqlxInvoiceRepository {
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<InvoiceRef>, BillingError> {
         let rows: Vec<InvoiceRow> = sqlx::query_as(
             "SELECT id, tenant_id, stripe_invoice_id, number, status, total_minor, currency,
                     hosted_url, pdf_url, period_start, period_end, created_at, paid_at
-             FROM billing.invoices WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2",
+             FROM billing.invoices
+             WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
         )
         .bind(tenant_id.as_i64())
+        .bind(after_id)
         .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
@@ -976,13 +980,17 @@ impl crate::domain::InvoiceRepository for SqlxInvoiceRepository {
         scope: &mut PlatformScope<'_>,
         tenant_id: TenantId,
         limit: u32,
+        after_id: Option<i64>,
     ) -> Result<Vec<InvoiceRef>, BillingError> {
         let rows: Vec<InvoiceRow> = sqlx::query_as(
             "SELECT id, tenant_id, stripe_invoice_id, number, status, total_minor, currency,
                     hosted_url, pdf_url, period_start, period_end, created_at, paid_at
-             FROM billing.invoices WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2",
+             FROM billing.invoices
+             WHERE tenant_id = $1 AND ($2::bigint IS NULL OR id < $2)
+             ORDER BY id DESC LIMIT $3",
         )
         .bind(tenant_id.as_i64())
+        .bind(after_id)
         .bind(i64::from(limit))
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await

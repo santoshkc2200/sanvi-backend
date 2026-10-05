@@ -68,7 +68,7 @@ pub fn api_error(err: ThemingError) -> ApiError {
         },
         ThemingError::Storage(detail) => {
             tracing::error!(error = %detail, "theming storage failure");
-            ApiError::internal("storage failure")
+            ApiError::from_storage_detail(&detail)
         }
         ThemingError::Cache(detail) => {
             tracing::error!(error = %detail, "theming cache failure");
@@ -601,6 +601,21 @@ pub async fn install_theme_version(
     }
 }
 
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ThemeVersionListQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = theme_version_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last version of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn theme_version_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 200).build()
+}
+
 /// `GET /api/v1/platform/themes/{key}/versions`.
 #[utoipa::path(
     get,
@@ -608,21 +623,31 @@ pub async fn install_theme_version(
     tag = "theming",
     operation_id = "list_platform_theme_versions",
     params(
-        ("key" = String, Path, description = "Theme key")
+        ("key" = String, Path, description = "Theme key"),
+        ThemeVersionListQuery
     ),
     responses(
         (status = 200, description = "The theme's version history", body = Vec<crate::application::views::ThemeVersionAdminView>),
-        (status = 404, description = "Unknown theme", body = ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = ProblemDetail),
+        (status = 404, description = "Unknown theme", body = ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
     )
 )]
 pub async fn list_platform_theme_versions(
     state: web::Data<ThemingState>,
     path: web::Path<String>,
+    query: web::Query<ThemeVersionListQuery>,
     _guard: RequiredPermission,
 ) -> Result<HttpResponse, ApiError> {
+    let after_id = query
+        .after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     let view = state
         .list_versions
-        .execute(&path.into_inner())
+        .execute(&path.into_inner(), query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(view))
@@ -714,13 +739,13 @@ async fn begin_platform_scope<'a>(
 async fn commit_scope(scope: ScopedTx<'_>) -> Result<(), ApiError> {
     scope.commit().await.map_err(|err| {
         tracing::error!(error = %err, "failed to commit theming transaction");
-        ApiError::internal("storage failure")
+        ApiError::from_storage_detail(&err.to_string())
     })
 }
 
 async fn commit_scope_platform(scope: PlatformScope<'_>) -> Result<(), ApiError> {
     scope.commit().await.map_err(|err| {
         tracing::error!(error = %err, "failed to commit theming transaction");
-        ApiError::internal("storage failure")
+        ApiError::from_storage_detail(&err.to_string())
     })
 }

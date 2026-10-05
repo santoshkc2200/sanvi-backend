@@ -143,8 +143,10 @@ impl ListInvoices {
     pub async fn execute(
         &self,
         tenant_id: TenantId,
-        limit: u32,
+        limit: Option<u32>,
+        after_id: Option<i64>,
     ) -> Result<Vec<InvoiceView>, BillingError> {
+        let limit = sanvi_kernel::pagination::clamp_page_size(limit, 50, 100);
         let mut scope = self
             .tx_manager
             .begin_unscoped("list_invoices", "tenant")
@@ -152,7 +154,7 @@ impl ListInvoices {
             .map_err(storage)?;
         let invoices = self
             .invoices
-            .list_for_tenant_platform(&mut scope, tenant_id, limit)
+            .list_for_tenant_platform(&mut scope, tenant_id, limit, after_id)
             .await?;
         scope.commit().await.map_err(storage)?;
         Ok(invoices.iter().map(InvoiceView::from).collect())

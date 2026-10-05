@@ -119,8 +119,11 @@ pub fn api_error(err: PrivacyError) -> ApiError {
         PrivacyError::RateLimited(_) => ApiError::TooManyRequests {
             retry_after_secs: 60,
         },
-        PrivacyError::Storage(_)
-        | PrivacyError::EncryptionFailure(_)
+        PrivacyError::Storage(detail) => {
+            tracing::error!(error = %detail, "privacy storage failure");
+            ApiError::from_storage_detail(&detail)
+        }
+        PrivacyError::EncryptionFailure(_)
         | PrivacyError::PackagingFailed(_)
         | PrivacyError::Upstream(_) => {
             tracing::error!(error = %err, "privacy processing failure");
@@ -703,6 +706,29 @@ pub struct TenantRequestQuery {
     pub status: Option<DsrStatus>,
 }
 
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PrivacyPageQuery {
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = privacy_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last item of the previous page. Absent for the
+    /// first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
+fn privacy_limit_schema() -> utoipa::openapi::schema::Object {
+    sanvi_http::openapi::page_limit_schema(200, 200).build()
+}
+
+fn privacy_cursor(after: &Option<String>) -> Result<Option<i64>, ApiError> {
+    after
+        .as_deref()
+        .map(|raw| raw.parse::<i64>())
+        .transpose()
+        .map_err(|_| ApiError::bad_request("invalid cursor"))
+}
+
 /// `POST /api/v1/tenant/privacy/requests` — tenant admin acting for their
 /// end users (processor / service-provider role).
 #[utoipa::path(
@@ -738,28 +764,44 @@ pub async fn submit_tenant_dsr(
 }
 
 /// `GET /api/v1/tenant/privacy/requests` — the tenant's own requests.
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TenantRequestPageQuery {
+    /// Filter by status.
+    pub status: Option<DsrStatus>,
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = privacy_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last request of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    pub after: Option<String>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/privacy/requests",
     tag = "privacy",
     operation_id = "list_tenant_dsrs",
-    params(("status" = Option<DsrStatus>, Query, description = "Filter by status")),
+    params(TenantRequestPageQuery),
     responses(
         (status = 200, description = "Tenant's requests", body = Vec<crate::application::RequestOperatorView>),
-        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_tenant_dsrs(
     state: web::Data<PrivacyState>,
     _subject: OptionalSubject,
     _guard: RequiredPermission,
-    query: web::Query<TenantRequestQuery>,
+    query: web::Query<TenantRequestPageQuery>,
     req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
     let tenant_id = current_tenant(&req)?;
+    let after_id = privacy_cursor(&query.after)?;
     let requests = state
         .list_requests
-        .execute_for_tenant(tenant_id, query.status, 100)
+        .execute_for_tenant(tenant_id, query.status, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(requests))
@@ -769,9 +811,17 @@ pub async fn list_tenant_dsrs(
 // Platform operator
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListRequestsQuery {
+    /// Filter by status.
     pub status: Option<DsrStatus>,
+    /// Page size, clamped to 1..=200.
+    #[param(schema_with = privacy_limit_schema)]
+    pub limit: Option<u32>,
+    /// Cursor: the id of the last request of the previous page. Absent for
+    /// the first page; the page is ordered newest first.
+    pub after: Option<String>,
 }
 
 /// `GET /api/v1/platform/privacy/requests` — operator view.
@@ -780,10 +830,12 @@ pub struct ListRequestsQuery {
     path = "/api/v1/platform/privacy/requests",
     tag = "privacy",
     operation_id = "list_dsrs",
-    params(("status" = Option<DsrStatus>, Query, description = "Filter by status")),
+    params(ListRequestsQuery),
     responses(
         (status = 200, description = "Requests", body = Vec<crate::application::RequestOperatorView>),
-        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail)
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]
 pub async fn list_dsrs(
@@ -792,9 +844,10 @@ pub async fn list_dsrs(
     _guard: RequiredPermission,
     query: web::Query<ListRequestsQuery>,
 ) -> Result<impl Responder, ApiError> {
+    let after_id = privacy_cursor(&query.after)?;
     let requests = state
         .list_requests
-        .execute(query.status, 200)
+        .execute(query.status, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(requests))
@@ -868,14 +921,26 @@ pub async fn extend_dsr(
     path = "/api/v1/platform/privacy/appeals",
     tag = "privacy",
     operation_id = "list_appeals",
-    responses((status = 200, description = "Open appeals", body = Vec<crate::domain::Appeal>))
+    params(PrivacyPageQuery),
+    responses(
+        (status = 200, description = "One page of open appeals, oldest first", body = Vec<crate::domain::Appeal>),
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = sanvi_http::ProblemDetail)
+    )
 )]
 pub async fn list_appeals(
     state: web::Data<PrivacyState>,
     _subject: OptionalSubject,
     _guard: RequiredPermission,
+    query: web::Query<PrivacyPageQuery>,
 ) -> Result<impl Responder, ApiError> {
-    let appeals = state.list_appeals.execute(200).await.map_err(api_error)?;
+    let after_id = privacy_cursor(&query.after)?;
+    let appeals = state
+        .list_appeals
+        .execute(query.limit, after_id)
+        .await
+        .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(appeals))
 }
 
@@ -974,14 +1039,26 @@ pub async fn upsert_jurisdiction(
     path = "/api/v1/platform/privacy/holds",
     tag = "privacy",
     operation_id = "list_holds",
-    responses((status = 200, description = "Legal holds", body = Vec<crate::domain::LegalHold>))
+    params(PrivacyPageQuery),
+    responses(
+        (status = 200, description = "One page of legal holds, newest first", body = Vec<crate::domain::LegalHold>),
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = sanvi_http::ProblemDetail)
+    )
 )]
 pub async fn list_holds(
     state: web::Data<PrivacyState>,
     _subject: OptionalSubject,
     _guard: RequiredPermission,
+    query: web::Query<PrivacyPageQuery>,
 ) -> Result<impl Responder, ApiError> {
-    let holds = state.list_holds.execute(true).await.map_err(api_error)?;
+    let after_id = privacy_cursor(&query.after)?;
+    let holds = state
+        .list_holds
+        .execute(true, query.limit, after_id)
+        .await
+        .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(holds))
 }
 
@@ -1040,14 +1117,26 @@ pub async fn release_hold(
     path = "/api/v1/platform/privacy/incidents",
     tag = "privacy",
     operation_id = "list_incidents",
-    responses((status = 200, description = "Incidents", body = Vec<crate::domain::BreachIncident>))
+    params(PrivacyPageQuery),
+    responses(
+        (status = 200, description = "One page of incidents, newest first", body = Vec<crate::domain::BreachIncident>),
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = sanvi_http::ProblemDetail)
+    )
 )]
 pub async fn list_incidents(
     state: web::Data<PrivacyState>,
     _subject: OptionalSubject,
     _guard: RequiredPermission,
+    query: web::Query<PrivacyPageQuery>,
 ) -> Result<impl Responder, ApiError> {
-    let incidents = state.list_incidents.execute().await.map_err(api_error)?;
+    let after_id = privacy_cursor(&query.after)?;
+    let incidents = state
+        .list_incidents
+        .execute(query.limit, after_id)
+        .await
+        .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(incidents))
 }
 
@@ -1085,18 +1174,28 @@ pub async fn record_incident(
     path = "/api/v1/platform/privacy/incidents/{id}/obligations",
     tag = "privacy",
     operation_id = "list_obligations",
-    params(("id" = String, Path, description = "The incident id")),
-    responses((status = 200, description = "Obligations", body = Vec<crate::domain::NotificationObligation>))
+    params(
+        ("id" = String, Path, description = "The incident id"),
+        PrivacyPageQuery
+    ),
+    responses(
+        (status = 200, description = "One page of the incident's obligations, newest first", body = Vec<crate::domain::NotificationObligation>),
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = sanvi_http::ProblemDetail)
+    )
 )]
 pub async fn list_obligations(
     state: web::Data<PrivacyState>,
     path: web::Path<String>,
     _subject: OptionalSubject,
     _guard: RequiredPermission,
+    query: web::Query<PrivacyPageQuery>,
 ) -> Result<impl Responder, ApiError> {
+    let after_id = privacy_cursor(&query.after)?;
     let obligations = state
         .list_obligations
-        .execute(incident_id(&path)?)
+        .execute(incident_id(&path)?, query.limit, after_id)
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(obligations))
@@ -1248,14 +1347,26 @@ pub async fn upsert_activity(
     path = "/api/v1/platform/privacy/assessments",
     tag = "privacy",
     operation_id = "list_assessments",
-    responses((status = 200, description = "Assessments", body = Vec<crate::domain::RiskAssessment>))
+    params(PrivacyPageQuery),
+    responses(
+        (status = 200, description = "One page of risk assessments, newest first", body = Vec<crate::domain::RiskAssessment>),
+        (status = 400, description = "Malformed cursor", body = sanvi_http::ProblemDetail),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 504, description = "Statement timeout - the request exceeded its budget", body = sanvi_http::ProblemDetail)
+    )
 )]
 pub async fn list_assessments(
     state: web::Data<PrivacyState>,
     _subject: OptionalSubject,
     _guard: RequiredPermission,
+    query: web::Query<PrivacyPageQuery>,
 ) -> Result<impl Responder, ApiError> {
-    let assessments = state.list_assessments.execute().await.map_err(api_error)?;
+    let after_id = privacy_cursor(&query.after)?;
+    let assessments = state
+        .list_assessments
+        .execute(query.limit, after_id)
+        .await
+        .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(assessments))
 }
 

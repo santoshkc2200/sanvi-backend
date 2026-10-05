@@ -139,6 +139,27 @@ paths:
   /api/v1/tenant/invitations:
     get:
       operationId: list_invitations
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the id of the last invitation of the previous page. Absent
+          for the first page; the page is ordered newest first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -148,12 +169,24 @@ paths:
                   $ref: '#/components/schemas/InvitationView'
                 type: array
           description: Invitations
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '401':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout — the request exceeded its budget
       summary: '`GET /api/v1/tenant/invitations` — pending and accepted invitations.'
       tags:
       - identity
@@ -283,6 +316,27 @@ paths:
   /api/v1/tenant/members:
     get:
       operationId: list_members
+      parameters:
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 200
+          description: Page size, clamped to 1..=200; 200 when absent.
+          examples:
+          - 200
+          format: int32
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: |-
+          Cursor: the user id of the last member of the previous page. Absent
+          for the first page; the page is ordered newest member first.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -292,6 +346,12 @@ paths:
                   $ref: '#/components/schemas/MemberView'
                 type: array
           description: Members
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed cursor
         '401':
           content:
             application/json:
@@ -304,6 +364,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
+        '504':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Statement timeout — the request exceeded its budget
       summary: '`GET /api/v1/tenant/members` — the tenant''s members.'
       tags:
       - identity

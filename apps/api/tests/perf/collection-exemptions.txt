@@ -1,0 +1,78 @@
+# Collection exemptions — TASK-021 slice 11.2b (FR-1108).
+#
+# One line per exempted collection endpoint: `operationId | reason`.
+# An exemption is for surfaces whose size a client cannot influence:
+# platform-curated catalogs and registries, documents whose PUT mirrors the
+# GET, and reports bounded by their own date/subject arguments. Anything that
+# grows with tenant activity belongs behind a bounded `limit` instead.
+#
+# The gate fails on stale lines: an operation that has gained a bounded
+# `limit`, or no longer exists, must be removed from this file.
+
+# access — curated RBAC and entitlement catalogs
+list_permissions | fixed permission catalog seeded by the access context
+list_features | platform feature catalog, admin-authored and slowly growing by design
+list_roles_platform | curated platform role registry, admin-authored
+list_roles_tenant | curated tenant role registry, admin-authored
+list_tenant_entitlements | derived view over the plan catalog's grants, not an independent collection
+
+# advertising — platform registry and date-range reports
+list_ad_platforms | fixed ad-platform registry (one row per integrated platform)
+list_connections | bounded by the ad-platform registry a connection is created against
+get_ads_metrics | report over the requested date range, not an open-ended collection
+get_ads_metrics_summary | report over the requested date range, not an open-ended collection
+
+# billing — plan catalog
+list_plans | plan catalog, operator-authored
+list_public_plans | public projection of the plan catalog
+
+# localization — document-sync surfaces and the locale catalog
+get_platform_translations | bulk document sync surface; PUT mirrors the GET and the catalog size is platform-controlled
+get_localization_overrides | bulk document sync surface; PUT mirrors the GET and overrides are tenant-authored whole
+get_public_locales | supported-locale catalog
+
+# payments — provider catalog and live provider window
+list_payment_providers | payment-provider registry (one row per integrated provider)
+list_tenant_payouts | single live window read from the payout provider, which caps the page it returns
+
+# platform_admin — curated per-tenant sets
+list_entitlement_overrides | per-tenant override set, platform-admin-authored and small by usage
+
+# privacy — registries, catalogs, per-subject records and bounded reports
+list_activities | processing-activity registry, platform-curated
+list_jurisdictions | jurisdiction catalog
+list_retention_rules | retention rule catalog, platform-curated
+list_subprocessors | sub-processor registry, platform-curated
+list_public_subprocessors | public projection of the sub-processor registry
+get_consents | per-subject consent record set
+get_public_metrics | yearly aggregate report
+
+# theming — curated theme registries
+list_platform_themes | platform-curated theme registry, admin-authored
+list_available_themes | curated subset of the theme registry offered to a tenant
+
+# ---------------------------------------------------------------------------
+# Single-entity and report surfaces. Structurally the walker sees an array of
+# objects inside these responses; semantically the array is embedded children
+# of one parent entity (named by a path parameter or a singleton surface) or
+# a report whose extent its own arguments bound. None of them walks a table.
+# ---------------------------------------------------------------------------
+get_me | singleton identity projection; memberships are embedded children of the one subject
+list_sessions | returns only the caller's current session resolved from Kratos — a singleton by construction, not a session directory
+readiness | singleton readiness report; entries are the probe results for this process
+get_platform_ads_health | per-platform health report assembled for the request
+get_ads_metrics_freshness | per-campaign freshness report for the requested window
+get_spend_status | per-campaign spend report for the requested window
+get_directives | per-subject privacy directive record set
+get_privacy_notice | single notice document; sections are part of the document
+get_notice_at_collection | single notice-at-collection document
+get_public_theme | single resolved theme document; tokens/variables are part of the document
+get_tenant_theme_draft | single draft theme document
+preview_tenant_theme | single preview document rendered for the request
+get_campaign | single campaign; embedded collections are its own children
+get_creative | single creative; embedded collections are its own children
+get_creative_previews | previews derived per placement of the one named creative
+get_tenant_payment | single payment with its embedded refunds/dispute references
+oauth_callback | single connection view produced by completing one handshake
+get_domain_instructions | instruction document for the one named domain
+search_domains | per-query availability document; the embedded array is the TLD pricing for the one searched term
