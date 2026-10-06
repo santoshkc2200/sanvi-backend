@@ -38,3 +38,8 @@ sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+# The pool-overlay tests deserialize partial `[worker_pool]` sections;
+# serde_json is the format the workspace's other config tests use for that.
+serde_json.workspace = true

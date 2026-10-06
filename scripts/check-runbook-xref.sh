@@ -57,11 +57,18 @@ scan_tree() {
     fi
     python3 - "$rules" <<'PY' > "$tsv"
 import json, sys
+
+# LF only: a native Windows python translates \n to \r\n on stdout, and a
+# trailing \r in the runbook column breaks every -f check below (the same
+# portability class the layering/secret-scan gates fixed in 11.5g).
+sys.stdout.reconfigure(newline="\n")
 doc = json.load(open(sys.argv[1]))
 for rule in doc["rules"]:
     print(f'{rule["alert"]}\t{rule["runbook"]}')
 PY
     while IFS=$'\t' read -r alert runbook; do
+        # Belt and braces for any host whose python still writes CRLF.
+        runbook="${runbook%$'\r'}"
         local path="$tree/$runbook"
         if [[ ! -f "$path" ]]; then
             fail "alert $alert names runbook $runbook which does not exist"

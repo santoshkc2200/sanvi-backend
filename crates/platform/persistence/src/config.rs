@@ -40,6 +40,13 @@ pub struct DatabaseConfig {
     /// budget.
     #[serde(default = "default_statement_timeout_ms")]
     pub statement_timeout_ms: u64,
+    /// `application_name` the pool's connections present to Postgres. Distinct
+    /// per process (`sanvi-api` / `sanvi-worker`) so `pg_stat_activity`
+    /// attributes connections — and pool demand — to the process holding them
+    /// (TASK-021 11.2f: the input the per-process pool ceilings are measured
+    /// from). Absent configs keep the historical `"sanvi"`.
+    #[serde(default = "default_application_name")]
+    pub application_name: String,
     pub ssl_mode: SslMode,
     pub migrations_dir: String,
 }
@@ -50,6 +57,10 @@ pub struct DatabaseConfig {
 /// one. Long-running jobs override it per deployment.
 fn default_statement_timeout_ms() -> u64 {
     10_000
+}
+
+fn default_application_name() -> String {
+    "sanvi".to_string()
 }
 
 impl Default for DatabaseConfig {
@@ -66,6 +77,7 @@ impl Default for DatabaseConfig {
             idle_timeout_secs: 300,
             max_lifetime_secs: 1800,
             statement_timeout_ms: default_statement_timeout_ms(),
+            application_name: default_application_name(),
             ssl_mode: SslMode::Disable,
             migrations_dir: "./migrations".to_string(),
         }
@@ -86,6 +98,7 @@ impl fmt::Debug for DatabaseConfig {
             .field("idle_timeout_secs", &self.idle_timeout_secs)
             .field("max_lifetime_secs", &self.max_lifetime_secs)
             .field("statement_timeout_ms", &self.statement_timeout_ms)
+            .field("application_name", &self.application_name)
             .field("ssl_mode", &self.ssl_mode)
             .field("migrations_dir", &self.migrations_dir)
             .finish()
@@ -116,6 +129,9 @@ impl DatabaseConfig {
         }
         if self.acquire_timeout_secs == 0 {
             problems.push("database.acquire_timeout_secs must be >= 1".to_string());
+        }
+        if self.application_name.trim().is_empty() {
+            problems.push("database.application_name must not be empty".to_string());
         }
         if self.migrations_dir.trim().is_empty() {
             problems.push("database.migrations_dir must not be empty".to_string());
@@ -208,6 +224,9 @@ mod tests {
         }"#;
         let config: DatabaseConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.statement_timeout_ms, 10_000);
+        // Same overlay-compatibility rule for the application name: a config
+        // that predates the field (or omits it) keeps the historical value.
+        assert_eq!(config.application_name, "sanvi");
 
         let mut disabled: serde_json::Value = serde_json::from_str(json).unwrap();
         disabled["statement_timeout_ms"] = serde_json::json!(0);

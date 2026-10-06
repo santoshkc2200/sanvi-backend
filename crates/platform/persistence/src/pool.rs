@@ -16,7 +16,7 @@ pub async fn build_pool(config: &DatabaseConfig) -> Result<PgPool> {
         .port(config.port)
         .database(&config.name)
         .username(&config.user)
-        .application_name("sanvi");
+        .application_name(&config.application_name);
 
     if !config.password.is_empty() {
         options = options.password(&config.password);
@@ -51,6 +51,7 @@ pub async fn build_pool(config: &DatabaseConfig) -> Result<PgPool> {
         port = config.port,
         database = %config.name,
         user = %config.user,
+        application_name = %config.application_name,
         statement_timeout_ms = config.statement_timeout_ms,
         "connected to postgres",
     );

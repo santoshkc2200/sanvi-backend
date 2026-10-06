@@ -3959,6 +3959,7 @@ dependencies = [
  "sanvi-tenancy",
  "sanvi-theming",
  "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tracing",

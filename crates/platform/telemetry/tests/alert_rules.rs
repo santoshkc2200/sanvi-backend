@@ -461,6 +461,12 @@ const EXPORTED_METRICS: &[&str] = &[
     "http_server_duration_seconds_bucket",
     "tenant_resolution_duration",
     "tenant_resolution_source_total",
+    // platform/persistence/src/pool_metrics.rs (TASK-021 11.2f: the pool
+    // saturation signals the DbPool* rules alert on)
+    "db_pool_size_gauge",
+    "db_pool_idle_gauge",
+    "db_pool_acquire_seconds",
+    "db_pool_acquire_failures_total",
     // contexts/payments/src/adapters/metrics.rs
     "payments_platform_balance_movements_total",
     "payments_connection_status_gauge",
@@ -495,6 +501,7 @@ const EXPORTED_METRICS: &[&str] = &[
 /// renaming or moving a source breaks the compile, not the guarantee.
 const METRIC_SOURCES: &[&str] = &[
     include_str!("../../http/src/metrics.rs"),
+    include_str!("../../persistence/src/pool_metrics.rs"),
     include_str!("../../../contexts/payments/src/adapters/metrics.rs"),
     include_str!("../../../contexts/advertising/src/adapters/metrics.rs"),
 ];

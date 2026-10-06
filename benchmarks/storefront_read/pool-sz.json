@@ -1,0 +1,34 @@
+{
+  "scenario": "storefront_read",
+  "tag": "pool-sz",
+  "seed": "1",
+  "offered_rate_rps": 150,
+  "duration": "60s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 16,
+    "os": "Windows 11 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 5.4187,
+    "http_req_duration_p95_ms": 8.231919999999997,
+    "http_req_duration_p99_ms": 14.318173999999983,
+    "http_req_duration_avg_ms": 5.684984685885666,
+    "http_reqs_total": 18003,
+    "http_req_failed_rate": 0,
+    "iterations_total": 9001,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "lab: anonymous storefront SSR bootstrap (tenant-context + public theme)",
+    "journey budget from the plan: p95 <= 200 ms"
+  ]
+}

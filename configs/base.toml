@@ -124,13 +124,42 @@ port = 5432
 name = "sanvi"
 user = "sanvi_app"        # NOBYPASSRLS application role
 password = ""             # env only: SANVI__DATABASE__PASSWORD
+# The request-facing pool — the api process. The worker applies its own
+# overlay ([worker_pool] below) on top of these values, so each process has
+# its own measured ceiling and statement budget (TASK-021 11.2f,
+# benchmarks/pool-sizing-2026-10-06.md).
 max_connections = 10
 min_connections = 1
 acquire_timeout_secs = 10
 idle_timeout_secs = 300
 max_lifetime_secs = 1800
+# FR-1110: a statement that cannot finish inside the request budget is
+# cancelled by the database (this sits under the 30 s request middleware)
+# and surfaces as the contract's request-timeout problem. `0` disables —
+# the migration paths take that branch.
+statement_timeout_ms = 10000
+# Distinct per process so pg_stat_activity attributes connections to the
+# process holding them; the worker overrides this via [worker_pool].
+application_name = "sanvi-api"
 ssl_mode = "disable"
 migrations_dir = "./migrations"
+
+# The worker process's pool, applied over [database] by the worker's config
+# (apps/worker): absent keys inherit, so this section carries only what
+# measurement says must differ. Ceiling 8 = 2× the highest per-sample worker
+# demand measured under the steady-state shapes (4 open connections); the
+# api's ceiling of 10 survived the 3× probe with idle ≥ 8 of 10 and no
+# acquire wait above the 5 ms bucket, so it is unchanged.
+[worker_pool]
+max_connections = 8
+# Jobs have no client waiting, so the request-shaped 10 s budget would
+# cancel legitimate batch statements (retention deletes, metrics
+# aggregation); 60 s is 6× the api budget while still bounded — a batch
+# statement that cannot finish inside it needs chunking (TASK-028), not a
+# bigger cap. Measured statement ceiling under the steady-state shapes:
+# sub-second (benchmarks/pool-sizing-2026-10-06.md).
+statement_timeout_ms = 60000
+application_name = "sanvi-worker"
 
 [redis]
 url = "redis://localhost:6379"
@@ -422,6 +451,10 @@ advertising_metrics_ingestion_interval_secs = 3600
 advertising_token_refresh_interval_secs = 3600
 # A connection unverified for this long is picked up by the sweep above.
 advertising_token_refresh_stale_after_secs = 21600
+# 10.8: budget guardrails evaluation & spend anomaly sweep.
+advertising_budget_guardrails_interval_secs = 300
+# 10.8: budget rollover sweep.
+advertising_budget_rollover_interval_secs = 3600
 
 [payments]
 # Phase 09: tenant payment providers (Stripe Connect, direct charges —

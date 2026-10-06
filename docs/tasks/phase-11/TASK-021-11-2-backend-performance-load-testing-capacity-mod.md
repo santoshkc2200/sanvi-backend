@@ -647,3 +647,79 @@ over all 14 specs (no contract change); route-matrix regenerated — **one
 fingerprint row** (`advertising/src/adapters/http/handlers.rs`), no route
 rows; ga-checklist OK. Every new SQL statement is the runtime-checked
 `query_as` form — no `.sqlx` cache changes.
+
+### Slice 11.2f record — 2026-10-06
+
+Step 5 closed on the same Windows host as 11.2a–e; the measurement record is
+`benchmarks/pool-sizing-2026-10-06.md` (raw sampler log committed beside it;
+two 3× probe artifacts committed as `benchmarks/<scenario>/pool-sz.json`).
+The slice's numbers: **api ceiling 10 survives 3× the projected peak** (busy
+≤ 5 of 10 at any sampled instant, idle ≥ 5, no acquire probe above the 50 ms
+bucket across 744 probes, zero failures); **worker peak 4 connections**
+across every shape, so its new ceiling is 8 (2× measured peak); **statement
+ceiling in the heavy window 0.2 ms**, so the worker's new 60 s budget is a
+runaway bound five orders of magnitude above anything measured, not a tuned
+limit.
+
+**The load-bearing change is the split.** The worker previously took
+`[database]` whole — the production overlay shipped `max_connections = 50`
+*per process*, i.e. 100 against a default-100 Postgres before any migrator,
+superuser or session connection, an unexamined coincidence the 11.2a gauges
+never measured. Now `[database]` is the request-facing (api) pool and the
+worker applies a `[worker_pool]` overlay over it (`WorkerPoolConfig` in
+`apps/worker`, Option fields merged before `validate`, so validation sees
+the merged pair the way `build_pool` will): ceiling 8, statement timeout
+60 000 ms (jobs are not request-shaped; the api keeps 10 000 under the 30 s
+middleware), `application_name = "sanvi-worker"`. Prior values for every
+changed setting are in the benchmark doc's decision table; the api's
+production 50 remains a prior guess the lab cannot measure and is recorded
+as exactly that.
+
+**Per-process attribution.** `[database].application_name` (new, defaulted
+`"sanvi"`) replaces the hardcoded form in `build_pool`, and base.toml sets
+`sanvi-api` / `sanvi-worker` — `pg_stat_activity` now names the process
+holding each connection, which is how this capture separated the pools
+(arithmetic this time: total − api gauge; the worker has no HTTP scraper,
+the pre-existing export posture) and how every later capture (11.2i's soak,
+the capacity model) reads them directly. Four overlay unit tests in the
+worker cover inherit-only, override-only-carried-keys, validate-on-merged,
+and the distinct application name (empty override rejected).
+
+**Pool saturation is alert-covered (TASK-020 registry).** Two rules in
+`observability/alerts/rules.json`: `DbPoolAcquireWaitHigh` (ticket;
+p95 probe wait > 100 ms sustained 5 min — 20× the measured healthy ceiling
+of ≤ 5 ms, well under the 200 ms storefront budget, so it fires while there
+is still time to act) and `DbPoolAcquireFailures` (page; any probe acquire
+failure in 5 min — acquires failing means requests/jobs failed with them).
+Exprs ride the existing `db_pool_*` instruments from 11.2a
+(`histogram_quantile` over `db_pool_acquire_seconds_bucket`; `increase` on
+`db_pool_acquire_failures_total`); `EXPORTED_METRICS` gained the four pool
+metrics anchored to `pool_metrics.rs` in the alert-rules test (6/6 green,
+including the fire-on-breach / silent-when-clean evaluation for both new
+rules). New runbook `docs/runbooks/db-pool-saturation.md` carries both ids
+(runbook-xref OK) and opens with the probe semantics — the acquire number is
+a 1 Hz probe, not a hook — plus the assess/fix/verify loop (attribute by
+`application_name`, distinguish a slow database from a held connection, fix
+the query before touching a ceiling, record prior values).
+
+**Defect found and fixed here (measurement-led, the only config-behaviour
+change beyond the split).** The worker could not boot from the committed
+configs: `[scheduler]` in base.toml never received the two TASK-017 (10.8)
+keys `SchedulerConfig` requires (`advertising_budget_guardrails_interval_secs`,
+`advertising_budget_rollover_interval_secs` — the struct has no per-field
+serde defaults), so `WorkerConfig::validate` failed before a pool existed.
+Every environment that did not spell those keys as env overrides was running
+the api with no worker at all. Fixed by landing the struct's documented
+defaults in base.toml (the file's convention for every other interval) —
+and this is why the worker's side of the 11.2a pool capture was never taken.
+
+**Verification (scoped, this session).** Measurement first: the seven
+captured runs (five offered-rate + two 3× probes) finished 0 failed / 0
+dropped, rc 0, and the sampler's raw log is committed. Then
+`scripts/test.sh -p sanvi-persistence -p sanvi-api` (the slice's scoped
+tier) plus the worker suite (`scripts/test.sh -p sanvi-worker` — four new
+overlay tests) and the telemetry alert-rules gate; `cargo fmt --check`
+clean; clippy `-D warnings` clean over the changed crates; runbook-xref and
+ga-checklist OK. The lab release binaries were rebuilt from current main
+before the capture (11.2d/e read-model changes included); migrations applied
+on `sanvi_scale` (`migrate up` reports up to date) before any run.

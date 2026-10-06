@@ -36,6 +36,33 @@
       }
     },
     {
+      "alert": "DbPoolAcquireWaitHigh",
+      "symptom": "requests or jobs are queueing on the connection pool — p95 probe acquire wait exceeded 100 ms for five minutes",
+      "severity": "ticket",
+      "runbook": "docs/runbooks/db-pool-saturation.md",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(db_pool_acquire_seconds_bucket[5m]))) > 0.1",
+      "check": {
+        "kind": "p95_gauge",
+        "metric": "db_pool_acquire_seconds_p95_recorded",
+        "threshold": 0.1,
+        "for_secs": 300
+      }
+    },
+    {
+      "alert": "DbPoolAcquireFailures",
+      "symptom": "pool acquires are failing — a process could not check out a connection within its acquire budget",
+      "severity": "page",
+      "runbook": "docs/runbooks/db-pool-saturation.md",
+      "expr": "increase(db_pool_acquire_failures_total[5m]) > 0",
+      "check": {
+        "kind": "increase",
+        "metric": "db_pool_acquire_failures_total",
+        "window_secs": 300,
+        "threshold": 0,
+        "for_secs": 0
+      }
+    },
+    {
       "alert": "PaymentsPlatformBalanceMovement",
       "symptom": "funds moved across the platform balance — impossible by construction, always a sev-1",
       "severity": "page",

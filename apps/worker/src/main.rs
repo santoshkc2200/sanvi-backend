@@ -707,12 +707,59 @@ const fn default_true() -> bool {
     true
 }
 
+/// The worker's pool is not the api's. `[database]` is the request-facing
+/// pool (the api reads it directly); the worker applies this overlay on top
+/// of it, so every process gets its own measured ceiling and its own
+/// statement budget (TASK-021 11.2f). Every field is optional: absent keys
+/// inherit the shared `[database]` value.
+///
+/// The statement budget is the one that *differs by shape*: the api's cap
+/// exists so a client request fails inside its budget (FR-1110); worker jobs
+/// have no client waiting and legitimately run longer statements than any
+/// request (retention deletes, metrics aggregation over partitions), so the
+/// worker's budget is wider. It is not uncapped: a batch statement that
+/// cannot finish inside it needs chunking (TASK-028's archival work), not a
+/// bigger cap.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WorkerPoolConfig {
+    pub max_connections: Option<u32>,
+    pub min_connections: Option<u32>,
+    pub statement_timeout_ms: Option<u64>,
+    /// Distinct from the api's `application_name`, so `pg_stat_activity`
+    /// attributes connections — and pool demand — to the process holding
+    /// them.
+    pub application_name: Option<String>,
+}
+
+impl WorkerPoolConfig {
+    /// Merge the overlay onto the shared `[database]` values. Runs before
+    /// `validate`, so the merged pair is what is checked and what
+    /// `build_pool` sees.
+    fn apply(&self, database: &mut DatabaseConfig) {
+        if let Some(max) = self.max_connections {
+            database.max_connections = max;
+        }
+        if let Some(min) = self.min_connections {
+            database.min_connections = min;
+        }
+        if let Some(timeout) = self.statement_timeout_ms {
+            database.statement_timeout_ms = timeout;
+        }
+        if let Some(name) = &self.application_name {
+            database.application_name = name.clone();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct WorkerConfig {
     #[serde(default)]
     pub ids: IdsConfig,
     pub database: DatabaseConfig,
+    #[serde(default)]
+    pub worker_pool: WorkerPoolConfig,
     pub redis: RedisConfig,
     pub telemetry: TelemetryConfig,
     pub outbox: OutboxConfig,
@@ -777,12 +824,16 @@ impl WorkerConfig {
 
 fn load_config() -> anyhow::Result<WorkerConfig> {
     let environment = std::env::var("SANVI_ENV").unwrap_or_else(|_| "local".to_string());
-    let config: WorkerConfig = Figment::new()
+    let mut config: WorkerConfig = Figment::new()
         .merge(Toml::file("configs/base.toml"))
         .merge(Toml::file(format!("configs/{environment}.toml")))
         .merge(Env::prefixed("SANVI__").split("__"))
         .extract()
         .context("failed to load configuration")?;
+    // The worker's own pool ceiling and statement budget ride on top of the
+    // shared `[database]` values (TASK-021 11.2f); validation and
+    // `build_pool` see the merged pair.
+    config.worker_pool.apply(&mut config.database);
     config.validate()?;
     config.ids.resolve(&config.telemetry.environment, 2)?;
     Ok(config)
@@ -3168,8 +3219,9 @@ async fn main() -> ExitCode {
 
 #[cfg(test)]
 mod config_tests {
-    use super::{FeaturesConfig, WorkerConfig, notifications_disabled_reason};
+    use super::{FeaturesConfig, WorkerConfig, WorkerPoolConfig, notifications_disabled_reason};
     use sanvi_kernel::IdsConfig;
+    use sanvi_persistence::DatabaseConfig;
 
     fn configured() -> WorkerConfig {
         let mut config = WorkerConfig::default();
@@ -3227,5 +3279,58 @@ mod config_tests {
         let node = IdsConfig::default().resolve("local", 2).unwrap();
 
         assert_eq!(node.get(), 2);
+    }
+
+    #[test]
+    fn an_absent_worker_pool_section_inherits_the_shared_database_values() {
+        let mut database = DatabaseConfig::default();
+        let before = database.max_connections;
+        WorkerPoolConfig::default().apply(&mut database);
+
+        assert_eq!(database.max_connections, before);
+        assert_eq!(database.statement_timeout_ms, 10_000);
+    }
+
+    #[test]
+    fn the_worker_pool_overlay_overrides_only_the_keys_it_carries() {
+        let overlay: WorkerPoolConfig =
+            serde_json::from_str(r#"{ "max_connections": 8, "statement_timeout_ms": 60000 }"#)
+                .unwrap();
+        let mut database = DatabaseConfig::default();
+        overlay.apply(&mut database);
+
+        assert_eq!(database.max_connections, 8);
+        assert_eq!(database.statement_timeout_ms, 60_000);
+        // Everything the overlay does not carry keeps the shared value.
+        assert_eq!(database.min_connections, 1);
+        assert_eq!(database.acquire_timeout_secs, 10);
+    }
+
+    #[test]
+    fn a_worker_pool_below_the_shared_minimum_is_rejected_after_the_merge() {
+        // An overlay that asks for fewer than `[database]`'s min_connections
+        // must fail validation — the check runs on the merged pair, which is
+        // what `build_pool` will see, not on the section in isolation.
+        let overlay: WorkerPoolConfig =
+            serde_json::from_str(r#"{ "max_connections": 2, "min_connections": 4 }"#).unwrap();
+        let mut database = DatabaseConfig::default();
+        overlay.apply(&mut database);
+
+        assert!(database.validate().is_err());
+    }
+
+    #[test]
+    fn the_worker_presents_a_distinct_application_name() {
+        let overlay: WorkerPoolConfig =
+            serde_json::from_str(r#"{ "application_name": "sanvi-worker" }"#).unwrap();
+        let mut database = DatabaseConfig::default();
+        overlay.apply(&mut database);
+
+        assert_eq!(database.application_name, "sanvi-worker");
+        // And an empty override is a config error, not a silent blank name.
+        let blank: WorkerPoolConfig =
+            serde_json::from_str(r#"{ "application_name": " " }"#).unwrap();
+        blank.apply(&mut database);
+        assert!(database.validate().is_err());
     }
 }
