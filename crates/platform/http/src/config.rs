@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::abuse::AbuseSurface;
+use crate::compression::CompressionConfig;
 
 /// HTTP server settings. All values are validated together at startup.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -14,6 +15,9 @@ pub struct ServerConfig {
     pub request_timeout_secs: u64,
     pub max_body_bytes: usize,
     pub max_concurrency: usize,
+    /// Idle keep-alive timeout per connection. `0` disables keep-alive.
+    #[serde(default = "default_keep_alive_secs")]
+    pub keep_alive_secs: u64,
     pub cors: CorsConfig,
     pub rate_limit: RateLimitConfig,
     pub tenant: TenantPolicyConfig,
@@ -21,6 +25,17 @@ pub struct ServerConfig {
     pub security: SecurityHeadersConfig,
     #[serde(default)]
     pub abuse: AbuseControlsConfig,
+    /// Response compression with a size floor (TASK-021 step 7).
+    #[serde(default)]
+    pub compression: CompressionConfig,
+}
+
+fn default_keep_alive_secs() -> u64 {
+    // actix's own default is 5 s (client churn on every idle gap); 60 s sits
+    // at the ubiquitous load-balancer idle default, so the server almost
+    // never holds a connection the balancer has already dropped. Recorded
+    // in `benchmarks/transport-2026-10-06.md`.
+    60
 }
 
 impl Default for ServerConfig {
@@ -33,11 +48,13 @@ impl Default for ServerConfig {
             request_timeout_secs: 30,
             max_body_bytes: 1024 * 1024,
             max_concurrency: 10_000,
+            keep_alive_secs: default_keep_alive_secs(),
             cors: CorsConfig::default(),
             rate_limit: RateLimitConfig::default(),
             tenant: TenantPolicyConfig::default(),
             security: SecurityHeadersConfig::default(),
             abuse: AbuseControlsConfig::default(),
+            compression: CompressionConfig::default(),
         }
     }
 }
@@ -657,6 +674,39 @@ mod tests {
             SecurityHeadersConfig { hsts: None }
         );
         ServerConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn transport_defaults_are_the_tuned_values() {
+        let config = ServerConfig::default();
+        assert_eq!(config.keep_alive_secs, 60);
+        assert!(config.compression.enabled);
+        assert_eq!(config.compression.min_bytes, 1024);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn server_config_without_transport_keys_still_parses() {
+        // Configs written before step 7 carry no `keep_alive_secs` or
+        // `compression` keys: they take the tuned defaults rather than
+        // failing to boot.
+        let config: ServerConfig = serde_json::from_value(serde_json::json!({
+            "host": "0.0.0.0",
+            "port": 8080,
+            "workers": 0,
+            "shutdown_timeout_secs": 30,
+            "request_timeout_secs": 30,
+            "max_body_bytes": 1048576,
+            "max_concurrency": 10000,
+            "cors": {"allowed_origins": [], "allow_credentials": true, "max_age_secs": 600},
+            "rate_limit": {"enabled": false, "burst": 60, "per_second": 10, "fail_open": true, "exempt_paths": []},
+            "tenant": {"public_prefixes": [], "suspended_allowlist": [], "tenant_rate_limit": null}
+        }))
+        .expect("pre-step-7 configs parse");
+        assert_eq!(config.keep_alive_secs, 60);
+        assert!(config.compression.enabled);
+        assert_eq!(config.compression.min_bytes, 1024);
+        config.validate().unwrap();
     }
 
     #[test]

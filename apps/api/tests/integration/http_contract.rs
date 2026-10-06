@@ -392,6 +392,54 @@ async fn openapi_json_is_served() {
 }
 
 #[actix_web::test]
+async fn openapi_json_is_pre_rendered_and_conditional() {
+    // TASK-021 11.2h: the merged document is static per build, so it is
+    // rendered once (two reads are byte-identical) and carries a strong
+    // validator — a revalidation costs headers, not a rebuild.
+    let app = test::init_service(test_app_with_tenancy(false)).await;
+
+    let req = test::TestRequest::get().uri("/openapi.json").to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let etag = res
+        .headers()
+        .get("etag")
+        .expect("the contract carries a validator")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        res.headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "public, no-cache"
+    );
+    let first = test::read_body(res).await;
+    // The floor applies to the API's largest static asset: a contract that
+    // shrank under it would silently stop being compressed.
+    assert!(
+        first.len() > sanvi_http::CompressionConfig::default().min_bytes,
+        "the contract must stay above the compression floor ({} bytes)",
+        first.len()
+    );
+
+    let req = test::TestRequest::get().uri("/openapi.json").to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(test::read_body(res).await, first);
+
+    let req = test::TestRequest::get()
+        .uri("/openapi.json")
+        .insert_header(("if-none-match", etag.clone()))
+        .to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(res.headers().get("etag").unwrap().to_str().unwrap(), etag);
+    assert!(test::read_body(res).await.is_empty());
+}
+
+#[actix_web::test]
 async fn metrics_endpoint_renders_prometheus_format() {
     let app = test::init_service(test_app_with_tenancy(false)).await;
     let req = test::TestRequest::get().uri("/metrics").to_request();

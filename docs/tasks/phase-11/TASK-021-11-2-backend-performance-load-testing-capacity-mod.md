@@ -807,3 +807,70 @@ sanvi-worker; `cargo fmt` clean; clippy `--all-targets` clean (zero
 warnings) over the five changed crates. The platform crate gained a
 `prometheus` dependency and a `futures-util` dev-dependency; access gained
 `sanvi-cache`; api and worker gained `sanvi-cache` for the resolver wiring.
+
+### Slice 11.2h record — 2026-10-06
+
+Step 7 closed. The slice's numbers are in
+`benchmarks/transport-2026-10-06.md`; the shape, in brief:
+
+**Compression with a floor, not the stock middleware.**
+`sanvi_http::SelectiveCompression` (new `compression.rs`) negotiates with
+actix's own `AcceptEncoding::negotiate` (brotli > zstd > gzip > deflate at
+equal q) and encodes with actix's own `Encoder` — but refuses what the
+stock `Compress` accepts: bodies under `CompressionConfig::min_bytes`
+(1024, `[server.compression]`, `enabled = false` is the rollback),
+already-compressed content types (allow-list is textual only — the stock
+predicate still encodes `application/zip` and audio), and any response
+already carrying a non-`identity` `Content-Encoding`. Unknown types fail
+closed. Refuse-everything clients get `406` + `Vary` without the handler
+running; every encoded response carries `Vary: Accept-Encoding` (the stock
+middleware sets it only on its 406 path). The floor is measured, not
+chosen: the contract renders 320,559 B → ~51 KB gzip, while a 219 B
+problem body saves 38 B — tens of bytes at the cost of a compression pass
+on the hottest path.
+
+**Keep-alive 5 s → 60 s.** actix's default is 5 s (verified in the
+vendored `actix-http` source) — handshake churn on every idle gap.
+`server.keep_alive_secs` (`0` disables), wired in `bind_without_run`;
+60 sits at the ubiquitous balancer idle default. The production balancer's
+actual timeout is the number this host cannot supply — recorded as tunable
+config, not measurement.
+
+**ETags.** `ConditionalEtag` (new `etag.rs`) stamps a strong validator
+(`"sha256[..128]"` over the identity bytes) on successful GET/HEAD
+responses and answers `304` on weak-comparison match (`*`, lists, `W/`);
+streams, empties, non-2xx and already-tagged responses (theming,
+localization — left authoritative) pass through. `/openapi.json` is
+pre-rendered once with `Cache-Control: public, no-cache`: the 11.2c
+profile's 25 ms rebuild disappears for 200s and revalidations alike; two
+reads are byte-identical. `/metrics` gets a validator like everything
+else but no cacheability — deliberately not cached, it is live per scrape.
+
+**Payload trimming: audited, not cut.** `to_json()` is already compact
+(verified in the vendored utoipa source); field removal would change
+response bodies, which this task forbids. `PublicPlanView` and
+`PrivacyNoticeView` are lean; `ResolvedTheme`'s dual `tokens`/`css_vars`
+plus in-body `etag` are frontend-contract decisions deferred to TASK-026 /
+frontend TASK-022 — named here so the next slice does not re-audit.
+
+**Fails-before evidence.** The two first runs failed and are recorded:
+`Some(0)` with a zero floor encoded an empty body (the decision now
+requires non-empty — the `Encoder` agrees), and a hand-typed `Vary`
+substring in the test never matched (the assertion now lowercases both
+sides). The required floor proof: 1023 B passes through, 1024 B encodes
+(`>=`, pinned); a 4 KiB PNG and a handler-encoded gzip pass through
+byte-identical; br and gzip round-trip to the exact handler bytes.
+
+**Verification (scoped, this session).** `cargo nextest run -p sanvi-http`
+100/100 (11 transport wire tests + decision-matrix units included);
+`sanvi-api` http_contract 18/18 (incl. the new pre-render/conditional test
+with its above-the-floor assertion) + headers_snapshot 3/3; `cargo fmt`
+clean; clippy `--all-targets -D warnings` clean over `sanvi-http` +
+`sanvi-api`; layering OK; `openapi --check` clean over all 14 specs (no
+contract change); route-matrix regenerated — fingerprint rows only
+(`apps/api/src/lib.rs`, five `sanvi-http` rows incl. the two new modules),
+no route rows; ga-checklist OK. New deps: `sha2` + `hex` (sanvi-http),
+`flate2` + `brotli` workspace (dev-decoders for the round-trip tests;
+both already in the lock). No `.sqlx` changes (no queries touched). The
+size probe (`size_probe.rs`) was deleted after its single run — it wrote
+the measured bytes and nothing else.

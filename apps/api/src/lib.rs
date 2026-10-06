@@ -12,9 +12,10 @@ use std::future::Future;
 use std::sync::Arc;
 
 use actix_web::{
-    App, HttpResponse,
+    App, HttpRequest, HttpResponse,
     body::BoxBody,
     dev::{ServiceRequest, ServiceResponse},
+    http::header,
     web,
 };
 use chrono::{DateTime, Utc};
@@ -3814,11 +3815,41 @@ async fn metrics(state: web::Data<AppState>) -> HttpResponse {
     }
 }
 
-/// `/openapi.json` handler: the merged contract document.
-async fn openapi_json() -> HttpResponse {
-    use utoipa::OpenApi as _;
-    let doc = ApiDoc::openapi();
+/// The merged contract document, rendered once: it is static per build, so
+/// rebuilding and re-serializing it per request (~25 ms avg in the 11.2c
+/// profile, the second-hottest endpoint) is pure waste. The validator is a
+/// strong ETag over the rendered bytes, so conditional requests revalidate
+/// without a body at all.
+///
+/// `Cache-Control: public, no-cache` lets shared caches store the document
+/// but forces revalidation on every reuse, so a deploy is visible as soon as
+/// the ETag moves. (The platform ETag middleware leaves this response alone
+/// — it already carries a validator.)
+static OPENAPI_JSON: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+
+fn rendered_openapi() -> &'static (String, String) {
+    OPENAPI_JSON.get_or_init(|| {
+        use utoipa::OpenApi as _;
+        let body = ApiDoc::openapi()
+            .to_json()
+            .expect("openapi serialization is infallible");
+        let etag = sanvi_http::etag_for_bytes(body.as_bytes());
+        (body, etag)
+    })
+}
+
+/// `/openapi.json` handler: the pre-rendered contract document.
+async fn openapi_json(req: HttpRequest) -> HttpResponse {
+    let (body, etag) = rendered_openapi();
+    if sanvi_http::if_none_match_matches(req.headers().get(header::IF_NONE_MATCH), etag) {
+        return HttpResponse::NotModified()
+            .insert_header(("etag", etag.clone()))
+            .insert_header(("cache-control", "public, no-cache"))
+            .finish();
+    }
     HttpResponse::Ok()
+        .insert_header(("etag", etag.clone()))
+        .insert_header(("cache-control", "public, no-cache"))
         .content_type("application/json")
-        .body(doc.to_json().expect("openapi serialization is infallible"))
+        .body(body.clone())
 }

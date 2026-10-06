@@ -18,6 +18,20 @@ shutdown_timeout_secs = 30
 request_timeout_secs = 30
 max_body_bytes = 1048576  # 1 MiB
 max_concurrency = 10000
+# Idle keep-alive per connection: 0 disables. actix's own default is 5 s
+# (connection churn on every idle gap); 60 s sits at the ubiquitous
+# load-balancer idle default so the server rarely holds a connection the
+# balancer has already dropped (TASK-021 11.2h,
+# benchmarks/transport-2026-10-06.md).
+keep_alive_secs = 60
+
+# Response compression (TASK-021 11.2h): brotli preferred, then zstd, gzip,
+# deflate — negotiated per request. Bodies under the floor pass through
+# untouched, as do already-compressed representations (images, audio,
+# archives, …) and anything already carrying a Content-Encoding.
+[server.compression]
+enabled = true
+min_bytes = 1024
 
 [server.cors]
 # Explicit origin allow-list; wildcards are rejected at startup.

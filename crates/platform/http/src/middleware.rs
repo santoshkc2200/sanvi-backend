@@ -10,7 +10,9 @@ use futures_util::FutureExt as _;
 use uuid::Uuid;
 
 use crate::authn::AuthnLayer;
+use crate::compression::SelectiveCompression;
 use crate::config::{CorsConfig, RateLimitConfig, ServerConfig};
+use crate::etag::ConditionalEtag;
 use crate::impersonation::ImpersonationLayer;
 use crate::locale::{LocaleMiddleware, LocaleResolutionLayer};
 use crate::metrics::{HttpInstruments, context_from_path};
@@ -53,8 +55,8 @@ const PUBLIC_CROSS_ORIGIN_PATHS: &[&str] = &["/api/v1/public/track"];
 /// metrics → request id → tracing span → traceparent header → concurrency
 /// limit → panic catch → rate limit → tenant resolution → authentication →
 /// impersonation → locale negotiation → tenant rate limit → request timeout
-/// → body normalize → CORS → security headers → abuse quota → error
-/// handlers.
+/// → body normalize → CORS → abuse quota → compression → etag → security
+/// headers → error handlers.
 ///
 /// `tenant` is `None` until the tenancy context is wired (phase 01+); without
 /// it every route behaves as a public route. `authn` is `None` until the
@@ -116,6 +118,11 @@ where
 
     app.wrap(crate::error::ErrorHandlersLayer)
         .wrap(SecurityHeaders { hsts })
+        // Validators over the identity bytes, before compression encodes
+        // them; compression outside the ETag so a 304 never carries a
+        // `Content-Encoding` and validators stay encoding-independent.
+        .wrap(ConditionalEtag)
+        .wrap(SelectiveCompression::new(config.compression))
         // Inside the security headers on purpose: a beacon the abuse quota
         // drops must be indistinguishable from one the handler accepted —
         // same status, body, and header set — or the headers become the

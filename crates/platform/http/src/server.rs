@@ -5,6 +5,7 @@ use actix_service::IntoServiceFactory;
 use actix_web::{
     body::MessageBody,
     dev::{AppConfig, Response},
+    http::KeepAlive,
 };
 
 use crate::config::ServerConfig;
@@ -39,6 +40,11 @@ where
         .workers(workers)
         .disable_signals()
         .shutdown_timeout(config.shutdown_timeout_secs)
+        .keep_alive(if config.keep_alive_secs == 0 {
+            KeepAlive::Disabled
+        } else {
+            KeepAlive::Timeout(Duration::from_secs(config.keep_alive_secs))
+        })
         .client_request_timeout(Duration::from_secs(config.request_timeout_secs + 5))
         .bind((config.host.as_str(), config.port))
 }

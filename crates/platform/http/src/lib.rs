@@ -2,10 +2,12 @@
 //! into.
 //!
 //! - [`server::bind`] builds the actix server with configured workers,
-//!   timeouts and graceful shutdown.
-//! - [`middleware::stack`] applies the canonical middleware chain:
-//!   concurrency limit → request id → tracing span → panic catch → CORS →
-//!   security headers → rate limit → tenant resolution → request timeout.
+//!   timeouts, keep-alive and graceful shutdown.
+//! - [`middleware::stack`] applies the canonical middleware chain (see its
+//!   docs for the full order): metrics → … → CORS → abuse quota →
+//!   compression → etag → security headers → error handlers.
+//! - [`compression`] encodes responses above a size floor, never twice.
+//! - [`etag`] stamps validators on GET/HEAD and answers `304`.
 //! - [`error`] defines the RFC 9457 `application/problem+json` model and the
 //!   single place where domain errors map to HTTP status codes.
 //! - [`openapi`] hosts the generated OpenAPI document and Scalar UI.
@@ -13,8 +15,10 @@
 pub mod abuse;
 pub mod authn;
 pub mod authz;
+pub mod compression;
 pub mod config;
 pub mod error;
+pub mod etag;
 pub mod features;
 pub mod impersonation;
 pub mod locale;
@@ -35,11 +39,13 @@ pub use authn::{
 pub use authz::{
     Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,
 };
+pub use compression::{CompressionConfig, SUPPORTED_ENCODINGS_LIST, SelectiveCompression};
 pub use config::{
     AbuseControlsConfig, CorsConfig, HstsConfig, RateLimitConfig, SecurityHeadersConfig,
     ServerConfig, SurfaceAbuseConfig, TenantPolicyConfig, WindowQuota,
 };
 pub use error::{ApiError, PROBLEM_TYPE_BASE, ProblemDetail, ProblemTranslator};
+pub use etag::{ConditionalEtag, etag_for_bytes, if_none_match_matches};
 pub use features::{FeatureGate, RequiredAnyFeature, RequiredFeature};
 pub use impersonation::{
     IMPERSONATION_BANNER_HEADER, IMPERSONATION_HEADER, ImpersonatedSubject, ImpersonationContext,
