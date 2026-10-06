@@ -311,9 +311,10 @@ rls-matrix:
     cargo nextest run -p sanvi-api --test integration rls_matrix
 
 # TASK-021 (FR-1108/FR-1110): the perf test target — the bounded-collections
-# contract gate today; EXPLAIN assertions (11.2d) and statement-count guards
-# (11.2e) join it as their slices land. Same scoping convention as
-# test-idor: the workspace suite runs it too.
+# contract gate (11.2b) and the EXPLAIN plan gate for the profiled read
+# models (11.2d); statement-count guards (11.2e) join it as their slice
+# lands. Same scoping convention as test-idor: the workspace suite runs it
+# too.
 test-perf:
     #!/usr/bin/env bash
     set -euo pipefail

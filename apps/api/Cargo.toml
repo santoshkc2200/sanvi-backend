@@ -49,6 +49,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 actix-http.workspace = true
+hex.workspace = true
+sha2.workspace = true
 sanvi-kernel.workspace = true
 sanvi-domains.workspace = true
 sanvi-payments.workspace = true

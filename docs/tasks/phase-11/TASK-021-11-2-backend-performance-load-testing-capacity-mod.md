@@ -462,3 +462,78 @@ note for Windows hosts: run the probe script with `MSYS_NO_PATHCONV=1`
 (Git Bash path-converts leading-slash env args into
 `C:/Program Files/Git/...`; the first probe pass measured nothing for
 exactly this reason and was re-run).
+
+### Slice 11.2d record — 2026-10-06
+
+Step 3 closed on the same Windows host, all measurement against the seeded
+scratch databases whose shape the plan gate now reproduces
+(`benchmarks/explain-2026-10-06.md` is the record; numbers below are its).
+
+**What the plans said.** 11.2b's keyset shape (`WHERE tenant_id … ORDER BY
+id DESC LIMIT n`) is served by *primary-key walks with the tenant filter
+riding on top* on five read models: invoices, DSRs, invitations,
+custom_domains, orders — a 200-row invoice page read 6,000 rows and removed
+4,000 by filter at three tenants, and the audit seq-keyset removed ~3,000
+per 50-row page (the waste scales with platform size, not tenant size).
+DSRs and invitations had no tenant index at all. The public
+slug-availability check seq-scanned `tenancy.tenants` — `WHERE slug = $1`
+cannot use the `lower(slug)` expression index. The RLS predicate measured
+~0.1 µs/row as a filter and removes zero rows on every plan that leads with
+`tenant_id` — the intuition that RLS is expensive is here wrong per table;
+recorded rather than assumed.
+
+**The migration** (`20261006000000_perf_keyset_indexes.sql`, down paired):
+`(tenant_id, id)` keyset indexes created or realigned on the five read
+models plus disputes (which missed the payments index pass of 20260824050000
+despite an identical page query), `audit_entries_tenant_seq_idx`, the slug
+unique index rebuilt on `(slug)` (the CHECK constraint makes the expression
+form redundant), and `tenants_created_idx` for the platform browse keyset.
+Behaviour-preserving: same rows, same order, same uniqueness. Reviewed and
+deliberately left: translations (PK prefix), plan entitlements/prices (the
+seq scan is correct at this distribution — public_plans' cost is the N+1,
+step 4's), checkouts, the infix-ILIKE tenant search (pg_trgm is the
+production answer if it ever grows; noted, not added).
+
+**The gate** — `apps/api/tests/perf/explain_assertions.rs`, wired into
+`just test-perf` (no workflow edit needed; the integration job already runs
+`-p sanvi-api`). Fourteen rules pin the profiled read models' access paths:
+each names a query as the adapter issues it, the table that must not be
+scanned, and the index the plan must use. Pinning the index name — not
+merely "no Seq Scan" — is load-bearing: the slice's drop-index drill
+(required by the slice table) shows dropping `invoices_tenant_idx` flips
+the plan to `Index Scan Backward using invoices_pkey` with the tenant as a
+Filter, invisible to a scan-type check; the drill's plan and the checker's
+failure message are both in the benchmark artifact, and fixture tests prove
+the checker on synthetic plans.
+
+**The fixture.** The rules must run in the steady-state posture (visibility
+map filled), and the slice measured the hard way that a per-run clone
+cannot: Postgres declines to mark freshly-committed pages all-visible, and
+on an empty map the planner legitimately prefers the pkey walk for cursor
+pages — identical statements flip on VACUUM/autovacuum alone. The gate
+therefore builds a shared fixture database once per (migration set, seed)
+pair under an advisory lock (the `sanvi_perf_<template-fp>_<seed-hash>`
+name carries both, so either moving rebuilds), waits for the map to fill
+(manual VACUUM marked nothing on this seed even minutes later; autovacuum's
+first pass fills it — the loop polls every 10 s, budget 6 min, one-time per
+fixture), and uses it read-only thereafter: steady-state re-runs take
+~0.4 s. The `scripts/test-db.sh` reaper (`sanvi_t_*`/`sanvi_b_*`) never
+touches it.
+
+**Verification (scoped, this session).** `just test-perf`-equivalent
+(`cargo nextest run -p sanvi-api --test perf` on the shared server):
+16/16. Fails-before evidence: the before-plans above were measured on a
+pre-migration scratch database (the pkey walks the gate forbids), and the
+drop-index drill re-created that plan in place, the checker naming it; the
+gate's first live runs also failed (6, then 4 named flips) on the
+transient fresh-clone posture before the fixture waited for autovacuum —
+recorded as the fixture-design lesson, not as a pass condition. Down/up
+migration applied cleanly on a pristine clone; workspace suite
+`scripts/test.sh --quiet` 1251/1251 (idor sweep, RLS matrix,
+route/permission gates all green over the new migration), plus
+`scripts/test.sh --quiet -p sanvi-persistence` 18/18 (migrator lifecycle)
+scoped earlier; `cargo fmt --check` clean;
+clippy `-D warnings` clean over sanvi-api and sanvi-persistence;
+`scripts/check-layering.sh` OK; `scripts/check-openapi.sh` clean over all
+14 specs (no contract change). No `.sqlx` changes (no macro queries
+touched).
