@@ -184,6 +184,36 @@ impl ProviderConnectionRepository for SqlxProviderConnectionRepository {
         row.map(TryFrom::try_from).transpose()
     }
 
+    async fn find_by_ids(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        ids: &[ConnectionId],
+    ) -> Result<std::collections::HashMap<ConnectionId, ProviderConnection>, PaymentsError> {
+        let mut found = std::collections::HashMap::new();
+        if ids.is_empty() {
+            return Ok(found);
+        }
+        let keys: Vec<i64> = ids.iter().map(|id| id.as_i64()).collect();
+        let rows = sqlx::query_as::<_, ProviderConnectionRow>(
+            r#"SELECT id, tenant_id, provider, external_account_id, status,
+                      capabilities, requirements, country, default_currency,
+                      connected_at, last_synced_at, disconnected_at
+               FROM payments.provider_connections
+               WHERE tenant_id = $1 AND id = ANY($2)"#,
+        )
+        .bind(tenant_id.as_i64())
+        .bind(&keys)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        for row in rows {
+            let connection: ProviderConnection = row.try_into()?;
+            found.insert(connection.id, connection);
+        }
+        Ok(found)
+    }
+
     async fn update(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -671,6 +701,36 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         row.map(row_to_checkout).transpose()
     }
 
+    async fn find_by_ids(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        ids: &[CheckoutId],
+    ) -> Result<std::collections::HashMap<CheckoutId, Checkout>, PaymentsError> {
+        let mut found = std::collections::HashMap::new();
+        if ids.is_empty() {
+            return Ok(found);
+        }
+        let keys: Vec<i64> = ids.iter().map(|id| id.as_i64()).collect();
+        let rows = sqlx::query_as::<_, CheckoutRow>(
+            "SELECT id, tenant_id, connection_id, reference, customer_ref,
+                    amount_minor, currency, status, external_session_id,
+                    idempotency_key, locale, expires_at, completed_at, created_at
+             FROM payments.checkouts
+             WHERE tenant_id = $1 AND id = ANY($2)",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(&keys)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        for row in rows {
+            let checkout = row_to_checkout(row)?;
+            found.insert(checkout.id, checkout);
+        }
+        Ok(found)
+    }
+
     async fn find_by_idempotency_key(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -1139,6 +1199,36 @@ impl PaymentRepository for SqlxPaymentRepository {
         row.map(TryFrom::try_from).transpose()
     }
 
+    async fn find_by_ids(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        ids: &[PaymentId],
+    ) -> Result<std::collections::HashMap<PaymentId, PaymentRecord>, PaymentsError> {
+        let mut found = std::collections::HashMap::new();
+        if ids.is_empty() {
+            return Ok(found);
+        }
+        let keys: Vec<i64> = ids.iter().map(|id| id.as_i64()).collect();
+        let rows = sqlx::query_as::<_, PaymentRow>(
+            "SELECT id, tenant_id, checkout_id, external_payment_id, status,
+                    amount_minor, currency, fee_amount_minor, fee_currency,
+                    payout_status, failure, captured_at, created_at
+             FROM payments.payments
+             WHERE tenant_id = $1 AND id = ANY($2)",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(&keys)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        for row in rows {
+            let record = PaymentRecord::try_from(row)?;
+            found.insert(record.id, record);
+        }
+        Ok(found)
+    }
+
     async fn find_by_external_id(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -1442,6 +1532,36 @@ impl RefundRepository for SqlxRefundRepository {
         Ok(sum.unwrap_or(0))
     }
 
+    async fn sum_succeeded_for_payments(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        payment_ids: &[PaymentId],
+    ) -> Result<std::collections::HashMap<PaymentId, i64>, PaymentsError> {
+        let mut sums = std::collections::HashMap::new();
+        if payment_ids.is_empty() {
+            return Ok(sums);
+        }
+        let ids: Vec<i64> = payment_ids.iter().map(|id| id.as_i64()).collect();
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            // SUM(bigint) yields NUMERIC — cast back so the minor-unit
+            // arithmetic stays an integer end to end.
+            "SELECT payment_id, COALESCE(SUM(amount_minor), 0)::bigint
+             FROM payments.refunds
+             WHERE tenant_id = $1 AND payment_id = ANY($2) AND status = 'succeeded'
+             GROUP BY payment_id",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(&ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        for (payment_id, sum) in rows {
+            sums.insert(PaymentId::try_from(payment_id).map_err(storage_id)?, sum);
+        }
+        Ok(sums)
+    }
+
     async fn insert(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -1743,6 +1863,40 @@ impl DisputeRepository for SqlxDisputeRepository {
         .await
         .map_err(storage)?;
         rows.into_iter().map(TryFrom::try_from).collect()
+    }
+
+    async fn latest_for_payments(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        payment_ids: &[PaymentId],
+    ) -> Result<std::collections::HashMap<PaymentId, DisputeRecord>, PaymentsError> {
+        let mut latest = std::collections::HashMap::new();
+        if payment_ids.is_empty() {
+            return Ok(latest);
+        }
+        let ids: Vec<i64> = payment_ids.iter().map(|id| id.as_i64()).collect();
+        // DISTINCT ON keeps the per-payment "most recently updated" semantics
+        // of the export's `max_by_key` while collapsing the page's queries
+        // into one (TASK-021 11.2e).
+        let rows = sqlx::query_as::<_, DisputeRow>(
+            "SELECT DISTINCT ON (payment_id) \
+                    id, tenant_id, payment_id, external_dispute_id, status, amount_minor, currency,
+                    reason, due_by, charge_id, created_at, updated_at
+             FROM payments.disputes
+             WHERE tenant_id = $1 AND payment_id = ANY($2)
+             ORDER BY payment_id, updated_at DESC, id DESC",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(&ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        for row in rows {
+            let record = DisputeRecord::try_from(row)?;
+            latest.insert(record.payment_id, record);
+        }
+        Ok(latest)
     }
 
     async fn count_open_for_connection(

@@ -74,6 +74,17 @@ pub trait ImpersonationGrantRepository: Send + Sync {
         tenant_id: TenantId,
         now: DateTime<Utc>,
     ) -> Result<u32, PlatformAdminError>;
+
+    /// The same count for several tenants in one grouped statement, keyed by
+    /// tenant — the platform tenant list uses it to avoid one query per row
+    /// (TASK-021 11.2e). Tenants with none map to an absent entry (treat as
+    /// zero).
+    async fn count_active_batch(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+        now: DateTime<Utc>,
+    ) -> Result<std::collections::HashMap<TenantId, u32>, PlatformAdminError>;
 }
 
 /// Four-eyes pending approvals.

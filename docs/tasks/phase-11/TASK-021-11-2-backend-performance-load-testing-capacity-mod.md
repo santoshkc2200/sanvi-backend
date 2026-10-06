@@ -537,3 +537,113 @@ clippy `-D warnings` clean over sanvi-api and sanvi-persistence;
 `scripts/check-layering.sh` OK; `scripts/check-openapi.sh` clean over all
 14 specs (no contract change). No `.sqlx` changes (no macro queries
 touched).
+
+### Slice 11.2e record — 2026-10-06
+
+Step 4 closed on the same Windows host. The slice's oracle and its fixes, in
+that order.
+
+**The gate.** New `apps/api/tests/perf/statement_counts.rs` (registered in
+the perf target's `main.rs`; `just test-perf` runs the whole target, so no
+recipe edit). The oracle is `pg_stat_statements`: every guarded use case runs
+against its own cloned test database between two counter snapshots, and the
+**diff** is the use case's statement profile — per-statement call counts plus
+a total ceiling. Assertions are per-fragment ("the pricing page touches
+`billing.plan_prices` exactly once"). Reintroducing a per-row loop turns the
+exact-once into a multiple of the seeded row count, so the count test is the
+falsifiable form of "no N+1 here". Design points: snapshots filter by `dbid`,
+so a parallel nextest run cannot contaminate a window (every test owns a
+database) and no global reset is used; the counter's own SELECT is excluded
+by text; a vacuity guard fails an empty window; a missing preload fails
+loudly naming the fix. Four no-database fixture tests pin the diff/matching
+core, two of them `#[should_panic]` proofs that the assertions fire.
+
+**Test-server prerequisite.** The shared test Postgres now preloads
+`pg_stat_statements` (`testsupport::shared_postgres_request` and
+`scripts/test-db.sh`), and `bootstrap` installs the extension on the template
+under a momentary reopen — clones are born with the view, including templates
+from older revisions (allowconn dance, idempotent). Containers started by
+older code must be recreated once (`scripts/test-db.sh down && up` or
+`docker rm -f sanvi_test_pg`); the failure mode is the snapshot error naming
+exactly that, never a silent pass.
+
+**The sweep.** All 15 context crates swept for per-element query loops
+(multi-line regex for loop bodies containing `.await`, then every candidate
+read by hand, adapters included). Clean: audit, media, notifications, system
+— and localization/tenancy on all read paths. Seven read-model N+1s found and
+fixed here:
+
+1. **billing** `ListPublicPlans`/`ListPlans` — the 11.2c profiled N+1 (one
+   prices query and one entitlements query per plan row; 1,803 calls each per
+   601 requests). New port methods `list_active_for_plans` /
+   `list_for_plans` (`plan_id = ANY($1)`, grouped into `BTreeMap`); the use
+   cases issue one statement per child table regardless of catalog size.
+2. **domains** `ListCustomDomains` — up to 200 per-domain certificate
+   lookups per page to fill `cert_expires_at`. New
+   `CertificateRepository::find_for_domains` (DISTINCT ON (domain_id) …
+   `not_after DESC`, preserving the latest-cert semantics).
+3. **identity** membership `list`/`list_with_emails` — per-member
+   `role_ids_for` behind every member listing. New `roles_for_users` (one
+   tenant-wide `membership_roles` query, grouped) — the shape
+   `list_all_platform` already used.
+4. **payments** `ExportPayments` — 3 queries per exported row (refund sum,
+   dispute list, checkout fetch), repeated per page. Three per-page batches:
+   `sum_succeeded_for_payments` (GROUP BY), `latest_for_payments`
+   (DISTINCT ON (payment_id) … `updated_at DESC` — preserves the documented
+   most-recent-dispute-wins rule), `find_by_ids` on checkouts.
+5. **payments** `ListDisputes` — the deep-link chain resolved
+   payment → checkout → connection per dispute (memoized, still up to 3
+   queries per row). Now one batch per hop (`find_by_ids` on payments,
+   checkouts, provider_connections); the live-connection fallback is
+   untouched, and the guard's exactly-one connections query proves the chain
+   resolved without it.
+6. **platform_admin** tenant views — 3 COUNT queries per tenant per page.
+   New `count_members_platform_batch` (identity),
+   `count_active_batch` (access), `count_active_batch` (impersonation
+   grants): three grouped statements per page.
+7. **access** role hydration — `granting`/`list_all`/`assignable_to` fetched
+   permissions per role; this compounded into `/me` through
+   `SqlxRoleCatalog::permissions_for_roles`. `hydrate_many` batches all
+   roles' permissions into one `ANY($1)` query; single-row `hydrate` stays
+   for `find_by_id`/`find_by_key`.
+
+**advertising** `list_creatives` resolved the feature gate per creative —
+deduped to one check per distinct platform (the answer depends only on
+(tenant, platform); the catalog is in-memory). In-process, not SQL, so no
+statement guard applies; behavior is identical. **Left deliberately** (not
+read models): the sweep's write-path loops (multi-row INSERTs, per-row
+DELETEs on bounded job batches, fixed small catalogs) are recorded in the
+sweep notes and stay as they are — this slice's bar is "no N+1 remains in any
+read model".
+
+**The guards.** Seven use-case guards (billing ×2, domains, identity,
+payments, platform_admin, access), each seeding ≥3 rows through the context's
+own repositories or audited raw SQL before the window opens, asserting exact
+per-table counts plus a total ceiling — the fixture sizes are what make a
+reintroduced loop a visible multiple rather than an off-by-one.
+
+**Fails-before (the slice's drill).** The per-plan loop was deliberately
+reintroduced in `ListPublicPlans`; `list_public_plans_issues_one_statement_
+per_table` failed with `statements matching "FROM billing.plan_prices" must
+fire exactly 1x per use case, saw 6x` (the migrated catalog's 3 plans + the
+fixture's 3), the window dump showing the loop's 6+6 pattern. Reverted; the
+batched form is what ships.
+
+**Fixture lessons (for the next gate author).** Raw-SQL seeds run on the
+**admin pool** — the migrator role is an RLS subject on
+`identity.memberships`, `access.roles`, `payments.provider_connections`
+(42501 on insert); the superuser is not. Real FKs to respect:
+`membership_roles.role_id` → `access.roles`,
+`memberships.user_id` → `identity.users`,
+`checkouts.connection_id` → `provider_connections`,
+`one_primary_per_tenant` (domains; seed role Alias for the 2nd/3rd row).
+
+**Verification (this session).** `scripts/test.sh --quiet` **1262/1262**
+(+11 = the new guards); the six context suites 416/416; advertising + api
+342/342 (idor sweep, RLS matrix, bounded_collections, explain_assertions
+green alongside); `cargo fmt --check` clean; clippy `--all-targets
+-D warnings` clean over the nine changed crates; layering OK; openapi clean
+over all 14 specs (no contract change); route-matrix regenerated — **one
+fingerprint row** (`advertising/src/adapters/http/handlers.rs`), no route
+rows; ga-checklist OK. Every new SQL statement is the runtime-checked
+`query_as` form — no `.sqlx` cache changes.

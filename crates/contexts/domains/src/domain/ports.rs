@@ -275,6 +275,17 @@ pub trait CertificateRepository: Send + Sync {
         domain_id: CustomDomainId,
     ) -> Result<Option<Certificate>, DomainsError>;
 
+    /// Latest certificate (by `not_after`) for several domains of one tenant
+    /// in one statement, keyed by domain — the list view decorates every row
+    /// with its cert, and a per-domain query there is an N+1. Domains with no
+    /// certificate map to an absent entry.
+    async fn find_for_domains(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        domain_ids: &[CustomDomainId],
+    ) -> Result<std::collections::HashMap<CustomDomainId, Certificate>, DomainsError>;
+
     /// Platform scope read (force-release).
     async fn find_for_domain_platform(
         &self,

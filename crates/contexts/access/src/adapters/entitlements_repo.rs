@@ -147,6 +147,38 @@ impl EntitlementRepository for SqlxEntitlementRepository {
         Ok(())
     }
 
+    async fn count_active_batch(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+        now: DateTime<Utc>,
+    ) -> Result<std::collections::HashMap<TenantId, u32>, AccessError> {
+        let mut counts = std::collections::HashMap::new();
+        if tenant_ids.is_empty() {
+            return Ok(counts);
+        }
+        let ids: Vec<i64> = tenant_ids.iter().map(|id| id.as_i64()).collect();
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT tenant_id, count(*) FROM access.entitlements
+             WHERE tenant_id = ANY($1) AND source = 'override'
+               AND (expires_at IS NULL OR expires_at > $2)
+             GROUP BY tenant_id",
+        )
+        .bind(&ids)
+        .bind(now)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| AccessError::Storage(err.to_string()))?;
+        for (tenant_id, count) in rows {
+            counts.insert(
+                TenantId::try_from(tenant_id)
+                    .map_err(|err| AccessError::Storage(format!("invalid tenant id: {err}")))?,
+                count as u32,
+            );
+        }
+        Ok(counts)
+    }
+
     async fn count_active(
         &self,
         scope: &mut PlatformScope<'_>,

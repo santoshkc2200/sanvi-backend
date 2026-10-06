@@ -88,7 +88,8 @@ start_postgres() {
             -c synchronous_commit=off \
             -c full_page_writes=off \
             -c max_connections=600 \
-            -c shared_buffers=256MB >/dev/null
+            -c shared_buffers=256MB \
+            -c shared_preload_libraries=pg_stat_statements >/dev/null
         until docker exec "$PG_NAME" pg_isready -q -U postgres 2>/dev/null; do sleep 0.2; done
     fi
 }

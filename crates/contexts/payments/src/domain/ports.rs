@@ -67,6 +67,16 @@ pub trait ProviderConnectionRepository: Send + Sync {
         id: ConnectionId,
     ) -> Result<Option<ProviderConnection>, PaymentsError>;
 
+    /// Several connections of one tenant in one statement, keyed by id — the
+    /// dispute list resolves deep links through its page's connections, and
+    /// per-row lookups there are an N+1. Absent ids have no row.
+    async fn find_by_ids(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        ids: &[ConnectionId],
+    ) -> Result<std::collections::HashMap<ConnectionId, ProviderConnection>, PaymentsError>;
+
     /// Persist an aggregate's current state (status transitions stamp
     /// `connected_at`/`disconnected_at` and refresh capabilities).
     async fn update(
@@ -551,6 +561,16 @@ pub trait CheckoutRepository: Send + Sync {
         id: CheckoutId,
     ) -> Result<Option<Checkout>, PaymentsError>;
 
+    /// Several checkouts of one tenant in one statement, keyed by id — the
+    /// export decorates each payment row with its checkout's reference, and
+    /// per-row lookups there are an N+1. Absent ids have no row.
+    async fn find_by_ids(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        ids: &[CheckoutId],
+    ) -> Result<std::collections::HashMap<CheckoutId, Checkout>, PaymentsError>;
+
     /// The idempotency key's owner, if any (`checkouts_idempotency_idx`).
     async fn find_by_idempotency_key(
         &self,
@@ -733,6 +753,16 @@ pub trait PaymentRepository: Send + Sync {
         id: PaymentId,
     ) -> Result<Option<super::payment::PaymentRecord>, PaymentsError>;
 
+    /// Several payments of one tenant in one statement, keyed by id — the
+    /// dispute list resolves deep links through its page's payments, and
+    /// per-row lookups there are an N+1. Absent ids have no row.
+    async fn find_by_ids(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        ids: &[PaymentId],
+    ) -> Result<std::collections::HashMap<PaymentId, super::payment::PaymentRecord>, PaymentsError>;
+
     /// Locate by the provider's external id (`pi_…` / `pay_…`), tenant-
     /// scoped — the webhook payment handlers need this, but the read
     /// path also uses it for dispute routing.
@@ -836,6 +866,18 @@ pub trait DisputeRepository: Send + Sync {
         payment_id: PaymentId,
     ) -> Result<Vec<super::dispute::DisputeRecord>, PaymentsError>;
 
+    /// The most recently updated dispute per payment for several payments in
+    /// one statement, keyed by payment — the export's "current dispute"
+    /// column, batched (a reopened dispute wins over an older row, same as
+    /// the per-payment query). Payments with no dispute map to an absent
+    /// entry.
+    async fn latest_for_payments(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        payment_ids: &[PaymentId],
+    ) -> Result<std::collections::HashMap<PaymentId, super::dispute::DisputeRecord>, PaymentsError>;
+
     /// How many disputes on this connection are still **open** (need a
     /// response or are under review) — the disconnect guard's second
     /// blocker; zero means clear.
@@ -900,6 +942,16 @@ pub trait RefundRepository: Send + Sync {
         tenant_id: TenantId,
         payment_id: PaymentId,
     ) -> Result<i64, PaymentsError>;
+
+    /// The same sum for several payments in one statement, keyed by payment
+    /// id — the export's refunded column, batched. Payments with no
+    /// succeeded refunds map to an absent entry (treat as zero).
+    async fn sum_succeeded_for_payments(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        payment_ids: &[PaymentId],
+    ) -> Result<std::collections::HashMap<PaymentId, i64>, PaymentsError>;
 
     async fn insert(
         &self,

@@ -119,6 +119,16 @@ pub trait MembershipRepository: Send + Sync {
         tenant_id: TenantId,
     ) -> Result<u32, IdentityError>;
 
+    /// Member counts for several tenants in one grouped statement, keyed by
+    /// tenant — the platform tenant list decorates every row with its count,
+    /// and per-tenant queries there are an N+1 (TASK-021 11.2e). Tenants with
+    /// no members map to an absent entry (treat as zero).
+    async fn count_members_platform_batch(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+    ) -> Result<std::collections::HashMap<TenantId, u32>, IdentityError>;
+
     /// True when `user_id` holds `role_key` in `tenant_id` (last-owner guard).
     async fn count_role_holders(
         &self,

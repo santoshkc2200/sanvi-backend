@@ -134,24 +134,37 @@ impl MembershipRepository for SqlxMembershipRepository {
         .await
         .map_err(|err| IdentityError::Storage(err.to_string()))?;
 
-        let mut memberships = Vec::with_capacity(rows.len());
-        for row in rows {
-            let user_id = UserId::try_from(row.user_id)
-                .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?;
-            let roles = self.role_ids_for(scope, tenant_id, user_id).await?;
-            memberships.push(Membership::from_parts(
-                tenant_id,
-                user_id,
-                roles,
-                MembershipStatus::parse(&row.status)?,
-                row.invited_by
-                    .map(UserId::try_from)
-                    .transpose()
-                    .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
-                row.created_at,
-            ));
-        }
-        Ok(memberships)
+        // One roles query for the whole page — per-member `role_ids_for` was
+        // an N+1 on every member listing (TASK-021 11.2e; the grouping shape
+        // is the one `list_all_platform` already used).
+        let user_ids: Vec<i64> = rows.iter().map(|row| row.user_id).collect();
+        let roles_by_user = self.roles_for_users(scope, tenant_id, &user_ids).await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let user_id = UserId::try_from(row.user_id)
+                    .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?;
+                let roles = roles_by_user
+                    .get(&row.user_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(RoleId::try_from)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|err| IdentityError::Storage(format!("invalid role id: {err}")))?;
+                Ok(Membership::from_parts(
+                    tenant_id,
+                    user_id,
+                    roles,
+                    MembershipStatus::parse(&row.status)?,
+                    row.invited_by
+                        .map(UserId::try_from)
+                        .transpose()
+                        .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
+                    row.created_at,
+                ))
+            })
+            .collect()
     }
 
     async fn list_with_emails(
@@ -177,28 +190,41 @@ impl MembershipRepository for SqlxMembershipRepository {
         .await
         .map_err(|err| IdentityError::Storage(err.to_string()))?;
 
-        let mut result = Vec::with_capacity(rows.len());
-        for row in rows {
-            let user_id = UserId::try_from(row.user_id)
-                .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?;
-            let roles = self.role_ids_for(scope, tenant_id, user_id).await?;
-            let email = Email::parse(&row.primary_email)?;
-            result.push((
-                Membership::from_parts(
-                    tenant_id,
-                    user_id,
-                    roles,
-                    MembershipStatus::parse(&row.status)?,
-                    row.invited_by
-                        .map(UserId::try_from)
-                        .transpose()
-                        .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?,
-                    row.created_at,
-                ),
-                email,
-            ));
-        }
-        Ok(result)
+        // One roles query for the whole page (see `list`).
+        let user_ids: Vec<i64> = rows.iter().map(|row| row.user_id).collect();
+        let roles_by_user = self.roles_for_users(scope, tenant_id, &user_ids).await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let user_id = UserId::try_from(row.user_id)
+                    .map_err(|err| IdentityError::Storage(format!("invalid user id: {err}")))?;
+                let roles = roles_by_user
+                    .get(&row.user_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(RoleId::try_from)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|err| IdentityError::Storage(format!("invalid role id: {err}")))?;
+                let email = Email::parse(&row.primary_email)?;
+                Ok((
+                    Membership::from_parts(
+                        tenant_id,
+                        user_id,
+                        roles,
+                        MembershipStatus::parse(&row.status)?,
+                        row.invited_by
+                            .map(UserId::try_from)
+                            .transpose()
+                            .map_err(|err| {
+                                IdentityError::Storage(format!("invalid user id: {err}"))
+                            })?,
+                        row.created_at,
+                    ),
+                    email,
+                ))
+            })
+            .collect()
     }
 
     async fn remove(
@@ -350,6 +376,34 @@ impl MembershipRepository for SqlxMembershipRepository {
             .collect()
     }
 
+    async fn count_members_platform_batch(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+    ) -> Result<std::collections::HashMap<TenantId, u32>, IdentityError> {
+        let mut counts = std::collections::HashMap::new();
+        if tenant_ids.is_empty() {
+            return Ok(counts);
+        }
+        let ids: Vec<i64> = tenant_ids.iter().map(|id| id.as_i64()).collect();
+        let rows: Vec<(i64, i32)> = sqlx::query_as(
+            "SELECT tenant_id, count(*)::int4 FROM identity.memberships
+             WHERE tenant_id = ANY($1) GROUP BY tenant_id",
+        )
+        .bind(&ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        for (tenant_id, count) in rows {
+            counts.insert(
+                TenantId::try_from(tenant_id)
+                    .map_err(|err| IdentityError::Storage(format!("invalid tenant id: {err}")))?,
+                count.max(0) as u32,
+            );
+        }
+        Ok(counts)
+    }
+
     async fn count_members_platform(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -405,5 +459,36 @@ impl SqlxMembershipRepository {
             .map(|row| RoleId::try_from(row.role_id))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| IdentityError::Storage(format!("invalid role id: {err}")))
+    }
+
+    /// Role ids for many users of one tenant in **one** statement, grouped by
+    /// user id (raw i64 keys — callers re-type on extraction). Users with no
+    /// roles map to an absent entry; the callers default to empty.
+    async fn roles_for_users(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        user_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, Vec<i64>>, IdentityError> {
+        let mut grouped: std::collections::HashMap<i64, Vec<i64>> =
+            std::collections::HashMap::new();
+        if user_ids.is_empty() {
+            return Ok(grouped);
+        }
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT user_id, role_id
+             FROM identity.membership_roles
+             WHERE tenant_id = $1 AND user_id = ANY($2)
+             ORDER BY user_id, role_id",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(user_ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| IdentityError::Storage(err.to_string()))?;
+        for (user_id, role_id) in rows {
+            grouped.entry(user_id).or_default().push(role_id);
+        }
+        Ok(grouped)
     }
 }

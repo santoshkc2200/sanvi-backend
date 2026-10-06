@@ -32,18 +32,24 @@ impl ListCustomDomains {
     ) -> Result<Vec<CustomDomainView>, DomainsError> {
         let limit = sanvi_kernel::pagination::clamp_page_size(limit, 200, 200);
         let domains = self.domains.list(scope, tenant_id, limit, after_id).await?;
-        let mut views = Vec::with_capacity(domains.len());
-        for domain in &domains {
-            let mut view = CustomDomainView::of(domain);
-            let cert = self
-                .certs
-                .find_for_domain(scope, tenant_id, domain.id)
-                .await?;
-            view.cert_expires_at = cert
-                .filter(|cert| cert.status == CertificateStatus::Active)
-                .map(|cert| cert.not_after);
-            views.push(view);
-        }
+        // One certificate query for the whole page — per-domain lookups here
+        // were up to 200 queries per page (TASK-021 11.2e).
+        let domain_ids: Vec<_> = domains.iter().map(|domain| domain.id).collect();
+        let certs = self
+            .certs
+            .find_for_domains(scope, tenant_id, &domain_ids)
+            .await?;
+        let views = domains
+            .iter()
+            .map(|domain| {
+                let mut view = CustomDomainView::of(domain);
+                view.cert_expires_at = certs
+                    .get(&domain.id)
+                    .filter(|cert| cert.status == CertificateStatus::Active)
+                    .map(|cert| cert.not_after);
+                view
+            })
+            .collect();
         Ok(views)
     }
 }

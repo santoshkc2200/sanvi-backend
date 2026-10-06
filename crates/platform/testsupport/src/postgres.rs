@@ -163,6 +163,16 @@ fn shared_postgres_request() -> testcontainers::ContainerRequest<Postgres> {
                     "max_connections=600",
                     "-c",
                     "shared_buffers=256MB",
+                    // Statement accounting for the perf gate: the
+                    // statement-count assertions diff `pg_stat_statements`
+                    // entries per database, which needs the module preloaded.
+                    // `testcontainers` reuses an existing container as-is, so
+                    // a server started by an older revision must be recreated
+                    // (`docker rm -f sanvi_test_pg` or
+                    // `scripts/test-db.sh down`) before this takes effect —
+                    // the gate fails loudly naming this when it is missing.
+                    "-c",
+                    "shared_preload_libraries=pg_stat_statements",
                 ])
 }
 
@@ -310,6 +320,49 @@ async fn bootstrap(port: u16) -> String {
                     .execute(&mut lock)
                     .await
                     .expect("mark template");
+            }
+
+            // Every cloned database must carry the `pg_stat_statements` view —
+            // the perf gate's statement-count assertions read it — so the
+            // extension is installed on the template itself. A template from an
+            // older revision may predate this, and it arrives closed to
+            // connections either way, so the extension is created under a
+            // momentary reopen. `CREATE EXTENSION` needs the superuser; `IF NOT
+            // EXISTS` makes the pass idempotent and near-free when present.
+            {
+                let allow = format!(
+                    "UPDATE pg_database SET datallowconn = true WHERE datname = '{template}'"
+                );
+                sqlx::raw_sql(AssertSqlSafe(allow))
+                    .execute(&mut lock)
+                    .await
+                    .expect("reopen template");
+                let mut template_conn = PgConnection::connect_with(
+                    &PgConnectOptions::new()
+                        .host("127.0.0.1")
+                        .port(port)
+                        .database(&template)
+                        .username("postgres")
+                        .password("postgres")
+                        .application_name("sanvi-testsupport"),
+                )
+                .await
+                .expect("template connection");
+                sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+                    .execute(&mut template_conn)
+                    .await
+                    .expect("create pg_stat_statements on template");
+                template_conn
+                    .close()
+                    .await
+                    .expect("close template connection");
+                let disallow = format!(
+                    "UPDATE pg_database SET datallowconn = false WHERE datname = '{template}'"
+                );
+                sqlx::raw_sql(AssertSqlSafe(disallow))
+                    .execute(&mut lock)
+                    .await
+                    .expect("close template");
             }
 
             // Templates for migration sets this checkout has moved past are

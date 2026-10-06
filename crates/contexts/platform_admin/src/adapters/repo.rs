@@ -235,6 +235,36 @@ impl ImpersonationGrantRepository for SqlxImpersonationGrantRepository {
         .map_err(storage)?;
         Ok(count as u32)
     }
+
+    async fn count_active_batch(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+        now: DateTime<Utc>,
+    ) -> Result<std::collections::HashMap<TenantId, u32>, PlatformAdminError> {
+        let mut counts = std::collections::HashMap::new();
+        if tenant_ids.is_empty() {
+            return Ok(counts);
+        }
+        let ids: Vec<i64> = tenant_ids.iter().map(|id| id.as_i64()).collect();
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT tenant_id, count(*) FROM platform_admin.impersonation_grants
+             WHERE tenant_id = ANY($1) AND revoked_at IS NULL AND expires_at > $2
+             GROUP BY tenant_id",
+        )
+        .bind(&ids)
+        .bind(now)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        for (tenant_id, count) in rows {
+            counts.insert(
+                TenantId::try_from(tenant_id).map_err(storage)?,
+                count as u32,
+            );
+        }
+        Ok(counts)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,23 +517,29 @@ impl SqlxTenantAdminViewRepository {
         scope: &mut PlatformScope<'_>,
         tenants: &[sanvi_tenancy::domain::Tenant],
     ) -> Result<Vec<TenantAdminView>, PlatformAdminError> {
+        // Three grouped counts for the whole page — the per-tenant form was
+        // three queries per tenant row (TASK-021 11.2e).
+        let tenant_ids: Vec<TenantId> = tenants.iter().map(|tenant| tenant.id()).collect();
+        let member_counts = self
+            .memberships
+            .count_members_platform_batch(scope, &tenant_ids)
+            .await
+            .map_err(|err| PlatformAdminError::Storage(err.to_string()))?;
+        let override_counts = self
+            .entitlements
+            .count_active_batch(scope, &tenant_ids, self.clock.now())
+            .await
+            .map_err(|err| PlatformAdminError::Storage(err.to_string()))?;
+        let impersonation_counts = self
+            .grants
+            .count_active_batch(scope, &tenant_ids, self.clock.now())
+            .await?;
         let mut views = Vec::with_capacity(tenants.len());
         for tenant in tenants {
             let tenant_id = tenant.id();
-            let member_count = self
-                .memberships
-                .count_members_platform(scope, tenant_id)
-                .await
-                .map_err(|err| PlatformAdminError::Storage(err.to_string()))?;
-            let override_count = self
-                .entitlements
-                .count_active(scope, tenant_id, self.clock.now())
-                .await
-                .map_err(|err| PlatformAdminError::Storage(err.to_string()))?;
-            let active_impersonations = self
-                .grants
-                .count_active(scope, tenant_id, self.clock.now())
-                .await?;
+            let member_count = member_counts.get(&tenant_id).copied().unwrap_or(0);
+            let override_count = override_counts.get(&tenant_id).copied().unwrap_or(0);
+            let active_impersonations = impersonation_counts.get(&tenant_id).copied().unwrap_or(0);
             views.push(TenantAdminView {
                 tenant_id,
                 slug: tenant.slug().to_string(),

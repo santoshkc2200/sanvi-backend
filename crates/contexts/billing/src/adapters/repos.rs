@@ -4,6 +4,8 @@
 //! (RLS-filtered by construction); writes and cross-tenant maintenance run
 //! under the audited `PlatformScope`.
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sanvi_kernel::TenantId;
@@ -272,6 +274,34 @@ impl PlanPriceRepository for SqlxPlanPriceRepository {
         .map_err(map_db)?;
         rows.into_iter().map(to_price).collect()
     }
+
+    async fn list_active_for_plans(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        plan_ids: &[PlanId],
+    ) -> Result<BTreeMap<PlanId, Vec<PlanPrice>>, BillingError> {
+        let mut grouped: BTreeMap<PlanId, Vec<PlanPrice>> = BTreeMap::new();
+        if plan_ids.is_empty() {
+            return Ok(grouped);
+        }
+        let ids: Vec<i64> = plan_ids.iter().map(|id| id.as_i64()).collect();
+        let rows: Vec<PriceRow> = sqlx::query_as(
+            "SELECT id, plan_id, stripe_price_id, currency, interval, unit_amount_minor,
+                    trial_days, active, created_at
+             FROM billing.plan_prices
+             WHERE active AND plan_id = ANY($1)
+             ORDER BY plan_id, unit_amount_minor",
+        )
+        .bind(&ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
+        for row in rows {
+            let price = to_price(row)?;
+            grouped.entry(price.plan_id()).or_default().push(price);
+        }
+        Ok(grouped)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +374,38 @@ impl crate::domain::PlanEntitlementRepository for SqlxPlanEntitlementRepository 
                 limit: row.limit,
             })
             .collect())
+    }
+
+    async fn list_for_plans(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        plan_ids: &[PlanId],
+    ) -> Result<BTreeMap<PlanId, Vec<EntitlementGrant>>, BillingError> {
+        let mut grouped: BTreeMap<PlanId, Vec<EntitlementGrant>> = BTreeMap::new();
+        if plan_ids.is_empty() {
+            return Ok(grouped);
+        }
+        let ids: Vec<i64> = plan_ids.iter().map(|id| id.as_i64()).collect();
+        let rows: Vec<(i64, String, bool, Option<i64>)> = sqlx::query_as(
+            "SELECT plan_id, feature_key, enabled, \"limit\"
+             FROM billing.plan_entitlements
+             WHERE plan_id = ANY($1)
+             ORDER BY plan_id, feature_key",
+        )
+        .bind(&ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(map_db)?;
+        for (plan_id, feature_key, enabled, limit) in rows {
+            let plan_id =
+                PlanId::try_from(plan_id).map_err(|err| BillingError::Storage(err.to_string()))?;
+            grouped.entry(plan_id).or_default().push(EntitlementGrant {
+                feature_key,
+                enabled,
+                limit,
+            });
+        }
+        Ok(grouped)
     }
 }
 

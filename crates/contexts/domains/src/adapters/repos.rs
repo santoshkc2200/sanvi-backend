@@ -1080,6 +1080,41 @@ impl crate::domain::CertificateRepository for SqlxCertificateRepository {
         row.map(certificate_from_row).transpose()
     }
 
+    async fn find_for_domains(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        domain_ids: &[CustomDomainId],
+    ) -> Result<std::collections::HashMap<CustomDomainId, Certificate>, DomainsError> {
+        let mut latest: std::collections::HashMap<CustomDomainId, Certificate> =
+            std::collections::HashMap::new();
+        if domain_ids.is_empty() {
+            return Ok(latest);
+        }
+        let ids: Vec<i64> = domain_ids.iter().map(|id| id.as_i64()).collect();
+        // DISTINCT ON keeps the per-domain "latest by not_after" semantics of
+        // `find_for_domain` while collapsing the page's worth of queries into
+        // one (the list-view N+1, TASK-021 11.2e). Runtime-checked form, like
+        // every batched query this slice added — no .sqlx cache refresh.
+        let rows: Vec<CertificateRow> = sqlx::query_as(
+            "SELECT DISTINCT ON (domain_id) \
+              id, domain_id, tenant_id, hostname, issuer, serial, not_before, not_after, \
+              renewed_at, expiry_warned_days, status, last_error \
+              FROM domains.certificates WHERE tenant_id = $1 AND domain_id = ANY($2) \
+              ORDER BY domain_id, not_after DESC",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(&ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        for row in rows {
+            let cert = certificate_from_row(row)?;
+            latest.insert(cert.domain_id, cert);
+        }
+        Ok(latest)
+    }
+
     async fn find_for_domain_platform(
         &self,
         scope: &mut PlatformScope<'_>,

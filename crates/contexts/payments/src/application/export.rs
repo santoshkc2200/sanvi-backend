@@ -246,27 +246,41 @@ async fn stream_page_inner(
         .list(scope, state.tenant_id, &page_filter)
         .await?;
     let next_cursor = page.next_cursor.clone();
+    // Three batch queries for the whole page — per-row refund sums, dispute
+    // lookups and checkout fetches were 3 × PAGE_SIZE queries per exported
+    // page (TASK-021 11.2e).
+    let payment_ids: Vec<_> = page.items.iter().map(|payment| payment.id).collect();
+    let refunded = state
+        .refunds
+        .sum_succeeded_for_payments(scope, state.tenant_id, &payment_ids)
+        .await?;
+    let disputes = state
+        .disputes
+        .latest_for_payments(scope, state.tenant_id, &payment_ids)
+        .await?;
+    let checkout_ids: Vec<_> = page
+        .items
+        .iter()
+        .filter_map(|payment| payment.checkout_id)
+        .collect();
+    let checkouts = state
+        .checkouts
+        .find_by_ids(scope, state.tenant_id, &checkout_ids)
+        .await?;
+
     let mut chunk: Vec<u8> = Vec::new();
     for payment in &page.items {
-        let refunded_minor = state
-            .refunds
-            .sum_succeeded_for_payment(scope, state.tenant_id, payment.id)
-            .await?;
+        let refunded_minor = refunded.get(&payment.id).copied().unwrap_or(0);
         // The current dispute is the most recently updated one — a
-        // reopened or superseded dispute must win over an old row.
-        let dispute_status = state
-            .disputes
-            .list_for_payment(scope, state.tenant_id, payment.id)
-            .await?
-            .iter()
-            .max_by_key(|d| d.updated_at)
+        // reopened or superseded dispute must win over an old row (the
+        // batch query keeps that semantics with DISTINCT ON … updated_at DESC).
+        let dispute_status = disputes
+            .get(&payment.id)
             .map(|d| d.status.as_str().to_string())
             .unwrap_or_default();
         let checkout_ref = match payment.checkout_id {
-            Some(checkout_id) => state
-                .checkouts
-                .find_by_id(scope, state.tenant_id, checkout_id)
-                .await?
+            Some(checkout_id) => checkouts
+                .get(&checkout_id)
                 .map(|c| c.reference.as_str().to_string())
                 .unwrap_or_default(),
             None => String::new(),

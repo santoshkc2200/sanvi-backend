@@ -165,11 +165,7 @@ impl RoleRepository for SqlxRoleRepository {
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
 
-        let mut roles = Vec::with_capacity(rows.len());
-        for row in rows {
-            roles.push(self.hydrate(scope, row).await?);
-        }
-        Ok(roles)
+        self.hydrate_many(scope, rows).await
     }
 
     async fn list_all(&self, scope: &mut PlatformScope<'_>) -> Result<Vec<Role>, AccessError> {
@@ -181,11 +177,7 @@ impl RoleRepository for SqlxRoleRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
-        let mut roles = Vec::with_capacity(rows.len());
-        for row in rows {
-            roles.push(self.hydrate(scope, row).await?);
-        }
-        Ok(roles)
+        self.hydrate_many(scope, rows).await
     }
 
     async fn assignable_to(
@@ -205,15 +197,12 @@ impl RoleRepository for SqlxRoleRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
-        let mut roles = Vec::with_capacity(rows.len());
-        for row in rows {
-            roles.push(self.hydrate(scope, row).await?);
-        }
-        Ok(roles)
+        self.hydrate_many(scope, rows).await
     }
 }
 
 impl SqlxRoleRepository {
+    /// Hydrate one role (single-row read paths).
     async fn hydrate(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -227,6 +216,62 @@ impl SqlxRoleRepository {
         .fetch_all(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(|err| AccessError::Storage(err.to_string()))?;
+        let mut permissions_by_role = std::collections::BTreeMap::new();
+        permissions_by_role.insert(
+            row.id,
+            permissions
+                .into_iter()
+                .map(|p| p.permission)
+                .collect::<BTreeSet<_>>(),
+        );
+        self.build_role(row, &permissions_by_role)
+    }
+
+    /// Hydrate a page of roles with **one** permission query for the whole
+    /// batch — per-row `SELECT … WHERE role_id = $1` here was the N+1 that
+    /// compounded into every role listing and, through `SqlxRoleCatalog`,
+    /// into `/me` (TASK-021 11.2e).
+    async fn hydrate_many(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        rows: Vec<RoleRow>,
+    ) -> Result<Vec<Role>, AccessError> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+        let links: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT role_id, permission
+             FROM access.role_permissions
+             WHERE role_id = ANY($1)
+             ORDER BY role_id, permission",
+        )
+        .bind(&ids)
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(|err| AccessError::Storage(err.to_string()))?;
+        let mut permissions_by_role: std::collections::BTreeMap<i64, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (role_id, permission) in links {
+            permissions_by_role
+                .entry(role_id)
+                .or_default()
+                .insert(permission);
+        }
+        rows.into_iter()
+            .map(|row| self.build_role(row, &permissions_by_role))
+            .collect()
+    }
+
+    fn build_role(
+        &self,
+        row: RoleRow,
+        permissions_by_role: &std::collections::BTreeMap<i64, BTreeSet<String>>,
+    ) -> Result<Role, AccessError> {
+        let permissions = permissions_by_role
+            .get(&row.id)
+            .cloned()
+            .unwrap_or_default();
         let tenant_id = row
             .tenant_id
             .map(TenantId::try_from)
@@ -239,10 +284,7 @@ impl SqlxRoleRepository {
             tenant_id,
             row.key,
             row.name,
-            permissions
-                .into_iter()
-                .map(|p| p.permission)
-                .collect::<BTreeSet<_>>(),
+            permissions,
             row.is_system,
             row.created_at,
         ))

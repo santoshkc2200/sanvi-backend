@@ -2059,23 +2059,31 @@ pub async fn list_creatives(
         .execute(tenant_id, query.limit, after_id)
         .await
         .map_err(api_error)?;
-    let mut visible = Vec::new();
-    for creative in creatives {
-        let descriptor = state
-            .catalog
-            .execute()
-            .into_iter()
-            .find(|descriptor| descriptor.key == creative.platform)
-            .ok_or_else(|| ApiError::ServiceUnavailable {
-                detail: "advertising platform is unavailable".to_string(),
-            })?;
-        if feature_gate
-            .check(tenant_id, &descriptor.entitlement_key)
-            .await?
-        {
-            visible.push(CreativeView::from(creative));
+    // One gate check per distinct platform — per-creative checks resolved
+    // the same (tenant, platform) answer up to page-size times (TASK-021
+    // 11.2e). The catalog itself is in-memory.
+    let catalog = state.catalog.execute();
+    let mut entitled: std::collections::HashMap<crate::domain::PlatformKey, bool> =
+        std::collections::HashMap::new();
+    for creative in &creatives {
+        if !entitled.contains_key(&creative.platform) {
+            let descriptor = catalog
+                .iter()
+                .find(|descriptor| descriptor.key == creative.platform)
+                .ok_or_else(|| ApiError::ServiceUnavailable {
+                    detail: "advertising platform is unavailable".to_string(),
+                })?;
+            let allowed = feature_gate
+                .check(tenant_id, &descriptor.entitlement_key)
+                .await?;
+            entitled.insert(creative.platform.clone(), allowed);
         }
     }
+    let visible = creatives
+        .into_iter()
+        .filter(|creative| entitled.get(&creative.platform).copied().unwrap_or(false))
+        .map(CreativeView::from)
+        .collect();
     Ok(HttpResponse::Ok().json(CreativesView { creatives: visible }))
 }
 

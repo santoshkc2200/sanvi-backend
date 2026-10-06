@@ -103,36 +103,57 @@ impl ListDisputes {
             .await?;
 
         // Resolve each dispute's connected account (the deep-link anchor)
-        // through its payment → checkout → connection chain. A dangling
+        // through its payment → checkout → connection chain — one batch per
+        // hop, not a chain of per-row queries (TASK-021 11.2e). A dangling
         // link anywhere falls back to the tenant's live connection — only
         // a tenant with no live connection renders without links.
+        let payment_ids: Vec<PaymentId> = {
+            let mut seen = std::collections::BTreeSet::new();
+            for dispute in &page.items {
+                seen.insert(dispute.payment_id);
+            }
+            seen.into_iter().collect()
+        };
+        let payments_by_id = self
+            .payments
+            .find_by_ids(&mut scope, command.tenant_id, &payment_ids)
+            .await?;
+        let checkout_ids: Vec<_> = {
+            let mut seen = std::collections::BTreeSet::new();
+            for payment in payments_by_id.values() {
+                if let Some(checkout_id) = payment.checkout_id {
+                    seen.insert(checkout_id);
+                }
+            }
+            seen.into_iter().collect()
+        };
+        let checkouts_by_id = self
+            .checkouts
+            .find_by_ids(&mut scope, command.tenant_id, &checkout_ids)
+            .await?;
+        let connection_ids: Vec<_> = {
+            let mut seen = std::collections::BTreeSet::new();
+            for checkout in checkouts_by_id.values() {
+                seen.insert(checkout.connection_id);
+            }
+            seen.into_iter().collect()
+        };
+        let connections_by_id = self
+            .connections
+            .find_by_ids(&mut scope, command.tenant_id, &connection_ids)
+            .await?;
+
         let mut account_by_payment: HashMap<PaymentId, Option<String>> = HashMap::new();
         for dispute in &page.items {
             if account_by_payment.contains_key(&dispute.payment_id) {
                 continue;
             }
-            let account = match self
-                .payments
-                .find_by_id(&mut scope, command.tenant_id, dispute.payment_id)
-                .await?
-            {
-                Some(payment) => match payment.checkout_id {
-                    Some(checkout_id) => match self
-                        .checkouts
-                        .find_by_id(&mut scope, command.tenant_id, checkout_id)
-                        .await?
-                    {
-                        Some(checkout) => self
-                            .connections
-                            .find_by_id(&mut scope, command.tenant_id, checkout.connection_id)
-                            .await?
-                            .map(|c| c.external_account_id),
-                        None => None,
-                    },
-                    None => None,
-                },
-                None => None,
-            };
+            let account = payments_by_id
+                .get(&dispute.payment_id)
+                .and_then(|payment| payment.checkout_id)
+                .and_then(|checkout_id| checkouts_by_id.get(&checkout_id))
+                .and_then(|checkout| connections_by_id.get(&checkout.connection_id))
+                .map(|c| c.external_account_id.clone());
             account_by_payment.insert(dispute.payment_id, account);
         }
         // The fallback is resolved once per page, only when something dangles.

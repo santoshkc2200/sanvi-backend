@@ -6,6 +6,8 @@
 //! `begin_unscoped`, so a repository method that forgets its scope is a type
 //! error, not a row leak.
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sanvi_kernel::TenantId;
@@ -72,6 +74,15 @@ pub trait PlanPriceRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         plan_id: PlanId,
     ) -> Result<Vec<PlanPrice>, BillingError>;
+
+    /// Active prices for several plans in one statement, grouped by plan —
+    /// the pricing page fetches the whole catalog at once, so per-plan
+    /// queries would be an N+1. Plans with no prices map to an empty vec.
+    async fn list_active_for_plans(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        plan_ids: &[PlanId],
+    ) -> Result<BTreeMap<PlanId, Vec<PlanPrice>>, BillingError>;
 }
 
 /// The plan → entitlement map.
@@ -90,6 +101,15 @@ pub trait PlanEntitlementRepository: Send + Sync {
         scope: &mut PlatformScope<'_>,
         plan_id: PlanId,
     ) -> Result<Vec<EntitlementGrant>, BillingError>;
+
+    /// Grants for several plans in one statement, grouped by plan — same
+    /// reasoning as the price batch. Plans with no grants map to an empty
+    /// vec.
+    async fn list_for_plans(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        plan_ids: &[PlanId],
+    ) -> Result<BTreeMap<PlanId, Vec<EntitlementGrant>>, BillingError>;
 }
 
 /// Subscriptions. Tenant-scoped reads run under `ScopedTx` (RLS-filtered by

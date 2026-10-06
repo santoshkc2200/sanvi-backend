@@ -287,6 +287,27 @@ impl MembershipRepository for World {
             .count() as u32)
     }
 
+    async fn count_members_platform_batch(
+        &self,
+        _scope: &mut PlatformScope<'_>,
+        tenant_ids: &[TenantId],
+    ) -> Result<std::collections::HashMap<TenantId, u32>, IdentityError> {
+        let memory = self.memory.lock().unwrap();
+        Ok(tenant_ids
+            .iter()
+            .map(|tenant_id| {
+                let count = memory
+                    .memberships
+                    .iter()
+                    .filter(|m| {
+                        m.tenant_id() == *tenant_id && m.status() == MembershipStatus::Active
+                    })
+                    .count() as u32;
+                (*tenant_id, count)
+            })
+            .collect())
+    }
+
     async fn count_role_holders(
         &self,
         _scope: &mut ScopedTx<'_>,

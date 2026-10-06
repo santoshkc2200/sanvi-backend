@@ -156,26 +156,30 @@ impl ListPublicPlans {
             .await
             .map_err(storage)?;
         let plans = self.plans.list(&mut scope, true).await?;
-        let mut views = Vec::with_capacity(plans.len());
-        for plan in plans {
-            let prices = self
-                .prices
-                .list_active_for_plan(&mut scope, plan.id())
-                .await?
-                .iter()
-                .map(PlanPriceView::from)
-                .collect();
-            let entitlements = self.grants.list_for_plan(&mut scope, plan.id()).await?;
-            views.push(PublicPlanView {
+        // One batch per child table — a query per plan row was the profiled
+        // N+1 on the pricing page (TASK-021 11.2c: 1,803 price calls for 601
+        // requests).
+        let plan_ids: Vec<PlanId> = plans.iter().map(|plan| plan.id()).collect();
+        let prices = self
+            .prices
+            .list_active_for_plans(&mut scope, &plan_ids)
+            .await?;
+        let entitlements = self.grants.list_for_plans(&mut scope, &plan_ids).await?;
+        let views = plans
+            .iter()
+            .map(|plan| PublicPlanView {
                 plan_id: plan.id(),
                 key: plan.key().to_string(),
                 name: plan.name().to_string(),
                 tier: plan.tier(),
                 sort_order: plan.sort_order(),
-                prices,
-                entitlements,
-            });
-        }
+                prices: prices
+                    .get(&plan.id())
+                    .map(|rows| rows.iter().map(PlanPriceView::from).collect())
+                    .unwrap_or_default(),
+                entitlements: entitlements.get(&plan.id()).cloned().unwrap_or_default(),
+            })
+            .collect();
         scope.commit().await.map_err(storage)?;
         Ok(views)
     }
@@ -212,14 +216,15 @@ impl ListPlans {
             .await
             .map_err(storage)?;
         let plans = self.plans.list(&mut scope, false).await?;
-        let mut views = Vec::with_capacity(plans.len());
-        for plan in plans {
-            let prices = self
-                .prices
-                .list_active_for_plan(&mut scope, plan.id())
-                .await?;
-            let entitlements = self.grants.list_for_plan(&mut scope, plan.id()).await?;
-            views.push(PlanAdminView {
+        let plan_ids: Vec<PlanId> = plans.iter().map(|plan| plan.id()).collect();
+        let prices = self
+            .prices
+            .list_active_for_plans(&mut scope, &plan_ids)
+            .await?;
+        let entitlements = self.grants.list_for_plans(&mut scope, &plan_ids).await?;
+        let views = plans
+            .iter()
+            .map(|plan| PlanAdminView {
                 plan_id: plan.id(),
                 key: plan.key().to_string(),
                 name: plan.name().to_string(),
@@ -228,20 +233,24 @@ impl ListPlans {
                 visibility: plan.visibility(),
                 sort_order: plan.sort_order(),
                 prices: prices
-                    .iter()
-                    .map(|price| PlanAdminPriceView {
-                        price_id: price.id(),
-                        stripe_price_id: price.stripe_price_id().to_string(),
-                        currency: price.currency().to_string(),
-                        interval: price.interval(),
-                        unit_amount_minor: price.unit_amount_minor(),
-                        trial_days: price.trial_days(),
-                        active: price.active(),
+                    .get(&plan.id())
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|price| PlanAdminPriceView {
+                                price_id: price.id(),
+                                stripe_price_id: price.stripe_price_id().to_string(),
+                                currency: price.currency().to_string(),
+                                interval: price.interval(),
+                                unit_amount_minor: price.unit_amount_minor(),
+                                trial_days: price.trial_days(),
+                                active: price.active(),
+                            })
+                            .collect()
                     })
-                    .collect(),
-                entitlements,
-            });
-        }
+                    .unwrap_or_default(),
+                entitlements: entitlements.get(&plan.id()).cloned().unwrap_or_default(),
+            })
+            .collect();
         scope.commit().await.map_err(storage)?;
         Ok(views)
     }
