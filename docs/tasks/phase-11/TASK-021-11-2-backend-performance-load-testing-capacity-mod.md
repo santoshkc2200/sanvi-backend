@@ -723,3 +723,87 @@ clean; clippy `-D warnings` clean over the changed crates; runbook-xref and
 ga-checklist OK. The lab release binaries were rebuilt from current main
 before the capture (11.2d/e read-model changes included); migrations applied
 on `sanvi_scale` (`migrate up` reports up to date) before any run.
+
+### Slice 11.2g record — 2026-10-06
+
+Step 6 closed on the same Windows host as 11.2a–f. The slice's two falsifiable
+gates both live in `crates/platform/cache` and both pass:
+
+**Single-flight stampede protection, proven at the required scale.**
+`sanvi_cache::SingleFlight` (new `single_flight.rs`) is the per-key in-flight
+map: `try_lead`/`wait` primitives plus `get_or_load`, the canonical cache-aside
+loop (check → lead-or-wait → load once → fill → return; waiters exit through
+the cache re-read; a failed load releases the flight and the next waiter leads
+its own attempt — fail-closed, never a fabricated value). The gate test drives
+500 concurrent misses on one key through `get_or_load` and asserts the loader
+ran exactly once and every caller received the leader's value; supporting
+tests cover lead-after-completion, a parked waiter woken by completion, and
+wait-when-idle. Two defects the test itself caught during development: the
+first draft dropped the leader's guard before awaiting the load (the flight
+completed instantly and every caller loaded — exactly the stampede it exists
+to prevent), and the closure shape that survives the `Send`-at-async-trait
+boundary is boxed-future callbacks (`Fn() -> Pin<Box<dyn Future + Send + 'a>>`),
+not `AsyncFn` bounds, whose HRTB `Send` proof rustc cannot make at the
+`FeatureGate` port's async-trait boundary. Both findings are recorded here so
+the next caller does not re-learn them.
+
+**Wired into the two expensive shared-per-tenant keys** (the 11.2c profile's
+hot paths): `ResolveThemeService::resolve_live` (the public storefront theme
+read — one resolution per tenant+locale per expiry instead of one per
+in-flight request; the DB path moved verbatim into `resolve_live_uncached`)
+and `EntitlementResolver::resolve` (one resolve_from_db per tenant per 300 s
+expiry; its in-flight set also guards the worker's budget-guardrails gate).
+Both keep their existing invalidation semantics untouched — single-flight
+sits between cache miss and database, it does not extend what is cached.
+
+**Hit ratios per cache.** New `sanvi_cache::CacheMetrics`
+(`cache_hits_total`/`cache_misses_total`/`cache_stampede_joins_total`,
+`context`-labelled, registered on the process registry) wired into the
+entitlement resolver (`context="access.entitlements"`, both apps) — the
+entitlement cache previously had no hit-ratio instruments at all. Theming
+already counted hits/misses (`ThemingMetrics`, 11.2c's capture used them) and
+localization carries its own `hit_ratio()`; decisions, sessions, resolution
+and domains host remain un-instrumented and are recorded as such: all four
+are per-identity or pre-tenant lookups whose miss cost is one indexed
+statement, not a fan-out.
+
+**The tenant-key audit is a gate, not a review.**
+`crates/platform/cache/tests/key_audit.rs` scans every `src/` tree under
+`crates/` and `apps/` for `"sanvi:` key literals; each must either
+interpolate `{tenant` in the format string or sit on a justified allow-list
+(tenancy resolution and domains host: pre-tenant by definition; sessions:
+token-scoped with the tenant in the payload; decisions: the tenant-scoped
+resource id is embedded in the key; abuse/rl counters: request counts, never
+tenant payload; scheduler leader: infra lock; `sanvi:*:` scan patterns: the
+wildcard twins of tenant-shaped key families). A new tenant-less key fails
+the test naming the file and the fix; the self-test plants a naked key shape
+and asserts the named failure, and vacuity guards assert the scan reached the
+known key sites (the 11.5g Windows-path-separator lesson — this scanner reads
+bytes, not separators). Today's audit result: **every tenant-data cache
+(entitlements, resolved themes, membership versions, decisions) carries a
+tenant component**; the platform crate's `TenantCache` doc-claim that it is
+"the only way tenant-scoped data reaches Redis" is false as written —
+contexts own their adapters with hand-rolled keys, which is exactly why the
+gate, not the helper, is the enforcement — and the doc now says so.
+
+**TTLs are justified per entry, not inherited** (audit result, no change
+needed): sessions ≤60 s (revocation staleness bound, index +60 s for the
+logout webhook), decisions 1–30 s with a config validator that rejects
+anything wider, entitlements 300 s (event-driven invalidation is primary;
+TTL is the lost-event bound), resolved themes 24 h (publish/rollback
+invalidate immediately cross-instance), resolution/domains host
+config-driven with worker-side invalidation. Negative caching: the domains
+host cache already caches unknown hosts in Redis (the attacker-influenced
+per-request path), entitlement empty sets are cached as ordinary values, and
+theming caches the default-theme fallback; tenancy slug resolution caches
+positives only — its miss path is not hot (the per-request host lookup is
+domains'), so a negative-caching change there is deliberately not taken.
+
+**Verification (scoped, this session).** `cargo nextest run -p sanvi-cache`
+11/11 including both gates;
+`scripts/test.sh -p sanvi-access` 57/57, `-p sanvi-theming` 48/48,
+`-p sanvi-api` 83/83 (perf gates included); `cargo check` clean for
+sanvi-worker; `cargo fmt` clean; clippy `--all-targets` clean (zero
+warnings) over the five changed crates. The platform crate gained a
+`prometheus` dependency and a `futures-util` dev-dependency; access gained
+`sanvi-cache`; api and worker gained `sanvi-cache` for the resolver wiring.

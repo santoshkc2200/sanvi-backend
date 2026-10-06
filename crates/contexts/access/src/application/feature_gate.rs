@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use sanvi_cache::{CacheMetrics, SingleFlight};
 use sanvi_kernel::TenantId;
 use sanvi_persistence::TxManager;
 
@@ -51,21 +52,30 @@ impl ResolvedSet {
 }
 
 /// Resolves a tenant's full entitlement set (cache-first, database-fallback).
+/// The miss path runs under a process-local single-flight (TASK-021 11.2g):
+/// when the cached set expires, one resolution per tenant runs against the
+/// database and every concurrent gate check waits for it and re-reads, so a
+/// busy tenant's expiry costs one query pair, not one per in-flight request.
 pub struct EntitlementResolver {
     tx_manager: TxManager,
     features: Arc<dyn FeatureRepository>,
     entitlements: Arc<dyn EntitlementRepository>,
     cache: Arc<dyn EntitlementCache>,
+    single_flight: Arc<SingleFlight>,
+    metrics: Arc<CacheMetrics>,
     clock: Arc<dyn Clock>,
     cache_ttl_secs: u64,
 }
 
 impl EntitlementResolver {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tx_manager: TxManager,
         features: Arc<dyn FeatureRepository>,
         entitlements: Arc<dyn EntitlementRepository>,
         cache: Arc<dyn EntitlementCache>,
+        single_flight: Arc<SingleFlight>,
+        metrics: Arc<CacheMetrics>,
         clock: Arc<dyn Clock>,
         cache_ttl_secs: u64,
     ) -> Self {
@@ -74,6 +84,8 @@ impl EntitlementResolver {
             features,
             entitlements,
             cache,
+            single_flight,
+            metrics,
             clock,
             cache_ttl_secs,
         }
@@ -84,14 +96,39 @@ impl EntitlementResolver {
     /// fail closed — never fabricate an entitlement.
     #[tracing::instrument(name = "access.resolve", skip_all, fields(tenant_id = %tenant_id))]
     pub async fn resolve(&self, tenant_id: TenantId) -> Result<ResolvedSet, AccessError> {
-        if let Some(cached) = self.cache.get(tenant_id).await {
-            return Ok(ResolvedSet::Cached(cached.entries));
-        }
-        let entries = self.resolve_from_db(tenant_id).await?;
-        self.cache
-            .put(tenant_id, &entries, self.cache_ttl_secs)
-            .await;
-        Ok(ResolvedSet::Fresh(entries))
+        self.single_flight
+            .get_or_load(
+                &format!("access:entitlements:{tenant_id}"),
+                || {
+                    Box::pin(async {
+                        match self.cache.get(tenant_id).await {
+                            Some(cached) => {
+                                self.metrics.hit("access.entitlements");
+                                Some(ResolvedSet::Cached(cached.entries))
+                            }
+                            None => {
+                                self.metrics.miss("access.entitlements");
+                                None
+                            }
+                        }
+                    })
+                },
+                |set| {
+                    Box::pin(async move {
+                        self.cache
+                            .put(tenant_id, set.entries(), self.cache_ttl_secs)
+                            .await;
+                    })
+                },
+                || {
+                    Box::pin(async {
+                        self.resolve_from_db(tenant_id)
+                            .await
+                            .map(ResolvedSet::Fresh)
+                    })
+                },
+            )
+            .await
     }
 
     async fn resolve_from_db(

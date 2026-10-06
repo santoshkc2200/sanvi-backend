@@ -99,6 +99,8 @@ async fn wire(
         features.clone(),
         entitlements.clone(),
         cache.clone(),
+        Arc::new(sanvi_cache::SingleFlight::new()),
+        Arc::new(sanvi_cache::CacheMetrics::noop()),
         clock.clone(),
         300,
     ));

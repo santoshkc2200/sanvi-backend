@@ -1077,6 +1077,8 @@ async fn main() -> ExitCode {
             Arc::new(SqlxFeatureRepository::new()),
             entitlements.clone(),
             entitlement_cache.clone(),
+            Arc::new(sanvi_cache::SingleFlight::new()),
+            Arc::new(sanvi_cache::CacheMetrics::new(registry)),
             Arc::new(AccessSystemClock),
             config.access.entitlement_cache_ttl_secs,
         )),

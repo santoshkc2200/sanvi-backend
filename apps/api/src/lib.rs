@@ -899,6 +899,8 @@ pub fn build_access_state(
         features.clone(),
         entitlements.clone(),
         entitlement_cache.clone(),
+        Arc::new(sanvi_cache::SingleFlight::new()),
+        Arc::new(sanvi_cache::CacheMetrics::new(registry)),
         clock.clone(),
         config.entitlement_cache_ttl_secs,
     ));

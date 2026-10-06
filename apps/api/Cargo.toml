@@ -21,6 +21,7 @@ sanvi-advertising.workspace = true
 sanvi-media.workspace = true
 sanvi-notifications.workspace = true
 sanvi-audit.workspace = true
+sanvi-cache.workspace = true
 sanvi-billing.workspace = true
 sanvi-http.workspace = true
 sanvi-identity.workspace = true

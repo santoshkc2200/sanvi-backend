@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use sanvi_cache::SingleFlight;
 use sanvi_kernel::{RawIdGenerator, TenantId};
 use sanvi_persistence::PgPool;
 
@@ -30,6 +31,7 @@ pub struct ResolveThemeService {
     tenants: Arc<dyn TenantThemeRepository>,
     resolver: Arc<dyn TenantContextResolver>,
     cache: Arc<ResolvedThemeCache>,
+    single_flight: Arc<SingleFlight>,
     metrics: Arc<ThemingMetrics>,
     clock: Arc<dyn Clock>,
     tx: sanvi_persistence::TxManager,
@@ -56,6 +58,7 @@ impl ResolveThemeService {
             tenants,
             resolver,
             cache,
+            single_flight: Arc::new(SingleFlight::new()),
             metrics,
             clock,
             tx: sanvi_persistence::TxManager::new(pool, ids),
@@ -83,19 +86,51 @@ impl ResolveThemeService {
         }
     }
 
-    /// A tenant's live theme, cache-first.
+    /// A tenant's live theme, cache-first with single-flight stampede
+    /// protection (TASK-021 11.2g): one resolution per tenant+locale per
+    /// expiry; concurrent misses wait and re-read the cache instead of each
+    /// rebuilding the resolved document against the database.
     pub async fn resolve_live(
         &self,
         tenant_id: TenantId,
         locale: &str,
     ) -> Result<ResolvedTheme, ThemingError> {
         let _timer = self.metrics.resolution_duration.start_timer();
-        if let Some(cached) = self.cache.get(tenant_id, locale).await {
-            self.metrics.cache_hits.inc();
-            return Ok(cached);
-        }
-        self.metrics.cache_misses.inc();
+        self.single_flight
+            .get_or_load(
+                &format!("theming:resolved:{tenant_id}:{locale}"),
+                || {
+                    Box::pin(async {
+                        match self.cache.get(tenant_id, locale).await {
+                            Some(hit) => {
+                                self.metrics.cache_hits.inc();
+                                Some(hit)
+                            }
+                            None => {
+                                self.metrics.cache_misses.inc();
+                                None
+                            }
+                        }
+                    })
+                },
+                |resolved| {
+                    Box::pin(async move {
+                        self.cache
+                            .set(tenant_id, locale, &resolved, self.ttl_secs)
+                            .await;
+                    })
+                },
+                || Box::pin(async { self.resolve_live_uncached(tenant_id, locale).await }),
+            )
+            .await
+    }
 
+    /// The uncached resolution path (one process-local flight at a time).
+    async fn resolve_live_uncached(
+        &self,
+        tenant_id: TenantId,
+        locale: &str,
+    ) -> Result<ResolvedTheme, ThemingError> {
         let mut scope =
             self.tx.begin_for(tenant_id.as_i64()).await.map_err(|err| {
                 ThemingError::Storage(format!("failed to open tenant scope: {err}"))
@@ -112,11 +147,6 @@ impl ResolveThemeService {
             .commit()
             .await
             .map_err(|err| ThemingError::Storage(err.to_string()))?;
-
-        let _ = self
-            .cache
-            .set(tenant_id, locale, &resolved, self.ttl_secs)
-            .await;
         Ok(resolved)
     }
 
