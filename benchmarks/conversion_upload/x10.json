@@ -1,0 +1,34 @@
+{
+  "scenario": "conversion_upload",
+  "tag": "x10",
+  "seed": "1",
+  "offered_rate_rps": 500,
+  "duration": "120s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 16,
+    "os": "Windows 11 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 60.22695,
+    "http_req_duration_p95_ms": 11473.27349,
+    "http_req_duration_p99_ms": 18949.266667999993,
+    "http_req_duration_avg_ms": 1433.9997801461623,
+    "http_reqs_total": 55420,
+    "http_req_failed_rate": 0.001515698303861422,
+    "iterations_total": 55419,
+    "dropped_iterations_total": 4577
+  },
+  "notes": [
+    "lab: unsigned beacon, so capture fails closed after key verification",
+    "the beacon answers 202 in every case by design; upload is the worker sweep"
+  ]
+}

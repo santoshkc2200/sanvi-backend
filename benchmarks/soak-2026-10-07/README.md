@@ -1,0 +1,59 @@
+# 24-hour soak — TASK-021 step 8 (slice 11.2i)
+
+**Status: RUNNING (launched 2026-10-07 09:57 +09:00, completes ~09:57 on
+2026-10-08).** This record's result table is appended by
+`summarize.sh` when the run ends; the slice record in the task file
+records the verdict separately.
+
+**Lab, not production.** Same posture as
+[`../load3x-2026-10-07.md`](../load3x-2026-10-07.md): seed 1 scale data,
+compose Postgres 18 (port 5433), release build 0.10.0, Redis warm, rate
+limiting disabled, tracking abuse quota raised, host shared with unrelated
+Docker stacks.
+
+- **Shape:** all five k6 shapes **concurrently at the offered rates**
+  (50 / 20 / 10 / 100 / 50 iterations/s) for **86,400 s**, tag `soak24`.
+  The API carries the offered-rate peak for one day; the worker runs its
+  normal schedules against the same database the whole time (outbox,
+  schedulers, sweeps) — the conversion upload sweep's success ratio
+  (journey 5's budget) is read from its metrics, not from HTTP.
+- **Artifacts:** `samples-soak24.txt` (sampler, 30 s cadence, one row per
+  sample), `k6-<scenario>.log`, and the five `benchmarks/<scenario>/soak24.json`
+  summaries written by k6 at the end.
+- **Sampler columns:** timestamp, host CPU, api/worker RSS, api/worker
+  threads, api/worker handles, api/worker CPU, api pool
+  size/idle/acquire-count/acquire-sum/acquire-failures,
+  pg_stat_activity total/api/worker/active.
+- **Task counts — the standing gap, restated:** per-task counts are not
+  instrumented (the tokio-console gap recorded since 11.2c: unwired, TUI
+  not headless-capturable). The OS-level proxies this soak watches —
+  thread count, handle count, RSS — are what "no unbounded task
+  accumulation" means here, and the caveat transfers to the reader.
+
+## Pass conditions (step 8's verify lines)
+
+1. **Flat memory** — api/worker RSS max ≈ last (slope ≈ 0 over 24 h). The
+   process entered the soak at ~457 MB: the Windows-heap plateau left by
+   the 10× spikes ([spike10x-2026-10-07.md](../spike10x-2026-10-07.md)),
+   not the ~100 MB of a fresh process. Flat-at-457 is the pass; growth
+   from 457 is the failure.
+2. **No connection growth** — pg totals and the api pool's
+   size/idle/acquire counters return to their idle shape between and after
+   k6's steady load; acquire failures stay at the spike-era count + 0.
+3. **No unbounded task accumulation** — threads and handles flat.
+4. **0 failed / 0 dropped** on every shape at the offered rates (the same
+   load the rc0/rc.1 captures hold).
+
+## Result (appended at completion)
+
+*pending — `bash benchmarks/soak-2026-10-07/summarize.sh` writes the
+verdict block below when k6 exits.*
+
+## Reproducing
+
+```bash
+# start (detaches; k6 + sampler survive the shell)
+bash benchmarks/soak-2026-10-07/soak.sh            # PERF_DURATION default 86400s
+# verdict
+bash benchmarks/soak-2026-10-07/summarize.sh
+```

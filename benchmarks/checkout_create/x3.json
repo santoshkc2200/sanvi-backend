@@ -1,0 +1,34 @@
+{
+  "scenario": "checkout_create",
+  "tag": "x3",
+  "seed": "1",
+  "offered_rate_rps": 30,
+  "duration": "300s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 16,
+    "os": "Windows 11 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 4.2345500000000005,
+    "http_req_duration_p95_ms": 10.223329999999988,
+    "http_req_duration_p99_ms": 25.30909899999996,
+    "http_req_duration_avg_ms": 5.17272827149523,
+    "http_reqs_total": 9002,
+    "http_req_failed_rate": 0,
+    "iterations_total": 9001,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "lab: no Kratos/Stripe in the harness, so the create stops at the 401 boundary",
+    "plan budget: success ratio >= 99.5 % excluding provider declines (needs sessions)"
+  ]
+}

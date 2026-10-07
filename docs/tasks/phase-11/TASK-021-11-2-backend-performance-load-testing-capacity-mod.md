@@ -874,3 +874,84 @@ no route rows; ga-checklist OK. New deps: `sha2` + `hex` (sanvi-http),
 both already in the lock). No `.sqlx` changes (no queries touched). The
 size probe (`size_probe.rs`) was deleted after its single run — it wrote
 the measured bytes and nothing else.
+
+### Slice 11.2i record — 2026-10-07
+
+Step 8's load runs and step 9's capacity model, on the same Windows host as
+11.2a–h (20 cores/16 GB, **shared with unrelated co-tenant Docker stacks —
+ragflow/Elasticsearch, a kind control plane, cmak — recorded because it is
+the honest description of every number here**). Release binaries rebuilt
+from current main before any capture (11.2b–h included; build stamp
+`0.10.0`, commit `unknown`, the same unstamped-local shape as rc0).
+
+**3× steady state (`benchmarks/load3x-2026-10-07.md`, artifacts
+`<scenario>/x3.json`, sampler `load3x-2026-10-07/samples.txt`).** All five
+shapes concurrently at 3× rates (690 iterations/s offered) for 300 s:
+**every budget holds, every resource under 70 %** — storefront p95 9.3 ms
+(4.7 % of the 200 ms budget), admin 9.8 ms, checkout 100 % success (lab
+boundary), 252,007 requests, 0 failed / 0 dropped; api CPU max 13.1 % of
+the machine (1.5 core-ms/request mean), RSS max 109 MB, pool busy ≤ 5 of
+10, Redis 1.83 MB. Host CPU peaked 94 % — host-wide including the five k6
+generators and co-tenants, not the API.
+
+**10× spike (`benchmarks/spike10x-2026-10-07.md`, `<scenario>/x10.json`,
+recovery artifacts `rec.1.json`/`rec.2.json`).** Two identical 2-minute
+spikes at 2,300 iterations/s offered degraded **differently** — run A
+through host/CPU contention (pool idle 8–10, host 76 %), run B through the
+10-connection pool (idle → 1, ~1 s mean acquire waits, RSS → 769 MB,
+host 37–46 %) — p95 6.4 s to 46 s, error rates ≤ 0.45 %, no restart, no
+5xx storm. **Recovery immediate and complete both times**: offered-rate
+storefront immediately after each spike ran p95 6.5 / 6.7 ms, 0 failed /
+0 dropped, process start time unchanged. Two honesty notes recorded with
+the artifacts: the harness's `rate × 4` VU cap client-starves the offer
+once latency exceeds ~4 s (the server never received the full 10×), and
+RSS does not return to ~100 MB post-burst — it plateaus at ~460 MB, which
+is the number the soak watches and the capacity model budgets.
+
+**perf-compare rc0 → rc.1 (offered-rate set, committed).** Two shapes
+flagged (checkout_create p95 +41 %, webhook_flood p99 +26 %); the run was
+**not** accepted as a regression and **not** waived on authority either —
+seven same-binary repeats of the flagged shapes (rc.1b…rc.1g, committed)
+show the flagged statistics are tail noise: checkout p50 flat at 3.8–4.4 ms
+against rc0's 4.22 with p95 swinging 6.0–10.9 ms (rc0: 7.6) and p99
+11.4–19.2 (rc0: 16.1); webhook p50 1.4–1.7 (rc0: 1.64), p99 4.2–5.6
+(rc0: 4.42). Every rc0 statistic sits inside the same-binary repeat band;
+the exception is explained here and in the artifacts rather than by
+threshold loosening.
+
+**24 h soak (`benchmarks/soak-2026-10-07/`).** Launched 2026-10-07 09:57
+(+09:00) detached: five shapes concurrently at the offered rates for
+86,400 s (`soak24` artifacts on completion) with a 30 s resource sampler
+(RSS, threads, handles, per-process CPU, pool gauges, pg_stat_activity).
+`soak.sh` / `sampler.sh` / `summarize.sh` are committed as the reproducible
+harness; the pass conditions (flat memory from the ~460 MB plateau, no
+connection growth, flat threads/handles — the per-task-count tokio-console
+gap restated — 0 failed / 0 dropped) are in the README, and the verdict
+appends to it when the run ends. **The soak completes ~09:57 on
+2026-10-08; its verdict and the DoD lines that depend on it land in slice
+11.2j's commit.**
+
+**Capacity model (`docs/runbooks/capacity.md`).** Single-host, lab-measured,
+labelled as such; every constant cites its committed artifact: CPU
+1.5 core-ms/request (mean) with the requests/tenant/day arithmetic, memory
+budget 512 MB/process (the 460 MB plateau + headroom), pool ceilings 10/8
+with the production-50 prior guess still named as a guess, Redis
+~12.5 kB/tenant, the degradation knee honestly bounded as "between 3× and
+10×" with the two-bottleneck observation, and per-resource scaling
+triggers wired to the existing alert ids. The document answers no alert and
+is exempted in `runbook-xref-exempt.txt` with a reason (xref gate green).
+The two numbers TASK-023 and TASK-026 take from this task — the shedding
+ceiling and the capacity constants — are now measured and cited rather
+than guessed.
+
+**Verification (scoped, this session).** No Rust or SQL changed; the
+scoped gates over the touched surface: `check-runbook-xref.sh` OK (after
+the exemption line), ga-checklist OK, artifacts carry stats_version 2 +
+machine profile + build stamp (`perf-compare` accepted rc.1 vs rc0 for
+three shapes and refused nothing on provenance). Sampler defects found and
+fixed during the runs (each recorded in the records above): first sample's
+CPU delta is the process lifetime (drop row 1), a failed `/metrics` scrape
+killed the first sampler mid-spike (`set -e` removed), CPU% divided by
+nominal rather than elapsed interval (fixed via `$EPOCHREALTIME` deltas),
+and the k6-presence stop condition needed to be opt-in. New in-flight
+artifacts (`samples-soak24.txt`, `soak24.json` ×5) commit on completion.
