@@ -182,7 +182,9 @@ paths:
         affected entries within ~2 s (the entry TTL is a backstop only).
         Requests carrying an `Authorization` header are never served from or
         written to the cache, and responses carrying `Set-Cookie` are never
-        stored. Varies on `Accept-Language`.
+        stored. Varies on `Accept-Language`. The response preloads the tenant's
+        brand logo — the largest above-the-fold resource the backend knows
+        about — via a `Link; rel=preload` header.
       tags:
       - theming
   /api/v1/tenant/theme/assets:

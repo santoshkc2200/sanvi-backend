@@ -20,7 +20,7 @@ use crate::application::draft::UpdateTenantThemeDraftCommand;
 use crate::application::install::InstallThemeVersionCommand;
 use crate::application::views::TenantThemeView;
 use crate::domain::tenant_theme::{BrandAssetKind, ThemeState};
-use crate::domain::{ThemingError, sign_preview_token, verify_preview_token};
+use crate::domain::{ResolvedTheme, ThemingError, sign_preview_token, verify_preview_token};
 
 /// The theming context's domain-error → HTTP mapping.
 pub fn api_error(err: ThemingError) -> ApiError {
@@ -101,7 +101,9 @@ pub struct PublicThemeQuery {
 /// affected entries within ~2 s (the entry TTL is a backstop only).
 /// Requests carrying an `Authorization` header are never served from or
 /// written to the cache, and responses carrying `Set-Cookie` are never
-/// stored. Varies on `Accept-Language`.
+/// stored. Varies on `Accept-Language`. The response preloads the tenant's
+/// brand logo — the largest above-the-fold resource the backend knows
+/// about — via a `Link; rel=preload` header.
 #[utoipa::path(
     get,
     path = "/api/v1/public/theme",
@@ -152,12 +154,28 @@ pub async fn get_public_theme(
             .finish());
     }
 
-    Ok(HttpResponse::Ok()
+    let mut response = HttpResponse::Ok();
+    response
         .insert_header(("etag", resolved.etag.clone()))
         // The response may be retained by shared caches, but every reuse
         // must revalidate the ETag so a publish is visible immediately.
-        .insert_header(("cache-control", "public, no-cache"))
-        .json(resolved))
+        .insert_header(("cache-control", "public, no-cache"));
+    if let Some(link) = lcp_preload_hint(&resolved) {
+        response.insert_header(("link", link));
+    }
+    Ok(response.json(resolved))
+}
+
+/// The LCP preload hint (TASK-022 11.3f, FR-1111): the tenant's brand logo
+/// is the above-the-fold resource the backend knows about, so the theme
+/// document response preloads it for the storefront's top templates. `None`
+/// when the tenant ships no logo — a hint must never be invented.
+pub fn lcp_preload_hint(resolved: &ResolvedTheme) -> Option<String> {
+    resolved
+        .brand_assets
+        .logo
+        .as_ref()
+        .map(|logo| format!("<{logo}>; rel=preload; as=image"))
 }
 
 #[derive(Clone, Serialize, ToSchema)]
@@ -756,4 +774,54 @@ async fn commit_scope_platform(scope: PlatformScope<'_>) -> Result<(), ApiError>
         tracing::error!(error = %err, "failed to commit theming transaction");
         ApiError::from_storage_detail(&err.to_string())
     })
+}
+
+#[cfg(test)]
+mod lcp_preload_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn resolved_theme(logo: Option<&str>) -> ResolvedTheme {
+        let mut body = json!({
+            "theme_key": "base",
+            "theme_version": "1.0.0",
+            "theme_api": "1",
+            "capabilities": [],
+            "tokens": {},
+            "css_vars": ":root{}",
+            "layouts": {},
+            "fonts": [],
+            "theme_assets": {"screenshots": []},
+            "revision": 3,
+            "locale": "en",
+            "etag": "\"t\""
+        });
+        let assets = match logo {
+            Some(url) => json!({"logo": url, "favicon": null, "og_image": null}),
+            None => json!({"logo": null, "favicon": null, "og_image": null}),
+        };
+        body["brand_assets"] = assets;
+        serde_json::from_value(body).expect("fixture deserializes")
+    }
+
+    /// The storefront's LCP preload rides the theme document: the tenant
+    /// logo, as an image, in Link form (TASK-022 11.3f).
+    #[test]
+    fn the_brand_logo_is_preloaded_when_present() {
+        let resolved = resolved_theme(Some(
+            "https://cdn.example.com/assets/theming/logo-abc123.svg",
+        ));
+        assert_eq!(
+            lcp_preload_hint(&resolved).as_deref(),
+            Some("<https://cdn.example.com/assets/theming/logo-abc123.svg>; rel=preload; as=image")
+        );
+    }
+
+    /// A tenant with no logo gets no hint: inventing a preload target is
+    /// worse than none.
+    #[test]
+    fn no_logo_means_no_hint() {
+        let resolved = resolved_theme(None);
+        assert_eq!(lcp_preload_hint(&resolved), None);
+    }
 }
