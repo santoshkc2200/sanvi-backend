@@ -492,3 +492,51 @@ async fn locale_partitions_the_served_entries() {
     );
     drop(ja); // the ja request's own entry, not asserted further here
 }
+
+/// The theme handler's posture: `public, no-cache` + ETag. The SSR cache
+/// stores it — revalidation is structural, the key embeds the theme
+/// revision — and replays the headers unchanged, so downstream caches keep
+/// revalidating exactly as before.
+#[actix_web::test]
+async fn no_cache_with_an_etag_is_storable_but_replayed_with_its_policy() {
+    let renders: Renders = Arc::new(AtomicUsize::new(0));
+    let renders_for_handler = renders.clone();
+    let app = actix_test::init_service(
+        App::new()
+            .wrap(layer(
+                cache(),
+                Arc::new(StaticResolver { tenant: tenant(1) }),
+            ))
+            .route(
+                "/api/v1/public/theme",
+                web::get().to(move || {
+                    let renders = renders_for_handler.clone();
+                    async move {
+                        renders.fetch_add(1, Ordering::SeqCst);
+                        HttpResponse::Ok()
+                            .content_type("application/json")
+                            .insert_header(("etag", "\"render-1\""))
+                            .insert_header(("cache-control", "public, no-cache"))
+                            .body(r#"{"render":1}"#)
+                    }
+                }),
+            ),
+    )
+    .await;
+
+    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    let second = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    assert_eq!(
+        renders.load(Ordering::SeqCst),
+        1,
+        "no-cache + ETag responses are storable: the second request hits"
+    );
+    let first_head = first.response().headers().clone();
+    let second_head = second.response().headers().clone();
+    assert_eq!(
+        first_head.get(header::CACHE_CONTROL),
+        second_head.get(header::CACHE_CONTROL),
+        "the no-cache policy replays unchanged"
+    );
+    assert_eq!(first_head.get(header::ETAG), second_head.get(header::ETAG));
+}

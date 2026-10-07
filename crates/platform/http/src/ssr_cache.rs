@@ -367,6 +367,21 @@ fn capture(res: &actix_web::HttpResponse) -> (CapturedHead, bool) {
         headers,
     };
 
+    let cache_control = res
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let forbids_sharing = cache_control.contains("no-store") || cache_control.contains("private");
+    // `no-cache` normally forbids reuse-without-revalidation, but a
+    // `no-cache` response that carries a strong `ETag` revalidates
+    // structurally here: the cache key embeds the theme revision, a publish
+    // changes the revision (and invalidates the entries), and the replayed
+    // `no-cache` + ETag headers keep every downstream cache revalidating
+    // exactly as before. Without an ETag, `no-cache` is honoured strictly.
+    let no_cache_without_validator =
+        cache_control.contains("no-cache") && !res.headers().contains_key(header::ETAG);
     let storable = res.status() == StatusCode::OK
         && !res.headers().contains_key(header::SET_COOKIE)
         && res
@@ -374,15 +389,8 @@ fn capture(res: &actix_web::HttpResponse) -> (CapturedHead, bool) {
             .get(header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.starts_with("application/json"))
-        && !res
-            .headers()
-            .get(header::CACHE_CONTROL)
-            .is_some_and(|value| {
-                let value = value.to_str().unwrap_or_default().to_ascii_lowercase();
-                ["no-store", "no-cache", "private"]
-                    .iter()
-                    .any(|directive| value.contains(directive))
-            });
+        && !forbids_sharing
+        && !no_cache_without_validator;
 
     (head, storable)
 }
