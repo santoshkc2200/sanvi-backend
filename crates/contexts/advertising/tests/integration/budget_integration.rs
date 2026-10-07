@@ -186,7 +186,7 @@ impl TestHarness {
         let db = sanvi_testsupport::test_db().await;
         let pool = db.app_pool();
 
-        let today = Utc::now().date_naive();
+        let today = crate::tenant_today();
         let yesterday = today - Duration::days(1);
         let _ = sqlx::query("SELECT advertising.ensure_monthly_partitions($1)")
             .bind(yesterday)
@@ -456,7 +456,7 @@ async fn test_cap_below_current_spend_confirmation() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // Insert 50,000 JPY spend today
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
@@ -528,7 +528,7 @@ async fn test_dry_run_simulation() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // Insert 85,000 JPY spend today
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
@@ -593,7 +593,7 @@ async fn test_threshold_evaluator_dedup_and_auto_pause() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // Put a daily cap of 100,000 JPY with auto_pause = true
     let cmd = PutBudgetCapCommand {
@@ -730,7 +730,7 @@ async fn test_repeat_sweep_does_not_repause_an_already_paused_campaign() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // Daily auto-pause cap saved before any spend exists, so the immediate
     // post-save evaluation is a no-op and the first sweep below does the pause.
@@ -829,7 +829,7 @@ async fn test_stale_data_guard_no_pause_on_stale_connections() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // Mark connection as stale (last synced 10 hours ago)
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
@@ -924,7 +924,7 @@ async fn test_stale_alert_does_not_suppress_later_settled_pause() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // First evaluation runs against a stale connection and over-cap spend.
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
@@ -1052,7 +1052,7 @@ async fn test_daily_cap_pauses_at_one_hundred_percent() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // Fresh connection (seeded as synced now) and spend exactly at the cap.
     let mut scope = harness.tx.begin_for(tenant_id.as_i64()).await.unwrap();
@@ -1132,7 +1132,7 @@ async fn test_spend_status_and_run_rate_projection() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // Put a daily cap of 100,000 JPY
     let cmd = PutBudgetCapCommand {
@@ -1324,7 +1324,7 @@ async fn test_alert_acknowledgment() {
         cap_id: None,
         campaign_id: Some(camp_id),
         period: BudgetPeriod::Daily,
-        period_start: Utc::now().date_naive(),
+        period_start: crate::tenant_today(),
         threshold: 80,
         condition: AlertCondition::Threshold80,
         spend: Money::new(80_000, "JPY").unwrap(),
@@ -1773,7 +1773,7 @@ async fn test_pinned_fx_basis_requires_the_exact_snapshot() {
     let (harness, tenant_id) = TestHarness::new().await;
     let (conn_id, camp_id) =
         seed_connection_and_campaign(&harness.pool, &harness.platforms, tenant_id, "JPY").await;
-    let today = Utc::now().date_naive();
+    let today = crate::tenant_today();
 
     // 1,000 USD of spend today; the cap's currency is JPY. 1,000 USD minor
     // is 10.00 major; at 150 JPY/USD that is 1,500 JPY (minor = major here).
@@ -2105,7 +2105,7 @@ async fn test_pinned_basis_date_is_validated_independently_of_rows() {
     // No metrics rows at all: the scope is empty, which is exactly the state
     // the row-driven validation cannot cover.
 
-    let published = Utc::now().date_naive() - Duration::days(2);
+    let published = crate::tenant_today() - Duration::days(2);
     let fx = Arc::new(FixedSnapshotsFx { published });
     let status_query = Arc::new(GetSpendStatus::new(
         harness.tx.clone(),

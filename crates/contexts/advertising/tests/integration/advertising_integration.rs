@@ -3463,7 +3463,7 @@ async fn metrics_daily_upsert_is_idempotent_at_row_and_rollup_grain() {
     .await;
 
     let repo = SqlxMetricsRepository::new();
-    let date = Utc::now().date_naive();
+    let date = crate::tenant_today();
     let platform = PlatformKey::parse("google_ads").unwrap();
 
     let first_pass = MetricsDailyRow {
@@ -3568,7 +3568,7 @@ async fn replace_window_deletes_a_day_the_restatement_no_longer_reports() {
 
     let repo = SqlxMetricsRepository::new();
     let platform = PlatformKey::parse("google_ads").unwrap();
-    let day_one = Utc::now().date_naive();
+    let day_one = crate::tenant_today();
     let day_two = day_one.succ_opt().unwrap();
 
     let row = |date: NaiveDate| MetricsDailyRow {
@@ -3677,7 +3677,7 @@ async fn ingest_connection_metrics_round_trips_through_the_query_layer() {
     let ingest =
         IngestConnectionMetrics::new(manager.clone(), platforms, campaigns, metrics_repo.clone());
 
-    let date = Utc::now().date_naive();
+    let date = crate::tenant_today();
     let first = ingest.execute(&connection, date, date).await.unwrap();
     assert_eq!(first, 1, "one campaign, one day");
     // A second pass over the identical window must succeed and never
@@ -3740,7 +3740,7 @@ async fn revenue_join_attributes_single_campaign_and_parks_ambiguous_revenue_at_
     let conversions: Arc<dyn sanvi_advertising::domain::ConversionEventRepository> =
         Arc::new(SqlxCampaignRepository::new());
     let metrics_repo: Arc<dyn MetricsRepository> = Arc::new(SqlxMetricsRepository::new());
-    let date = Utc::now().date_naive();
+    let date = crate::tenant_today();
 
     // Metrics must be ingested first so the target `metrics_daily` row
     // exists — `set_campaign_revenue` is an UPDATE, not an upsert, by
