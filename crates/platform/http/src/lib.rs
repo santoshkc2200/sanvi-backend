@@ -15,6 +15,7 @@
 pub mod abuse;
 pub mod authn;
 pub mod authz;
+pub mod cache_headers;
 pub mod compression;
 pub mod config;
 pub mod error;

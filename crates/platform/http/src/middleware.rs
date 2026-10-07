@@ -118,6 +118,12 @@ where
         .map(|rate_config| Arc::new(RateLimiter::new(rate_config, redis.clone())));
 
     app.wrap(crate::error::ErrorHandlersLayer)
+        // Per-app cache headers (TASK-022 11.3e) outermost but one, so the
+        // policy holds on every response the app can produce, whatever the
+        // middleware short-circuits beneath it.
+        .wrap(crate::cache_headers::CacheHeadersLayer::new(
+            config.cache_headers.clone(),
+        ))
         .wrap(SecurityHeaders { hsts })
         // Validators over the identity bytes, before compression encodes
         // them; compression outside the ETag so a 304 never carries a

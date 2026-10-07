@@ -44,6 +44,16 @@ min_bytes = 1024
 enabled = false
 ttl_secs = 300
 
+# Per-app response cache headers (TASK-022 11.3e): the platform-admin and
+# tenant-console surfaces are always `no-store`; the public storefront reads
+# carry `public, max-age = storefront_max_age_secs` unless a handler set its
+# own Cache-Control. The device-class partition of the server-side cache is
+# internal — responses do not currently differ by device — so no
+# `Vary: User-Agent` is emitted; `Vary: Accept-Language` comes from the
+# locale middleware.
+[server.cache_headers]
+storefront_max_age_secs = 60
+
 [server.cors]
 # Explicit origin allow-list; wildcards are rejected at startup.
 allowed_origins = []

@@ -33,6 +33,11 @@ pub struct ServerConfig {
     /// correct-but-slower behaviour: every public read renders.
     #[serde(default)]
     pub ssr_cache: SsrCacheConfig,
+    /// Per-app response cache headers (TASK-022 11.3e): the admin surfaces
+    /// never cache, the storefront reads carry a short shared-cache
+    /// lifetime.
+    #[serde(default)]
+    pub cache_headers: CacheHeadersConfig,
 }
 
 fn default_keep_alive_secs() -> u64 {
@@ -61,6 +66,7 @@ impl Default for ServerConfig {
             abuse: AbuseControlsConfig::default(),
             compression: CompressionConfig::default(),
             ssr_cache: SsrCacheConfig::default(),
+            cache_headers: CacheHeadersConfig::default(),
         }
     }
 }
@@ -100,6 +106,9 @@ impl ServerConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.ssr_cache.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.cache_headers.validate() {
             problems.push(err.to_string());
         }
         if !problems.is_empty() {
@@ -217,6 +226,42 @@ impl SsrCacheConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.enabled && self.ttl_secs == 0 {
             anyhow::bail!("server.ssr_cache.ttl_secs must be >= 1 when ssr_cache is enabled");
+        }
+        Ok(())
+    }
+}
+
+/// Per-app response cache headers (TASK-022 11.3e).
+///
+/// The documented policy, mapped onto the backend's serving surfaces:
+/// the platform-admin and tenant-console surfaces are `no-store` (they
+/// render session-scoped data); the public storefront reads carry a short
+/// shared-cache lifetime (`public, max-age`) stamped only when a handler
+/// has not set its own `Cache-Control`. Theme-dependent responses vary on
+/// the request target (the host *is* the tenant), locale-dependent ones on
+/// `Accept-Language` — stamped by the locale middleware and asserted by
+/// the cache-headers snapshot.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CacheHeadersConfig {
+    /// The shared-cache lifetime of a storefront read, in seconds. Short by
+    /// design: the browser revalidates often, the server-side SSR cache
+    /// (when enabled) absorbs the render cost.
+    pub storefront_max_age_secs: u64,
+}
+
+impl Default for CacheHeadersConfig {
+    fn default() -> Self {
+        Self {
+            storefront_max_age_secs: 60,
+        }
+    }
+}
+
+impl CacheHeadersConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.storefront_max_age_secs == 0 {
+            anyhow::bail!("server.cache_headers.storefront_max_age_secs must be >= 1");
         }
         Ok(())
     }
