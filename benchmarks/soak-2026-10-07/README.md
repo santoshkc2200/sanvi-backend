@@ -1,9 +1,29 @@
 # 24-hour soak — TASK-021 step 8 (slice 11.2i)
 
-**Status: RUNNING (launched 2026-10-07 09:57 +09:00, completes ~09:57 on
-2026-10-08).** This record's result table is appended by
+**Status: RUNNING — attempt 2 (launched 2026-10-07 10:36:30 +09:00,
+completes ~10:36 on 2026-10-08).** This record's result table is appended by
 `summarize.sh` when the run ends; the slice record in the task file
 records the verdict separately.
+
+**Attempt 1 aborted (09:57–10:34).** The host entered Modern Standby on its
+5-minute idle timeout at ~10:07 while the soak ran — every process froze
+together (13-minute hole in the sampler CSV, Postgres connections shed,
+working sets trimmed) — and an idle-timeout standby would recur throughout
+any 24 h run. Attempt 1's partial artifacts are preserved under
+`attempt1-aborted/` (sampler CSV through 10:34; the k6 logs are empty — the
+processes were force-killed before any summary was written, so no soak24.json
+exists for the attempt). Fix: `powercfg /change standby-timeout-ac 0` (and
+`standby-timeout-dc 0`) — **prior values to restore after the run: AC 300 s
+(0x12c), DC 180 s (0xb4)**; hibernate was already 0 on AC. The API and worker
+processes were not restarted (start times 08:56 / 08:54, before both
+attempts); attempt 2 measures the same processes.
+
+**Attempt-2 memory baseline (pass condition 1, restated).** The API entered
+attempt 2 at ~94 MB working set — the post-standby trim of the ~457 MB
+plateau process, not a fresh process (private commit is unchanged; the
+sampler reads `WorkingSet64`). Flatness is judged on slope across the 24 h
+window, not on the absolute level; the 457 MB plateau and its cause remain
+as recorded in [spike10x-2026-10-07.md](../spike10x-2026-10-07.md).
 
 **Lab, not production.** Same posture as
 [`../load3x-2026-10-07.md`](../load3x-2026-10-07.md): seed 1 scale data,
