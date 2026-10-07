@@ -27,6 +27,7 @@ pub mod middleware;
 pub mod openapi;
 pub mod rate_limit;
 pub mod server;
+pub mod ssr_cache;
 pub mod tenancy;
 pub mod trace_context;
 pub mod tracing;

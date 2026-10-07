@@ -65,6 +65,9 @@ fn app_with_locale() -> actix_web::App<
         Some(Arc::new(LocaleMiddleware {
             resolver: Arc::new(StubResolver),
         })),
+        sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+            sanvi_http::config::SsrCacheConfig::default(),
+        ),
     )
 }
 

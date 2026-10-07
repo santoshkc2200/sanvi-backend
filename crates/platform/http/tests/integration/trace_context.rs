@@ -46,6 +46,9 @@ async fn the_assembled_stack_stamps_the_traceparent_header() {
         None,
         None,
         None,
+        sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+            sanvi_http::config::SsrCacheConfig::default(),
+        ),
     ))
     .await;
 

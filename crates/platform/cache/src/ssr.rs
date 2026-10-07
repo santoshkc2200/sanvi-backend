@@ -12,8 +12,17 @@
 //! key-audit gate enforces: `sanvi:{tenant_id}:ssr:{…}` — which also makes
 //! per-tenant invalidation a single `SCAN` prefix (`ssr_invalidation_pattern`).
 
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
+
+use anyhow::Context;
+use redis::AsyncCommands;
 use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
+
+use crate::metrics::CacheMetrics;
+use crate::single_flight::SingleFlight;
 
 /// The device partition of the key (FR-1111). Introduced because the
 /// storefront serves different markup to mobile; if that ever stops being
@@ -157,6 +166,230 @@ impl SsrCacheKey {
 /// the key stays one unambiguous string.
 fn percent_encode_route(route: &str) -> String {
     route.replace('%', "%25")
+}
+
+/// A cached SSR response: the status, the headers worth replaying (every
+/// header present at the cache layer, minus `content-length`, which the
+/// response builder re-derives), and the identity-encoded body bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SsrEntry {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// The context label on the [`CacheMetrics`] hit/miss counters.
+pub const SSR_METRICS_CONTEXT: &str = "ssr";
+
+/// Cap for the process-local fallback map (Redis-backed deployments never
+/// touch it).
+const DEFAULT_MAX_LOCAL_ENTRIES: usize = 4096;
+
+struct LocalEntry {
+    entry: SsrEntry,
+    stored_at: Instant,
+    ttl: Duration,
+}
+
+/// The bounded process-local fallback used only when Redis is not
+/// configured (mirrors `ResolvedThemeCache`): correctness first — the local
+/// map is shared by every worker of the process, capped, and TTL-checked.
+#[derive(Default)]
+struct LocalInner {
+    entries: HashMap<String, LocalEntry>,
+}
+
+/// The SSR response cache (TASK-022, FR-1111): Redis-backed when Redis is
+/// configured — the shared layer the worker's event-driven invalidation
+/// acts on — with a process-local fallback otherwise. Cache trouble
+/// degrades to a miss, never an error: the flag-off path is always
+/// available.
+#[derive(Clone)]
+pub struct SsrCache {
+    redis: Option<redis::aio::ConnectionManager>,
+    local: Arc<RwLock<LocalInner>>,
+    single_flight: SingleFlight,
+    metrics: Option<CacheMetrics>,
+    max_local_entries: usize,
+}
+
+impl SsrCache {
+    pub fn new(
+        redis: Option<redis::aio::ConnectionManager>,
+        metrics: Option<CacheMetrics>,
+    ) -> Self {
+        Self {
+            redis,
+            local: Arc::new(RwLock::new(LocalInner::default())),
+            single_flight: SingleFlight::new(),
+            metrics,
+            max_local_entries: DEFAULT_MAX_LOCAL_ENTRIES,
+        }
+    }
+
+    /// The shared flight map: one render per key per process, whatever the
+    /// backing store.
+    pub fn single_flight(&self) -> &SingleFlight {
+        &self.single_flight
+    }
+
+    /// Count a render: a read that fell through to a load.
+    pub fn record_miss(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.miss(SSR_METRICS_CONTEXT);
+        }
+    }
+
+    /// Count a concurrent miss that joined an in-flight render.
+    pub fn record_join(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.join(SSR_METRICS_CONTEXT);
+        }
+    }
+
+    /// Read one entry. `None` is a miss — including on any cache error,
+    /// which only logs.
+    pub async fn get(&self, key: &SsrCacheKey) -> Option<SsrEntry> {
+        let canonical = key.to_cache_key();
+        if let Some(manager) = &self.redis {
+            let mut conn = manager.clone();
+            match conn.get::<_, Option<String>>(&canonical).await {
+                Ok(Some(json)) => match serde_json::from_str::<SsrEntry>(&json) {
+                    Ok(entry) => {
+                        if let Some(metrics) = &self.metrics {
+                            metrics.hit(SSR_METRICS_CONTEXT);
+                        }
+                        return Some(entry);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            key = %canonical,
+                            "cached SSR entry failed to deserialize; evicting"
+                        );
+                        let _: Result<(), _> = conn.del(&canonical).await;
+                    }
+                },
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::debug!(
+                        error = %err,
+                        key = %canonical,
+                        "SSR cache read failed; treating as miss"
+                    );
+                }
+            }
+            return None;
+        }
+        // Process-local fallback (Redis absent): shared across the
+        // process's workers, bounded, TTL-checked. A local entry cannot be
+        // invalidated by another process — the worker's invalidation path
+        // clears it in the same process, and the TTL bounds anything left.
+        let hit = {
+            let mut inner = self.local.write().expect("ssr local cache lock poisoned");
+            match inner.entries.get(&canonical) {
+                // A read is a peek, never a removal: several waiters exit
+                // through the same entry after one render.
+                Some(local) if local.stored_at.elapsed() < local.ttl => Some(local.entry.clone()),
+                Some(_) => {
+                    // Expired: take it out (already dead).
+                    inner.entries.remove(&canonical);
+                    None
+                }
+                None => None,
+            }
+        };
+        if hit.is_some()
+            && let Some(metrics) = &self.metrics
+        {
+            metrics.hit(SSR_METRICS_CONTEXT);
+        }
+        hit
+    }
+
+    /// Write one entry. Best-effort: a failed write costs the next read a
+    /// render, never a wrong response.
+    pub async fn put(&self, key: &SsrCacheKey, entry: &SsrEntry, ttl: Duration) {
+        let canonical = key.to_cache_key();
+        if let Some(manager) = &self.redis {
+            let json = match serde_json::to_string(entry) {
+                Ok(json) => json,
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        key = %canonical,
+                        "SSR entry failed to serialize; not stored"
+                    );
+                    return;
+                }
+            };
+            let mut conn = manager.clone();
+            if let Err(err) = conn
+                .set_ex::<_, _, ()>(&canonical, json, ttl.as_secs().max(1))
+                .await
+            {
+                tracing::debug!(
+                    error = %err,
+                    key = %canonical,
+                    "SSR cache write failed; next read renders"
+                );
+            }
+            return;
+        }
+        let mut inner = self.local.write().expect("ssr local cache lock poisoned");
+        if inner.entries.len() >= self.max_local_entries {
+            inner
+                .entries
+                .retain(|_, local| local.stored_at.elapsed() < local.ttl);
+            while inner.entries.len() >= self.max_local_entries {
+                // Still full: drop the arbitrary quarter the map iterates
+                // first. The cap protects memory; hit ratio is not a
+                // contract here.
+                let victims: Vec<String> = inner
+                    .entries
+                    .keys()
+                    .take(inner.entries.len() - self.max_local_entries * 3 / 4)
+                    .cloned()
+                    .collect();
+                for victim in victims {
+                    inner.entries.remove(&victim);
+                }
+            }
+        }
+        inner.entries.insert(
+            canonical,
+            LocalEntry {
+                entry: entry.clone(),
+                stored_at: Instant::now(),
+                ttl,
+            },
+        );
+    }
+
+    /// Event-driven invalidation (TASK-022 11.3d): drop every SSR entry of
+    /// one tenant. Returns the number of entries removed.
+    pub async fn invalidate_tenant(&self, tenant_id: TenantId) -> anyhow::Result<u64> {
+        let mut removed = 0u64;
+        let prefix = format!("sanvi:{tenant_id}:ssr:");
+        if let Some(manager) = &self.redis {
+            let mut scan_conn = manager.clone();
+            let mut conn = manager.clone();
+            let mut iter = scan_conn
+                .scan_match::<_, String>(&ssr_invalidation_pattern(tenant_id))
+                .await
+                .context("failed to scan SSR cache for invalidation")?;
+            while let Some(item) = iter.next_item().await {
+                let key = item.with_context(|| "failed while scanning SSR cache keys")?;
+                let _: Result<(), _> = conn.del(&key).await;
+                removed += 1;
+            }
+        }
+        let mut inner = self.local.write().expect("ssr local cache lock poisoned");
+        let before = inner.entries.len();
+        inner.entries.retain(|key, _| !key.starts_with(&prefix));
+        removed += (before - inner.entries.len()) as u64;
+        Ok(removed)
+    }
 }
 
 /// The invalidation scan pattern for one tenant's SSR entries (event-driven

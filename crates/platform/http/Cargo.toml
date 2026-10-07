@@ -18,6 +18,7 @@ futures-util.workspace = true
 hex.workspace = true
 opentelemetry.workspace = true
 redis.workspace = true
+sanvi-cache.workspace = true
 sanvi-kernel.workspace = true
 sanvi-telemetry.workspace = true
 serde.workspace = true

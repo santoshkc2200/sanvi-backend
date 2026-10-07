@@ -104,6 +104,9 @@ fn build_app(
         None,
         None,
         None,
+        sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+            sanvi_http::config::SsrCacheConfig::default(),
+        ),
     )
 }
 
@@ -211,6 +214,9 @@ async fn suspended_tenant_allowlist_still_serves() {
         None,
         None,
         None,
+        sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+            sanvi_http::config::SsrCacheConfig::default(),
+        ),
     );
     let app = test::init_service(app).await;
 

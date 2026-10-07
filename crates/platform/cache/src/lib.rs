@@ -28,7 +28,10 @@ pub mod ssr;
 
 pub use metrics::CacheMetrics;
 pub use single_flight::{FlightGuard, SingleFlight};
-pub use ssr::{DeviceClass, SsrCacheKey, SsrKeyError, ssr_invalidation_pattern};
+pub use ssr::{
+    DeviceClass, SSR_METRICS_CONTEXT, SsrCache, SsrCacheKey, SsrEntry, SsrKeyError,
+    ssr_invalidation_pattern,
+};
 
 /// Tenant-namespaced cache over Redis.
 #[derive(Clone)]

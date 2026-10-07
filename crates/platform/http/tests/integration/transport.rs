@@ -35,7 +35,18 @@ fn build_app(
         .route("/large", web::get().to(large_json))
         .route("/image", web::get().to(png_bytes))
         .route("/precompressed", web::get().to(precompressed));
-    middleware::stack(app, config, None, None, None, None, None)
+    middleware::stack(
+        app,
+        config,
+        None,
+        None,
+        None,
+        None,
+        None,
+        sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+            sanvi_http::config::SsrCacheConfig::default(),
+        ),
+    )
 }
 
 /// ~200 B of JSON: under the floor, never encoded.

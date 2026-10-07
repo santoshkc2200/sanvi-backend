@@ -80,6 +80,7 @@ pub fn stack<T>(
     authn: Option<std::sync::Arc<crate::authn::AuthnMiddleware>>,
     impersonation: Option<std::sync::Arc<crate::impersonation::ImpersonationMiddleware>>,
     locale: Option<std::sync::Arc<LocaleMiddleware>>,
+    ssr_cache: crate::ssr_cache::SsrCacheLayer,
 ) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -139,6 +140,11 @@ where
         })
         .wrap(TenantRateLimitLayer::new(tenant_limiter))
         .wrap(LocaleResolutionLayer::new(locale))
+        // The keyed SSR cache (TASK-022): inside the locale middleware —
+        // the negotiated locale partitions the key — and outside
+        // authentication, whose credentials the cache must never see. The
+        // flag-off assembly is a pass-through.
+        .wrap(ssr_cache)
         .wrap(ImpersonationLayer::new(impersonation))
         .wrap(AuthnLayer::new(authn))
         .wrap(TenantResolutionLayer::new(tenant))

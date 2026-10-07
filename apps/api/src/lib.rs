@@ -2200,6 +2200,48 @@ pub struct ThemingWiring {
     pub cache: Arc<ResolvedThemeCache>,
 }
 
+/// The SSR cache's key resolver (TASK-022, FR-1111): host -> tenant via the
+/// tenancy resolution order (signed header, custom domain, subdomain), then
+/// the live theme revision through the theming resolution service — both
+/// cache-first, so the hot path costs two Redis-shaped reads. A host that
+/// resolves to no tenant (the marketing site, a garbage Host) yields `None`
+/// and the request bypasses the cache.
+struct StorefrontSsrKeyResolver {
+    host_resolver: Arc<dyn sanvi_http::tenancy::TenantResolver>,
+    themes: Arc<ResolveThemeService>,
+}
+
+impl sanvi_http::ssr_cache::SsrKeyResolver for StorefrontSsrKeyResolver {
+    fn resolve<'a>(
+        &'a self,
+        host: &'a str,
+        locale: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Option<sanvi_http::ssr_cache::SsrKeyResolution>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            match self.host_resolver.resolve(host, None).await {
+                Ok(sanvi_http::tenancy::Resolution::Found(context)) => {
+                    let resolved = self
+                        .themes
+                        .resolve_live(context.tenant_id, locale)
+                        .await
+                        .ok()?;
+                    Some(sanvi_http::ssr_cache::SsrKeyResolution {
+                        tenant_id: context.tenant_id,
+                        theme_revision: resolved.revision,
+                    })
+                }
+                _ => None,
+            }
+        })
+    }
+}
+
 /// The theming context's feature-gate adapter over the access context's
 /// domain-level `FeatureGate` (premium themes, custom CSS, custom
 /// templates). The theming context never depends on the access crate.
@@ -3543,6 +3585,10 @@ pub fn build_app(
         config: config.clone(),
     };
 
+    // Captured before `state` moves into app_data (TASK-022 11.3c).
+    let ssr_cache_config = server_config.ssr_cache.clone();
+    let prometheus_registry = state.metrics.prometheus_registry().clone();
+
     // Media ships ungated (no feature flag): the state is a plain
     // HTTP-client wrapper over `config.media`, built infallibly here.
     let media_state = build_media_state(&config.media);
@@ -3776,6 +3822,32 @@ pub fn build_app(
         None
     };
 
+    // TASK-022 (FR-1111): the keyed SSR response cache over the anonymous
+    // storefront reads. The flag-off default (and any build without the
+    // theming context) assembles the pass-through layer: every public read
+    // renders, exactly the pre-cache behaviour.
+    let ssr_cache = if config.server.ssr_cache.enabled {
+        theming.as_ref().map(|theming| {
+            let resolver: std::sync::Arc<dyn sanvi_http::ssr_cache::SsrKeyResolver> =
+                std::sync::Arc::new(StorefrontSsrKeyResolver {
+                    host_resolver: tenancy.host_resolver.clone(),
+                    themes: theming.service.clone(),
+                });
+            sanvi_http::ssr_cache::SsrCacheLayer::new(
+                ssr_cache_config.clone(),
+                sanvi_cache::SsrCache::new(
+                    redis.clone(),
+                    Some(sanvi_cache::CacheMetrics::new(&prometheus_registry)),
+                ),
+                resolver,
+            )
+        })
+    } else {
+        None
+    };
+    let ssr_cache = ssr_cache
+        .unwrap_or_else(|| sanvi_http::ssr_cache::SsrCacheLayer::disabled(ssr_cache_config));
+
     middleware::stack(
         app,
         server_config,
@@ -3784,6 +3856,7 @@ pub fn build_app(
         authn,
         impersonation,
         locale_middleware,
+        ssr_cache,
     )
 }
 

@@ -112,7 +112,18 @@ fn build_app(
     > + 'static,
 > {
     let app = App::new().route("/ok", web::get().to(|| async { "ok" }));
-    middleware::stack(app, config, None, None, None, None, None)
+    middleware::stack(
+        app,
+        config,
+        None,
+        None,
+        None,
+        None,
+        None,
+        sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+            sanvi_http::config::SsrCacheConfig::default(),
+        ),
+    )
 }
 
 #[actix_web::test]
@@ -157,7 +168,18 @@ async fn slow_handler_times_out_with_504() {
                 "never"
             }),
         );
-        middleware::stack(app, config.clone(), None, None, None, None, None)
+        middleware::stack(
+            app,
+            config.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+                sanvi_http::config::SsrCacheConfig::default(),
+            ),
+        )
     })
     .await;
     let (status, _, body) = raw_get(format!("{url}/slow")).await;
@@ -174,7 +196,18 @@ async fn panicking_handler_becomes_500() {
     config.rate_limit.enabled = false;
     let (url, task) = spawn_real(move || {
         let app = App::new().route("/boom", web::get().to(boom));
-        middleware::stack(app, config.clone(), None, None, None, None, None)
+        middleware::stack(
+            app,
+            config.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+                sanvi_http::config::SsrCacheConfig::default(),
+            ),
+        )
     })
     .await;
     let (status, _, body) = raw_get(format!("{url}/boom")).await;
@@ -208,7 +241,18 @@ async fn concurrency_limit_rejects_when_saturated() {
                 }
             }),
         );
-        middleware::stack(app, config.clone(), None, None, None, None, None)
+        middleware::stack(
+            app,
+            config.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+                sanvi_http::config::SsrCacheConfig::default(),
+            ),
+        )
     })
     .await;
 
@@ -250,7 +294,18 @@ async fn concurrency_rejection_carries_request_id_and_retry_after() {
                 }
             }),
         );
-        middleware::stack(app, config.clone(), None, None, None, None, None)
+        middleware::stack(
+            app,
+            config.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            sanvi_http::ssr_cache::SsrCacheLayer::disabled(
+                sanvi_http::config::SsrCacheConfig::default(),
+            ),
+        )
     })
     .await;
 
