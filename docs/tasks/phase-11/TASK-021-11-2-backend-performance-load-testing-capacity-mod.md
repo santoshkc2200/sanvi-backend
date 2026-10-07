@@ -1,6 +1,6 @@
 # TASK-021: 11.2 Backend performance, load testing & capacity
 
-**Phase:** 11 · **Status:** in-progress · **Size:** L
+**Phase:** 11 · **Status:** done · **Size:** L
 **Requirement(s):** FR-1108, FR-1109, FR-1110, NFR-1101, NFR-1104
 **Depends on:** TASK-019, TASK-020, **phase 10 merged (TASK-016, TASK-017, TASK-018)**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -209,16 +209,20 @@ does not tell you.
 
 ## Definition of done
 
-- [ ] Cursor pagination on every collection endpoint; no unbounded list in any of the thirteen specs.
-- [ ] Statement timeouts return a problem-details error rather than holding a connection.
-- [ ] Twenty endpoints profiled with before/after numbers committed.
-- [ ] Missing indexes added, duplicates removed, RLS predicate cost recorded per table.
-- [ ] A plan flipping to a sequential scan on a profiled endpoint fails CI.
-- [ ] No N+1 remains in any read model; a statement-count test guards each one.
-- [ ] Pool sizes and timeouts derive from measurement and are documented with their prior values.
-- [ ] Stampede protection holds at 500 concurrent misses; a tenant-less cache key cannot compile.
-- [ ] 3× peak holds every lab budget under 70 % utilisation; 10× recovers; the 24 h soak is flat.
-- [ ] `docs/runbooks/capacity.md` is published, labelled single-host, with every constant cited.
+- [x] Cursor pagination on every collection endpoint; no unbounded list in any of the thirteen specs.
+- [x] Statement timeouts return a problem-details error rather than holding a connection.
+- [x] Twenty endpoints profiled with before/after numbers committed.
+- [x] Missing indexes added, duplicates removed, RLS predicate cost recorded per table.
+- [x] A plan flipping to a sequential scan on a profiled endpoint fails CI.
+- [x] No N+1 remains in any read model; a statement-count test guards each one.
+- [x] Pool sizes and timeouts derive from measurement and are documented with their prior values.
+- [x] Stampede protection holds at 500 concurrent misses; a tenant-less cache key cannot compile.
+- [x] 3× peak holds every lab budget under 70 % utilisation; 10× recovers. *The 24 h soak is
+  **waived on this host by the task owner (2026-10-07): a developer machine, shared with the
+  owner's other work, that entered idle standby mid-run on the first attempt — see
+  [`benchmarks/soak-2026-10-07/README.md`](../../../benchmarks/soak-2026-10-07/README.md); the soak's
+  pass conditions stand for whichever host eventually runs it.***
+- [x] `docs/runbooks/capacity.md` is published, labelled single-host, with every constant cited.
 
 ## Verification
 
@@ -955,3 +959,63 @@ killed the first sampler mid-spike (`set -e` removed), CPU% divided by
 nominal rather than elapsed interval (fixed via `$EPOCHREALTIME` deltas),
 and the k6-presence stop condition needed to be opt-in. New in-flight
 artifacts (`samples-soak24.txt`, `soak24.json` ×5) commit on completion.
+
+### Slice 11.2j record — 2026-10-07 (task closed)
+
+Step 8–9's soak verdict was the last open line, and the slice that was to
+receive it became the slice that waived it. The full `## Verification`
+block ran once, on the same Windows host as 11.2a–i, with the script
+equivalents (`just` is not installed here — the task's own portable-form
+convention): `cargo fmt --check` clean; `cargo clippy --workspace
+--all-targets -- -D warnings` clean; `check-layering.sh` OK;
+`scripts/test.sh` full workspace suite **1304/1304** (nextest, agent
+profile); `check-openapi.sh` clean over all 14 specs; `cargo nextest run
+-p sanvi-api --test perf` **27/27** (bounded_collections +
+explain_assertions + statement_counts together, first time all three ran
+in one pass); a fresh perf run tagged **rc.3** (five shapes × 60 s at the
+offered rates, same machine profile and 0.10.0/`unknown` build stamp as
+rc.1, all shapes under their k6 thresholds, artifacts committed as
+`benchmarks/<scenario>/rc.3.json`); and `perf-compare rc.1 rc.3` **clean
+on all five scenarios** — no latency metric past the +20 %/noise-floor
+tolerance, no failed-rate or dropped-iteration move, same machine profile,
+same stats_version, same build stamp, so no `NOTE` lines either. That
+closes the block's `rc.1 → rc.3` edge: rc.1 (11.2i) was the
+post-optimization state, rc.3 is the task's exit state, and nothing moved.
+
+**The soak was waived by the task owner.** During this slice the running
+attempt was found frozen 13 minutes in — the host had entered Modern
+Standby on its 5-minute idle timeout while the load ran (every process
+froze together; the API never restarted, its RSS drop was working-set
+trim). Two relaunches followed: the first attempt's restart died to a
+sampler defect this session introduced and fixed (the `tasklist //FI`
+k6-liveness check only parses when MSYS path conversion is on; the
+relaunch inherited `MSYS_NO_PATHCONV=1`, the check misread "no k6", the
+sampler exited after two rows — the check is now the portable
+`tasklist | grep` form, committed with the note), and the second was
+cancelled at the owner's decision: **this is a developer machine, and a
+24-hour soak is not wanted on it.** The waiver is recorded in
+`benchmarks/soak-2026-10-07/README.md` with the full attempt history
+(attempt 1's partial CSV preserved; idle-sleep was disabled for the
+attempts, `standby-timeout-ac/dc` restored to the prior 300 s / 180 s
+afterwards, verified by re-read). Step 8's soak verify line and the DoD
+line are recorded as **waived on this host, not passed** — the flatness
+evidence the next host owes is spelled out in the README's pass
+conditions. Everything else step 8 required stands as landed in 11.2i.
+
+**One harness defect fixed here (the slice's only code change).**
+`perf-compare`'s default scenario enumeration globbed every directory
+under `benchmarks/` — true when TASK-019 wrote it, wrong since 11.2c/11.2i
+added `profiles/`, `load3x-*`, `spike10x-*`, `soak-*` and `pool-sizing-*`
+record directories, which failed the gate as "no baseline artifact" noise.
+The enumeration now scopes to directories holding a candidate artifact for
+the candidate tag; a directory that holds the candidate but not the
+baseline still fails (the missing-baseline rule is untouched), and the
+self-test grew cases for both the skipped record directory and the
+unbaselined scenario directory (`--self-test` OK, 30+ cases). This is a
+gate-logic fix, behaviour-preserving for every real scenario.
+
+**Definition of done:** every line ticked; the soak line carries the
+waiver inline with its pointer. Status flipped to **done** here and in
+[`../backlog.md`](../backlog.md) in this commit. TASK-023's shedding
+ceiling and TASK-026's capacity constants remain the measured numbers from
+`docs/runbooks/capacity.md`, exactly as 11.2i left them.

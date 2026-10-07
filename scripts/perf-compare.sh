@@ -45,6 +45,20 @@ artifact() {
     return 1
 }
 
+# The scenarios of one comparison: every benchmarks/ directory that holds a
+# candidate artifact for the candidate tag. Directory presence alone is not
+# the test — since 11.2c/11.2i the tree also carries non-scenario directories
+# (profile records, load/spike/soak sample logs), and a missing baseline in
+# one of those is not a gate failure, it is not a scenario at all.
+default_scenarios() {
+    local tag="$1" dir
+    while IFS= read -r dir; do
+        if [[ -f "$dir/$tag.json" ]]; then
+            basename "$dir"
+        fi
+    done < <(find "$benchmarks" -mindepth 1 -maxdepth 1 -type d | sort)
+}
+
 # Refuse to compare numbers that did not come from the same machine.
 profiles_differ() {
     local base_json="$1" cand_json="$2"
@@ -313,6 +327,33 @@ if [[ "${1:-}" == "--self-test" ]]; then
     mk quiet '.tag = "quiet" | .metrics = {"http_req_duration_p50_ms":1.0, "http_req_duration_p95_ms":1.0, "http_req_duration_p99_ms":1.0, "http_req_duration_avg_ms":1.0, "http_reqs_total":1000, "http_req_failed_rate":0, "iterations_total":1000, "dropped_iterations_total":0}'
     expect_pass "sub-noise jitter (+0.3 ms) was reported as a regression" "$scenario" quiet jitter
 
+    # The default enumeration scopes itself to directories holding a
+    # candidate artifact: the benchmark tree carries non-scenario
+    # directories (profile records, soak/sample logs) and their absence of
+    # artifacts must not fail the whole comparison.
+    mkdir -p "$benchmarks/records-only"
+    enum="$(default_scenarios same)"
+    if [[ "$enum" != "selftest" ]]; then
+        echo "self-test failed: the default enumeration returned '$enum', not 'selftest' — an artifact-less directory leaked into the scenario set" >&2
+        exit 1
+    fi
+    if [[ -z "$(default_scenarios missingtag)" ]]; then
+        : # a tag nothing holds is an empty scenario set — the main loop's empty-set guard fails it
+    else
+        echo "self-test failed: the default enumeration invented scenarios for a tag with no artifacts" >&2
+        exit 1
+    fi
+    # A directory that does hold the candidate but not the baseline is a
+    # real scenario and still fails (the missing-baseline rule above).
+    mkdir -p "$benchmarks/unbaselined"
+    jq -n --argjson p "$profile" --argjson b "$build" --argjson m "$metrics" \
+        '{scenario:"unbaselined", stats_version:2, build:$b, machine_profile:$p, metrics:$m,
+          duration:"60s", offered_rate_rps:50}' | jq '.tag = "same"' >"$benchmarks/unbaselined/same.json"
+    if ! grep -q "unbaselined" <(default_scenarios same); then
+        echo "self-test failed: a candidate-bearing directory was dropped from the scenario set" >&2
+        exit 1
+    fi
+
     echo "self-test: OK (identical passes; +25% fails; foreign host, missing baseline, null metrics, unusable stamps and version-1 stats refused; build diff announced; avg swing and sub-noise jitter pass)"
     exit 0
 fi
@@ -324,15 +365,15 @@ shift 2
 scenarios=("$@")
 if [[ ${#scenarios[@]} == 0 ]]; then
     # bash 3.2 (macOS) has no mapfile: fill the array portably.
-    while IFS= read -r dir; do
-        scenarios+=("$(basename "$dir")")
-    done < <(find "$benchmarks" -mindepth 1 -maxdepth 1 -type d | sort)
+    while IFS= read -r scenario; do
+        scenarios+=("$scenario")
+    done < <(default_scenarios "$cand_tag")
 fi
 # An empty set means there is nothing baselined at all: block the merge
 # with the reason, rather than passing — or (bash 3.2 + set -u) dying on
 # the unbound "${scenarios[@]}" expansion below.
 if [[ ${#scenarios[@]} -eq 0 ]]; then
-    echo "perf-compare: FAIL — no scenario artifacts under $benchmarks (nothing to gate; capture some with \`just perf <tag>\`)" >&2
+    echo "perf-compare: FAIL — no candidate artifacts for tag '$cand_tag' under $benchmarks (nothing to gate; capture some with \`just perf <tag>\`)" >&2
     exit 1
 fi
 
