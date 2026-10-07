@@ -33,6 +33,43 @@ the correct-but-slower behaviour.
   test that asserts this is the most valuable test in the task.**
 - Invalidation is driven by domain events, not by a TTL that hopes for the best.
 
+## Execution slices
+
+Added 2026-10-07, when the task was picked up (the phase README's convention: tasks are sliced as
+they are picked up). Two groundings the table assumes, both verified against the tree on the day:
+
+- **There is no `api/storefront.yaml`.** The storefront read surface is the `/api/v1/public*`
+  resources across theming, localization, billing (public plans) and privacy (disclosures) — the
+  surfaces the 11.2c profile ranked. Step 1 therefore documents the cache semantics on the specs
+  that own those operations, not on a spec that does not exist.
+- **11.2h pre-paid part of Steps 5–6.** `SelectiveCompression` (Brotli-first, 1024-byte floor,
+  already-compressed and encoded responses refused, `Vary` on every encoded response) and
+  `ConditionalEtag` are in `crates/platform/http` behind `[server.compression]` /
+  `server.keep_alive_secs` with wire tests. This task must not re-land them; its remaining transport
+  work is the per-app HTML lifetimes and the storefront preload hint.
+
+| Slice | Steps | Shape | Scoped verification for the session |
+| --- | --- | --- | --- |
+| **11.3a** cache semantics in the specs + the flag definition | 1 | contract-led, small | `scripts/check-openapi.sh` clean over the touched specs; flag absent/off is a no-op (`scripts/test.sh -p sanvi-api` config tests); ga-checklist OK |
+| **11.3b** cache-key type + the key-partition negative tests | 2 (key half) | test-led, small | the four partition tests (tenant, locale, theme revision, device class) green; a tenant-less key fails to construct (type-level, not by review) |
+| **11.3c** keyed cache, single-flight, metrics, the response negatives | 2 (response half) + 3 | the slice that can serve a wrong response | written-first negatives shown failing on the no-cache stub in-session, green after; 500 concurrent misses → render counter = 1; `scripts/test.sh -p sanvi-cache -p sanvi-http -p sanvi-api` |
+| **11.3d** invalidation on domain events | 4 | event-led | publish-a-theme test asserts the affected entries are gone inside the documented window; `scripts/test.sh -p <touched contexts> -p sanvi-api` |
+| **11.3e** per-app cache headers + `Vary` snapshot | 5 | small, config + middleware | snapshot test per serving surface (extends 11.2h's `headers_snapshot`); admin `no-store` asserted; `scripts/test.sh -p sanvi-http -p sanvi-api` |
+| **11.3f** storefront preload hint (compression already landed) | 6 remainder | small, judgement | preload header asserted on the storefront read responses; already-compressed refusal re-proven by 11.2h's wire tests (no re-landing) |
+| **11.3g** flag on in the lab, measure, close | 7 | measurement-led, no code | `scripts/perf.sh <tag>` with the flag on; `scripts/perf-compare.sh` against the stored candidate; the task's full `## Verification` block once, then the status flip here and in `../backlog.md` |
+
+**Order.** 11.3a → the rest (the flag and the documented semantics are what everything else cites).
+11.3b → 11.3c (the middleware constructs the key type). 11.3c → 11.3d (there is nothing to
+invalidate before entries exist). 11.3e and 11.3f are independent of 11.3b–d and of each other.
+**11.3g runs last and alone** — it is the slice where the cache can first serve a response to a
+request that did not render it, so it ships behind the flag with the off position
+verified as the pre-cache behaviour.
+
+**Host coordination.** Sliced 2026-10-07 while TASK-021's 24 h soak (attempt 3) is mid-run on this
+host, completing ~09:57 2026-10-08. No build or test tier runs against the host until the soak ends —
+a full-CPU build is co-tenant noise the soak's pass conditions (0 failed / 0 dropped, flat
+curves) cannot absorb. Implementation starts 11.3a after the soak verdict lands.
+
 ## File ownership map
 
 - `crates/platform/http/**` — cache middleware, `Vary`, compression, early hints
