@@ -601,7 +601,15 @@ pub async fn rectify_request(
 
 /// `GET /api/v1/public/privacy/notice` — the current notice + version,
 /// generated from live configuration (jurisdiction sections and the
-/// retention table).
+/// retention table).///
+/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+/// enabled, the anonymous response is served from the server-side SSR cache
+/// keyed by (tenant, locale, theme revision, device class) with
+/// single-flight on miss; a theme publish or content change invalidates the
+/// affected entries within ~2 s (the entry TTL is a backstop only).
+/// Requests carrying an `Authorization` header are never served from or
+/// written to the cache, and responses carrying `Set-Cookie` are never
+/// stored. Varies on `Accept-Language`.
 #[utoipa::path(
     get,
     path = "/api/v1/public/privacy/notice",
@@ -621,7 +629,15 @@ pub async fn get_privacy_notice(
 }
 
 /// `GET /api/v1/public/privacy/notice-at-collection` — categories, purposes,
-/// retention and sale/share status, served before any collection.
+/// retention and sale/share status, served before any collection.///
+/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+/// enabled, the anonymous response is served from the server-side SSR cache
+/// keyed by (tenant, locale, theme revision, device class) with
+/// single-flight on miss; a theme publish or content change invalidates the
+/// affected entries within ~2 s (the entry TTL is a backstop only).
+/// Requests carrying an `Authorization` header are never served from or
+/// written to the cache, and responses carrying `Set-Cookie` are never
+/// stored. Varies on `Accept-Language`.
 #[utoipa::path(
     get,
     path = "/api/v1/public/privacy/notice-at-collection",
@@ -647,7 +663,15 @@ pub struct MetricsQuery {
 }
 
 /// `GET /api/v1/public/privacy/metrics` — annual request metrics (CCPA
-/// disclosure), generated from the request ledger.
+/// disclosure), generated from the request ledger.///
+/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+/// enabled, the anonymous response is served from the server-side SSR cache
+/// keyed by (tenant, locale, theme revision, device class) with
+/// single-flight on miss; a theme publish or content change invalidates the
+/// affected entries within ~2 s (the entry TTL is a backstop only).
+/// Requests carrying an `Authorization` header are never served from or
+/// written to the cache, and responses carrying `Set-Cookie` are never
+/// stored. Varies on `Accept-Language`.
 #[utoipa::path(
     get,
     path = "/api/v1/public/privacy/metrics",
@@ -669,7 +693,15 @@ pub async fn get_public_metrics(
 }
 
 /// `GET /api/v1/public/subprocessors` — the public sub-processor list with
-/// role and transfer mechanism.
+/// role and transfer mechanism.///
+/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+/// enabled, the anonymous response is served from the server-side SSR cache
+/// keyed by (tenant, locale, theme revision, device class) with
+/// single-flight on miss; a theme publish or content change invalidates the
+/// affected entries within ~2 s (the entry TTL is a backstop only).
+/// Requests carrying an `Authorization` header are never served from or
+/// written to the cache, and responses carrying `Set-Cookie` are never
+/// stored. Varies on `Accept-Language`.
 #[utoipa::path(
     get,
     path = "/api/v1/public/subprocessors",

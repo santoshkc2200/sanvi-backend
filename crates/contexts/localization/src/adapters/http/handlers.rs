@@ -56,7 +56,15 @@ pub struct SupportedLocalesView {
     pub locales: Vec<crate::domain::SupportedLocale>,
 }
 
-/// `GET /api/v1/public/locales` — the platform's enabled locale set.
+/// `GET /api/v1/public/locales` — the platform's enabled locale set.///
+/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+/// enabled, the anonymous response is served from the server-side SSR cache
+/// keyed by (tenant, locale, theme revision, device class) with
+/// single-flight on miss; a theme publish or content change invalidates the
+/// affected entries within ~2 s (the entry TTL is a backstop only).
+/// Requests carrying an `Authorization` header are never served from or
+/// written to the cache, and responses carrying `Set-Cookie` are never
+/// stored. Varies on `Accept-Language`.
 #[utoipa::path(
     get,
     path = "/api/v1/public/locales",
@@ -82,7 +90,15 @@ pub struct MessagesQuery {
 }
 
 /// `GET /api/v1/public/messages/{domain}?locale=` — catalog delivery for
-/// the frontend, ETag-cached.
+/// the frontend, ETag-cached.///
+/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+/// enabled, the anonymous response is served from the server-side SSR cache
+/// keyed by (tenant, locale, theme revision, device class) with
+/// single-flight on miss; a theme publish or content change invalidates the
+/// affected entries within ~2 s (the entry TTL is a backstop only).
+/// Requests carrying an `Authorization` header are never served from or
+/// written to the cache, and responses carrying `Set-Cookie` are never
+/// stored. Varies on `Accept-Language`.
 #[utoipa::path(
     get,
     path = "/api/v1/public/messages/{domain}",

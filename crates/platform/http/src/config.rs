@@ -28,6 +28,11 @@ pub struct ServerConfig {
     /// Response compression with a size floor (TASK-021 step 7).
     #[serde(default)]
     pub compression: CompressionConfig,
+    /// Server-side SSR response cache for the anonymous storefront reads
+    /// (TASK-022; the `platform.ssr_cache` flag). Off — the default — is the
+    /// correct-but-slower behaviour: every public read renders.
+    #[serde(default)]
+    pub ssr_cache: SsrCacheConfig,
 }
 
 fn default_keep_alive_secs() -> u64 {
@@ -55,6 +60,7 @@ impl Default for ServerConfig {
             security: SecurityHeadersConfig::default(),
             abuse: AbuseControlsConfig::default(),
             compression: CompressionConfig::default(),
+            ssr_cache: SsrCacheConfig::default(),
         }
     }
 }
@@ -91,6 +97,9 @@ impl ServerConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.abuse.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.ssr_cache.validate() {
             problems.push(err.to_string());
         }
         if !problems.is_empty() {
@@ -165,6 +174,51 @@ impl TenantPolicyConfig {
         self.suspended_allowlist
             .iter()
             .any(|prefix| path.starts_with(prefix))
+    }
+}
+
+/// Server-side SSR response cache (FR-1111, TASK-022; the
+/// `platform.ssr_cache` flag).
+///
+/// Caches the anonymous storefront read responses (the `/api/v1/public`
+/// resources across theming, localization, billing and privacy) keyed by
+/// `(tenant, locale, theme revision, device class)`, with single-flight on
+/// miss. Authenticated responses — anything arriving with an `Authorization`
+/// header — and responses carrying `Set-Cookie` are never served from or
+/// written to the cache, asserted by tests rather than comments.
+///
+/// Invalidation is event-driven: a theme publish or content change drops the
+/// affected entries within ~2 s (the outbox poll interval is 1 s plus stream
+/// delivery). The TTL is only a backstop for entries whose invalidation
+/// event was missed, never the primary expiry mechanism. Absent Redis (or
+/// any cache error) degrades to an always-miss, which is the flag-off
+/// behaviour.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SsrCacheConfig {
+    /// The `platform.ssr_cache` flag. `false` (the default) is the
+    /// pre-cache behaviour: every public read renders.
+    pub enabled: bool,
+    /// Backstop TTL for a cached storefront entry, in seconds. Invalidation
+    /// on publish/content change is event-driven and does not wait for it.
+    pub ttl_secs: u64,
+}
+
+impl Default for SsrCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ttl_secs: 300,
+        }
+    }
+}
+
+impl SsrCacheConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.enabled && self.ttl_secs == 0 {
+            anyhow::bail!("server.ssr_cache.ttl_secs must be >= 1 when ssr_cache is enabled");
+        }
+        Ok(())
     }
 }
 
@@ -517,6 +571,49 @@ mod tests {
     #[test]
     fn defaults_are_valid() {
         ServerConfig::default().validate().unwrap();
+    }
+
+    /// The `platform.ssr_cache` flag ships off (TASK-022 11.3a): a config
+    /// that does not mention the section at all is the pre-cache behaviour,
+    /// and an enabled cache cannot have a zero backstop TTL.
+    #[test]
+    fn ssr_cache_absent_means_off_and_enabled_requires_a_backstop_ttl() {
+        let config: ServerConfig = toml::from_str(
+            r#"
+host = "0.0.0.0"
+port = 8080
+workers = 0
+shutdown_timeout_secs = 30
+request_timeout_secs = 30
+max_body_bytes = 1048576
+max_concurrency = 10000
+[cors]
+allowed_origins = []
+allow_credentials = true
+max_age_secs = 600
+[rate_limit]
+enabled = false
+burst = 60
+per_second = 10
+fail_open = true
+exempt_paths = []
+[tenant]
+public_prefixes = []
+suspended_allowlist = []
+"#,
+        )
+        .unwrap();
+        assert!(!config.ssr_cache.enabled, "absent section = flag off");
+        assert_eq!(config.ssr_cache.ttl_secs, 300);
+
+        let enabled_no_ttl: SsrCacheConfig =
+            toml::from_str("enabled = true\nttl_secs = 0").unwrap();
+        assert!(enabled_no_ttl.validate().is_err());
+        let enabled = SsrCacheConfig {
+            enabled: true,
+            ttl_secs: 300,
+        };
+        enabled.validate().unwrap();
     }
 
     #[test]

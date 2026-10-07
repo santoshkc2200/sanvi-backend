@@ -118,6 +118,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 ] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs", "io-util"] }
+toml = "0.8"
 # Only for `tonic::metadata` (the OTLP auth headers OpenObserve requires).
 # Must stay on the same major as opentelemetry-otlp's own tonic, or the
 # MetadataMap we build is a different type from the one it accepts.

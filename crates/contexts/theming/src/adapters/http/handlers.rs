@@ -93,7 +93,15 @@ pub struct PublicThemeQuery {
 
 /// `GET /api/v1/public/theme` — the resolved live theme for the request
 /// host (or the platform default), ETag-cached. No authentication; tenant
-/// resolution happens here because public paths skip the tenant middleware.
+/// resolution happens here because public paths skip the tenant middleware.///
+/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+/// enabled, the anonymous response is served from the server-side SSR cache
+/// keyed by (tenant, locale, theme revision, device class) with
+/// single-flight on miss; a theme publish or content change invalidates the
+/// affected entries within ~2 s (the entry TTL is a backstop only).
+/// Requests carrying an `Authorization` header are never served from or
+/// written to the cache, and responses carrying `Set-Cookie` are never
+/// stored. Varies on `Accept-Language`.
 #[utoipa::path(
     get,
     path = "/api/v1/public/theme",
