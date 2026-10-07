@@ -321,6 +321,12 @@ test-perf:
     eval "$(./scripts/test-db.sh up)"
     cargo nextest run -p sanvi-api --test perf
 
+# TASK-022 (FR-1111): the SSR cache-key partition tests — two tenants
+# cannot share an entry, and locale, theme revision and device class each
+# partition the key. No database; runs in the workspace suite too.
+test-cache-keys:
+    cargo nextest run -p sanvi-cache --test ssr_cache_negative
+
 openapi:
     ./scripts/check-openapi.sh
 
