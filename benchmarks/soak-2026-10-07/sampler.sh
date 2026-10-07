@@ -83,7 +83,12 @@ while :; do
         "${api_rss:-0}" "${wrk_rss:-0}" "${api_thr:-0}" "${wrk_thr:-0}" "${api_hdl:-0}" "${wrk_hdl:-0}" \
         "${api_cpu:-0}" "${wrk_cpu:-0}" "$m" "$p" >> "$outfile"
 
-    if [[ "$stop_on_k6" == "yes" ]] && (( now - start > interval )) && ! tasklist //FI "IMAGENAME eq k6.exe" 2>/dev/null | grep -q k6.exe; then
+    # Plain `tasklist | grep`, no //FI filter: the double-slash form only
+    # works when MSYS path conversion is on — under MSYS_NO_PATHCONV=1 the
+    # // flag reaches tasklist verbatim, the call errors, and the sampler
+    # reads "no k6" and exits mid-soak (that is exactly what happened to
+    # the relaunched run on 2026-10-07).
+    if [[ "$stop_on_k6" == "yes" ]] && (( now - start > interval )) && ! tasklist 2>/dev/null | grep -qi "k6.exe"; then
         break
     fi
     sleep "$interval"

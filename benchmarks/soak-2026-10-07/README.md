@@ -1,7 +1,7 @@
 # 24-hour soak — TASK-021 step 8 (slice 11.2i)
 
-**Status: RUNNING — attempt 2 (launched 2026-10-07 10:36:30 +09:00,
-completes ~10:36 on 2026-10-08).** This record's result table is appended by
+**Status: RUNNING — attempt 3 (launched 2026-10-07 10:42:50 +09:00,
+completes ~10:42 on 2026-10-08).** This record's result table is appended by
 `summarize.sh` when the run ends; the slice record in the task file
 records the verdict separately.
 
@@ -16,10 +16,21 @@ exists for the attempt). Fix: `powercfg /change standby-timeout-ac 0` (and
 `standby-timeout-dc 0`) — **prior values to restore after the run: AC 300 s
 (0x12c), DC 180 s (0xb4)**; hibernate was already 0 on AC. The API and worker
 processes were not restarted (start times 08:56 / 08:54, before both
-attempts); attempt 2 measures the same processes.
+attempts); attempt 3 measures the same processes.
 
-**Attempt-2 memory baseline (pass condition 1, restated).** The API entered
-attempt 2 at ~94 MB working set — the post-standby trim of the ~457 MB
+**Attempt 2 aborted (10:36–10:42, launcher error, no soak data).** The
+relaunch was made with `MSYS_NO_PATHCONV=1` in the environment (a Git Bash
+workaround used elsewhere on this host), which the nohup'd sampler inherited;
+its `tasklist //FI` k6-liveness check only parses when MSYS path conversion
+is on, so the check errored, the sampler read "no k6" and exited after two
+rows. The sampler's liveness check is now the portable `tasklist | grep` form
+(no flags — committed with this note), and the relaunch runs in a clean
+environment. The two-row CSV is preserved as
+`attempt1-aborted/samples-soak24-attempt2-sampler-misfire.txt`; k6 never
+wrote anything for attempt 2.
+
+**Attempt-3 memory baseline (pass condition 1, restated).** The API entered
+attempt 3 at ~95 MB working set — the post-standby trim of the ~457 MB
 plateau process, not a fresh process (private commit is unchanged; the
 sampler reads `WorkingSet64`). Flatness is judged on slope across the 24 h
 window, not on the absolute level; the 457 MB plateau and its cause remain
