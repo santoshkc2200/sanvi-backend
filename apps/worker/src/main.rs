@@ -968,6 +968,16 @@ async fn main() -> ExitCode {
     // Publish/rollback/asset events clear every instance's cached resolved
     // theme so a tenant's new look is visible within one request.
     let theming_cache = Arc::new(ResolvedThemeCache::new(Some(redis.clone())));
+    // TASK-022 (FR-1111): the worker invalidates the storefront SSR cache on
+    // the theme-publish / content-change events. Redis-backed: the deletions
+    // reach every api replica inside the documented ~2 s window (outbox poll
+    // 1 s + stream delivery).
+    let ssr_cache: Arc<sanvi_cache::SsrCache> = Arc::new(sanvi_cache::SsrCache::new(
+        Some(redis.clone()),
+        Some(sanvi_cache::CacheMetrics::new(
+            metrics.prometheus_registry(),
+        )),
+    ));
     let theming_consumer = StreamConsumer::new(pool.clone(), streams.clone());
     let theming_consumer_metrics = Arc::new(ConsumerMetrics::new("theming"));
     if let Err(err) = theming_consumer_metrics.register(registry) {
@@ -3000,13 +3010,14 @@ async fn main() -> ExitCode {
 
     let localization_shutdown = shutdown_rx.clone();
     let localization_stream = format!("{}.localization", config.outbox.stream);
+    let ssr_for_localization = ssr_cache.clone();
     let localization_task = tokio::spawn(async move {
         localization_consumer
             .run_until_shutdown(
                 &localization_stream,
                 "localization",
                 &localization_consumer_name,
-                localization_event_handler(localization_service),
+                localization_event_handler(localization_service, Some(ssr_for_localization)),
                 localization_shutdown,
             )
             .await;
@@ -3014,13 +3025,14 @@ async fn main() -> ExitCode {
 
     let theming_shutdown = shutdown_rx.clone();
     let theming_stream = format!("{}.theming", config.outbox.stream);
+    let ssr_for_theming = ssr_cache.clone();
     let theming_task = tokio::spawn(async move {
         theming_consumer
             .run_until_shutdown(
                 &theming_stream,
                 "theming",
                 &theming_consumer_name,
-                theming_event_handler(theming_cache),
+                theming_event_handler(theming_cache, Some(ssr_for_theming)),
                 theming_shutdown,
             )
             .await;

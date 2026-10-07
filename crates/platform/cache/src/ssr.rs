@@ -366,6 +366,30 @@ impl SsrCache {
         );
     }
 
+    /// Platform-wide invalidation (a platform-scope content change — e.g. a
+    /// platform translation — touches every tenant's fallback chain). Returns
+    /// the number of entries removed.
+    pub async fn invalidate_all(&self) -> anyhow::Result<u64> {
+        let mut removed = 0u64;
+        if let Some(manager) = &self.redis {
+            let mut scan_conn = manager.clone();
+            let mut conn = manager.clone();
+            let mut iter = scan_conn
+                .scan_match::<_, String>("sanvi:*:ssr:*")
+                .await
+                .context("failed to scan SSR cache for platform-wide invalidation")?;
+            while let Some(item) = iter.next_item().await {
+                let key = item.with_context(|| "failed while scanning SSR cache keys")?;
+                let _: Result<(), _> = conn.del(&key).await;
+                removed += 1;
+            }
+        }
+        let mut inner = self.local.write().expect("ssr local cache lock poisoned");
+        removed += inner.entries.len() as u64;
+        inner.entries.clear();
+        Ok(removed)
+    }
+
     /// Event-driven invalidation (TASK-022 11.3d): drop every SSR entry of
     /// one tenant. Returns the number of entries removed.
     pub async fn invalidate_tenant(&self, tenant_id: TenantId) -> anyhow::Result<u64> {

@@ -104,9 +104,11 @@ impl Clock for SystemClock {
 /// `platform.processed_events` dedup), so re-delivery is safe.
 pub fn theming_event_handler(
     cache: std::sync::Arc<ResolvedThemeCache>,
+    ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
 ) -> sanvi_messaging::ConsumerHandler {
     std::sync::Arc::new(move |envelope: sanvi_kernel::events::EventEnvelope| {
         let cache = cache.clone();
+        let ssr_cache = ssr_cache.clone();
         Box::pin(async move {
             match envelope.event_type.as_str() {
                 "theming.tenant_theme_published"
@@ -120,6 +122,14 @@ pub fn theming_event_handler(
                         .and_then(|value| value.parse::<TenantId>().ok());
                     if let Some(tenant_id) = tenant_id {
                         cache.invalidate_tenant(tenant_id).await;
+                        // TASK-022 (FR-1111): the storefront SSR cache
+                        // partitions by theme revision, so a publish makes
+                        // the old entries unreachable; dropping them keeps
+                        // the documented ~2 s window honest and frees the
+                        // memory the backstop TTL would have held.
+                        if let Some(ssr) = &ssr_cache {
+                            ssr.invalidate_tenant(tenant_id).await?;
+                        }
                     }
                 }
                 // Registry events don't change any tenant's rendered theme:
@@ -131,4 +141,90 @@ pub fn theming_event_handler(
             Ok(())
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sanvi_cache::{DeviceClass, SsrCache, SsrCacheKey};
+    use sanvi_kernel::SnowflakeId;
+
+    fn envelope(event_type: &str, tenant_id: TenantId) -> sanvi_kernel::events::EventEnvelope {
+        sanvi_kernel::events::EventEnvelope::new(
+            EventId::from_snowflake(SnowflakeId::try_from(42).unwrap()),
+            "theming.tenant_theme",
+            tenant_id.as_snowflake(),
+            event_type,
+            serde_json::json!({}),
+        )
+        .with_metadata("tenant_id", serde_json::json!(tenant_id.to_string()))
+    }
+
+    async fn seed_entry(ssr: &SsrCache, tenant_id: TenantId, route: &str) {
+        let key =
+            SsrCacheKey::new(tenant_id, "en", 3, DeviceClass::Desktop, route).expect("seed key");
+        let entry = sanvi_cache::SsrEntry {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        };
+        ssr.put(&key, &entry, std::time::Duration::from_secs(300))
+            .await;
+    }
+
+    /// A theme publish must drop the tenant's SSR entries inside the
+    /// documented ~2 s window (TASK-022 11.3d) — here: immediately, the
+    /// handler running synchronously — while another tenant's entries
+    /// survive.
+    #[tokio::test]
+    async fn theme_publish_invalidates_the_tenant_ssr_entries_within_the_window() {
+        let published = TenantId::from_snowflake(SnowflakeId::try_from(300).unwrap());
+        let untouched = TenantId::from_snowflake(SnowflakeId::try_from(301).unwrap());
+        let ssr = Arc::new(SsrCache::new(None, None));
+        seed_entry(&ssr, published, "/api/v1/public/theme").await;
+        seed_entry(&ssr, published, "/api/v1/public/plans").await;
+        seed_entry(&ssr, untouched, "/api/v1/public/theme").await;
+
+        let handler = theming_event_handler(
+            Arc::new(ResolvedThemeCache::new(None)),
+            Some(Arc::clone(&ssr)),
+        );
+        handler(envelope("theming.tenant_theme_published", published))
+            .await
+            .expect("handler succeeds");
+
+        let removed = ssr.invalidate_tenant(published).await.unwrap();
+        assert_eq!(
+            removed, 0,
+            "the published tenant's entries are already gone"
+        );
+        let remaining = ssr.invalidate_tenant(untouched).await.unwrap();
+        assert_eq!(
+            remaining, 1,
+            "another tenant's entries survive the invalidation"
+        );
+    }
+
+    /// A tenant key the handler cannot parse must not nuke the world, and
+    /// unrelated events are inert.
+    #[tokio::test]
+    async fn unrelated_events_leave_the_ssr_cache_alone() {
+        let tenant_id = TenantId::from_snowflake(SnowflakeId::try_from(302).unwrap());
+        let ssr = Arc::new(SsrCache::new(None, None));
+        seed_entry(&ssr, tenant_id, "/api/v1/public/theme").await;
+
+        let handler = theming_event_handler(
+            Arc::new(ResolvedThemeCache::new(None)),
+            Some(Arc::clone(&ssr)),
+        );
+        // A registry event: no tenant's rendering changes, nothing dropped.
+        handler(envelope("theming.theme_published", tenant_id))
+            .await
+            .expect("handler succeeds");
+        let removed = ssr.invalidate_tenant(tenant_id).await.unwrap();
+        assert_eq!(
+            removed, 1,
+            "registry events do not invalidate the SSR cache"
+        );
+    }
 }

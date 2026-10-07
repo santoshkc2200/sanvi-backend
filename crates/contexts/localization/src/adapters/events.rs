@@ -78,10 +78,16 @@ impl Clock for SystemClock {
 /// `platform.processed_events`), so re-delivery after a crash is safe.
 pub fn localization_event_handler(
     service: std::sync::Arc<crate::adapters::catalog::LocalizationService>,
+    ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
 ) -> sanvi_messaging::ConsumerHandler {
     std::sync::Arc::new(move |envelope: sanvi_kernel::events::EventEnvelope| {
         let service = service.clone();
+        let ssr_cache = ssr_cache.clone();
         Box::pin(async move {
+            // TASK-022 (FR-1111): copy changes are the "content change" half
+            // of the SSR invalidation contract — a tenant-scoped change drops
+            // that tenant's entries, a platform-scoped one drops everything
+            // (platform copy rides every tenant's fallback chain).
             match envelope.event_type.as_str() {
                 "localization.tenant_locales_changed" => {
                     let tenant_id = envelope
@@ -91,6 +97,9 @@ pub fn localization_event_handler(
                         .and_then(|value| value.parse::<sanvi_kernel::TenantId>().ok());
                     if let Some(tenant_id) = tenant_id {
                         service.invalidate_tenant(tenant_id);
+                        if let Some(ssr) = &ssr_cache {
+                            ssr.invalidate_tenant(tenant_id).await?;
+                        }
                     }
                     service.cache().clear();
                 }
@@ -101,6 +110,16 @@ pub fn localization_event_handler(
                         .and_then(|value| value.as_str())
                         .unwrap_or("platform");
                     service.invalidate_scope(scope);
+                    if let Some(ssr) = &ssr_cache {
+                        match scope.parse::<sanvi_kernel::TenantId>() {
+                            Ok(tenant_id) => {
+                                ssr.invalidate_tenant(tenant_id).await?;
+                            }
+                            Err(_) => {
+                                ssr.invalidate_all().await?;
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
