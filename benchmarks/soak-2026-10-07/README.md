@@ -1,9 +1,17 @@
 # 24-hour soak — TASK-021 step 8 (slice 11.2i)
 
-**Status: RUNNING — attempt 3 (launched 2026-10-07 10:42:50 +09:00,
-completes ~10:42 on 2026-10-08).** This record's result table is appended by
-`summarize.sh` when the run ends; the slice record in the task file
-records the verdict separately.
+**Status: CANCELLED — waived by the task owner (2026-10-07).** The owner's
+call: this is a developer machine, and a 24-hour soak is not wanted on it —
+the host is shared with the owner's other work (other agent sessions, Docker
+stacks) and entered idle standby mid-run on attempt 1, which is the honest
+description of what a soak here would measure. Step 8's soak verify line and
+the matching Definition-of-done line are recorded as **waived on this host**,
+not passed; the pass conditions below stand for whichever host eventually
+runs it. The load, spike, recovery and capacity work of steps 8–9 is
+unaffected and complete. Attempt history (1 standby-aborted, 2
+launcher-error, 3 running until cancellation at 11:03) is kept below as the
+record of why the run never happened here; the attempt-3 sampler CSV was
+discarded (twenty rows, no evidential value).
 
 **Attempt 1 aborted (09:57–10:34).** The host entered Modern Standby on its
 5-minute idle timeout at ~10:07 while the soak ran — every process froze
