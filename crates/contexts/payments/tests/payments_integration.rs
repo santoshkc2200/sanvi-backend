@@ -415,6 +415,7 @@ impl PermissionGate for FakePermissionGate {
         _subject: &'a Subject,
         _permission: &'a str,
         _resource: &'a ResourceRef,
+        _write: bool,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<sanvi_http::Decision, sanvi_http::ApiError>>

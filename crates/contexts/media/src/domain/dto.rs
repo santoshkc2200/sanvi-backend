@@ -56,6 +56,12 @@ pub struct AssetView {
     pub external_ref: Option<String>,
     pub kind: String,
     pub status: String,
+    /// Set only on the degraded read path (TASK-023, FR-1113): object
+    /// storage is down, so there is no live metadata — only this marker
+    /// (`object_storage_unavailable`) for the placeholder UI. `None` on
+    /// every live read, so a placeholder is never mistaken for metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]

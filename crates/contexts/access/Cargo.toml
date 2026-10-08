@@ -20,6 +20,7 @@ sanvi-http.workspace = true
 sanvi-identity.workspace = true
 sanvi-kernel.workspace = true
 sanvi-messaging.workspace = true
+sanvi-resilience.workspace = true
 sanvi-persistence.workspace = true
 serde.workspace = true
 serde_json.workspace = true

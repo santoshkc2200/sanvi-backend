@@ -10,19 +10,78 @@ pub struct HttpKetoClient {
     http: reqwest::Client,
     read_url: String,
     write_url: String,
+    breaker: std::sync::Arc<sanvi_resilience::CircuitBreaker>,
+    degradation: Option<std::sync::Arc<sanvi_resilience::DegradationRegistry>>,
 }
+
+const KETO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl HttpKetoClient {
     pub fn new(read_url: String, write_url: String) -> Result<Self, AccessError> {
+        Self::with_resilience(
+            read_url,
+            write_url,
+            KETO_TIMEOUT,
+            sanvi_resilience::BreakerConfig::default(),
+            None,
+        )
+    }
+
+    /// Test constructor: a shortened deadline so a slow Keto is observable
+    /// in milliseconds.
+    pub fn with_timeout(
+        read_url: String,
+        write_url: String,
+        timeout: std::time::Duration,
+    ) -> Result<Self, AccessError> {
+        Self::with_resilience(
+            read_url,
+            write_url,
+            timeout,
+            sanvi_resilience::BreakerConfig::default(),
+            None,
+        )
+    }
+
+    /// The full constructor (TASK-023): the matrix's breaker (5 failures /
+    /// 30 s cooldown) and the degradation registry's `keto` reason.
+    pub fn with_resilience(
+        read_url: String,
+        write_url: String,
+        timeout: std::time::Duration,
+        breaker_config: sanvi_resilience::BreakerConfig,
+        degradation: Option<std::sync::Arc<sanvi_resilience::DegradationRegistry>>,
+    ) -> Result<Self, AccessError> {
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(timeout)
+            .timeout(timeout)
             .build()
             .map_err(|err| AccessError::BackendUnreachable(err.to_string()))?;
+        let breaker = std::sync::Arc::new(sanvi_resilience::CircuitBreaker::new(
+            "keto",
+            breaker_config,
+            None,
+        ));
         Ok(Self {
             http,
             read_url,
             write_url,
+            breaker,
+            degradation,
         })
+    }
+
+    /// TASK-023: membership checks run under the dependency-matrix
+    /// breaker; an open breaker fails fast as `BackendUnreachable` — the
+    /// exact error shape the degraded authorizer's deny/cached-read rule
+    /// recognises.
+    fn note_breaker_state(&self) {
+        if let Some(degradation) = &self.degradation {
+            degradation.set_degraded(
+                sanvi_resilience::DegradationReason::Keto,
+                self.breaker.state() == sanvi_resilience::BreakerState::Open,
+            );
+        }
     }
 }
 
@@ -193,9 +252,21 @@ impl PermissionStore for HttpKetoClient {
         // Keto v26 (legacy namespaces) exposes only the single check
         // endpoint; candidate-role sets are small and the decision cache
         // absorbs the cost.
+        // TASK-023: one breaker report per check batch; an open breaker
+        // fails fast with BackendUnreachable before any request is built.
+        let mut permit = match self.breaker.acquire() {
+            Ok(permit) => Some(permit),
+            Err(_open) => {
+                self.note_breaker_state();
+                return Err(AccessError::BackendUnreachable(
+                    "circuit breaker open after repeated Keto failures".to_string(),
+                ));
+            }
+        };
         let mut results = Vec::with_capacity(objects.len());
+        let mut first_error = None;
         for object in objects {
-            let response = self
+            let response = match self
                 .http
                 .get(format!("{}/relation-tuples/check", self.read_url))
                 .query(&[
@@ -206,25 +277,43 @@ impl PermissionStore for HttpKetoClient {
                 ])
                 .send()
                 .await
-                .map_err(|err| AccessError::BackendUnreachable(err.to_string()))?;
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    first_error = Some(AccessError::BackendUnreachable(err.to_string()));
+                    break;
+                }
+            };
             if !response.status().is_success()
                 && response.status() != reqwest::StatusCode::FORBIDDEN
             {
-                return Err(AccessError::BackendRejected(format!(
+                first_error = Some(AccessError::BackendRejected(format!(
                     "check returned {}: {}",
                     response.status(),
                     response.text().await.unwrap_or_default()
                 )));
+                break;
             }
             // Keto's legacy check endpoint answers denials as
             // `403 {"allowed":false}` — a normal decision, not a failure.
-            let parsed: CheckResponse = response
-                .json()
-                .await
-                .map_err(|err| AccessError::BackendRejected(err.to_string()))?;
+            let parsed: CheckResponse = match response.json::<CheckResponse>().await {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    first_error = Some(AccessError::BackendRejected(err.to_string()));
+                    break;
+                }
+            };
             results.push(parsed.allowed);
         }
-        Ok(results)
+        let ok = first_error.is_none();
+        if let Some(permit) = permit.take() {
+            permit.report(ok);
+        }
+        self.note_breaker_state();
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(results),
+        }
     }
 }
 

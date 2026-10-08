@@ -1,0 +1,38 @@
+[package]
+name = "resilience-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+actix-web.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+prometheus.workspace = true
+redis.workspace = true
+reqwest.workspace = true
+sanvi-domains.workspace = true
+uuid.workspace = true
+sanvi-access.workspace = true
+sanvi-advertising.workspace = true
+sanvi-cache.workspace = true
+sanvi-billing.workspace = true
+sanvi-http.workspace = true
+sanvi-identity.workspace = true
+sanvi-kernel.workspace = true
+sanvi-messaging.workspace = true
+sanvi-media.workspace = true
+sanvi-persistence.workspace = true
+sanvi-privacy.workspace = true
+sanvi-resilience.workspace = true
+sanvi-telemetry.workspace = true
+sanvi-testsupport.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]

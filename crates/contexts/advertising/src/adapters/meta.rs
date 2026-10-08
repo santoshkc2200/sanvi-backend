@@ -1346,10 +1346,27 @@ impl MetaConversionSink {
         graph_base_url: String,
         access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
     ) -> Result<Self, AdvertisingError> {
+        Self::with_custom_endpoints_and_timeout(
+            _config,
+            graph_base_url,
+            access_tokens,
+            REQUEST_TIMEOUT,
+        )
+    }
+
+    /// Test constructor: a shortened request deadline so a slow Meta is
+    /// observable in milliseconds. The connect phase keeps the matrix's
+    /// 5 s budget; the error contract is identical.
+    pub fn with_custom_endpoints_and_timeout(
+        _config: &AdvertisingConfig,
+        graph_base_url: String,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+        request_timeout: std::time::Duration,
+    ) -> Result<Self, AdvertisingError> {
         Ok(Self {
             http: reqwest::Client::builder()
                 .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(request_timeout)
                 .build()
                 .map_err(|err| {
                     AdvertisingError::PlatformUnavailable(format!(

@@ -19,14 +19,29 @@ pub struct HttpKratosClient {
     session_cookie_name: String,
 }
 
+const KRATOS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 impl HttpKratosClient {
     pub fn new(
         public_url: String,
         admin_url: Option<String>,
         session_cookie_name: String,
     ) -> Result<Self, IdentityError> {
+        Self::new_with_timeout(public_url, admin_url, session_cookie_name, KRATOS_TIMEOUT)
+    }
+
+    /// Test constructor: a shortened deadline so a slow Kratos is
+    /// observable in milliseconds. The transport contract (deadline,
+    /// fail-closed) is identical.
+    pub fn new_with_timeout(
+        public_url: String,
+        admin_url: Option<String>,
+        session_cookie_name: String,
+        timeout: std::time::Duration,
+    ) -> Result<Self, IdentityError> {
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(timeout)
+            .timeout(timeout)
             .build()
             .map_err(|err| IdentityError::KratosUnreachable(err.to_string()))?;
         Ok(Self {

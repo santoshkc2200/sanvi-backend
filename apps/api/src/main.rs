@@ -108,6 +108,15 @@ async fn main() -> ExitCode {
     ));
     pool_metrics.spawn_sampler(pool.clone());
 
+    // TASK-023: the degradation registry is process-wide and always built
+    // (adapters flip reasons on it whether or not the header flag is on);
+    // the `platform.degraded_mode` flag only decides whether the header
+    // middleware stamps responses.
+    let degradation =
+        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::new(Some(
+            metrics.prometheus_registry(),
+        )));
+
     let redis = match connect_redis(&config.redis).await {
         Ok(manager) => Some(manager),
         Err(err) => {
@@ -243,6 +252,7 @@ async fn main() -> ExitCode {
         approval_gate.clone(),
         metrics.prometheus_registry(),
         redis.clone(),
+        degradation.clone(),
     );
 
     let entitlement_admin: Arc<dyn sanvi_platform_admin::domain::EntitlementAdmin> =
@@ -293,6 +303,7 @@ async fn main() -> ExitCode {
             access.features_repo.clone(),
             audit.writer.clone(),
             metrics.prometheus_registry(),
+            degradation.clone(),
         ))
     } else {
         None
@@ -504,15 +515,6 @@ async fn main() -> ExitCode {
         let ssr_metrics = sanvi_cache::SsrCacheMetrics::new(metrics.prometheus_registry());
         std::sync::Arc::new(sanvi_cache::SsrCache::new(redis.clone(), Some(ssr_metrics)))
     });
-
-    // TASK-023: the degradation registry is process-wide and always built
-    // (adapters flip reasons on it whether or not the header flag is on);
-    // the `platform.degraded_mode` flag only decides whether the header
-    // middleware stamps responses.
-    let degradation =
-        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::new(Some(
-            metrics.prometheus_registry(),
-        )));
 
     let bind_config = config.clone();
     let factory_config = config.clone();

@@ -98,6 +98,24 @@ impl CheckPermission {
     }
 }
 
+/// The decision-cache key format, shared by [`CachedAuthorizer`] (which
+/// fills it) and the [`crate::application::degraded_authorizer::
+/// DegradedAuthorizer`] (which reads it during a Keto outage). One format,
+/// or the grace-window reads would look up keys the normal path never
+/// wrote.
+pub(crate) fn decision_cache_key(
+    user_id: UserId,
+    permission: &str,
+    resource: &ResourceRef,
+) -> String {
+    let resource_key = match resource {
+        ResourceRef::Tenant(id) => format!("tenant:{id}"),
+        ResourceRef::User(id) => format!("user:{id}"),
+        ResourceRef::Platform => "platform".to_string(),
+    };
+    format!("{user_id}:{permission}:{resource_key}")
+}
+
 /// The Keto role object for a candidate: platform roles are global
 /// (`platform:{key}`); system tenant templates materialize per tenant
 /// (`{tenant_id}:{key}`) because membership is always tenant-scoped.
@@ -129,12 +147,7 @@ impl CachedAuthorizer {
     }
 
     fn cache_key(&self, user_id: UserId, permission: &str, resource: &ResourceRef) -> String {
-        let resource_key = match resource {
-            ResourceRef::Tenant(id) => format!("tenant:{id}"),
-            ResourceRef::User(id) => format!("user:{id}"),
-            ResourceRef::Platform => "platform".to_string(),
-        };
-        format!("{user_id}:{permission}:{resource_key}")
+        decision_cache_key(user_id, permission, resource)
     }
 }
 

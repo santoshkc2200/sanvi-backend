@@ -1,6 +1,7 @@
 //! Application: use cases for the access context.
 
 pub mod check_permission;
+pub mod degraded_authorizer;
 pub mod entitlements;
 pub mod feature_gate;
 pub mod features;
@@ -11,6 +12,7 @@ pub mod seed_features;
 pub mod seed_roles;
 
 pub use check_permission::{CachedAuthorizer, CheckPermission};
+pub use degraded_authorizer::{DegradedAuthorizer, KETO_DOWNGRADE_GRACE_SECS};
 pub use entitlements::{
     ExpireEntitlements, GrantEntitlement, GrantEntitlementCommand, GrantEntitlementOutput,
     ListTenantEntitlements, ListTenantOverrides, RevokeEntitlement, RevokeEntitlementCommand,

@@ -23,6 +23,7 @@ sanvi-messaging.workspace = true
 sanvi-persistence.workspace = true
 sanvi-telemetry.workspace = true
 sanvi-tenancy.workspace = true
+sanvi-resilience.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

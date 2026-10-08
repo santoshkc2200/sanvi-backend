@@ -40,12 +40,18 @@ pub enum Decision {
 }
 
 /// Port for permission checks, implemented by the access context.
+///
+/// `write` separates mutations from reads so the degraded path can apply
+/// its rule (TASK-023, FR-1113): while Keto is down, writes deny by
+/// default and reads may serve the cached decision for the grace window.
+/// `GET`/`HEAD`/`OPTIONS` are reads; everything else is a write.
 pub trait PermissionGate: Send + Sync {
     fn check<'a>(
         &'a self,
         subject: &'a Subject,
         permission: &'a str,
         resource: &'a ResourceRef,
+        write: bool,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<Decision, ApiError>> + Send + 'a>>;
 }
 
@@ -108,6 +114,10 @@ impl actix_web::FromRequest for RequiredPermission {
             .extensions()
             .get::<crate::tenancy::TenantContext>()
             .map(|context| context.tenant_id);
+        // GET/HEAD/OPTIONS are reads; everything else is a write for the
+        // degraded-authorization rule (captured before the future: the
+        // method read cannot borrow `req` across it).
+        let write = !req.method().is_safe();
         // Registered as `web::Data::new(Arc<dyn PermissionGate>)` (the
         // `Arc` keeps `T` sized, unlike `Data::from(Arc<dyn T>)`).
         let gate = req
@@ -147,7 +157,7 @@ impl actix_web::FromRequest for RequiredPermission {
                 ResourceSpec::Platform => ResourceRef::Platform,
             };
 
-            match gate.check(&subject, requirement.key, &resource).await? {
+            match gate.check(&subject, requirement.key, &resource, write).await? {
                 Decision::Allowed => Ok(requirement),
                 Decision::Denied => Err(ApiError::Forbidden {
                     detail: format!("permission required: {}", requirement.key),

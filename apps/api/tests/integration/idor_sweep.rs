@@ -1196,6 +1196,7 @@ async fn build_sweep_app(
         Arc::new(sanvi_platform_admin::adapters::NoopApprovalGate),
         metrics.prometheus_registry(),
         None,
+        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()),
     );
     let entitlement_admin: Arc<dyn sanvi_platform_admin::domain::EntitlementAdmin> =
         Arc::new(AccessEntitlementAdmin::new(

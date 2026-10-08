@@ -79,12 +79,40 @@ impl GetMediaAsset {
         Self { gateway }
     }
 
+    /// The object-storage read path (TASK-023, FR-1113): while storage is
+    /// down the gateway reports `Unavailable`, and the read degrades to a
+    /// marked placeholder instead of a 500 — the course page renders its
+    /// placeholder UI. `placeholder` is `Some` only here, and `status` is
+    /// `degraded`, so the marker is never mistaken for live metadata.
+    /// Mutations never take this path: they propagate `Unavailable` and
+    /// the handler renders the honest `503 media_unavailable`.
     pub async fn execute(
         &self,
         tenant_id: TenantId,
         asset_id: String,
     ) -> Result<AssetView, MediaError> {
-        self.gateway.get_asset(tenant_id, &asset_id).await
+        match self.gateway.get_asset(tenant_id, &asset_id).await {
+            Ok(view) => Ok(view),
+            Err(MediaError::Unavailable { detail }) => {
+                tracing::warn!(asset_id = %asset_id, error = %detail, "object storage down; serving placeholder");
+                Ok(AssetView {
+                    id: asset_id,
+                    owner_id: None,
+                    external_ref: None,
+                    kind: "unknown".to_string(),
+                    status: "degraded".to_string(),
+                    placeholder: Some("object_storage_unavailable".to_string()),
+                    duration_ms: None,
+                    width: None,
+                    height: None,
+                    progress_percent: 0,
+                    error_message: None,
+                    version: 0,
+                    updated_at: None,
+                })
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -136,6 +164,7 @@ mod tests {
             external_ref: None,
             kind: "image".to_string(),
             status: "ready".to_string(),
+            placeholder: None,
             duration_ms: None,
             width: None,
             height: None,

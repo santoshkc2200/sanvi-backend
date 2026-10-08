@@ -278,6 +278,7 @@ mod tests {
             external_ref: None,
             kind: "image".to_string(),
             status: "ready".to_string(),
+            placeholder: None,
             duration_ms: None,
             width: None,
             height: None,

@@ -2406,6 +2406,98 @@ async fn upload_sweep_parks_event_after_5_consecutive_failures() {
     assert_eq!(report.parked, 0);
 }
 
+/// TASK-023 (FR-1112/FR-1113), dependency-matrix rows "Google Ads"/"Meta"
+/// outage: a failing platform parks the conversion with its directive
+/// snapshot intact, never drops it, and never uploads without the
+/// snapshot; the healthy platform is untouched.
+#[tokio::test]
+async fn upload_sweep_outage_parks_conversions_with_their_directive_snapshot() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "outage-parks-with-snapshot").await;
+    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let fixtures = FakeAdPlatform::fixtures();
+    // Fixture 0 is google_ads, fixture 1 is meta (platform catalog order).
+    seed_test_connection(&tx, &connections, tenant_id, "google_ads").await;
+    seed_test_connection(&tx, &connections, tenant_id, "meta").await;
+
+    let google_sink = Arc::new(FakeConversionSink::new(fixtures[0].clone()));
+    let meta_sink = Arc::new(
+        FakeConversionSink::new(fixtures[1].clone()).with_upload_error(
+            AdvertisingError::PlatformUnavailable("simulated meta outage".to_string()),
+        ),
+    );
+    let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
+    sinks.insert(PlatformKey::parse("google_ads").unwrap(), google_sink.clone());
+    sinks.insert(PlatformKey::parse("meta").unwrap(), meta_sink.clone());
+
+    let capture = capture_with(
+        tx.clone(),
+        FakeDirectiveResolver::allow_all(),
+        None,
+        VendorRole::ThirdParty,
+    );
+    capture
+        .execute({
+            let mut command = command_with_device_subject(tenant_id, "evt-outage-snapshot");
+            // Both platforms must be pending: the sweep only attempts what
+            // capture marked, so a google-only command would never prove
+            // anything about the meta outage.
+            command.platforms = vec![
+                PlatformKey::parse("google_ads").unwrap(),
+                PlatformKey::parse("meta").unwrap(),
+            ];
+            command
+        })
+        .await
+        .unwrap();
+
+    let repo: Arc<dyn ConversionEventRepository> = Arc::new(SqlxCampaignRepository::new());
+    let worker = UploadPendingConversions::new(
+        tx.clone(),
+        repo.clone(),
+        connections.clone(),
+        Arc::new(FakeDirectiveResolver::allow_all()),
+        sinks,
+        Arc::new(AdvertisingMetrics::default()),
+    );
+
+    // Sweep five times: meta fails each time, then parks at the ceiling.
+    for attempt in 1..=5 {
+        let report = worker.execute(100).await.unwrap();
+        assert_eq!(report.failed + report.parked, 1, "attempt {attempt}");
+        assert_eq!(report.uploaded, 1, "google uploads on attempt {attempt}");
+    }
+
+    // Meta parked; google uploaded.
+    let row = fetch_row(&pool, tenant_id, "evt-outage-snapshot").await;
+    assert_eq!(row["upload_states"]["meta"]["status"], "parked");
+    assert_eq!(row["upload_states"]["google_ads"]["status"], "uploaded");
+
+    // The parked conversion still carries its directive snapshot: the
+    // later-justifiable upload is possible because the snapshot travelled
+    // with the event, not because anyone re-asked.
+    let consent = &row["consent"];
+    assert!(!consent["resolver_version"].as_str().unwrap_or("").is_empty());
+    assert!(!consent["purposes_asked"].as_array().expect("purposes frozen").is_empty());
+
+    // Nothing ever uploaded without a snapshot: every upload the healthy
+    // sink accepted carried the frozen directive.
+    for (_, event) in google_sink.uploaded_records() {
+        assert!(
+            !event.consent.resolver_version.is_empty()
+                && !event.consent.purposes_asked.is_empty(),
+            "no upload may happen without its directive snapshot"
+        );
+    }
+
+    // The event was never dropped: the row persists, ready for the
+    // operator replay path (RetryConversion).
+    assert_eq!(row_count(&pool, tenant_id, "evt-outage-snapshot").await, 1);
+}
+
 #[tokio::test]
 async fn upload_sweep_observability_metrics_recorded_accurately() {
     let db = sanvi_testsupport::test_db().await;
@@ -3058,6 +3150,7 @@ impl sanvi_http::PermissionGate for TestPermissionGate {
         _subject: &'a sanvi_http::Subject,
         _permission: &'a str,
         _resource: &'a sanvi_http::ResourceRef,
+        _write: bool,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<sanvi_http::Decision, sanvi_http::ApiError>>

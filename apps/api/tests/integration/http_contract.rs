@@ -121,6 +121,7 @@ pub(crate) fn test_app_with(
         build_approval_gate_stub(),
         metrics.prometheus_registry(),
         None,
+        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()),
     );
 
     // Theming wired for real: its public route shares the /api/v1/public

@@ -18,6 +18,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct HitoxMediaAdapter {
     http: reqwest::Client,
     base_url: String,
+    breaker: std::sync::Arc<sanvi_resilience::CircuitBreaker>,
+    degradation: Option<std::sync::Arc<sanvi_resilience::DegradationRegistry>>,
     service_api_key: String,
 }
 
@@ -51,15 +53,76 @@ impl HitoxMediaAdapter {
     /// `AppConfig::validate`, which reports every configuration problem
     /// together rather than panicking on the first one.
     pub fn new(config: MediaConfig) -> Self {
+        Self::with_resilience(
+            config,
+            REQUEST_TIMEOUT,
+            sanvi_resilience::BreakerConfig::default(),
+            None,
+        )
+    }
+
+    /// The composition-root constructor (TASK-023): the matrix's 20 s
+    /// request deadline and breaker (5 failures / 30 s cooldown), plus
+    /// the shared degradation registry so the `object_storage` reason
+    /// reaches the `X-Sanvi-Degraded` header while the breaker is open.
+    pub fn new_with_degradation(
+        config: MediaConfig,
+        degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
+    ) -> Self {
+        Self::with_resilience(
+            config,
+            REQUEST_TIMEOUT,
+            sanvi_resilience::BreakerConfig::default(),
+            Some(degradation),
+        )
+    }
+
+    /// Test constructor: a shortened request deadline so a slow storage is
+    /// observable in milliseconds.
+    pub fn with_timeout(config: MediaConfig, request_timeout: Duration) -> Self {
+        Self::with_resilience(
+            config,
+            request_timeout,
+            sanvi_resilience::BreakerConfig::default(),
+            None,
+        )
+    }
+
+    /// The full constructor (TASK-023): the matrix's breaker (5 failures /
+    /// 30 s cooldown) and the degradation registry's `object_storage`
+    /// reason. `request_timeout` bounds the call; the connect phase keeps
+    /// the matrix's 5 s budget.
+    pub fn with_resilience(
+        config: MediaConfig,
+        request_timeout: Duration,
+        breaker_config: sanvi_resilience::BreakerConfig,
+        degradation: Option<std::sync::Arc<sanvi_resilience::DegradationRegistry>>,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(request_timeout)
             .build()
             .expect("reqwest client builds with static config");
+        let breaker = std::sync::Arc::new(sanvi_resilience::CircuitBreaker::new(
+            "object_storage",
+            breaker_config,
+            None,
+        ));
         Self {
             http,
             base_url: config.base_url,
             service_api_key: config.service_api_key,
+            breaker,
+            degradation,
+        }
+    }
+
+    fn note_breaker_state(&self) {
+        if let Some(degradation) = &self.degradation {
+            degradation.set_degraded(
+                sanvi_resilience::DegradationReason::ObjectStorage,
+                self.breaker.state() == sanvi_resilience::BreakerState::Open,
+            );
         }
     }
 
@@ -173,6 +236,42 @@ fn connection_failure(error: reqwest::Error) -> MediaError {
     }
 }
 
+/// TASK-023: every gateway send runs under the dependency-matrix breaker —
+/// one report per send, an open breaker fails fast as `Unavailable` (the
+/// shape the placeholder read path and the honest `503` upload path both
+/// render).
+#[async_trait::async_trait]
+trait BreakerSend {
+    async fn send_via_breaker(
+        self,
+        adapter: &HitoxMediaAdapter,
+    ) -> Result<reqwest::Response, MediaError>;
+}
+
+#[async_trait::async_trait]
+impl BreakerSend for reqwest::RequestBuilder {
+    async fn send_via_breaker(
+        self,
+        adapter: &HitoxMediaAdapter,
+    ) -> Result<reqwest::Response, MediaError> {
+        let mut permit = match adapter.breaker.acquire() {
+            Ok(permit) => Some(permit),
+            Err(_open) => {
+                adapter.note_breaker_state();
+                return Err(MediaError::Unavailable {
+                    detail: "media service unavailable (circuit breaker open)".to_string(),
+                });
+            }
+        };
+        let result = self.send().await.map_err(connection_failure);
+        if let Some(permit) = permit.take() {
+            permit.report(result.is_ok());
+        }
+        adapter.note_breaker_state();
+        result
+    }
+}
+
 #[async_trait]
 impl MediaGatewayPort for HitoxMediaAdapter {
     async fn create_asset(
@@ -185,9 +284,8 @@ impl MediaGatewayPort for HitoxMediaAdapter {
             .request(reqwest::Method::POST, "/v1/assets", tenant_id)
             .header("Idempotency-Key", idempotency_key)
             .json(&input)
-            .send()
-            .await
-            .map_err(connection_failure)?;
+            .send_via_breaker(self)
+            .await?;
         if !response.status().is_success() {
             return Err(map_error(response).await);
         }
@@ -216,9 +314,8 @@ impl MediaGatewayPort for HitoxMediaAdapter {
                 tenant_id,
             )
             .json(&Req { part_numbers })
-            .send()
-            .await
-            .map_err(connection_failure)?;
+            .send_via_breaker(self)
+            .await?;
         if !response.status().is_success() {
             return Err(map_error(response).await);
         }
@@ -247,9 +344,8 @@ impl MediaGatewayPort for HitoxMediaAdapter {
                 tenant_id,
             )
             .json(&Req { parts })
-            .send()
-            .await
-            .map_err(connection_failure)?;
+            .send_via_breaker(self)
+            .await?;
         if !response.status().is_success() {
             return Err(map_error(response).await);
         }
@@ -268,9 +364,8 @@ impl MediaGatewayPort for HitoxMediaAdapter {
                 &format!("/v1/assets/{encoded_id}"),
                 tenant_id,
             )
-            .send()
-            .await
-            .map_err(connection_failure)?;
+            .send_via_breaker(self)
+            .await?;
         if !response.status().is_success() {
             return Err(map_error(response).await);
         }
@@ -285,9 +380,8 @@ impl MediaGatewayPort for HitoxMediaAdapter {
                 &format!("/v1/assets/{encoded_id}"),
                 tenant_id,
             )
-            .send()
-            .await
-            .map_err(connection_failure)?;
+            .send_via_breaker(self)
+            .await?;
         if response.status().is_success() {
             Ok(())
         } else {
@@ -307,9 +401,8 @@ impl MediaGatewayPort for HitoxMediaAdapter {
                 &format!("/v1/assets/{encoded_id}/delivery"),
                 tenant_id,
             )
-            .send()
-            .await
-            .map_err(connection_failure)?;
+            .send_via_breaker(self)
+            .await?;
         if !response.status().is_success() {
             return Err(map_error(response).await);
         }

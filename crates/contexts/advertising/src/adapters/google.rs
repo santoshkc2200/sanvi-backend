@@ -1415,6 +1415,24 @@ impl GoogleConversionSink {
         api_base_url: String,
         access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
     ) -> Result<Self, AdvertisingError> {
+        Self::with_custom_endpoints_and_timeout(
+            config,
+            api_base_url,
+            access_tokens,
+            REQUEST_TIMEOUT,
+        )
+    }
+
+    /// Test constructor: a shortened request deadline so a slow Google Ads
+    /// is observable in milliseconds. The connect phase keeps the matrix's
+    /// 5 s budget; the error contract (transport failure →
+    /// `PlatformUnavailable`) is identical.
+    pub fn with_custom_endpoints_and_timeout(
+        config: &AdvertisingConfig,
+        api_base_url: String,
+        access_tokens: Arc<dyn ConnectionAccessTokenProvider>,
+        request_timeout: std::time::Duration,
+    ) -> Result<Self, AdvertisingError> {
         if config.google_ads_developer_token.trim().is_empty() {
             return Err(AdvertisingError::PlatformUnavailable(
                 "google ads developer token is required for the conversion sink".to_string(),
@@ -1423,7 +1441,7 @@ impl GoogleConversionSink {
         Ok(Self {
             http: reqwest::Client::builder()
                 .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(request_timeout)
                 .build()
                 .map_err(|err| {
                     AdvertisingError::PlatformUnavailable(format!(

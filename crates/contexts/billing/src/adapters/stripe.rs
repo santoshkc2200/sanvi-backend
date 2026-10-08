@@ -26,6 +26,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_RETRIES: usize = 3;
 const RETRY_BACKOFF_MS: u64 = 200;
 
+/// One attempt's failure, classified by the retry rule: retryable
+/// attempts feed the bounded in-call backoff, fatal ones surface
+/// immediately.
+enum AttemptOutcome {
+    Retryable(BillingError),
+    Fatal(BillingError),
+}
+
 /// Verify a Stripe webhook signature header (`t=...,v1=...`) against the
 /// signing secret. Pure function — unit-tested against known vectors.
 pub fn verify_webhook_signature(
@@ -153,6 +161,9 @@ pub struct HttpStripeClient {
     api_key: String,
     api_version: String,
     metrics: Option<StripeMetrics>,
+    retry_backoff_ms: u64,
+    breaker: Option<Arc<sanvi_resilience::CircuitBreaker>>,
+    degradation: Option<Arc<sanvi_resilience::DegradationRegistry>>,
 }
 
 impl HttpStripeClient {
@@ -162,17 +173,113 @@ impl HttpStripeClient {
         api_version: String,
         metrics: Option<StripeMetrics>,
     ) -> Self {
+        Self::new_with_resilience(
+            api_base,
+            api_key,
+            api_version,
+            metrics,
+            CONNECT_TIMEOUT,
+            REQUEST_TIMEOUT,
+            RETRY_BACKOFF_MS,
+            sanvi_resilience::BreakerConfig::default(),
+            None,
+        )
+    }
+
+    /// The composition-root constructor (TASK-023): production timeouts
+    /// and the matrix breaker (5 failures / 30 s cooldown), plus the
+    /// shared degradation registry so the `stripe` reason reaches the
+    /// `X-Sanvi-Degraded` header while the breaker is open.
+    pub fn new_with_degradation(
+        api_base: String,
+        api_key: String,
+        api_version: String,
+        metrics: Option<StripeMetrics>,
+        degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
+    ) -> Self {
+        Self::new_with_resilience(
+            api_base,
+            api_key,
+            api_version,
+            metrics,
+            CONNECT_TIMEOUT,
+            REQUEST_TIMEOUT,
+            RETRY_BACKOFF_MS,
+            sanvi_resilience::BreakerConfig::default(),
+            Some(degradation),
+        )
+    }
+
+    /// Test/full-control constructor: the production one pins the matrix
+    /// constants; injection tests shorten the deadlines and count faster
+    /// so a slow Stripe is observable in milliseconds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_timeouts(
+        api_base: String,
+        api_key: String,
+        api_version: String,
+        metrics: Option<StripeMetrics>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+        retry_backoff_ms: u64,
+    ) -> Self {
+        Self::new_with_resilience(
+            api_base,
+            api_key,
+            api_version,
+            metrics,
+            connect_timeout,
+            request_timeout,
+            retry_backoff_ms,
+            sanvi_resilience::BreakerConfig::default(),
+            None,
+        )
+    }
+
+    /// The full constructor (TASK-023): a circuit breaker per the
+    /// dependency matrix (failures/cooldown in `config`) and the
+    /// degradation registry for the `stripe` reason.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_resilience(
+        api_base: String,
+        api_key: String,
+        api_version: String,
+        metrics: Option<StripeMetrics>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+        retry_backoff_ms: u64,
+        breaker_config: sanvi_resilience::BreakerConfig,
+        degradation: Option<Arc<sanvi_resilience::DegradationRegistry>>,
+    ) -> Self {
         let http = reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(connect_timeout)
+            .timeout(request_timeout)
             .build()
             .expect("stripe http client construction is infallible");
+        let breaker = Arc::new(sanvi_resilience::CircuitBreaker::new(
+            "stripe",
+            breaker_config,
+            None,
+        ));
         Self {
             http,
             api_base,
             api_key,
             api_version,
             metrics,
+            retry_backoff_ms,
+            breaker: Some(breaker),
+            degradation,
+        }
+    }
+
+    /// Mark the registry's `stripe` reason while the breaker is open.
+    fn note_breaker_state(&self) {
+        if let (Some(breaker), Some(degradation)) = (&self.breaker, &self.degradation) {
+            degradation.set_degraded(
+                sanvi_resilience::DegradationReason::Stripe,
+                breaker.state() == sanvi_resilience::BreakerState::Open,
+            );
         }
     }
 
@@ -185,73 +292,119 @@ impl HttpStripeClient {
     ) -> Result<serde_json::Value, BillingError> {
         let started = Instant::now();
         let url = format!("{}{}", self.api_base.trim_end_matches('/'), path);
-        let mut last_err = None;
-        for _attempt in 0..=MAX_RETRIES {
-            let mut request = self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .header("Stripe-Version", &self.api_version)
-                .form(form);
-            if let Some(key) = idempotency_key {
-                request = request.header("Idempotency-Key", key);
+
+        // TASK-023: the call runs under the dependency-matrix breaker, one
+        // report per call (retries are in-call backoff, not separate
+        // outcomes). An open breaker fails fast with the same error shape
+        // a failing call produces — callers cannot tell a tripped breaker
+        // from a refusing Stripe, and neither should have to.
+        let mut permit = match self.breaker.as_ref().map(|breaker| breaker.acquire()) {
+            Some(Ok(permit)) => Some(permit),
+            Some(Err(_open)) => {
+                self.note_breaker_state();
+                return Err(BillingError::StripeConnection {
+                    detail: "circuit breaker open after repeated Stripe failures".to_string(),
+                });
             }
-            match request.send().await {
-                Ok(response) => {
-                    let status = response.status();
-                    let body: serde_json::Value = response
-                        .json()
-                        .await
-                        .unwrap_or_else(|_| serde_json::json!({}));
-                    if let Some(metrics) = &self.metrics {
-                        metrics.observe(op, started);
+            None => None,
+        };
+
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            match self
+                .post_form_attempt(op, &url, idempotency_key, form, started)
+                .await
+            {
+                Ok(body) => {
+                    if let Some(permit) = permit.take() {
+                        permit.report(true);
                     }
-                    if status.is_success() {
-                        return Ok(body);
-                    }
-                    let code = status.as_u16();
-                    if let Some(metrics) = &self.metrics {
-                        metrics.error(&code.to_string());
-                    }
-                    let err = match code {
-                        401 | 403 => BillingError::StripeUnauthorized,
-                        429 => BillingError::StripeRateLimited,
-                        400 | 404 => BillingError::StripeBadRequest {
-                            detail: stripe_message(&body).to_string(),
-                        },
-                        _ => BillingError::StripeService {
-                            detail: stripe_message(&body).to_string(),
-                        },
-                    };
-                    // Retry on rate limits, conflicts and service failures;
-                    // never on authentication or validation problems.
-                    if code == 429 || code == 409 || code >= 500 {
-                        last_err = Some(err);
-                        tokio::time::sleep(Duration::from_millis(
-                            RETRY_BACKOFF_MS * 2u64.pow(_attempt as u32),
-                        ))
-                        .await;
-                        continue;
+                    return Ok(body);
+                }
+                Err(AttemptOutcome::Fatal(err)) => {
+                    if let Some(permit) = permit.take() {
+                        permit.report(false);
                     }
                     return Err(err);
                 }
-                Err(err) => {
-                    last_err = Some(BillingError::StripeConnection {
-                        detail: err.to_string(),
-                    });
-                    if _attempt < MAX_RETRIES {
+                Err(AttemptOutcome::Retryable(err)) => {
+                    last_err = Some(err);
+                    if attempt < MAX_RETRIES {
                         tokio::time::sleep(Duration::from_millis(
-                            RETRY_BACKOFF_MS * 2u64.pow(_attempt as u32),
+                            self.retry_backoff_ms * 2u64.pow(attempt as u32),
                         ))
                         .await;
-                        continue;
                     }
                 }
             }
         }
+        if let Some(permit) = permit.take() {
+            permit.report(false);
+        }
+        self.note_breaker_state();
         Err(last_err.unwrap_or_else(|| BillingError::StripeConnection {
             detail: "unknown failure".to_string(),
         }))
+    }
+
+    /// One HTTP attempt, classified into retryable (429/409/5xx/transport)
+    /// and fatal (everything else) by the same rule the matrix documents.
+    async fn post_form_attempt(
+        &self,
+        op: &str,
+        url: &str,
+        idempotency_key: Option<&str>,
+        form: &[(&str, String)],
+        started: Instant,
+    ) -> Result<serde_json::Value, AttemptOutcome> {
+        let mut request = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .header("Stripe-Version", &self.api_version)
+            .form(form);
+        if let Some(key) = idempotency_key {
+            request = request.header("Idempotency-Key", key);
+        }
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(err) => {
+                return Err(AttemptOutcome::Retryable(BillingError::StripeConnection {
+                    detail: err.to_string(),
+                }));
+            }
+        };
+        let status = response.status();
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(metrics) = &self.metrics {
+            metrics.observe(op, started);
+        }
+        if status.is_success() {
+            return Ok(body);
+        }
+        let code = status.as_u16();
+        if let Some(metrics) = &self.metrics {
+            metrics.error(&code.to_string());
+        }
+        let err = match code {
+            401 | 403 => BillingError::StripeUnauthorized,
+            429 => BillingError::StripeRateLimited,
+            400 | 404 => BillingError::StripeBadRequest {
+                detail: stripe_message(&body).to_string(),
+            },
+            _ => BillingError::StripeService {
+                detail: stripe_message(&body).to_string(),
+            },
+        };
+        // Retry on rate limits, conflicts and service failures; never on
+        // authentication or validation problems.
+        if code == 429 || code == 409 || code >= 500 {
+            return Err(AttemptOutcome::Retryable(err));
+        }
+        Err(AttemptOutcome::Fatal(err))
     }
 
     async fn get_json(&self, op: &str, path: &str) -> Result<serde_json::Value, BillingError> {

@@ -29,6 +29,7 @@ use sanvi_access::{
     application::entitlements::EntitlementPolicy,
     application::{
         CachedAuthorizer, CheckPermission, CreateCustomRole, DefineFeature, DeleteCustomRole,
+        DegradedAuthorizer,
         DeprecateFeature, EntitlementFeatureGate, EntitlementResolver, ExpireEntitlements,
         GrantEntitlement, GrantEntitlementOutput, ListFeatures, ListPermissions, ListRoles,
         ListTenantEntitlements, ListTenantOverrides, RebuildAccessTuples, RevokeEntitlement,
@@ -683,6 +684,8 @@ pub struct AccessWiring {
     pub feature_gate: Arc<dyn HttpFeatureGatePort>,
     pub state: sanvi_access::adapters::http::AccessState,
     pub authorizer: Arc<dyn Authorizer>,
+    /// The Keto-outage rule (TASK-023): wraps `authorizer`.
+    pub degraded_authorizer: Arc<DegradedAuthorizer>,
     pub role_repository: Arc<dyn RoleRepository>,
     pub permission_store: Arc<dyn PermissionStore>,
     pub decision_cache: Arc<dyn DecisionCache>,
@@ -705,7 +708,7 @@ pub struct AccessWiring {
 /// The `PermissionGate` port implementation: converts between the platform's
 /// subject/resource vocabulary and the access context's.
 pub struct AccessGate {
-    authorizer: Arc<dyn Authorizer>,
+    authorizer: Arc<DegradedAuthorizer>,
 }
 
 impl PermissionGate for AccessGate {
@@ -714,6 +717,7 @@ impl PermissionGate for AccessGate {
         subject: &'a Subject,
         permission: &'a str,
         resource: &'a ResourceRef,
+        write: bool,
     ) -> std::pin::Pin<
         Box<dyn Future<Output = Result<sanvi_http::Decision, sanvi_http::ApiError>> + Send + 'a>,
     > {
@@ -730,9 +734,13 @@ impl PermissionGate for AccessGate {
                 ResourceRef::User(id) => sanvi_access::domain::ResourceRef::User(*id),
                 ResourceRef::Platform => sanvi_access::domain::ResourceRef::Platform,
             };
+            // TASK-023: the degraded authorizer owns the outage rule —
+            // writes deny by default, cached reads survive the grace
+            // window — so a Keto outage denies (403) instead of inviting a
+            // 503 retry storm against a dependency that cannot answer.
             match self
                 .authorizer
-                .check(subject.user_id, &permission, &resource)
+                .check_with_mode(subject.user_id, &permission, &resource, write)
                 .await
             {
                 Ok(sanvi_access::domain::Decision::Allowed) => Ok(sanvi_http::Decision::Allowed),
@@ -827,12 +835,19 @@ pub fn build_access_state(
     approval_gate: Arc<dyn ApprovalGate>,
     registry: &prometheus::Registry,
     redis: Option<redis::aio::ConnectionManager>,
+    degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
 ) -> AccessWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
     let store: Arc<dyn PermissionStore> = Arc::new(
-        HttpKetoClient::new(keto_read_url.to_string(), keto_write_url.to_string())
-            .expect("keto client construction is infallible"),
+        HttpKetoClient::with_resilience(
+            keto_read_url.to_string(),
+            keto_write_url.to_string(),
+            std::time::Duration::from_secs(5),
+            sanvi_resilience::BreakerConfig::default(),
+            Some(degradation.clone()),
+        )
+        .expect("keto client construction is infallible"),
     );
     // A process-local decision cache is unsafe here: the Keto sync consumer
     // runs in the worker, so its `invalidate_user` can never reach an API
@@ -864,13 +879,21 @@ pub fn build_access_state(
         roles.clone(),
         store.clone(),
     ));
-    let authorizer: Arc<dyn Authorizer> = Arc::new(CachedAuthorizer::new(
+    let cached_authorizer: Arc<dyn Authorizer> = Arc::new(CachedAuthorizer::new(
         check,
         cache.clone(),
         config.decision_cache_ttl_secs,
     ));
+    // TASK-023: the Keto-outage rule wraps the cached authorizer; the
+    // registry is the shared one the degraded-mode header reads.
+    let degraded_authorizer = Arc::new(DegradedAuthorizer::new(
+        cached_authorizer.clone(),
+        cache.clone(),
+        degradation.clone(),
+    ));
+    let authorizer: Arc<dyn Authorizer> = cached_authorizer;
     let gate: Arc<dyn PermissionGate> = Arc::new(AccessGate {
-        authorizer: authorizer.clone(),
+        authorizer: degraded_authorizer.clone(),
     });
 
     let membership_source = Arc::new(SqlxMembershipSource::new(
@@ -1006,6 +1029,7 @@ pub fn build_access_state(
         feature_gate: http_gate,
         state,
         authorizer,
+        degraded_authorizer,
         role_repository: roles,
         permission_store: store,
         decision_cache: cache,
@@ -1950,6 +1974,7 @@ pub fn build_billing_state(
     features_repo: Arc<dyn sanvi_access::domain::FeatureRepository>,
     audit_writer: Arc<dyn AuditWriter>,
     registry: &prometheus::Registry,
+    degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
 ) -> sanvi_billing::adapters::http::BillingState {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
 
@@ -1968,11 +1993,12 @@ pub fn build_billing_state(
     let clock: Arc<dyn BillingClock> = Arc::new(BillingSystemClock);
 
     let stripe_metrics = StripeMetrics::new(registry);
-    let stripe: Arc<dyn StripeClient> = Arc::new(HttpStripeClient::new(
+    let stripe: Arc<dyn StripeClient> = Arc::new(HttpStripeClient::new_with_degradation(
         config.stripe_api_base.clone(),
         config.stripe_api_key.expose_secret().clone(),
         config.stripe_api_version.clone(),
         Some(stripe_metrics),
+        degradation,
     ));
     let tax_gate: Arc<dyn TaxGate> = Arc::new(CachedTaxGate::new(
         stripe.clone(),
@@ -3381,10 +3407,13 @@ pub async fn build_advertising_state(
 /// directly instead of `main.rs`.
 pub fn build_media_state(
     config: &sanvi_media::MediaConfig,
+    degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
 ) -> sanvi_media::adapters::http::MediaState {
-    let gateway: std::sync::Arc<dyn sanvi_media::domain::MediaGatewayPort> = std::sync::Arc::new(
-        sanvi_media::adapters::hitox::HitoxMediaAdapter::new(config.clone()),
-    );
+    let gateway: std::sync::Arc<dyn sanvi_media::domain::MediaGatewayPort> =
+        std::sync::Arc::new(sanvi_media::adapters::hitox::HitoxMediaAdapter::new_with_degradation(
+            config.clone(),
+            degradation,
+        ));
     sanvi_media::adapters::http::MediaState {
         create_asset_upload: std::sync::Arc::new(sanvi_media::application::CreateAssetUpload::new(
             gateway.clone(),
@@ -3592,7 +3621,7 @@ pub fn build_app(
 
     // Media ships ungated (no feature flag): the state is a plain
     // HTTP-client wrapper over `config.media`, built infallibly here.
-    let media_state = build_media_state(&config.media);
+    let media_state = build_media_state(&config.media, degradation.clone());
 
     // The billing context mounts its tenant routes inside the shared tenant
     // scope (a second scope on the same prefix would shadow the first).
