@@ -6,9 +6,10 @@
 //! Jobs run sequentially on the leader; a job that overruns its interval
 //! simply runs late (no overlapping runs of the same job).
 
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
+use sanvi_resilience::{JobRetryBudget, JobRetryPolicy, RetryOutcome};
 use tracing::{debug, error, info, warn};
 
 static ACQUIRE_OR_RENEW_SCRIPT: std::sync::LazyLock<redis::Script> =
@@ -98,6 +99,12 @@ pub struct Scheduler {
     jobs: Vec<Arc<dyn Job>>,
     lock_ttl_secs: u64,
     tick: Duration,
+    /// One retry budget per job name (TASK-023 step 7): a permanently
+    /// failing job suspends at its budget instead of burning capacity
+    /// forever, until the skip window lapses (one probe run) or the
+    /// operator replays it.
+    retry_policy: JobRetryPolicy,
+    budgets: std::sync::Mutex<HashMap<String, JobRetryBudget>>,
 }
 
 impl Scheduler {
@@ -113,6 +120,8 @@ impl Scheduler {
             jobs,
             lock_ttl_secs: LOCK_TTL_SECS,
             tick: TICK,
+            retry_policy: JobRetryPolicy::default(),
+            budgets: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -128,6 +137,13 @@ impl Scheduler {
 
     pub fn with_tick(mut self, tick: Duration) -> Self {
         self.tick = tick;
+        self
+    }
+
+    /// Bound every job's consecutive failures: past the budget the job
+    /// suspends (skipped with a warning) instead of running forever.
+    pub fn with_retry_policy(mut self, policy: JobRetryPolicy) -> Self {
+        self.retry_policy = policy;
         self
     }
 
@@ -242,9 +258,16 @@ impl Scheduler {
                     break;
                 }
                 let job = &self.jobs[index];
+                if !self.admit(job.name()) {
+                    continue;
+                }
                 debug!(job = job.name(), "running scheduled job");
-                if let Err(err) = job.run().await {
-                    error!(error = %err, job = job.name(), "scheduled job failed");
+                match job.run().await {
+                    Ok(()) => self.record_success(job.name()),
+                    Err(err) => {
+                        error!(error = %err, job = job.name(), "scheduled job failed");
+                        self.record_failure(job.name());
+                    }
                 }
                 next_due[index] = tokio::time::Instant::now() + job.interval();
             }
@@ -267,6 +290,42 @@ impl Scheduler {
                 debug!("completed due jobs sequence");
             }
         }
+    }
+
+    /// May this job run on this tick? A suspended job is skipped with a
+    /// warning — the operator path back is the DLQ/CLI replay surface, or
+    /// the probe run the budget allows once the skip window lapses.
+    fn admit(&self, job_name: &str) -> bool {
+        let mut budgets = self.budgets.lock().expect("scheduler budget lock");
+        let budget = budgets
+            .entry(job_name.to_string())
+            .or_insert_with(|| JobRetryBudget::new(self.retry_policy));
+        match budget.admit() {
+            RetryOutcome::Run => true,
+            RetryOutcome::SkipUntil(until) => {
+                warn!(
+                    job = job_name,
+                    resume_at = ?until,
+                    "scheduled job suspended at its retry budget; skipping"
+                );
+                false
+            }
+        }
+    }
+
+    fn record_success(&self, job_name: &str) {
+        let budgets = self.budgets.lock().expect("scheduler budget lock");
+        if let Some(budget) = budgets.get(job_name) {
+            budget.record_success();
+        }
+    }
+
+    fn record_failure(&self, job_name: &str) {
+        let mut budgets = self.budgets.lock().expect("scheduler budget lock");
+        let budget = budgets
+            .entry(job_name.to_string())
+            .or_insert_with(|| JobRetryBudget::new(self.retry_policy));
+        budget.record_failure();
     }
 
     /// Take the leader lock, or extend it if we already hold it.

@@ -22,7 +22,10 @@ pub use consumer::{
     ConsumerHandler, HandlerError, StreamConsumer, TransactionalConsumerHandler, is_transient_error,
 };
 pub use metrics::{ConsumerMetrics, OutboxMetrics};
-pub use outbox::{OutboxDispatcher, OutboxRecord, StreamName};
+pub use outbox::{
+    DeadLetterSummary, OutboxDispatcher, OutboxRecord, StreamName, list_dead_letters,
+    replay_dead_letter,
+};
 pub use redis::{StreamsClient, connect_redis};
 pub use scheduler::{FnJob, Job, Scheduler};
 pub use writer::OutboxWriter;

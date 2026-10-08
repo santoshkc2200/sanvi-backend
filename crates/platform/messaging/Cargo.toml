@@ -15,6 +15,7 @@ prometheus.workspace = true
 redis.workspace = true
 sanvi-kernel.workspace = true
 sanvi-persistence.workspace = true
+sanvi-resilience.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

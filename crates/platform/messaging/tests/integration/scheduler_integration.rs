@@ -318,3 +318,53 @@ async fn scheduler_cancels_job_when_lease_is_lost() {
     let _ = shutdown_tx.send(true);
     let _ = tokio::time::timeout(Duration::from_secs(1), h1).await;
 }
+
+/// TASK-023 step 7 (FR-1112): a permanently failing job stops at its retry
+/// budget instead of burning capacity forever — two failures suspend it,
+/// and the long backoff keeps it suspended for the rest of the run.
+#[tokio::test]
+async fn permanently_failing_job_stops_at_its_retry_budget() {
+    let conn = prepare_redis().await;
+    let lock_key = sanvi_testsupport::test_stream("scheduler_budget");
+    let runs = Arc::new(AtomicUsize::new(0));
+    let runs_clone = runs.clone();
+
+    let job = Arc::new(FnJob::new(
+        "always_fails",
+        Duration::from_millis(40),
+        move || {
+            let runs = runs_clone.clone();
+            Box::pin(async move {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Err(anyhow::anyhow!("permanent outage"))
+            })
+        },
+    ));
+
+    let scheduler = Scheduler::new(conn, "worker-budget", vec![job])
+        .with_lock_key(lock_key)
+        .with_tick(Duration::from_millis(20))
+        .with_lock_ttl(5)
+        .with_retry_policy(sanvi_resilience::JobRetryPolicy {
+            max_consecutive_failures: 2,
+            base_backoff_secs: 3600,
+            max_backoff_secs: 3600,
+        });
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(async move {
+        scheduler.run_until_shutdown(shutdown_rx).await;
+    });
+
+    // Long enough for a dozen runs without a budget; the budget must hold
+    // the count at exactly the two failures that suspended it.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
+
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        2,
+        "a permanently failing job must stop at its retry budget"
+    );
+}

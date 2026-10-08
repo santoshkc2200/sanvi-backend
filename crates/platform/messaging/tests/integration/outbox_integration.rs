@@ -175,3 +175,67 @@ async fn consumer_group_creation_is_idempotent() {
         .await
         .unwrap();
 }
+
+/// TASK-023 step 7 (FR-1112): dead-lettered outbox rows are listed for
+/// triage and replayable — replay moves the row back to the outbox with a
+/// fresh attempt budget, and replaying what is not dead-lettered reports
+/// false instead of fabricating work.
+#[tokio::test]
+async fn dead_lettered_rows_list_and_replay() {
+    let (pool, db) = prepare_postgres().await;
+    // The app role holds INSERT-only on the DLQ table by design; triage
+    // and replay run privileged (the CLI connects as migrator), so the
+    // operator-level reads and the replay scope use the admin pool here.
+    let admin = db.admin_pool().await;
+
+    sqlx::query(
+        "INSERT INTO platform.outbox_dlq
+             (id, aggregate, aggregate_id, event_type, payload, metadata, occurred_at, attempts, failure)
+         VALUES (424242, 'tenants', 42, 'tenants.tenant_created', '{}', '{}', now(), 5, 'stream down')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let listed = sanvi_messaging::list_dead_letters(&admin, 20)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, 424242);
+    assert_eq!(listed[0].event_type, "tenants.tenant_created");
+    assert_eq!(listed[0].failure, "stream down");
+
+    let tx = sanvi_persistence::TxManager::new(admin.clone(), sanvi_testsupport::test_ids());
+    let mut scope = tx
+        .begin_unscoped("matrix_dlq_replay", "platform-admin")
+        .await
+        .unwrap();
+    assert!(
+        sanvi_messaging::replay_dead_letter(&mut scope, 424242)
+            .await
+            .unwrap()
+    );
+    // Nothing left to replay: the second call reports false.
+    assert!(
+        !sanvi_messaging::replay_dead_letter(&mut scope, 424242)
+            .await
+            .unwrap()
+    );
+    scope.commit().await.unwrap();
+
+    // The row is back in the outbox, unpublished, with a fresh budget —
+    // the next dispatch poll picks it up again.
+    let row: (Option<chrono::DateTime<chrono::Utc>>, i32) =
+        sqlx::query_as("SELECT published_at, attempts FROM platform.outbox WHERE id = 424242")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(row.0.is_none());
+    assert_eq!(row.1, 0);
+    let remaining: (i64,) =
+        sqlx::query_as("SELECT count(*) FROM platform.outbox_dlq WHERE id = 424242")
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    assert_eq!(remaining.0, 0);
+}

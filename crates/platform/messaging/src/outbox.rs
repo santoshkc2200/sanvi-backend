@@ -353,3 +353,81 @@ impl OutboxDispatcher {
         info!("outbox dispatcher stopped");
     }
 }
+
+/// One dead-lettered outbox row awaiting triage: what it was, why the
+/// dispatcher gave up on it, and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadLetterSummary {
+    pub id: i64,
+    pub aggregate: String,
+    pub event_type: String,
+    pub failure: String,
+    pub attempts: i32,
+    pub dead_lettered_at: DateTime<Utc>,
+}
+
+/// Operator triage (TASK-023 step 7): the dead-letter head, newest first.
+/// Runs privileged (the app role holds INSERT-only on the DLQ table) —
+/// the CLI connects as migrator.
+pub async fn list_dead_letters(pool: &PgPool, limit: i64) -> Result<Vec<DeadLetterSummary>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: i64,
+        aggregate: String,
+        event_type: String,
+        failure: String,
+        attempts: i32,
+        dead_lettered_at: DateTime<Utc>,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, aggregate, event_type, failure, attempts, dead_lettered_at
+         FROM platform.outbox_dlq
+         ORDER BY dead_lettered_at DESC
+         LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to list dead-lettered outbox rows")?;
+    Ok(rows
+        .into_iter()
+        .map(|row| DeadLetterSummary {
+            id: row.id,
+            aggregate: row.aggregate,
+            event_type: row.event_type,
+            failure: row.failure,
+            attempts: row.attempts,
+            dead_lettered_at: row.dead_lettered_at,
+        })
+        .collect())
+}
+
+/// Operator path back (TASK-023 step 7): move a dead-lettered row to the
+/// outbox with a fresh attempt budget, so the next dispatch poll picks it
+/// up again. Returns `false` when the id is not dead-lettered — replaying
+/// what is not there must report, not fabricate. Runs inside the caller's
+/// audited scope.
+pub async fn replay_dead_letter(
+    scope: &mut sanvi_persistence::PlatformScope<'_>,
+    event_id: i64,
+) -> Result<bool> {
+    let tx = scope.tx_mut().as_inner();
+    let replayed: Option<i64> = sqlx::query_scalar(
+        "WITH moved AS (
+           DELETE FROM platform.outbox_dlq WHERE id = $1
+           RETURNING aggregate, aggregate_id, event_type, payload, metadata, occurred_at
+         )
+         INSERT INTO platform.outbox
+           (id, aggregate, aggregate_id, event_type, payload, metadata,
+            occurred_at, published_at, attempts)
+         SELECT $1, aggregate, aggregate_id, event_type, payload, metadata,
+                occurred_at, NULL, 0
+         FROM moved
+         RETURNING id",
+    )
+    .bind(event_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .context("failed to replay dead-lettered outbox row")?;
+    Ok(replayed.is_some())
+}

@@ -12,6 +12,7 @@ mod access;
 mod billing;
 mod config;
 mod control;
+mod dlq;
 mod healthcheck;
 mod i18n;
 mod migrate;
@@ -103,6 +104,12 @@ enum Command {
     Payments {
         #[command(subcommand)]
         action: PaymentsAction,
+    },
+    /// Phase-11 (TASK-023): the platform outbox dead-letter queue —
+    /// triage what the dispatcher gave up on, replay after the fix.
+    Dlq {
+        #[command(subcommand)]
+        action: DlqAction,
     },
     /// Load, validate and print the configuration.
     Config,
@@ -284,6 +291,21 @@ enum PaymentsAction {
     /// One manual connection-status reconciliation pass (the lost-webhook
     /// safety net).
     Sync,
+}
+
+#[derive(Subcommand)]
+enum DlqAction {
+    /// The platform outbox dead-letter head, newest first.
+    List {
+        /// Maximum rows to show.
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
+    },
+    /// Requeue one dead-lettered outbox row after fixing the root cause.
+    Replay {
+        /// The outbox event id to requeue.
+        event_id: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -695,6 +717,21 @@ async fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("payments command failed: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Dlq { action } => {
+            let result = match action {
+                DlqAction::List { limit } => dlq::list(&cli.env, limit).await,
+                DlqAction::Replay { event_id } => {
+                    dlq::replay(&cli.env, event_id, ids.clone()).await
+                }
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("dlq command failed: {err:#}");
                     ExitCode::FAILURE
                 }
             }
