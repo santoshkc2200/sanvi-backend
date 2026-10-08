@@ -33,13 +33,16 @@ keep_alive_secs = 60
 enabled = true
 min_bytes = 1024
 
-# Server-side SSR response cache for the anonymous storefront reads
-# (TASK-022; the platform.ssr_cache flag, FR-1111). Off is the pre-cache
-# behaviour: every public read renders. Invalidation on theme publish /
-# content change is event-driven (~2 s: outbox poll 1 s + stream delivery);
-# ttl_secs is only the backstop for entries whose invalidation event was
-# missed. Authenticated requests are never served from or written to the
-# cache, and neither is any response carrying Set-Cookie.
+# Server-side SSR response cache for the anonymous storefront content
+# reads (locales, messages, plans, privacy disclosures; TASK-022, the
+# platform.ssr_cache flag, FR-1111). /api/v1/public/theme is excluded: its
+# handler is already cache-first (TASK-021 11.2g) and an SSR hit would
+# re-pay the key build (benchmarks/ssr-cache-2026-10-07.md). Off is the
+# pre-cache behaviour: every public read renders. Invalidation on theme
+# publish / content change is event-driven (~2 s: outbox poll 1 s + stream
+# delivery); ttl_secs is only the backstop for entries whose invalidation
+# event was missed. Authenticated requests are never served from or written
+# to the cache, and neither is any response carrying Set-Cookie.
 [server.ssr_cache]
 enabled = false
 ttl_secs = 300

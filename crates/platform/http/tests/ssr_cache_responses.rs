@@ -135,7 +135,7 @@ macro_rules! storefront_app {
         actix_test::init_service({
             let renders = ($renders).clone();
             App::new().wrap(layer($cache, $resolver)).route(
-                "/api/v1/public/theme",
+                "/api/v1/public/plans",
                 web::get().to(move || counting_handler(renders.clone())),
             )
         })
@@ -156,7 +156,7 @@ async fn authenticated_requests_are_never_served_from_or_written_to_the_cache() 
     );
 
     // Anonymous first render fills the cache.
-    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     assert_eq!(first.status(), 200);
     assert_eq!(renders.load(Ordering::SeqCst), 1);
 
@@ -164,7 +164,7 @@ async fn authenticated_requests_are_never_served_from_or_written_to_the_cache() 
     let authed = actix_test::call_service(
         &app,
         actix_test::TestRequest::get()
-            .uri("/api/v1/public/theme")
+            .uri("/api/v1/public/plans")
             .insert_header((header::AUTHORIZATION, "Bearer token"))
             .to_request(),
     )
@@ -178,7 +178,7 @@ async fn authenticated_requests_are_never_served_from_or_written_to_the_cache() 
 
     // And it must not have written either: the next anonymous request hits
     // the entry the *first* anonymous request stored.
-    let third = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    let third = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     let body = actix_test::read_body(third).await;
     assert_eq!(
         renders.load(Ordering::SeqCst),
@@ -202,7 +202,7 @@ async fn a_response_carrying_set_cookie_is_never_stored() {
                 Arc::new(StaticResolver { tenant: tenant(1) }),
             ))
             .route(
-                "/api/v1/public/theme",
+                "/api/v1/public/plans",
                 web::get().to(move || {
                     let renders = renders_for_handler.clone();
                     async move {
@@ -219,7 +219,7 @@ async fn a_response_carrying_set_cookie_is_never_stored() {
 
     for _ in 0..2 {
         let res =
-            actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+            actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
         assert_eq!(res.status(), 200);
     }
     assert_eq!(
@@ -238,8 +238,8 @@ async fn two_tenants_cannot_share_an_entry() {
     });
     let app = storefront_app!(cache(), resolver, renders);
 
-    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
-    let second = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
+    let second = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     assert_eq!(
         renders.load(Ordering::SeqCst),
         2,
@@ -250,7 +250,7 @@ async fn two_tenants_cannot_share_an_entry() {
     assert_ne!(first_body, second_body, "tenants must never share an entry");
 
     // The rotation is back at tenant 1: its stored entry is served.
-    let third = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    let third = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     assert_eq!(actix_test::read_body(third).await, first_body);
     assert_eq!(renders.load(Ordering::SeqCst), 2);
 }
@@ -273,7 +273,7 @@ async fn five_hundred_concurrent_misses_render_exactly_once() {
         async move {
             let res = actix_test::call_service(
                 app.as_ref(),
-                ssr_get("/api/v1/public/theme").to_request(),
+                ssr_get("/api/v1/public/plans").to_request(),
             )
             .await;
             assert_eq!(res.status(), 200);
@@ -304,7 +304,7 @@ async fn a_no_store_response_is_never_stored() {
                 Arc::new(StaticResolver { tenant: tenant(1) }),
             ))
             .route(
-                "/api/v1/public/theme",
+                "/api/v1/public/plans",
                 web::get().to(move || {
                     let renders = renders_for_handler.clone();
                     async move {
@@ -320,7 +320,7 @@ async fn a_no_store_response_is_never_stored() {
     .await;
 
     for _ in 0..2 {
-        actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+        actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     }
     assert_eq!(
         renders.load(Ordering::SeqCst),
@@ -342,7 +342,7 @@ async fn a_hit_replays_status_headers_and_body() {
                 Arc::new(StaticResolver { tenant: tenant(1) }),
             ))
             .route(
-                "/api/v1/public/theme",
+                "/api/v1/public/plans",
                 web::get().to(move || {
                     let renders = renders_for_handler.clone();
                     async move {
@@ -357,8 +357,8 @@ async fn a_hit_replays_status_headers_and_body() {
     )
     .await;
 
-    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
-    let second = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
+    let second = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     assert_eq!(renders.load(Ordering::SeqCst), 1);
     assert_eq!(first.status(), second.status());
     let first_head = first.response().headers().clone();
@@ -389,7 +389,7 @@ async fn the_flag_off_position_renders_every_request() {
                 Arc::new(StaticResolver { tenant: tenant(1) }),
             ))
             .route(
-                "/api/v1/public/theme",
+                "/api/v1/public/plans",
                 web::get().to({
                     let renders = renders.clone();
                     let renders = renders.clone();
@@ -400,7 +400,7 @@ async fn the_flag_off_position_renders_every_request() {
     .await;
 
     for _ in 0..2 {
-        actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+        actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     }
     assert_eq!(renders.load(Ordering::SeqCst), 2, "flag off = no cache");
 }
@@ -473,7 +473,7 @@ async fn locale_partitions_the_served_entries() {
     );
 
     let make = |lang: &str| {
-        let req = ssr_get("/api/v1/public/theme").to_request();
+        let req = ssr_get("/api/v1/public/plans").to_request();
         req.extensions_mut().insert(crate_locale(lang));
         req
     };
@@ -508,7 +508,7 @@ async fn no_cache_with_an_etag_is_storable_but_replayed_with_its_policy() {
                 Arc::new(StaticResolver { tenant: tenant(1) }),
             ))
             .route(
-                "/api/v1/public/theme",
+                "/api/v1/public/plans",
                 web::get().to(move || {
                     let renders = renders_for_handler.clone();
                     async move {
@@ -524,8 +524,8 @@ async fn no_cache_with_an_etag_is_storable_but_replayed_with_its_policy() {
     )
     .await;
 
-    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
-    let second = actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    let first = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
+    let second = actix_test::call_service(&app, ssr_get("/api/v1/public/plans").to_request()).await;
     assert_eq!(
         renders.load(Ordering::SeqCst),
         1,
@@ -539,4 +539,38 @@ async fn no_cache_with_an_etag_is_storable_but_replayed_with_its_policy() {
         "the no-cache policy replays unchanged"
     );
     assert_eq!(first_head.get(header::ETAG), second_head.get(header::ETAG));
+}
+
+/// The measured exception: `/api/v1/public/theme` is excluded from the
+/// cache — its handler is already cache-first (TASK-021 11.2g) and the key
+/// build would be pure overhead — so it renders per request even with the
+/// flag on.
+#[actix_web::test]
+async fn the_theme_bootstrap_is_excluded_from_the_cache() {
+    let renders: Renders = Arc::new(AtomicUsize::new(0));
+    let renders_for_handler = renders.clone();
+    let app = actix_test::init_service(
+        App::new()
+            .wrap(layer(
+                cache(),
+                Arc::new(StaticResolver { tenant: tenant(1) }),
+            ))
+            .route(
+                "/api/v1/public/theme",
+                web::get().to(move || {
+                    let renders = renders_for_handler.clone();
+                    async move { counting_handler(renders).await }
+                }),
+            ),
+    )
+    .await;
+
+    for _ in 0..2 {
+        actix_test::call_service(&app, ssr_get("/api/v1/public/theme").to_request()).await;
+    }
+    assert_eq!(
+        renders.load(Ordering::SeqCst),
+        2,
+        "the excluded theme path must render per request"
+    );
 }

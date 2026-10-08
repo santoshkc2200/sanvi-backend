@@ -63,11 +63,23 @@ pub trait SsrKeyResolver: Send + Sync {
 }
 
 /// The public storefront read prefixes the cache engages on. These are the
-/// surfaces the 11.2c profile ranked: theme, locales/messages, public plans
-/// and the privacy disclosures. Tenancy's own public lookups
+/// surfaces the 11.2c profile ranked: locales/messages, public plans and
+/// the privacy disclosures. Tenancy's own public lookups
 /// (`slug-availability`, `tenant-context`) are deliberately absent — a
 /// cached availability answer would outlive the registration it reported.
 pub const SSR_CACHE_PREFIXES: &[&str] = &["/api/v1/public/"];
+
+/// Storefront reads excluded from the cache despite matching a prefix.
+/// `/api/v1/public/theme` is the one measured exception: its handler is
+/// already cache-first (the resolved-theme cache + single-flight of
+/// TASK-021 11.2g), so a hit here would re-pay the key build's two
+/// resolution reads to skip a handler that no longer renders anything —
+/// measured on the lab host as +0.5–0.8 ms p50 on the storefront bootstrap
+/// (`benchmarks/ssr-cache-2026-10-07.md`, same-binary flag on/off A/B).
+/// The theme revision stays a key dimension for the reads that are cached:
+/// a publish invalidates their entries even though they do not embed
+/// theme bytes.
+pub const SSR_CACHE_EXCLUDED_PREFIXES: &[&str] = &["/api/v1/public/theme"];
 
 /// The coarse device partition behind [`DeviceClass`] (FR-1111): the
 /// storefront serves different markup to mobile. Two classes, classified
@@ -181,6 +193,9 @@ where
         let engage = self.config.enabled
             && matches!(*req.method(), Method::GET | Method::HEAD)
             && SSR_CACHE_PREFIXES
+                .iter()
+                .any(|prefix| req.path().starts_with(prefix))
+            && !SSR_CACHE_EXCLUDED_PREFIXES
                 .iter()
                 .any(|prefix| req.path().starts_with(prefix))
             && req.headers().get(header::AUTHORIZATION).is_none();

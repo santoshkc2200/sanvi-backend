@@ -94,16 +94,17 @@ pub struct PublicThemeQuery {
 /// `GET /api/v1/public/theme` — the resolved live theme for the request
 /// host (or the platform default), ETag-cached. No authentication; tenant
 /// resolution happens here because public paths skip the tenant middleware.///
-/// Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
-/// enabled, the anonymous response is served from the server-side SSR cache
-/// keyed by (tenant, locale, theme revision, device class) with
-/// single-flight on miss; a theme publish or content change invalidates the
-/// affected entries within ~2 s (the entry TTL is a backstop only).
-/// Requests carrying an `Authorization` header are never served from or
-/// written to the cache, and responses carrying `Set-Cookie` are never
-/// stored. Varies on `Accept-Language`. The response preloads the tenant's
-/// brand logo — the largest above-the-fold resource the backend knows
-/// about — via a `Link; rel=preload` header.
+/// Cache semantics (TASK-022, FR-1111): this operation is deliberately NOT
+/// served from the server-side SSR cache — its handler is already
+/// cache-first (the resolved-theme cache + single-flight of TASK-021
+/// 11.2g), and an SSR hit would re-pay the cache key's resolution reads to
+/// skip a handler that no longer renders anything (measured, see
+/// `benchmarks/ssr-cache-2026-10-07.md`). The SSR cache covers the
+/// storefront content reads (locales, messages, plans, privacy
+/// disclosures), keyed by (tenant, locale, theme revision, device class); a
+/// theme publish invalidates those entries within ~2 s. This response
+/// preloads the tenant's brand logo — the largest above-the-fold resource
+/// the backend knows about — via a `Link; rel=preload` header.
 #[utoipa::path(
     get,
     path = "/api/v1/public/theme",
