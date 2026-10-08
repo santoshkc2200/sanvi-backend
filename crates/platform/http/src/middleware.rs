@@ -81,6 +81,7 @@ pub fn stack<T>(
     impersonation: Option<std::sync::Arc<crate::impersonation::ImpersonationMiddleware>>,
     locale: Option<std::sync::Arc<LocaleMiddleware>>,
     ssr_cache: crate::ssr_cache::SsrCacheLayer,
+    degraded: crate::degraded::DegradedHeaderLayer,
 ) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -117,8 +118,17 @@ where
         .filter(|rate_config| rate_config.enabled)
         .map(|rate_config| Arc::new(RateLimiter::new(rate_config, redis.clone())));
 
-    app.wrap(crate::error::ErrorHandlersLayer)
-        // Per-app cache headers (TASK-022 11.3e) outermost but one, so the
+    app
+        // The degraded-mode header is outermost (TASK-023): the error
+        // handlers beneath it rebuild error bodies and drop their headers,
+        // so the stamp must land after them — every response the app can
+        // produce, a shed 503 included, carries `X-Sanvi-Degraded` while
+        // any dependency runs degraded. The flag-off assembly is a
+        // pass-through.
+        .wrap(degraded)
+        .wrap(crate::error::ErrorHandlersLayer)
+        // Per-app cache headers (TASK-022 11.3e) outermost but two — the
+        // degraded-mode header (above) takes the outermost slot — so the
         // policy holds on every response the app can produce, whatever the
         // middleware short-circuits beneath it.
         .wrap(crate::cache_headers::CacheHeadersLayer::new(

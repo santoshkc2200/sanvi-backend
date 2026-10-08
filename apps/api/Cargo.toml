@@ -31,6 +31,7 @@ sanvi-messaging.workspace = true
 sanvi-persistence.workspace = true
 sanvi-platform-admin.workspace = true
 sanvi-privacy.workspace = true
+sanvi-resilience.workspace = true
 sanvi-system.workspace = true
 sanvi-telemetry.workspace = true
 sanvi-tenancy.workspace = true

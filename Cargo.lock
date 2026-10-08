@@ -3345,6 +3345,7 @@ dependencies = [
  "sanvi-persistence",
  "sanvi-platform-admin",
  "sanvi-privacy",
+ "sanvi-resilience",
  "sanvi-system",
  "sanvi-telemetry",
  "sanvi-tenancy",
@@ -3536,6 +3537,7 @@ dependencies = [
  "redis",
  "sanvi-cache",
  "sanvi-kernel",
+ "sanvi-resilience",
  "sanvi-telemetry",
  "serde",
  "serde_json",
@@ -3809,6 +3811,16 @@ dependencies = [
  "utoipa",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "sanvi-resilience"
+version = "0.10.0"
+dependencies = [
+ "prometheus",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1279,6 +1279,7 @@ async fn build_sweep_app(
         advertising,
         None, // redis
         None, // ssr_cache
+        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()), // degradation
     )
 }
 

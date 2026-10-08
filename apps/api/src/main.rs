@@ -505,6 +505,15 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(sanvi_cache::SsrCache::new(redis.clone(), Some(ssr_metrics)))
     });
 
+    // TASK-023: the degradation registry is process-wide and always built
+    // (adapters flip reasons on it whether or not the header flag is on);
+    // the `platform.degraded_mode` flag only decides whether the header
+    // middleware stamps responses.
+    let degradation =
+        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::new(Some(
+            metrics.prometheus_registry(),
+        )));
+
     let bind_config = config.clone();
     let factory_config = config.clone();
     let server = match bind(&bind_config.server, move || {
@@ -526,6 +535,7 @@ async fn main() -> ExitCode {
             advertising.clone(),
             redis.clone(),
             ssr_cache.clone(),
+            degradation.clone(),
         )
     }) {
         Ok(server) => server,

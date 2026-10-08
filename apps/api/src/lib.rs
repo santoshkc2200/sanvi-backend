@@ -3569,6 +3569,7 @@ pub fn build_app(
     advertising: Option<sanvi_advertising::adapters::http::AdvertisingState>,
     redis: Option<redis::aio::ConnectionManager>,
     ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
+    degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -3849,6 +3850,15 @@ pub fn build_app(
     let ssr_cache = ssr_cache
         .unwrap_or_else(|| sanvi_http::ssr_cache::SsrCacheLayer::disabled(ssr_cache_config));
 
+    // TASK-023 (FR-1113): the degraded-mode header. The flag-off assembly
+    // is a pass-through; the flag-on assembly stamps `X-Sanvi-Degraded` on
+    // every response served while a dependency runs degraded.
+    let degraded = if server_config.degraded_mode.enabled {
+        sanvi_http::DegradedHeaderLayer::new(degradation)
+    } else {
+        sanvi_http::DegradedHeaderLayer::disabled()
+    };
+
     middleware::stack(
         app,
         server_config,
@@ -3858,6 +3868,7 @@ pub fn build_app(
         impersonation,
         locale_middleware,
         ssr_cache,
+        degraded,
     )
 }
 

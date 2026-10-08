@@ -38,6 +38,15 @@ pub struct ServerConfig {
     /// lifetime.
     #[serde(default)]
     pub cache_headers: CacheHeadersConfig,
+    /// The `platform.load_shedding` flag (TASK-023, FR-1114). Off — the
+    /// default — admits everything up to the hard concurrency limit.
+    #[serde(default)]
+    pub load_shedding: LoadSheddingConfig,
+    /// The `platform.degraded_mode` flag (TASK-023, FR-1113): stamp
+    /// `X-Sanvi-Degraded` on responses served while a dependency runs
+    /// degraded.
+    #[serde(default)]
+    pub degraded_mode: DegradedModeConfig,
 }
 
 fn default_keep_alive_secs() -> u64 {
@@ -67,6 +76,8 @@ impl Default for ServerConfig {
             compression: CompressionConfig::default(),
             ssr_cache: SsrCacheConfig::default(),
             cache_headers: CacheHeadersConfig::default(),
+            load_shedding: LoadSheddingConfig::default(),
+            degraded_mode: DegradedModeConfig::default(),
         }
     }
 }
@@ -109,6 +120,12 @@ impl ServerConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.cache_headers.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.load_shedding.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.degraded_mode.validate() {
             problems.push(err.to_string());
         }
         if !problems.is_empty() {
@@ -267,9 +284,114 @@ impl CacheHeadersConfig {
     }
 }
 
-/// Security response headers (NFR-1114): specified, not inherited from
-/// framework defaults.
+/// Load shedding (TASK-023, FR-1114; the `platform.load_shedding` flag).
 ///
+/// Admission above the concurrency ceiling TASK-021 measured. The spike
+/// record (`benchmarks/spike10x-2026-10-07.md`) is the derivation: healthy
+/// at 3× the projected peak (in-flight well under a hundred), degradation
+/// onset between 3× and 10× through pool saturation (≈1 s acquire waits)
+/// and buffered-request RSS growth. The defaults sit between those two
+/// points on the pinned profile: the ceiling sheds before the pool queue
+/// grows unbounded, and the pool-wait signal sheds on the bottleneck shape
+/// before the 1 s waits the spike recorded. Webhooks and payment callbacks
+/// are never shed (NFR-1106), whatever the ceiling says.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LoadSheddingConfig {
+    /// The `platform.load_shedding` flag. `false` (the default) is the
+    /// flag-off behaviour: admission up to the hard concurrency limit only.
+    pub enabled: bool,
+    /// Global in-flight request ceiling. Shedding engages above it.
+    pub in_flight_ceiling: usize,
+    /// Per-tenant in-flight share: under contention (at or above
+    /// `fairness_knee` globally) a tenant holding more than this many
+    /// in-flight requests is shed ahead of everyone else.
+    pub per_tenant_in_flight: usize,
+    /// The global in-flight level at which per-tenant fairness starts
+    /// shedding hot tenants.
+    pub fairness_knee: usize,
+    /// Shed when the pool's p95 acquire wait exceeds this many
+    /// microseconds — the bottleneck signal the spike run recorded.
+    pub pool_wait_micros: u64,
+    /// `Retry-After` seconds carried by every `503 platform/overloaded`.
+    pub retry_after_secs: u64,
+    /// Path prefixes never shed: webhooks and payment callbacks (NFR-1106),
+    /// health/readiness, and the build probe.
+    pub exempt_prefixes: Vec<String>,
+}
+
+impl Default for LoadSheddingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            in_flight_ceiling: 2_000,
+            per_tenant_in_flight: 200,
+            fairness_knee: 1_000,
+            pool_wait_micros: 250_000,
+            retry_after_secs: 5,
+            exempt_prefixes: vec![
+                "/api/v1/webhooks".to_string(),
+                "/api/v1/billing/webhooks".to_string(),
+                "/api/v1/payments/webhooks".to_string(),
+                "/healthz".to_string(),
+                "/readyz".to_string(),
+                "/metrics".to_string(),
+                "/api/v1/system/build".to_string(),
+            ],
+        }
+    }
+}
+
+impl LoadSheddingConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.in_flight_ceiling == 0 {
+            anyhow::bail!("server.load_shedding.in_flight_ceiling must be >= 1");
+        }
+        if self.per_tenant_in_flight == 0 {
+            anyhow::bail!("server.load_shedding.per_tenant_in_flight must be >= 1");
+        }
+        if self.fairness_knee > self.in_flight_ceiling {
+            anyhow::bail!(
+                "server.load_shedding.fairness_knee must be <= in_flight_ceiling"
+            );
+        }
+        if self.retry_after_secs == 0 {
+            anyhow::bail!("server.load_shedding.retry_after_secs must be >= 1");
+        }
+        if self.exempt_prefixes.iter().any(|p| !p.starts_with('/')) {
+            anyhow::bail!("server.load_shedding.exempt_prefixes must start with '/'");
+        }
+        Ok(())
+    }
+}
+
+/// The `platform.degraded_mode` flag (TASK-023, FR-1113): when on, every
+/// response served while a dependency runs degraded carries
+/// `X-Sanvi-Degraded` (see [`crate::degraded`]). Off is the flag-off
+/// behaviour: no header, responses look ordinary even when degraded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct DegradedModeConfig {
+    pub enabled: bool,
+}
+
+impl Default for DegradedModeConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
+}
+
+impl DegradedModeConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Security response headers (NFR-1114): specified, not inherited from
+/// framework defaults.///
 /// The five headers that never vary per environment (CSP, frame protection,
 /// referrer policy, permissions policy, MIME sniffing protection) are pinned
 /// as code constants in [`crate::middleware`]'s `SecurityHeaders` — making

@@ -178,6 +178,7 @@ pub(crate) fn test_app_with(
         None, // advertising
         None, // redis
         None, // ssr_cache
+        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()), // degradation
     )
 }
 

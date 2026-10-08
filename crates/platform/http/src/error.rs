@@ -85,6 +85,16 @@ pub enum ApiError {
     #[error("request timed out")]
     RequestTimeout,
 
+    /// Load shedding (TASK-023, NFR-1106): the platform is too busy. This is
+    /// deliberately a distinct class from [`ApiError::ServiceUnavailable`]
+    /// even though both are `503`: `429` means the *caller* asked too often
+    /// (TASK-026), `platform/overloaded` means the *platform* is too busy —
+    /// a client backs off exponentially for the first and retries after
+    /// `Retry-After` for the second. Conflating them makes client backoff
+    /// wrong in both directions.
+    #[error("platform is overloaded, retry later")]
+    Overloaded { retry_after_secs: u64 },
+
     #[error("{detail}")]
     ServiceUnavailable { detail: String },
 
@@ -106,7 +116,9 @@ impl ApiError {
             Self::TenantSuspended => StatusCode::LOCKED,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::RequestTimeout => StatusCode::GATEWAY_TIMEOUT,
-            Self::ServiceUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Overloaded { .. } | Self::ServiceUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -124,6 +136,7 @@ impl ApiError {
             Self::TenantSuspended => "tenant-suspended",
             Self::TooManyRequests { .. } => "too-many-requests",
             Self::RequestTimeout => "request-timeout",
+            Self::Overloaded { .. } => "platform/overloaded",
             Self::ServiceUnavailable { .. } => "service-unavailable",
             Self::Internal { .. } => "internal-error",
         }
@@ -141,6 +154,7 @@ impl ApiError {
             Self::TenantSuspended => "Tenant Suspended",
             Self::TooManyRequests { .. } => "Too Many Requests",
             Self::RequestTimeout => "Gateway Timeout",
+            Self::Overloaded { .. } => "Platform Overloaded",
             Self::ServiceUnavailable { .. } => "Service Unavailable",
             Self::Internal { .. } => "Internal Server Error",
         }
@@ -212,7 +226,11 @@ impl ResponseError for ApiError {
 
     fn error_response(&self) -> HttpResponse {
         let mut response = HttpResponse::build(self.status()).json(self.problem());
-        if let Self::TooManyRequests { retry_after_secs } = self {
+        if let Self::TooManyRequests {
+            retry_after_secs } | Self::Overloaded {
+            retry_after_secs,
+        } = self
+        {
             response.headers_mut().insert(
                 actix_web::http::header::RETRY_AFTER,
                 retry_after_secs.to_string().parse().unwrap(),
@@ -478,6 +496,35 @@ mod tests {
         .error_response();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(response.headers().get("retry-after").unwrap(), "2");
+    }
+
+    /// TASK-023 (NFR-1106): the overload class is a distinct problem type
+    /// from the dependency-down class, and it is the only variant that
+    /// claims that meaning. Both ride `503`, but the `type` URI tells the
+    /// client which backoff applies.
+    #[test]
+    fn overloaded_is_its_own_problem_type_with_retry_after() {
+        let response = ApiError::Overloaded {
+            retry_after_secs: 7,
+        }
+        .error_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get("retry-after").unwrap(), "7");
+
+        let problem = ApiError::Overloaded {
+            retry_after_secs: 7,
+        }
+        .problem();
+        assert_eq!(problem.r#type, "https://sanvi.dev/problems/platform/overloaded");
+        assert_eq!(problem.title, "Platform Overloaded");
+        assert_eq!(problem.status, 503);
+
+        // Nothing else claims the overloaded meaning: the dependency-down
+        // class keeps its own slug on the same status.
+        assert_eq!(
+            ApiError::service_unavailable("stripe unreachable").type_slug(),
+            "service-unavailable"
+        );
     }
 
     #[test]

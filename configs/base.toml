@@ -57,6 +57,33 @@ ttl_secs = 300
 [server.cache_headers]
 storefront_max_age_secs = 60
 
+# The platform.load_shedding flag (TASK-023, FR-1114), off by default: the
+# pre-shedding behaviour admits everything up to the hard concurrency
+# limit. When enabled, requests above `in_flight_ceiling` in flight — or
+# while the DB pool's p95 acquire wait exceeds `pool_wait_micros` — get
+# `503` `platform/overloaded` with `Retry-After`. Under contention (at or
+# above `fairness_knee` globally) a tenant holding more than
+# `per_tenant_in_flight` in-flight requests is shed ahead of everyone
+# else. The ceiling derivation lives in the config type's docs and
+# benchmarks/spike10x-2026-10-07.md. Paths under `exempt_prefixes`
+# (webhooks, payment callbacks, health, the build probe) are never shed.
+[server.load_shedding]
+enabled = false
+in_flight_ceiling = 2000
+per_tenant_in_flight = 200
+fairness_knee = 1000
+pool_wait_micros = 250000
+retry_after_secs = 5
+
+# The platform.degraded_mode flag (TASK-023, FR-1113), off by default:
+# responses look ordinary even when a dependency is degraded. When
+# enabled, every response served while a dependency runs degraded carries
+# `X-Sanvi-Degraded` with the active reasons (`redis`, `keto`, `stripe`,
+# `ads`, `object_storage`, `postgres`) so the frontend can say so
+# honestly.
+[server.degraded_mode]
+enabled = false
+
 [server.cors]
 # Explicit origin allow-list; wildcards are rejected at startup.
 allowed_origins = []

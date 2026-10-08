@@ -123,6 +123,7 @@ fn build_app(
         sanvi_http::ssr_cache::SsrCacheLayer::disabled(
             sanvi_http::config::SsrCacheConfig::default(),
         ),
+        sanvi_http::degraded::DegradedHeaderLayer::disabled(),
     )
 }
 
@@ -179,7 +180,8 @@ async fn slow_handler_times_out_with_504() {
             sanvi_http::ssr_cache::SsrCacheLayer::disabled(
                 sanvi_http::config::SsrCacheConfig::default(),
             ),
-        )
+        sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+    )
     })
     .await;
     let (status, _, body) = raw_get(format!("{url}/slow")).await;
@@ -207,7 +209,8 @@ async fn panicking_handler_becomes_500() {
             sanvi_http::ssr_cache::SsrCacheLayer::disabled(
                 sanvi_http::config::SsrCacheConfig::default(),
             ),
-        )
+        sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+    )
     })
     .await;
     let (status, _, body) = raw_get(format!("{url}/boom")).await;
@@ -252,7 +255,8 @@ async fn concurrency_limit_rejects_when_saturated() {
             sanvi_http::ssr_cache::SsrCacheLayer::disabled(
                 sanvi_http::config::SsrCacheConfig::default(),
             ),
-        )
+        sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+    )
     })
     .await;
 
@@ -305,7 +309,8 @@ async fn concurrency_rejection_carries_request_id_and_retry_after() {
             sanvi_http::ssr_cache::SsrCacheLayer::disabled(
                 sanvi_http::config::SsrCacheConfig::default(),
             ),
-        )
+        sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+    )
     })
     .await;
 

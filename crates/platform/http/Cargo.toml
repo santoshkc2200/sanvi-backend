@@ -20,6 +20,7 @@ opentelemetry.workspace = true
 redis.workspace = true
 sanvi-cache.workspace = true
 sanvi-kernel.workspace = true
+sanvi-resilience.workspace = true
 sanvi-telemetry.workspace = true
 serde.workspace = true
 serde_json.workspace = true
