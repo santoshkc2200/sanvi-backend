@@ -64,9 +64,8 @@ pub trait SsrKeyResolver: Send + Sync {
 
 /// The public storefront read prefixes the cache engages on. These are the
 /// surfaces the 11.2c profile ranked: locales/messages, public plans and
-/// the privacy disclosures. Tenancy's own public lookups
-/// (`slug-availability`, `tenant-context`) are deliberately absent — a
-/// cached availability answer would outlive the registration it reported.
+/// the privacy disclosures. Tenancy's own public lookups are excluded
+/// below (see `SSR_CACHE_EXCLUDED_PREFIXES`).
 pub const SSR_CACHE_PREFIXES: &[&str] = &["/api/v1/public/"];
 
 /// Storefront reads excluded from the cache despite matching a prefix.
@@ -79,7 +78,16 @@ pub const SSR_CACHE_PREFIXES: &[&str] = &["/api/v1/public/"];
 /// The theme revision stays a key dimension for the reads that are cached:
 /// a publish invalidates their entries even though they do not embed
 /// theme bytes.
-pub const SSR_CACHE_EXCLUDED_PREFIXES: &[&str] = &["/api/v1/public/theme"];
+pub const SSR_CACHE_EXCLUDED_PREFIXES: &[&str] = &[
+    "/api/v1/public/theme",
+    // Tenancy's public lookups: a cached availability/context answer would
+    // outlive the registration or status it reported — a suspended tenant's
+    // storefront bootstrap must not keep being served from a 5-minute-old
+    // entry, and the SSR invalidation events (theme publish, content
+    // change) do not fire on tenant lifecycle changes.
+    "/api/v1/public/tenant-context",
+    "/api/v1/public/slug-availability",
+];
 
 /// The coarse device partition behind [`DeviceClass`] (FR-1111): the
 /// storefront serves different markup to mobile. Two classes, classified
