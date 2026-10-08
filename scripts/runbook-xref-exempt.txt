@@ -18,3 +18,5 @@ payments-alerts.md  the phase-09 alert index; its alerts name per-alert runbooks
 privacy.md  operator procedure (DSR handling), not an alert response
 stripe-api-version-upgrade-drill.md  scheduled drill, not an alert response
 capacity.md  the capacity model is the arithmetic the resource alerts fire into, not an alert response
+dependency-matrix.md  the dependency-behaviour contract and injection-test manifest, not an alert response
+rolling-restart.md  scheduled drill, not an alert response

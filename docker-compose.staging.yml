@@ -22,14 +22,22 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
+    # TASK-023 (FR-1112): the rolling-restart contract. SIGTERM drains
+    # in-flight requests up to `server.shutdown_timeout_secs` (30 s), so
+    # the compose grace period must exceed it or the orchestrator kills
+    # requests the server would have finished. The 10 s healthcheck
+    # interval detects the replacement quickly, shrinking the window in
+    # which new connections have nowhere to land (see
+    # docs/runbooks/rolling-restart.md for the drill that proves it).
+    stop_grace_period: 45s
     healthcheck:
       # The runtime image is distroless (no shell, no curl); sanvi-cli
       # ships in the same image and speaks raw HTTP for exactly this.
       test: ["CMD", "/usr/local/bin/sanvi-cli", "healthcheck"]
-      interval: 30s
+      interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 30s
 
   worker:
     image: ${WORKER_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}
@@ -42,3 +50,9 @@ services:
       # SANVI__DATABASE__* / SANVI__REDIS__URL / SANVI__TELEMETRY__OTLP__AUTH_TOKEN
       # from the host's secret manager
     restart: unless-stopped
+    # TASK-023: the worker stops polling on SIGTERM and finishes its batch,
+    # so the grace period covers the slowest sweep, not just signal
+    # delivery. Unacked stream entries are reclaimed by XAUTOCLAIM and
+    # redelivered (handlers are idempotent), so a worker restart loses no
+    # work — it only replays a bounded tail.
+    stop_grace_period: 90s

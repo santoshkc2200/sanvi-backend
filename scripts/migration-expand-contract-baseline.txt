@@ -1,0 +1,10 @@
+# Expand/contract baseline (TASK-023 11.4e): UP migrations that shipped
+# before the gate with coordinated code changes. Old migration files are
+# never edited (sqlx checksums); each line is one grandfathered file with
+# its reason. A file here that is touched again comes off this list and
+# must satisfy the gate like any new migration.
+#
+# <file>  <reason>
+
+20260826110000_advertising_conversion_upload_states.sql  # RENAME upload_state->upload_states shipped with the phase-10 code cutover reading the new name; pre-gate history
+20260916000000_advertising_retention_partition_drop.sql  # archival partition drops via EXECUTE are deletion-with-restore (TASK-028 owns the rehearsal), not a live-column contract break; pre-gate history
