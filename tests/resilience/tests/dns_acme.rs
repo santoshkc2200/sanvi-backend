@@ -52,7 +52,11 @@ async fn dns_slow_resolver_drops_out_of_the_majority() {
         "the per-verifier deadline must bound the round, took {:?}",
         started.elapsed()
     );
-    assert!(result.confirmed, "2 of 3 (one slow) must confirm: {:?}", result.detail);
+    assert!(
+        result.confirmed,
+        "2 of 3 (one slow) must confirm: {:?}",
+        result.detail
+    );
     assert_eq!(result.resolvers_agreed, 2);
 }
 
@@ -98,7 +102,11 @@ async fn dns_erroring_resolvers_tolerated_up_to_the_majority() {
         .verify_txt(&hostname, EXPECTED)
         .await
         .expect("a round with any answering resolver returns a result");
-    assert!(!result.confirmed, "1 of 3 must not confirm: {:?}", result.detail);
+    assert!(
+        !result.confirmed,
+        "1 of 3 must not confirm: {:?}",
+        result.detail
+    );
 }
 
 /// DNS · down — every resolver unreachable: the round fails with

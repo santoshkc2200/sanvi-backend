@@ -2430,7 +2430,10 @@ async fn upload_sweep_outage_parks_conversions_with_their_directive_snapshot() {
         ),
     );
     let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
-    sinks.insert(PlatformKey::parse("google_ads").unwrap(), google_sink.clone());
+    sinks.insert(
+        PlatformKey::parse("google_ads").unwrap(),
+        google_sink.clone(),
+    );
     sinks.insert(PlatformKey::parse("meta").unwrap(), meta_sink.clone());
 
     let capture = capture_with(
@@ -2480,15 +2483,24 @@ async fn upload_sweep_outage_parks_conversions_with_their_directive_snapshot() {
     // later-justifiable upload is possible because the snapshot travelled
     // with the event, not because anyone re-asked.
     let consent = &row["consent"];
-    assert!(!consent["resolver_version"].as_str().unwrap_or("").is_empty());
-    assert!(!consent["purposes_asked"].as_array().expect("purposes frozen").is_empty());
+    assert!(
+        !consent["resolver_version"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty()
+    );
+    assert!(
+        !consent["purposes_asked"]
+            .as_array()
+            .expect("purposes frozen")
+            .is_empty()
+    );
 
     // Nothing ever uploaded without a snapshot: every upload the healthy
     // sink accepted carried the frozen directive.
     for (_, event) in google_sink.uploaded_records() {
         assert!(
-            !event.consent.resolver_version.is_empty()
-                && !event.consent.purposes_asked.is_empty(),
+            !event.consent.resolver_version.is_empty() && !event.consent.purposes_asked.is_empty(),
             "no upload may happen without its directive snapshot"
         );
     }

@@ -38,6 +38,10 @@ pub struct PoolMetrics {
     /// Probe acquires that failed (pool timeout or connection error) —
     /// under a healthy database this stays at zero.
     pub acquire_failures: IntCounter,
+    /// The load shedder's live pressure signal (TASK-023, FR-1114): fed by
+    /// the sampler, read on admission. `None` until the composition root
+    /// wires it — the gauges above are unaffected either way.
+    pressure: Option<std::sync::Arc<sanvi_resilience::PoolPressure>>,
 }
 
 impl PoolMetrics {
@@ -71,7 +75,19 @@ impl PoolMetrics {
             idle,
             acquire_seconds,
             acquire_failures,
+            pressure: None,
         }
+    }
+
+    /// Wire the shedder's live pressure signal. The composition root calls
+    /// this once; every probe sample then feeds the signal the load
+    /// shedder reads on admission.
+    pub fn with_pressure(
+        mut self,
+        pressure: std::sync::Arc<sanvi_resilience::PoolPressure>,
+    ) -> Self {
+        self.pressure = Some(pressure);
+        self
     }
 
     /// Read the pool once: gauges from the pool's own counters, one probe
@@ -84,12 +100,21 @@ impl PoolMetrics {
         let started = Instant::now();
         match pool.acquire().await {
             Ok(connection) => {
-                self.acquire_seconds
-                    .observe(started.elapsed().as_secs_f64());
+                let waited = started.elapsed();
+                self.acquire_seconds.observe(waited.as_secs_f64());
+                if let Some(pressure) = &self.pressure {
+                    pressure.sample(waited);
+                }
                 drop(connection);
             }
             Err(err) => {
                 self.acquire_failures.inc();
+                // A failed probe waited the whole acquire timeout behind
+                // the queue: record the wait so the shedder sees the
+                // saturation instead of a missing sample.
+                if let Some(pressure) = &self.pressure {
+                    pressure.sample(started.elapsed());
+                }
                 debug!(error = %err, "pool acquire probe failed");
             }
         }

@@ -226,10 +226,8 @@ impl ResponseError for ApiError {
 
     fn error_response(&self) -> HttpResponse {
         let mut response = HttpResponse::build(self.status()).json(self.problem());
-        if let Self::TooManyRequests {
-            retry_after_secs } | Self::Overloaded {
-            retry_after_secs,
-        } = self
+        if let Self::TooManyRequests { retry_after_secs } | Self::Overloaded { retry_after_secs } =
+            self
         {
             response.headers_mut().insert(
                 actix_web::http::header::RETRY_AFTER,
@@ -515,7 +513,10 @@ mod tests {
             retry_after_secs: 7,
         }
         .problem();
-        assert_eq!(problem.r#type, "https://sanvi.dev/problems/platform/overloaded");
+        assert_eq!(
+            problem.r#type,
+            "https://sanvi.dev/problems/platform/overloaded"
+        );
         assert_eq!(problem.title, "Platform Overloaded");
         assert_eq!(problem.status, 503);
 

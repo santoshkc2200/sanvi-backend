@@ -109,7 +109,11 @@ impl DegradationRegistry {
     pub fn set(&self, reason: DegradationReason, active: bool) {
         let previous = self.flags[reason.index()].swap(active, Ordering::SeqCst);
         if previous != active {
-            tracing::warn!(reason = reason.as_str(), active, "degradation state changed");
+            tracing::warn!(
+                reason = reason.as_str(),
+                active,
+                "degradation state changed"
+            );
         }
         if let Some(gauges) = &self.gauges {
             gauges

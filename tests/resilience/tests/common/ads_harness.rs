@@ -14,14 +14,14 @@ use sanvi_advertising::adapters::{
     FakeAdPlatform, FakeConversionSink, SqlxAdvertisingConnectionRepository,
     SqlxCampaignRepository, SystemIdGenerator,
 };
+use sanvi_advertising::application::tracking::UploadPendingConversions;
 use sanvi_advertising::application::tracking::capture::{
     CaptureConversion, TrackConversionCommand,
 };
-use sanvi_advertising::application::tracking::UploadPendingConversions;
 use sanvi_advertising::domain::{
     AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError, ClickIds,
-    ConnectionId, ConversionEventRepository, ConversionSinkPort, PaymentLookup,
-    PaymentLookupPort, PlatformKey, SecretRef, VendorRole, VendorRolePort,
+    ConnectionId, ConversionEventRepository, ConversionSinkPort, PaymentLookup, PaymentLookupPort,
+    PlatformKey, SecretRef, VendorRole, VendorRolePort,
 };
 use sanvi_kernel::TenantId;
 use sanvi_persistence::{ScopedTx, TxManager};
@@ -186,9 +186,7 @@ pub fn outage_sinks(
             AdvertisingError::PlatformUnavailable(format!("simulated {failing_platform} outage")),
         ),
     );
-    let healthy = Arc::new(FakeConversionSink::new(
-        fixtures[healthy_fixture].clone(),
-    ));
+    let healthy = Arc::new(FakeConversionSink::new(fixtures[healthy_fixture].clone()));
     let mut sinks: BTreeMap<PlatformKey, Arc<dyn ConversionSinkPort>> = BTreeMap::new();
     sinks.insert(
         PlatformKey::parse(failing_platform).unwrap(),

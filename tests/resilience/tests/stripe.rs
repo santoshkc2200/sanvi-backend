@@ -40,7 +40,10 @@ async fn stripe_erroring_retries_under_the_same_idempotency_key() {
         .ensure_customer(TenantId::try_from(1_000_001_i64).unwrap(), command_id)
         .await;
     assert!(
-        matches!(outcome, Err(sanvi_billing::domain::BillingError::StripeService { .. })),
+        matches!(
+            outcome,
+            Err(sanvi_billing::domain::BillingError::StripeService { .. })
+        ),
         "exhausted 5xx retries surface a service error, got {outcome:?}"
     );
 
@@ -53,10 +56,16 @@ async fn stripe_erroring_retries_under_the_same_idempotency_key() {
     );
     let keys: Vec<_> = recorded
         .iter()
-        .map(|request| request.header("Idempotency-Key").unwrap_or("<missing>").to_string())
+        .map(|request| {
+            request
+                .header("Idempotency-Key")
+                .unwrap_or("<missing>")
+                .to_string()
+        })
         .collect();
     assert!(
-        keys.iter().all(|key| key == &format!("sanvi_customer_{command_id}")),
+        keys.iter()
+            .all(|key| key == &format!("sanvi_customer_{command_id}")),
         "every retry must carry the same idempotency key, got {keys:?}"
     );
 }
@@ -75,7 +84,10 @@ async fn stripe_slow_times_out_and_reports_a_connection_failure() {
         .ensure_customer(TenantId::try_from(1_000_001_i64).unwrap(), Uuid::new_v4())
         .await;
     assert!(
-        matches!(outcome, Err(sanvi_billing::domain::BillingError::StripeConnection { .. })),
+        matches!(
+            outcome,
+            Err(sanvi_billing::domain::BillingError::StripeConnection { .. })
+        ),
         "a deadline-exceeded call is a connection failure, got {outcome:?}"
     );
     assert!(
@@ -96,7 +108,10 @@ async fn stripe_down_exhausts_retries_into_a_connection_error() {
         .ensure_customer(TenantId::try_from(1_000_001_i64).unwrap(), Uuid::new_v4())
         .await;
     assert!(
-        matches!(outcome, Err(sanvi_billing::domain::BillingError::StripeConnection { .. })),
+        matches!(
+            outcome,
+            Err(sanvi_billing::domain::BillingError::StripeConnection { .. })
+        ),
         "a dead Stripe is a connection failure, got {outcome:?}"
     );
     assert!(

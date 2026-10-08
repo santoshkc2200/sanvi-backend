@@ -8,8 +8,10 @@
 
 pub mod breaker;
 pub mod degraded;
+pub mod pressure;
 pub mod retry_budget;
 
-pub use breaker::{BreakerConfig, BreakerOpen, CircuitBreaker, BreakerState};
+pub use breaker::{BreakerConfig, BreakerOpen, BreakerState, CircuitBreaker};
 pub use degraded::{DegradationReason, DegradationRegistry};
+pub use pressure::{MAX_SAMPLE_AGE, PoolPressure};
 pub use retry_budget::{JobRetryBudget, JobRetryPolicy, RetryOutcome};

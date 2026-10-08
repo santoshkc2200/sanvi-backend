@@ -69,6 +69,7 @@ fn app_with_locale() -> actix_web::App<
             sanvi_http::config::SsrCacheConfig::default(),
         ),
         sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+        None,
     )
 }
 

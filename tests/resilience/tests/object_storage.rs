@@ -27,7 +27,8 @@ fn config(base_url: &str) -> MediaConfig {
 #[tokio::test]
 async fn object_storage_down_blocks_uploads_with_an_honest_error() {
     let (base, _port) = common::closed_endpoint();
-    let adapter = HitoxMediaAdapter::with_timeout(config(&base), std::time::Duration::from_millis(300));
+    let adapter =
+        HitoxMediaAdapter::with_timeout(config(&base), std::time::Duration::from_millis(300));
     let tenant = sanvi_kernel::TenantId::try_from(1_000_001_i64).unwrap();
 
     let input = CreateAssetInput {
@@ -80,7 +81,10 @@ async fn object_storage_erroring_takes_the_degraded_path_and_breaker_opens() {
             .create_asset(tenant, &format!("matrix-key-{attempt}"), input)
             .await
             .expect_err("a 500ing storage cannot mint assets");
-        assert!(matches!(err, sanvi_media::domain::MediaError::Unavailable { .. }));
+        assert!(matches!(
+            err,
+            sanvi_media::domain::MediaError::Unavailable { .. }
+        ));
     }
     // Breaker open: the third call fails without a network round trip.
     let started = std::time::Instant::now();
@@ -92,9 +96,7 @@ async fn object_storage_erroring_takes_the_degraded_path_and_breaker_opens() {
         visibility: Default::default(),
         owner_id: None,
     };
-    let outcome = adapter
-        .create_asset(tenant, "matrix-key-3", input)
-        .await;
+    let outcome = adapter.create_asset(tenant, "matrix-key-3", input).await;
     assert!(outcome.is_err());
     assert!(
         started.elapsed() < std::time::Duration::from_millis(50),
@@ -134,7 +136,8 @@ async fn object_storage_down_serves_placeholders_and_blocks_uploads() {
             _tenant_id: sanvi_kernel::TenantId,
             _asset_id: &str,
             _part_numbers: Vec<i64>,
-        ) -> Result<Vec<sanvi_media::domain::UploadPartView>, sanvi_media::domain::MediaError> {
+        ) -> Result<Vec<sanvi_media::domain::UploadPartView>, sanvi_media::domain::MediaError>
+        {
             Err(unavailable())
         }
 
@@ -167,7 +170,8 @@ async fn object_storage_down_serves_placeholders_and_blocks_uploads() {
             &self,
             _tenant_id: sanvi_kernel::TenantId,
             _asset_id: &str,
-        ) -> Result<sanvi_media::domain::AssetDeliveryView, sanvi_media::domain::MediaError> {
+        ) -> Result<sanvi_media::domain::AssetDeliveryView, sanvi_media::domain::MediaError>
+        {
             Err(unavailable())
         }
     }

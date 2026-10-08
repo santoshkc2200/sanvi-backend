@@ -67,11 +67,16 @@ const PUBLIC_CROSS_ORIGIN_PATHS: &[&str] = &["/api/v1/public/track"];
 /// handlers see. `locale` is `None` until the localization context is wired
 /// (phase 06+); it runs after impersonation so negotiation sees the effective
 /// subject and tenant, and before the error handlers so problem bodies are
-/// localized.
+/// localized. `load_shed` is the process-global shedding state built once by
+/// the composition root (TASK-023); `None` (most tests) is a pass-through.
+/// The shedder sits inside tenant resolution so per-tenant fairness can read
+/// the resolved tenant, and outside the rate limiter so a shed request
+/// costs no Redis round trip.
 ///
 /// The tracing span wraps every protective middleware, so one span covers a
 /// request from accept to first byte; `tracing-actix-web` maps response
 /// bodies to its streaming type as the outermost body transform.
+#[allow(clippy::too_many_arguments)]
 pub fn stack<T>(
     app: actix_web::App<T>,
     config: ServerConfig,
@@ -82,6 +87,7 @@ pub fn stack<T>(
     locale: Option<std::sync::Arc<LocaleMiddleware>>,
     ssr_cache: crate::ssr_cache::SsrCacheLayer,
     degraded: crate::degraded::DegradedHeaderLayer,
+    load_shed: Option<std::sync::Arc<crate::load_shed::LoadShedState>>,
 ) -> actix_web::App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -164,6 +170,7 @@ where
         .wrap(ImpersonationLayer::new(impersonation))
         .wrap(AuthnLayer::new(authn))
         .wrap(TenantResolutionLayer::new(tenant))
+        .wrap(crate::load_shed::LoadShedding::new(load_shed))
         .wrap(RateLimit {
             limiter,
             config: config.rate_limit.clone(),

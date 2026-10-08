@@ -47,6 +47,7 @@ fn build_app(
             sanvi_http::config::SsrCacheConfig::default(),
         ),
         sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+        None,
     )
 }
 

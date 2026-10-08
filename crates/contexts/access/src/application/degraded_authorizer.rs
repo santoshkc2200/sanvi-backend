@@ -41,7 +41,12 @@ impl DegradedAuthorizer {
         cache: Arc<dyn DecisionCache>,
         degradation: Arc<DegradationRegistry>,
     ) -> Self {
-        Self::with_grace(inner, cache, degradation, Duration::from_secs(KETO_DOWNGRADE_GRACE_SECS))
+        Self::with_grace(
+            inner,
+            cache,
+            degradation,
+            Duration::from_secs(KETO_DOWNGRADE_GRACE_SECS),
+        )
     }
 
     /// Test constructor: a shortened grace window so the post-grace deny
@@ -87,7 +92,8 @@ impl DegradedAuthorizer {
         let mut outage = self.outage.lock().await;
         let since = *outage.get_or_insert(Instant::now());
         drop(outage);
-        self.degradation.set(sanvi_resilience::DegradationReason::Keto, true);
+        self.degradation
+            .set(sanvi_resilience::DegradationReason::Keto, true);
 
         // Writes deny while degraded, whatever the window says.
         if write {
@@ -110,7 +116,8 @@ impl DegradedAuthorizer {
             tracing::info!("keto recovered; clearing degradation");
         }
         drop(outage);
-        self.degradation.set(sanvi_resilience::DegradationReason::Keto, false);
+        self.degradation
+            .set(sanvi_resilience::DegradationReason::Keto, false);
     }
 }
 
@@ -134,7 +141,8 @@ impl Authorizer for DegradedAuthorizer {
     ) -> Result<Decision, AccessError> {
         // The trait-level default is a read: the HTTP gate threads the
         // write flag through [`Self::check_with_mode`] directly.
-        self.check_with_mode(user_id, permission, resource, false).await
+        self.check_with_mode(user_id, permission, resource, false)
+            .await
     }
 }
 
@@ -175,7 +183,9 @@ mod tests {
         let degradation = Arc::new(DegradationRegistry::default());
         let authorizer = DegradedAuthorizer::with_grace(
             Arc::new(FailingAuthorizer { err }),
-            Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(1024)),
+            Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(
+                1024,
+            )),
             degradation.clone(),
             Duration::from_millis(80),
         );
@@ -215,8 +225,7 @@ mod tests {
     #[tokio::test]
     async fn after_the_grace_window_cached_reads_deny_too() {
         let key = decision_cache_key(subject(), permission().as_str(), &resource());
-        let (authorizer, _) =
-            degraded(AccessError::BackendUnreachable("down".to_string())).await;
+        let (authorizer, _) = degraded(AccessError::BackendUnreachable("down".to_string())).await;
         authorizer.cache.put(&key, Decision::Allowed, 30).await;
         tokio::time::sleep(Duration::from_millis(120)).await;
         let outcome = authorizer
@@ -233,7 +242,9 @@ mod tests {
             Arc::new(FailingAuthorizer {
                 err: AccessError::Storage("pool exhausted".to_string()),
             }),
-            Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(1024)),
+            Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(
+                1024,
+            )),
             degradation.clone(),
             Duration::from_secs(30),
         );
@@ -262,7 +273,9 @@ mod tests {
             let degradation = Arc::new(DegradationRegistry::default());
             let authorizer = DegradedAuthorizer::with_grace(
                 Arc::new(Healthy),
-                Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(1024)),
+                Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(
+                    1024,
+                )),
                 degradation.clone(),
                 Duration::from_secs(30),
             );

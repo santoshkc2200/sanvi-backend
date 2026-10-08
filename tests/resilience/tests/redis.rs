@@ -160,13 +160,15 @@ async fn redis_down_pauses_streams_without_losing_the_outbox() {
     assert_eq!(published, 0, "nothing reached the stream");
 
     // The row survived: unpublished, attempt counted, not dead-lettered.
-    let row: (Option<chrono::DateTime<chrono::Utc>>, i32) = sqlx::query_as(
-        "SELECT published_at, attempts FROM platform.outbox WHERE id = 987654321",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("the outbox row must survive a failed publish");
-    assert!(row.0.is_none(), "an unpublished row keeps a NULL published_at");
+    let row: (Option<chrono::DateTime<chrono::Utc>>, i32) =
+        sqlx::query_as("SELECT published_at, attempts FROM platform.outbox WHERE id = 987654321")
+            .fetch_one(&pool)
+            .await
+            .expect("the outbox row must survive a failed publish");
+    assert!(
+        row.0.is_none(),
+        "an unpublished row keeps a NULL published_at"
+    );
     assert_eq!(row.1, 1, "exactly one failed attempt is recorded");
     // The app role cannot read the DLQ table (INSERT only, by design) —
     // the operator-level check runs on the admin pool.

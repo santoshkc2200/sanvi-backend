@@ -19,9 +19,13 @@ use std::time::Duration;
 #[tokio::test]
 async fn kratos_down_fails_authn_closed_with_503() {
     let (base, _port) = common::closed_endpoint();
-    let client =
-        sanvi_identity::adapters::kratos::HttpKratosClient::new_with_timeout(base, None, "ory_kratos_session".to_string(), Duration::from_millis(300))
-            .expect("client builds");
+    let client = sanvi_identity::adapters::kratos::HttpKratosClient::new_with_timeout(
+        base,
+        None,
+        "ory_kratos_session".to_string(),
+        Duration::from_millis(300),
+    )
+    .expect("client builds");
     let err = client
         .whoami("some-token", SessionChannel::Bearer)
         .await
@@ -35,9 +39,13 @@ async fn kratos_down_fails_authn_closed_with_503() {
 #[tokio::test]
 async fn kratos_erroring_fails_authn_closed_with_503() {
     let server = FaultServer::start(FaultMode::Status(500));
-    let client =
-        sanvi_identity::adapters::kratos::HttpKratosClient::new_with_timeout(server.base_url().to_string(), None, "ory_kratos_session".to_string(), Duration::from_millis(300))
-            .expect("client builds");
+    let client = sanvi_identity::adapters::kratos::HttpKratosClient::new_with_timeout(
+        server.base_url().to_string(),
+        None,
+        "ory_kratos_session".to_string(),
+        Duration::from_millis(300),
+    )
+    .expect("client builds");
     let err = client
         .whoami("some-token", SessionChannel::Bearer)
         .await
@@ -54,9 +62,13 @@ async fn kratos_slow_times_out_and_fails_authn_closed_with_503() {
         delay_ms: 5_000,
         status: 200,
     });
-    let client =
-        sanvi_identity::adapters::kratos::HttpKratosClient::new_with_timeout(server.base_url().to_string(), None, "ory_kratos_session".to_string(), Duration::from_millis(300))
-            .expect("client builds");
+    let client = sanvi_identity::adapters::kratos::HttpKratosClient::new_with_timeout(
+        server.base_url().to_string(),
+        None,
+        "ory_kratos_session".to_string(),
+        Duration::from_millis(300),
+    )
+    .expect("client builds");
     let started = std::time::Instant::now();
     let err = client
         .whoami("some-token", SessionChannel::Bearer)
@@ -86,7 +98,10 @@ fn assert_kratos_backend_failure(err: &sanvi_identity::domain::IdentityError) {
         || rendered.contains("rejected")
         || rendered.contains("operation was timed out")
         || rendered.contains("connection");
-    assert!(is_backend_failure, "expected a Kratos backend-failure error, got: {rendered}");
+    assert!(
+        is_backend_failure,
+        "expected a Kratos backend-failure error, got: {rendered}"
+    );
 }
 
 /// The authn middleware's documented consequence: a verifier error becomes
@@ -119,11 +134,12 @@ async fn assert_authn_failure_is_503() {
     // The canonical stack, assembled with only the authn middleware wired:
     // exactly the shape an identity outage leaves every route in.
     let app = actix_web::test::init_service(sanvi_http::middleware::stack(
-        actix_web::App::new().service(actix_web::web::resource("/secret").route(
-            actix_web::web::get().to(|| async {
-                actix_web::HttpResponse::Ok().body("never reaches here")
-            }),
-        )),
+        actix_web::App::new().service(
+            actix_web::web::resource("/secret").route(
+                actix_web::web::get()
+                    .to(|| async { actix_web::HttpResponse::Ok().body("never reaches here") }),
+            ),
+        ),
         sanvi_http::ServerConfig::default(),
         None,
         None,
@@ -134,6 +150,7 @@ async fn assert_authn_failure_is_503() {
             sanvi_http::config::SsrCacheConfig::default(),
         ),
         sanvi_http::DegradedHeaderLayer::disabled(),
+        None,
     ))
     .await;
     let request = actix_web::test::TestRequest::get()

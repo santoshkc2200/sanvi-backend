@@ -131,7 +131,11 @@ mod tests {
         let budget = budget();
         assert_eq!(budget.admit(), RetryOutcome::Run);
         budget.record_failure();
-        assert_eq!(budget.admit(), RetryOutcome::Run, "under budget: still runs");
+        assert_eq!(
+            budget.admit(),
+            RetryOutcome::Run,
+            "under budget: still runs"
+        );
         budget.record_failure();
         assert_eq!(budget.admit(), RetryOutcome::Run);
         budget.record_failure();

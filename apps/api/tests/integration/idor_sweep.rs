@@ -1278,9 +1278,10 @@ async fn build_sweep_app(
         domains,
         payments,
         advertising,
-        None, // redis
-        None, // ssr_cache
+        None,                                                                  // redis
+        None,                                                                  // ssr_cache
         std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()), // degradation
+        None, // load_shed: shedding tests build their own stack
     )
 }
 

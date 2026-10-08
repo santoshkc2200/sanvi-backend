@@ -3771,6 +3771,7 @@ dependencies = [
  "anyhow",
  "prometheus",
  "sanvi-kernel",
+ "sanvi-resilience",
  "sanvi-testsupport",
  "serde",
  "serde_json",

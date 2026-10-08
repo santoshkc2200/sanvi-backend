@@ -174,12 +174,13 @@ pub(crate) fn test_app_with(
         None, // privacy
         None, // localization
         Some(theming),
-        None, // domains
-        None, // payments
-        None, // advertising
-        None, // redis
-        None, // ssr_cache
+        None,                                                                  // domains
+        None,                                                                  // payments
+        None,                                                                  // advertising
+        None,                                                                  // redis
+        None,                                                                  // ssr_cache
         std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()), // degradation
+        None, // load_shed: shedding tests build their own stack
     )
 }
 

@@ -28,12 +28,11 @@ use sanvi_access::{
     },
     application::entitlements::EntitlementPolicy,
     application::{
-        CachedAuthorizer, CheckPermission, CreateCustomRole, DefineFeature, DeleteCustomRole,
-        DegradedAuthorizer,
-        DeprecateFeature, EntitlementFeatureGate, EntitlementResolver, ExpireEntitlements,
-        GrantEntitlement, GrantEntitlementOutput, ListFeatures, ListPermissions, ListRoles,
-        ListTenantEntitlements, ListTenantOverrides, RebuildAccessTuples, RevokeEntitlement,
-        SeedFeatures, UpdateCustomRole, UpdateFeature,
+        CachedAuthorizer, CheckPermission, CreateCustomRole, DefineFeature, DegradedAuthorizer,
+        DeleteCustomRole, DeprecateFeature, EntitlementFeatureGate, EntitlementResolver,
+        ExpireEntitlements, GrantEntitlement, GrantEntitlementOutput, ListFeatures,
+        ListPermissions, ListRoles, ListTenantEntitlements, ListTenantOverrides,
+        RebuildAccessTuples, RevokeEntitlement, SeedFeatures, UpdateCustomRole, UpdateFeature,
     },
     domain::{
         ApprovalGate, Authorizer, DecisionCache, EntitlementCache, EntitlementRepository,
@@ -3409,11 +3408,12 @@ pub fn build_media_state(
     config: &sanvi_media::MediaConfig,
     degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
 ) -> sanvi_media::adapters::http::MediaState {
-    let gateway: std::sync::Arc<dyn sanvi_media::domain::MediaGatewayPort> =
-        std::sync::Arc::new(sanvi_media::adapters::hitox::HitoxMediaAdapter::new_with_degradation(
+    let gateway: std::sync::Arc<dyn sanvi_media::domain::MediaGatewayPort> = std::sync::Arc::new(
+        sanvi_media::adapters::hitox::HitoxMediaAdapter::new_with_degradation(
             config.clone(),
             degradation,
-        ));
+        ),
+    );
     sanvi_media::adapters::http::MediaState {
         create_asset_upload: std::sync::Arc::new(sanvi_media::application::CreateAssetUpload::new(
             gateway.clone(),
@@ -3599,6 +3599,10 @@ pub fn build_app(
     redis: Option<redis::aio::ConnectionManager>,
     ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
     degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
+    // Process-global shedding counters, built once by the composition
+    // root (TASK-023, FR-1114). `None` admits everything; the flag inside
+    // `server.load_shedding` still decides.
+    load_shed: Option<std::sync::Arc<sanvi_http::LoadShedState>>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -3898,6 +3902,7 @@ pub fn build_app(
         locale_middleware,
         ssr_cache,
         degraded,
+        load_shed,
     )
 }
 

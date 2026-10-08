@@ -9,11 +9,11 @@
 mod common;
 
 use common::{FaultMode, FaultServer};
-use sanvi_access::adapters::keto::HttpKetoClient;
 use sanvi_access::adapters::decision_cache::InMemoryDecisionCache;
+use sanvi_access::adapters::keto::HttpKetoClient;
 use sanvi_access::application::degraded_authorizer::DegradedAuthorizer;
-use sanvi_access::domain::{Authorizer, Decision, DecisionCache, PermissionStore, ResourceRef};
 use sanvi_access::domain::{AccessError, Permission};
+use sanvi_access::domain::{Authorizer, Decision, DecisionCache, PermissionStore, ResourceRef};
 use sanvi_kernel::UserId;
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,7 +64,12 @@ async fn primed_cache(key: &str, decision: Decision) -> Arc<dyn DecisionCache> {
 async fn keto_down_denies_writes_and_serves_cached_reads_for_the_grace_window() {
     let degradation = Arc::new(sanvi_resilience::DegradationRegistry::default());
     let cache = primed_cache(
-        &format!("{}:{}:tenant:{}", subject(), read_permission().as_str(), 1_000_001),
+        &format!(
+            "{}:{}:tenant:{}",
+            subject(),
+            read_permission().as_str(),
+            1_000_001
+        ),
         Decision::Allowed,
     )
     .await;
@@ -125,7 +130,10 @@ async fn keto_erroring_takes_the_same_degraded_path() {
     )
     .expect("client builds");
     let err = client
-        .check_membership(UserId::try_from(1_i64).unwrap(), &["1000001:tenant_admin".to_string()])
+        .check_membership(
+            UserId::try_from(1_i64).unwrap(),
+            &["1000001:tenant_admin".to_string()],
+        )
         .await
         .expect_err("a 500ing Keto cannot answer membership checks");
     assert!(
@@ -159,8 +167,14 @@ async fn keto_transport_down_reports_backend_unreachable() {
     let client = HttpKetoClient::with_timeout(base.clone(), base, Duration::from_millis(300))
         .expect("client builds");
     let err = client
-        .check_membership(UserId::try_from(1_i64).unwrap(), &["1000001:tenant_admin".to_string()])
+        .check_membership(
+            UserId::try_from(1_i64).unwrap(),
+            &["1000001:tenant_admin".to_string()],
+        )
         .await
         .expect_err("a dead Keto cannot answer");
-    assert!(matches!(err, AccessError::BackendUnreachable(_)), "got: {err}");
+    assert!(
+        matches!(err, AccessError::BackendUnreachable(_)),
+        "got: {err}"
+    );
 }

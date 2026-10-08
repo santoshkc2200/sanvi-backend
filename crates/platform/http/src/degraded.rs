@@ -83,15 +83,13 @@ where
         let fut = self.service.call(req);
         Box::pin(async move {
             let mut res = fut.await?;
-            if let Some(registry) = registry.as_ref() {
-                if let Some(value) = registry.header_value() {
-                    if let Ok(header_value) = HeaderValue::from_str(&value) {
-                        res.response_mut().headers_mut().insert(
-                            HeaderName::from_static(DEGRADED_HEADER),
-                            header_value,
-                        );
-                    }
-                }
+            if let Some(registry) = registry.as_ref()
+                && let Some(value) = registry.header_value()
+                && let Ok(header_value) = HeaderValue::from_str(&value)
+            {
+                res.response_mut()
+                    .headers_mut()
+                    .insert(HeaderName::from_static(DEGRADED_HEADER), header_value);
             }
             Ok(res)
         })
@@ -103,17 +101,10 @@ mod tests {
     use super::*;
     use actix_web::{App, HttpResponse, web};
 
-    async fn served_status_and_header(
-        layer: DegradedHeaderLayer,
-    ) -> (u16, Option<String>) {
-        let app = actix_web::test::init_service(
-            App::new()
-                .wrap(layer)
-                .service(
-                    web::resource("/")
-                        .route(web::get().to(|| async { HttpResponse::Ok().body("ok") })),
-                ),
-        )
+    async fn served_status_and_header(layer: DegradedHeaderLayer) -> (u16, Option<String>) {
+        let app = actix_web::test::init_service(App::new().wrap(layer).service(
+            web::resource("/").route(web::get().to(|| async { HttpResponse::Ok().body("ok") })),
+        ))
         .await;
         let request = actix_web::test::TestRequest::default().to_request();
         let response = actix_web::test::call_service(&app, request).await;
@@ -134,8 +125,7 @@ mod tests {
         assert_eq!(header, None, "healthy platform stamps nothing");
 
         registry.set(sanvi_resilience::DegradationReason::Redis, true);
-        let (status, header) =
-            served_status_and_header(DegradedHeaderLayer::new(registry)).await;
+        let (status, header) = served_status_and_header(DegradedHeaderLayer::new(registry)).await;
         assert_eq!(status, 200);
         assert_eq!(header.as_deref(), Some("redis"));
     }

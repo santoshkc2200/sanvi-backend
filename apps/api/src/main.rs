@@ -103,19 +103,29 @@ async fn main() -> ExitCode {
 
     // TASK-021 step 0: pool gauges plus the 1 Hz acquire probe, so pool
     // saturation is measured (step 5 sizes the pools from these numbers).
-    let pool_metrics = std::sync::Arc::new(sanvi_persistence::PoolMetrics::new(
-        metrics.prometheus_registry(),
-    ));
+    // TASK-023 step 6: the probe also feeds the shedder's live pressure
+    // signal, so pool saturation sheds load instead of queueing it.
+    let pool_pressure = std::sync::Arc::new(sanvi_resilience::PoolPressure::new());
+    let pool_metrics = std::sync::Arc::new(
+        sanvi_persistence::PoolMetrics::new(metrics.prometheus_registry())
+            .with_pressure(pool_pressure.clone()),
+    );
     pool_metrics.spawn_sampler(pool.clone());
+
+    // TASK-023 step 6: process-global shedding counters, built once so
+    // every worker sheds against the same ceiling and tenant shares.
+    let load_shed = std::sync::Arc::new(sanvi_http::LoadShedState::new(
+        config.server.load_shedding.clone(),
+        Some(pool_pressure),
+    ));
 
     // TASK-023: the degradation registry is process-wide and always built
     // (adapters flip reasons on it whether or not the header flag is on);
     // the `platform.degraded_mode` flag only decides whether the header
     // middleware stamps responses.
-    let degradation =
-        std::sync::Arc::new(sanvi_resilience::DegradationRegistry::new(Some(
-            metrics.prometheus_registry(),
-        )));
+    let degradation = std::sync::Arc::new(sanvi_resilience::DegradationRegistry::new(Some(
+        metrics.prometheus_registry(),
+    )));
 
     let redis = match connect_redis(&config.redis).await {
         Ok(manager) => Some(manager),
@@ -538,6 +548,7 @@ async fn main() -> ExitCode {
             redis.clone(),
             ssr_cache.clone(),
             degradation.clone(),
+            Some(load_shed.clone()),
         )
     }) {
         Ok(server) => server,

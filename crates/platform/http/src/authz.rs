@@ -157,7 +157,10 @@ impl actix_web::FromRequest for RequiredPermission {
                 ResourceSpec::Platform => ResourceRef::Platform,
             };
 
-            match gate.check(&subject, requirement.key, &resource, write).await? {
+            match gate
+                .check(&subject, requirement.key, &resource, write)
+                .await?
+            {
                 Decision::Allowed => Ok(requirement),
                 Decision::Denied => Err(ApiError::Forbidden {
                     detail: format!("permission required: {}", requirement.key),

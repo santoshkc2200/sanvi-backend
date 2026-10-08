@@ -108,6 +108,7 @@ fn build_app(
             sanvi_http::config::SsrCacheConfig::default(),
         ),
         sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+        None,
     )
 }
 
@@ -219,6 +220,7 @@ async fn suspended_tenant_allowlist_still_serves() {
             sanvi_http::config::SsrCacheConfig::default(),
         ),
         sanvi_http::degraded::DegradedHeaderLayer::disabled(),
+        None,
     );
     let app = test::init_service(app).await;
 

@@ -23,6 +23,7 @@ pub mod error;
 pub mod etag;
 pub mod features;
 pub mod impersonation;
+pub mod load_shed;
 pub mod locale;
 pub mod metrics;
 pub mod middleware;
@@ -56,6 +57,7 @@ pub use impersonation::{
     IMPERSONATION_BANNER_HEADER, IMPERSONATION_HEADER, ImpersonatedSubject, ImpersonationContext,
     ImpersonationMiddleware, ImpersonationMode, ImpersonationVerifier, impersonation_actor,
 };
+pub use load_shed::{AdmitOutcome, InFlightGuard, LoadShedState, LoadShedding, ShedReason};
 pub use locale::{
     CurrentLocale, LocaleContext, LocaleMiddleware, LocaleResolutionInput, LocaleResolver,
     LocaleSource,

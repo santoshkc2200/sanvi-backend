@@ -244,31 +244,26 @@ fn serve_resp(mut stream: TcpStream, mode: Arc<Mutex<RespMode>>) {
                 if pending.len() > 1024 * 1024 {
                     break;
                 }
-                loop {
-                    match command_len(&pending) {
-                        Some(len) => {
-                            pending.drain(..len);
-                            match *mode.lock().unwrap() {
-                                RespMode::Ok => {
-                                    if stream.write_all(b"+OK\r\n").is_err() {
-                                        return;
-                                    }
-                                }
-                                RespMode::Error => {
-                                    if stream
-                                        .write_all(b"-ERR simulated redis failure\r\n")
-                                        .is_err()
-                                    {
-                                        return;
-                                    }
-                                }
-                                RespMode::Blackhole => {
-                                    // Swallow the command; the client's
-                                    // response timeout is the verdict.
-                                }
+                while let Some(len) = command_len(&pending) {
+                    pending.drain(..len);
+                    match *mode.lock().unwrap() {
+                        RespMode::Ok => {
+                            if stream.write_all(b"+OK\r\n").is_err() {
+                                return;
                             }
                         }
-                        None => break,
+                        RespMode::Error => {
+                            if stream
+                                .write_all(b"-ERR simulated redis failure\r\n")
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        RespMode::Blackhole => {
+                            // Swallow the command; the client's
+                            // response timeout is the verdict.
+                        }
                     }
                 }
             }

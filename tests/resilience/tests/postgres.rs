@@ -26,8 +26,7 @@ async fn postgres_slow_maps_statement_timeout_to_request_timeout() {
     let err = sqlx::query("SELECT pg_sleep(1)")
         .execute(&mut *conn)
         .await
-        .err()
-        .expect("pg_sleep(1) exceeds the 200ms statement timeout");
+        .expect_err("pg_sleep(1) exceeds the 200ms statement timeout");
     let rendered = err.to_string();
     assert!(
         rendered.contains("canceling statement due to statement timeout"),
@@ -48,8 +47,10 @@ async fn postgres_transient_sqlstates_classify_as_retryable() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
     let mut victim = pool.acquire().await.expect("victim connection");
-    let victim_pid: (i32,) =
-        sqlx::query_as("SELECT pg_backend_pid()").fetch_one(&mut *victim).await.unwrap();
+    let victim_pid: (i32,) = sqlx::query_as("SELECT pg_backend_pid()")
+        .fetch_one(&mut *victim)
+        .await
+        .unwrap();
 
     // A second connection kills the first one's backend: the victim's next
     // statement fails with 57P01 (terminating connection due to
@@ -67,8 +68,7 @@ async fn postgres_transient_sqlstates_classify_as_retryable() {
     let err = sqlx::query("SELECT pg_sleep(2)")
         .execute(&mut *victim)
         .await
-        .err()
-        .expect("the terminated backend's query must fail");
+        .expect_err("the terminated backend's query must fail");
     killer.await.unwrap();
     let rendered = err.to_string();
     assert!(
@@ -113,8 +113,7 @@ async fn postgres_down_fails_opaque_while_pool_bounds_the_wait() {
     let err = sqlx::query("SELECT 1")
         .fetch_one(&pool)
         .await
-        .err()
-        .expect("a dead Postgres must fail the query");
+        .expect_err("a dead Postgres must fail the query");
     let elapsed = started.elapsed();
     assert!(
         elapsed < std::time::Duration::from_secs(5),

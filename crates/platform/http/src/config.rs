@@ -354,9 +354,7 @@ impl LoadSheddingConfig {
             anyhow::bail!("server.load_shedding.per_tenant_in_flight must be >= 1");
         }
         if self.fairness_knee > self.in_flight_ceiling {
-            anyhow::bail!(
-                "server.load_shedding.fairness_knee must be <= in_flight_ceiling"
-            );
+            anyhow::bail!("server.load_shedding.fairness_knee must be <= in_flight_ceiling");
         }
         if self.retry_after_secs == 0 {
             anyhow::bail!("server.load_shedding.retry_after_secs must be >= 1");
@@ -372,16 +370,10 @@ impl LoadSheddingConfig {
 /// response served while a dependency runs degraded carries
 /// `X-Sanvi-Degraded` (see [`crate::degraded`]). Off is the flag-off
 /// behaviour: no header, responses look ordinary even when degraded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct DegradedModeConfig {
     pub enabled: bool,
-}
-
-impl Default for DegradedModeConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 impl DegradedModeConfig {
