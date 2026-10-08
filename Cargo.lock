@@ -3609,6 +3609,7 @@ dependencies = [
  "futures-util",
  "prometheus",
  "proptest",
+ "sanvi-cache",
  "sanvi-http",
  "sanvi-kernel",
  "sanvi-messaging",

@@ -17,11 +17,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use prometheus::{IntCounter, Registry};
 use redis::AsyncCommands;
 use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
 
-use crate::metrics::CacheMetrics;
 use crate::single_flight::SingleFlight;
 
 /// The device partition of the key (FR-1111). Introduced because the
@@ -168,6 +168,68 @@ fn percent_encode_route(route: &str) -> String {
     route.replace('%', "%25")
 }
 
+/// The SSR cache's own counters (TASK-022 11.3c/11.3g): a dedicated metric
+/// family, because the shared `CacheMetrics` family (`cache_hits_total`) is
+/// owned per process by whichever adapter registers first — the
+/// entitlements cache — and a second registration of the same names is
+/// rejected with the error swallowed, silently orphaning its increments.
+/// The hit ratio is
+/// `ssr_cache_hits_total / (ssr_cache_hits_total + ssr_cache_misses_total)`.
+#[derive(Clone)]
+pub struct SsrCacheMetrics {
+    hits: IntCounter,
+    misses: IntCounter,
+    joins: IntCounter,
+}
+
+impl SsrCacheMetrics {
+    pub fn new(registry: &Registry) -> Self {
+        let build = |name: &str, help: &str| {
+            let counter = IntCounter::new(name, help).expect("counter construction is infallible");
+            let _ = registry.register(Box::new(counter.clone()));
+            counter
+        };
+        Self {
+            hits: build(
+                "ssr_cache_hits_total",
+                "Storefront reads served from the SSR cache",
+            ),
+            misses: build(
+                "ssr_cache_misses_total",
+                "Storefront reads that rendered (SSR cache misses)",
+            ),
+            joins: build(
+                "ssr_cache_joins_total",
+                "Concurrent misses that joined an in-flight render",
+            ),
+        }
+    }
+
+    /// Counting without a registry (tests, single-process deployments).
+    pub fn noop() -> Self {
+        let build = |name: &str, help: &str| {
+            IntCounter::new(name, help).expect("counter construction is infallible")
+        };
+        Self {
+            hits: build("ssr_cache_hits_total", "hits"),
+            misses: build("ssr_cache_misses_total", "misses"),
+            joins: build("ssr_cache_joins_total", "joins"),
+        }
+    }
+
+    pub fn hit(&self) {
+        self.hits.inc();
+    }
+
+    pub fn miss(&self) {
+        self.misses.inc();
+    }
+
+    pub fn join(&self) {
+        self.joins.inc();
+    }
+}
+
 /// A cached SSR response: the status, the headers worth replaying (every
 /// header present at the cache layer, minus `content-length`, which the
 /// response builder re-derives), and the identity-encoded body bytes.
@@ -177,9 +239,6 @@ pub struct SsrEntry {
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
-
-/// The context label on the [`CacheMetrics`] hit/miss counters.
-pub const SSR_METRICS_CONTEXT: &str = "ssr";
 
 /// Cap for the process-local fallback map (Redis-backed deployments never
 /// touch it).
@@ -209,14 +268,14 @@ pub struct SsrCache {
     redis: Option<redis::aio::ConnectionManager>,
     local: Arc<RwLock<LocalInner>>,
     single_flight: SingleFlight,
-    metrics: Option<CacheMetrics>,
+    metrics: Option<SsrCacheMetrics>,
     max_local_entries: usize,
 }
 
 impl SsrCache {
     pub fn new(
         redis: Option<redis::aio::ConnectionManager>,
-        metrics: Option<CacheMetrics>,
+        metrics: Option<SsrCacheMetrics>,
     ) -> Self {
         Self {
             redis,
@@ -236,14 +295,14 @@ impl SsrCache {
     /// Count a render: a read that fell through to a load.
     pub fn record_miss(&self) {
         if let Some(metrics) = &self.metrics {
-            metrics.miss(SSR_METRICS_CONTEXT);
+            metrics.miss();
         }
     }
 
     /// Count a concurrent miss that joined an in-flight render.
     pub fn record_join(&self) {
         if let Some(metrics) = &self.metrics {
-            metrics.join(SSR_METRICS_CONTEXT);
+            metrics.join();
         }
     }
 
@@ -251,13 +310,14 @@ impl SsrCache {
     /// which only logs.
     pub async fn get(&self, key: &SsrCacheKey) -> Option<SsrEntry> {
         let canonical = key.to_cache_key();
+
         if let Some(manager) = &self.redis {
             let mut conn = manager.clone();
             match conn.get::<_, Option<String>>(&canonical).await {
                 Ok(Some(json)) => match serde_json::from_str::<SsrEntry>(&json) {
                     Ok(entry) => {
                         if let Some(metrics) = &self.metrics {
-                            metrics.hit(SSR_METRICS_CONTEXT);
+                            metrics.hit();
                         }
                         return Some(entry);
                     }
@@ -302,7 +362,7 @@ impl SsrCache {
         if hit.is_some()
             && let Some(metrics) = &self.metrics
         {
-            metrics.hit(SSR_METRICS_CONTEXT);
+            metrics.hit();
         }
         hit
     }

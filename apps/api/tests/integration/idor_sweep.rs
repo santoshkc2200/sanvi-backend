@@ -1278,6 +1278,7 @@ async fn build_sweep_app(
         payments,
         advertising,
         None, // redis
+        None, // ssr_cache
     )
 }
 

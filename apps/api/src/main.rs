@@ -498,6 +498,13 @@ async fn main() -> ExitCode {
         None
     };
 
+    // TASK-022 (FR-1111): one SSR cache per process — see build_app's note.
+    // Registered counters land here, once, before the workers fork.
+    let ssr_cache = config.server.ssr_cache.enabled.then(|| {
+        let ssr_metrics = sanvi_cache::SsrCacheMetrics::new(metrics.prometheus_registry());
+        std::sync::Arc::new(sanvi_cache::SsrCache::new(redis.clone(), Some(ssr_metrics)))
+    });
+
     let bind_config = config.clone();
     let factory_config = config.clone();
     let server = match bind(&bind_config.server, move || {
@@ -518,6 +525,7 @@ async fn main() -> ExitCode {
             payments.clone(),
             advertising.clone(),
             redis.clone(),
+            ssr_cache.clone(),
         )
     }) {
         Ok(server) => server,

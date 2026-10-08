@@ -177,6 +177,7 @@ pub(crate) fn test_app_with(
         None, // payments
         None, // advertising
         None, // redis
+        None, // ssr_cache
     )
 }
 

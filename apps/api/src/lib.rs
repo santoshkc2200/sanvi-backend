@@ -3568,6 +3568,7 @@ pub fn build_app(
     payments: Option<sanvi_payments::adapters::http::PaymentsState>,
     advertising: Option<sanvi_advertising::adapters::http::AdvertisingState>,
     redis: Option<redis::aio::ConnectionManager>,
+    ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
 ) -> App<
     impl actix_web::dev::ServiceFactory<
         ServiceRequest,
@@ -3587,7 +3588,6 @@ pub fn build_app(
 
     // Captured before `state` moves into app_data (TASK-022 11.3c).
     let ssr_cache_config = server_config.ssr_cache.clone();
-    let prometheus_registry = state.metrics.prometheus_registry().clone();
 
     // Media ships ungated (no feature flag): the state is a plain
     // HTTP-client wrapper over `config.media`, built infallibly here.
@@ -3823,27 +3823,28 @@ pub fn build_app(
     };
 
     // TASK-022 (FR-1111): the keyed SSR response cache over the anonymous
-    // storefront reads. The flag-off default (and any build without the
-    // theming context) assembles the pass-through layer: every public read
-    // renders, exactly the pre-cache behaviour.
-    let ssr_cache = if config.server.ssr_cache.enabled {
-        theming.as_ref().map(|theming| {
+    // storefront reads. The cache itself (and its counters) is built once in
+    // the binary's main and passed in — `build_app` runs once per actix
+    // worker, and a per-worker registration would leave 19 of 20 workers'
+    // counter increments invisible on /metrics. The shared Arc also makes
+    // the single-flight map process-wide. The flag-off default (and any
+    // build without the cache or the theming context) assembles the
+    // pass-through layer: every public read renders, exactly the pre-cache
+    // behaviour.
+    let ssr_cache = match (config.server.ssr_cache.enabled, ssr_cache, theming.as_ref()) {
+        (true, Some(cache), Some(theming)) => {
             let resolver: std::sync::Arc<dyn sanvi_http::ssr_cache::SsrKeyResolver> =
                 std::sync::Arc::new(StorefrontSsrKeyResolver {
                     host_resolver: tenancy.host_resolver.clone(),
                     themes: theming.service.clone(),
                 });
-            sanvi_http::ssr_cache::SsrCacheLayer::new(
+            Some(sanvi_http::ssr_cache::SsrCacheLayer::new(
                 ssr_cache_config.clone(),
-                sanvi_cache::SsrCache::new(
-                    redis.clone(),
-                    Some(sanvi_cache::CacheMetrics::new(&prometheus_registry)),
-                ),
+                (*cache).clone(),
                 resolver,
-            )
-        })
-    } else {
-        None
+            ))
+        }
+        _ => None,
     };
     let ssr_cache = ssr_cache
         .unwrap_or_else(|| sanvi_http::ssr_cache::SsrCacheLayer::disabled(ssr_cache_config));

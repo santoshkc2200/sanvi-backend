@@ -29,7 +29,7 @@ pub mod ssr;
 pub use metrics::CacheMetrics;
 pub use single_flight::{FlightGuard, SingleFlight};
 pub use ssr::{
-    DeviceClass, SSR_METRICS_CONTEXT, SsrCache, SsrCacheKey, SsrEntry, SsrKeyError,
+    DeviceClass, SsrCache, SsrCacheKey, SsrCacheMetrics, SsrEntry, SsrKeyError,
     ssr_invalidation_pattern,
 };
 

@@ -974,7 +974,7 @@ async fn main() -> ExitCode {
     // 1 s + stream delivery).
     let ssr_cache: Arc<sanvi_cache::SsrCache> = Arc::new(sanvi_cache::SsrCache::new(
         Some(redis.clone()),
-        Some(sanvi_cache::CacheMetrics::new(
+        Some(sanvi_cache::SsrCacheMetrics::new(
             metrics.prometheus_registry(),
         )),
     ));
