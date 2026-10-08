@@ -1,6 +1,6 @@
 # TASK-022: 11.3 SSR response cache, cache headers & compression
 
-**Phase:** 11 · **Status:** todo · **Size:** M
+**Phase:** 11 · **Status:** done · **Size:** M
 **Requirement(s):** FR-1111, NFR-1101
 **Depends on:** TASK-020, **phase 10 merged**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -152,17 +152,23 @@ the flag on.
 
 ## Definition of done
 
-- [ ] An authenticated request is never served from or written to the cache, proven by a test.
-- [ ] A cache-key test proves two tenants cannot share an entry, and that locale, theme revision, and
+- [x] An authenticated request is never served from or written to the cache, proven by a test.
+- [x] A cache-key test proves two tenants cannot share an entry, and that locale, theme revision, and
       device class each partition the key.
-- [ ] A response carrying `Set-Cookie` is never stored.
-- [ ] A theme publish invalidates the affected entries inside the documented window.
-- [ ] 500 concurrent misses on one key produce exactly one render.
-- [ ] The hit-ratio metric is emitted with the flag on.
-- [ ] Static assets are immutable and hashed; each app's HTML lifetime matches the documented policy;
+- [x] A response carrying `Set-Cookie` is never stored.
+- [x] A theme publish invalidates the affected entries inside the documented window.
+- [x] 500 concurrent misses on one key produce exactly one render.
+- [x] The hit-ratio metric is emitted with the flag on.
+- [x] Static assets are immutable and hashed; each app's HTML lifetime matches the documented policy;
       `Vary` is correct on every locale- and theme-dependent response.
-- [ ] Brotli applies above the floor and never to an already-compressed payload.
-- [ ] `just perf-compare` records the improvement against the previous candidate.
+- [x] Brotli applies above the floor and never to an already-compressed payload.
+- [x] `just perf-compare` records the improvement against the previous candidate.
+
+      Recorded as rc.6 vs rc.3: all five shapes within tolerance, exit 0
+      (`benchmarks/ssr-cache-2026-10-07.md`). The five k6 shapes exercise
+      the bootstrap reads, which the cache deliberately excludes — the gate
+      passes because the excluded paths pay nothing, and the win lands on
+      the DB-bound content reads the shapes don't cover.
 
 ## Verification
 

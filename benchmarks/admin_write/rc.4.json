@@ -1,0 +1,34 @@
+{
+  "scenario": "admin_write",
+  "tag": "rc.4",
+  "seed": "1",
+  "offered_rate_rps": 20,
+  "duration": "60s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 16,
+    "os": "Windows 11 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0",
+    "built_at": "unknown"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 3.5416,
+    "http_req_duration_p95_ms": 5.466925,
+    "http_req_duration_p99_ms": 10.980416000000005,
+    "http_req_duration_avg_ms": 3.7754791181364378,
+    "http_reqs_total": 1202,
+    "http_req_failed_rate": 0,
+    "iterations_total": 1201,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "lab: no Kratos in the harness, so the write stops at the 401 boundary",
+    "journey budget from the plan: p95 <= 400 ms"
+  ]
+}
