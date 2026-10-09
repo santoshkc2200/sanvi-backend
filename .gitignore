@@ -21,3 +21,8 @@ docker-compose.override.yml
 # generated SBOMs (cargo-cyclonedx); published with the release tag, never committed
 *.cdx.json
 *.cdx.json.sha256
+
+# TASK-025 restore-drill session artifacts (.drill/<session>/manifest.json,
+# encrypted backup set). The committed drill outputs are the measured
+# reports under benchmarks/dr/.
+/.drill/

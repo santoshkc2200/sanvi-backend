@@ -372,6 +372,27 @@ test-health-without-db:
     eval "$(./scripts/test-db.sh up)"
     cargo nextest run -p system-tests --test probes
 
+# TASK-025 (FR-1119/NFR-1107): the timed full-restore drill — fresh drill
+# database with scale data, pg_basebackup + WAL archive, restore into a
+# clean container, consistency checks (audit chain, outbox, payments).
+# `--rehearse` records the measured report into benchmarks/dr/ for
+# committing. Portable form: the same two scripts back-to-back.
+dr-restore *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    session="$(./scripts/db/backup.sh | sed -n 's/^backup: session \(.*\) complete$/\1/p')"
+    ./scripts/db/restore.sh --session "$session" {{args}}
+
+# TASK-025 (FR-1119): point-in-time recovery to the recorded target —
+# pre-backup markers replayed, the post-backup transaction absent, the
+# audit chain verified and the outbox free of torn delivery stamps.
+dr-pitr *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    session="$(./scripts/db/backup.sh | sed -n 's/^backup: session \(.*\) complete$/\1/p')"
+    target="$(jq -r '.pitr_target' ".drill/$session/markers.json")"
+    ./scripts/db/restore.sh --session "$session" --target-time "$target" {{args}}
+
 openapi:
     ./scripts/check-openapi.sh
 

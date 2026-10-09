@@ -20,3 +20,5 @@ stripe-api-version-upgrade-drill.md  scheduled drill, not an alert response
 capacity.md  the capacity model is the arithmetic the resource alerts fire into, not an alert response
 dependency-matrix.md  the dependency-behaviour contract and injection-test manifest, not an alert response
 rolling-restart.md  scheduled drill, not an alert response
+dr-restore.md  scheduled drill, not an alert response
+dr-single-tenant-restore.md  scheduled drill, not an alert response
