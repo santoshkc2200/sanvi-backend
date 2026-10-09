@@ -24,4 +24,7 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+sanvi-persistence.workspace = true
+sanvi-testsupport.workspace = true
+sqlx.workspace = true
 tokio.workspace = true

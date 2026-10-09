@@ -285,6 +285,40 @@ use sanvi_theming::{
 pub use config::AppConfig;
 pub use openapi::ApiDoc;
 
+struct QuotaPlanResolver(Arc<sanvi_http::quotas::QuotaService>);
+impl sanvi_http::api_limits::PlanResolver for QuotaPlanResolver {
+    fn plan<'a>(
+        &'a self,
+        tenant: sanvi_kernel::TenantId,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<sanvi_http::api_limits::LimitPlan, sanvi_http::ApiError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            use sanvi_http::api_limits::LimitPlan;
+            match self
+                .0
+                .plan_for(tenant)
+                .await
+                .map_err(sanvi_http::ApiError::from)?
+                .tier
+                .as_str()
+            {
+                "starter" => Ok(LimitPlan::Starter),
+                "professional" => Ok(LimitPlan::Professional),
+                "enterprise" => Ok(LimitPlan::Enterprise),
+                _ => Err(sanvi_http::ApiError::service_unavailable(
+                    "unknown billing plan",
+                )),
+            }
+        })
+    }
+}
+
 /// State shared by every handler in the app.
 #[derive(Clone)]
 pub struct AppState {
@@ -366,6 +400,13 @@ pub fn build_tenancy_state(
     let host_resolver = Arc::new(host_resolver);
 
     TenancyState {
+        quotas: Some(Arc::new(sanvi_http::quotas::QuotaService::new(
+            tx_manager.clone(),
+            Arc::new(sanvi_http::quotas::PgQuotaPlanProvider::new(
+                tx_manager.clone(),
+            )),
+            redis.clone(),
+        ))),
         provision: Arc::new(ProvisionTenant::new(
             tx_manager.clone(),
             tenants.clone(),
@@ -3724,6 +3765,22 @@ pub fn build_app(
             .configure(billing_routes::public_routes)
             .configure(billing_routes::billing_platform_routes)
             .configure(billing_routes::billing_internal_routes),
+        None => app,
+    };
+
+    let app = match &tenancy.quotas {
+        Some(service) => app
+            .app_data(web::Data::new(sanvi_http::quota_middleware::QuotaRuntime {
+                service: service.clone(),
+                enabled: config.platform.quotas,
+            }))
+            .app_data(web::Data::new(Arc::new(
+                sanvi_http::api_limits::ApiLimits::new(
+                    redis.clone(),
+                    Arc::new(QuotaPlanResolver(service.clone())),
+                    config.platform.rate_limits,
+                ),
+            ))),
         None => app,
     };
 

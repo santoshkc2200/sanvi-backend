@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.external_quota_reservations SET released=true\n            WHERE tenant_id=$1 AND dimension='storage_bytes' AND asset_id=$2 AND NOT released RETURNING amount,period_start",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "period_start",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "period_start"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "66375cad52085f21b879b796aa25e8fc3f9f706d320cd37e9f7ca2a462231f49"
+}

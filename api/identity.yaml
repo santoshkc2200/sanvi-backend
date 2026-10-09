@@ -1,3 +1,363 @@
+components:
+  schemas:
+    AcceptInvitationCommand:
+      properties:
+        token:
+          example: 64-hex-chars
+          type: string
+      required:
+      - token
+      type: object
+    CompleteLinkChallengeBody:
+      properties:
+        nonce:
+          example: 64-hex-chars
+          type:
+          - string
+          - 'null'
+      type: object
+    GrantMembershipCommand:
+      properties:
+        email:
+          example: alice@example.com
+          type: string
+        role_ids:
+          items:
+            examples:
+            - '873698342314721281'
+            format: snowflake-id
+            pattern: ^[1-9][0-9]{0,18}$
+            type: string
+          type: array
+      required:
+      - email
+      - role_ids
+      type: object
+    InvitationStatus:
+      enum:
+      - pending
+      - accepted
+      type: string
+    InvitationView:
+      properties:
+        accepted_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        email:
+          example: bob@example.com
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        invitation_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        role_ids:
+          items:
+            examples:
+            - '873698342314721281'
+            format: snowflake-id
+            pattern: ^[1-9][0-9]{0,18}$
+            type: string
+          type: array
+        status:
+          $ref: '#/components/schemas/InvitationStatus'
+      required:
+      - invitation_id
+      - email
+      - role_ids
+      - status
+      - expires_at
+      type: object
+    InviteMemberCommand:
+      properties:
+        email:
+          example: bob@example.com
+          type: string
+        role_ids:
+          items:
+            examples:
+            - '873698342314721281'
+            format: snowflake-id
+            pattern: ^[1-9][0-9]{0,18}$
+            type: string
+          type: array
+      required:
+      - email
+      - role_ids
+      type: object
+    LinkCompleteResponse:
+      properties:
+        linked:
+          type: boolean
+        provider:
+          type: string
+        subject:
+          type: string
+      required:
+      - provider
+      - subject
+      - linked
+      type: object
+    MeView:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        email:
+          example: alice@example.com
+          type: string
+        email_verified:
+          type: boolean
+        locale:
+          example: en
+          type:
+          - string
+          - 'null'
+        memberships:
+          items:
+            $ref: '#/components/schemas/MembershipSummary'
+          type: array
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        user_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - user_id
+      - email
+      - email_verified
+      - status
+      - created_at
+      - memberships
+      type: object
+    MemberView:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        email:
+          example: alice@example.com
+          type: string
+        invited_by:
+          type:
+          - string
+          - 'null'
+        role_ids:
+          items:
+            examples:
+            - '873698342314721281'
+            format: snowflake-id
+            pattern: ^[1-9][0-9]{0,18}$
+            type: string
+          type: array
+        status:
+          $ref: '#/components/schemas/MembershipStatus'
+        user_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - user_id
+      - email
+      - role_ids
+      - status
+      - created_at
+      type: object
+    MembershipStatus:
+      enum:
+      - active
+      - suspended
+      type: string
+    MembershipSummary:
+      description: |-
+        One tenant `GET /api/v1/me` reports the caller as a member of, with the
+        roles/permissions they hold there — the single hydration call the
+        frontend's session store and `can()`/`<Can>` are built on (see
+        `sanvi-frontend/docs/phase-02-auth-ux`), so it carries everything a tenant
+        switcher and permission-aware render need without a per-tenant follow-up
+        request.
+      properties:
+        permissions:
+          description: |-
+            The union of every permission `role_ids` grants — a UX hint only; the
+            backend enforces every mutation independently of what this list says.
+          items:
+            type: string
+          type: array
+        role_ids:
+          items:
+            examples:
+            - '873698342314721281'
+            format: snowflake-id
+            pattern: ^[1-9][0-9]{0,18}$
+            type: string
+          type: array
+        status:
+          $ref: '#/components/schemas/MembershipStatus'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        tenant_name:
+          example: Acme Corporation
+          type: string
+        tenant_slug:
+          example: acme
+          type: string
+      required:
+      - tenant_id
+      - tenant_slug
+      - tenant_name
+      - role_ids
+      - permissions
+      - status
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    SessionView:
+      properties:
+        aal:
+          type: string
+        authenticated_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        methods:
+          items:
+            type: string
+          type: array
+        session_id:
+          type: string
+      required:
+      - session_id
+      - aal
+      - methods
+      type: object
+    StartLinkChallengeCommand:
+      properties:
+        email:
+          example: alice@example.com
+          type: string
+        kratos_flow_id:
+          description: The Kratos login flow that collided (correlation only).
+          type:
+          - string
+          - 'null'
+        provider:
+          example: google
+          type: string
+        subject:
+          example: sub-12345
+          type: string
+      required:
+      - provider
+      - subject
+      - email
+      type: object
+    StartLinkChallengeResponse:
+      properties:
+        expires_in_secs:
+          description: How long the challenge stays valid, in seconds.
+          format: int64
+          minimum: 0
+          type: integer
+        nonce:
+          description: |-
+            The nonce the frontend stores in the `sanvi_link_intent` cookie
+            (`HttpOnly`, `SameSite=Lax`, TTL = the intent's).
+          type: string
+      required:
+      - nonce
+      - expires_in_secs
+      type: object
+    UpdateRolesCommand:
+      properties:
+        role_ids:
+          items:
+            examples:
+            - '873698342314721281'
+            format: snowflake-id
+            pattern: ^[1-9][0-9]{0,18}$
+            type: string
+          type: array
+      required:
+      - role_ids
+      type: object
+    UserStatus:
+      description: |-
+        Lifecycle of a projected user. Deactivated is terminal; the email is
+        released for reuse.
+      enum:
+      - active
+      - deactivated
+      type: string
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -25,7 +385,7 @@ paths:
           description: Challenge started
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid input
@@ -50,13 +410,13 @@ paths:
           description: Account linked
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '410':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Intent unavailable
@@ -78,7 +438,7 @@ paths:
           description: The current user
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
@@ -99,7 +459,7 @@ paths:
           description: The current session
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
@@ -123,13 +483,13 @@ paths:
           description: Session revoked
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Session not found
@@ -171,19 +531,19 @@ paths:
           description: Invitations
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout — the request exceeded its budget
@@ -207,13 +567,13 @@ paths:
           description: Invitation created
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid input
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
@@ -238,19 +598,19 @@ paths:
           description: Invitation accepted
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invitation not found
         '410':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invitation expired
@@ -276,7 +636,7 @@ paths:
           description: Invitation revoked
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invitation not found
@@ -306,7 +666,7 @@ paths:
           description: Invitation reissued
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invitation not found
@@ -348,25 +708,25 @@ paths:
           description: Members
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout — the request exceeded its budget
@@ -390,19 +750,19 @@ paths:
           description: Membership granted
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: User not found
@@ -428,13 +788,13 @@ paths:
           description: Membership revoked
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied or last-owner guard
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Membership not found
@@ -470,13 +830,13 @@ paths:
           description: Roles updated
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Membership not found

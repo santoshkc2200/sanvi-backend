@@ -1,3 +1,277 @@
+components:
+  schemas:
+    AssetDeliveryView:
+      properties:
+        expires_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        renditions:
+          items:
+            $ref: '#/components/schemas/RenditionView'
+          type: array
+        url:
+          type:
+          - string
+          - 'null'
+      type: object
+    AssetUploadView:
+      properties:
+        asset_id:
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        part_size:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        part_urls:
+          items:
+            $ref: '#/components/schemas/UploadPartView'
+          type:
+          - array
+          - 'null'
+        upload_id:
+          type:
+          - string
+          - 'null'
+        upload_url:
+          type:
+          - string
+          - 'null'
+      required:
+      - asset_id
+      - expires_at
+      type: object
+    AssetView:
+      properties:
+        duration_ms:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        error_message:
+          type:
+          - string
+          - 'null'
+        external_ref:
+          type:
+          - string
+          - 'null'
+        height:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        kind:
+          type: string
+        owner_id:
+          type:
+          - string
+          - 'null'
+        placeholder:
+          description: |-
+            Set only on the degraded read path (TASK-023, FR-1113): object
+            storage is down, so there is no live metadata — only this marker
+            (`object_storage_unavailable`) for the placeholder UI. `None` on
+            every live read, so a placeholder is never mistaken for metadata.
+          type:
+          - string
+          - 'null'
+        progress_percent:
+          format: int64
+          type: integer
+        status:
+          type: string
+        updated_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        version:
+          format: int64
+          type: integer
+        width:
+          format: int64
+          type:
+          - integer
+          - 'null'
+      required:
+      - id
+      - kind
+      - status
+      - progress_percent
+      - version
+      type: object
+    AssetVisibility:
+      enum:
+      - private
+      - public
+      type: string
+    CompleteUploadRequest:
+      description: |-
+        Wire-only shape for completing a multipart upload. Same treatment as
+        [`PresignPartsRequest`]: the use case takes the bare parts vec.
+      properties:
+        parts:
+          items:
+            $ref: '#/components/schemas/CompletedPartInput'
+          type: array
+      required:
+      - parts
+      type: object
+    CompletedPartInput:
+      properties:
+        etag:
+          type: string
+        part_number:
+          format: int64
+          type: integer
+      required:
+      - part_number
+      - etag
+      type: object
+    CreateAssetInput:
+      properties:
+        content_type:
+          type: string
+        filename:
+          type: string
+        kind:
+          type: string
+        owner_id:
+          type:
+          - string
+          - 'null'
+        size_bytes:
+          format: int64
+          type: integer
+        visibility:
+          $ref: '#/components/schemas/AssetVisibility'
+      required:
+      - kind
+      - content_type
+      - filename
+      - size_bytes
+      type: object
+    PresignPartsRequest:
+      description: |-
+        Wire-only shape for presigning multipart upload parts. This has no
+        counterpart in `domain::dto` because it is not a value the domain layer
+        needs to model — the use case takes the bare `Vec<i64>`.
+      properties:
+        part_numbers:
+          items:
+            format: int64
+            type: integer
+          type: array
+      required:
+      - part_numbers
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    RenditionView:
+      properties:
+        bitrate_kbps:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        content_type:
+          type: string
+        height:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        name:
+          type: string
+        url:
+          type:
+          - string
+          - 'null'
+        width:
+          format: int64
+          type:
+          - integer
+          - 'null'
+      required:
+      - name
+      - content_type
+      type: object
+    UploadPartView:
+      properties:
+        part_number:
+          format: int64
+          type: integer
+        url:
+          type: string
+      required:
+      - part_number
+      - url
+      type: object
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -32,13 +306,13 @@ paths:
           description: Asset minted, upload presigned
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: hitox-media-service rejected the request (e.g. missing Idempotency-Key)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing media.assets.manage permission
@@ -58,13 +332,13 @@ paths:
           description: Asset deleted
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing media.assets.manage permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such asset in this tenant's namespace
@@ -87,13 +361,13 @@ paths:
           description: Current asset state
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing media.assets.manage permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such asset in this tenant's namespace
@@ -123,19 +397,19 @@ paths:
           description: Upload completed, asset state after completion
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing media.assets.manage permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such asset in this tenant's namespace
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Upload already completed or part etags do not match
@@ -159,13 +433,13 @@ paths:
           description: Delivery URL for the asset
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing media.assets.manage permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such asset in this tenant's namespace
@@ -194,13 +468,13 @@ paths:
           description: 'Presigned URLs for the requested parts, wrapped as {"part_urls": [...]} to match course-media''s wire.part_urls read'
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing media.assets.manage permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such asset in this tenant's namespace

@@ -104,6 +104,7 @@ impl fmt::Display for ProviderSubject {
 /// A BCP-47 language tag. The full catalogue lives in the localization
 /// context (phase 06); here we only enforce well-formedness.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[schema(as = IdentityLocale)]
 pub struct Locale(String);
 
 impl Locale {

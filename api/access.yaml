@@ -1,3 +1,268 @@
+components:
+  schemas:
+    CreateRoleRequest:
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        permissions:
+          items:
+            type: string
+          type: array
+      required:
+      - key
+      - name
+      - permissions
+      type: object
+    DefineFeatureRequest:
+      properties:
+        default_enabled:
+          type: boolean
+        default_limit:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        key:
+          type: string
+        kind:
+          $ref: '#/components/schemas/FeatureKind'
+        name:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+      required:
+      - key
+      - name
+      - kind
+      type: object
+    EntitlementSourceView:
+      enum:
+      - override
+      - subscription
+      - plan_default
+      - feature_default
+      type: string
+    FeatureKind:
+      description: What an entitlement buys.
+      enum:
+      - boolean
+      - quota
+      type: string
+    FeatureView:
+      description: One catalog feature as exposed by the API.
+      properties:
+        default_enabled:
+          type: boolean
+        default_limit:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        deprecated_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        key:
+          type: string
+        kind:
+          $ref: '#/components/schemas/FeatureKind'
+        name:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+      required:
+      - key
+      - name
+      - kind
+      - default_enabled
+      - visibility
+      type: object
+    PermissionScope:
+      description: Who a permission applies to, which decides how the check resolves.
+      enum:
+      - platform
+      - tenant
+      - authenticated
+      type: string
+    PermissionView:
+      properties:
+        description:
+          type: string
+        key:
+          type: string
+        scope:
+          $ref: '#/components/schemas/PermissionScope'
+      required:
+      - key
+      - scope
+      - description
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    ResolvedEntitlementView:
+      description: One resolved entitlement as exposed to a tenant.
+      properties:
+        enabled:
+          type: boolean
+        expires_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        feature:
+          type: string
+        kind:
+          $ref: '#/components/schemas/FeatureKind'
+        limit:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        source:
+          $ref: '#/components/schemas/EntitlementSourceView'
+      required:
+      - feature
+      - kind
+      - enabled
+      - source
+      type: object
+    RoleScope:
+      description: Where a role applies.
+      enum:
+      - platform
+      - tenant
+      type: string
+    RoleView:
+      description: One role as exposed by the API.
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        is_system:
+          type: boolean
+        key:
+          type: string
+        name:
+          type: string
+        permissions:
+          items:
+            type: string
+          type: array
+        scope:
+          $ref: '#/components/schemas/RoleScope'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - id
+      - scope
+      - key
+      - name
+      - permissions
+      - is_system
+      - created_at
+      type: object
+    UpdateFeatureRequest:
+      properties:
+        default_enabled:
+          type: boolean
+        default_limit:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        name:
+          type: string
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+      required:
+      - name
+      - default_enabled
+      type: object
+    UpdateRoleRequest:
+      properties:
+        name:
+          type:
+          - string
+          - 'null'
+        permissions:
+          items:
+            type: string
+          type:
+          - array
+          - 'null'
+      type: object
+    Visibility:
+      description: Whether the feature shows up in tenant-facing catalogs.
+      enum:
+      - public
+      - hidden
+      type: string
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -21,13 +286,13 @@ paths:
           description: Permission registry
         '401':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Not authenticated
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
@@ -50,7 +315,7 @@ paths:
           description: Feature catalog
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
@@ -74,19 +339,19 @@ paths:
           description: Feature defined
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid definition
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Feature key already exists
@@ -112,13 +377,13 @@ paths:
           description: Feature deprecated
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Feature not found
@@ -151,19 +416,19 @@ paths:
           description: Feature updated
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid definition
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Feature not found
@@ -184,7 +449,7 @@ paths:
           description: Role catalog
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
@@ -205,13 +470,13 @@ paths:
           description: Resolved entitlements
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied or feature not enabled
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No tenant context
@@ -234,7 +499,7 @@ paths:
           description: Assignable roles
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
@@ -258,19 +523,19 @@ paths:
           description: Role created
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid role definition
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Escalation or permission denied
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Role key already exists
@@ -298,13 +563,13 @@ paths:
           description: Role deleted
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: System role or permission denied
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Role not found
@@ -339,19 +604,19 @@ paths:
           description: Role updated
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid role definition
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Escalation or permission denied
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Role not found

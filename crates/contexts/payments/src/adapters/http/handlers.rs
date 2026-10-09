@@ -243,6 +243,7 @@ pub struct BlockerView {
 /// only — no PII, no credentials (the session secret is a separate,
 /// never-persisted response).
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[schema(as = PaymentsConnectionView)]
 pub struct ConnectionView {
     #[schema(value_type = String)]
     pub id: ConnectionId,
@@ -338,6 +339,7 @@ impl ConnectionView {
 /// same connection; a crash between provider-side creation and
 /// persistence adopts the same account.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
+#[schema(as = PaymentsCreateConnectionRequest)]
 pub struct CreateConnectionRequest {
     /// Provider kind, as listed by the catalog.
     #[schema(example = "stripe_connect")]
@@ -1338,6 +1340,7 @@ pub struct PaymentListQuery {
     #[param(value_type = Option<String>)]
     pub date_to: Option<DateTime<Utc>>,
     /// Pagination cursor (opaque).
+    #[serde(rename = "after", alias = "cursor")]
     pub cursor: Option<String>,
     /// Page size, clamped to 1..=100.
     #[param(schema_with = payment_limit_schema)]
@@ -1361,6 +1364,7 @@ pub struct DisputeListQuery {
     #[param(value_type = Option<String>)]
     pub date_to: Option<DateTime<Utc>>,
     /// Pagination cursor (opaque).
+    #[serde(rename = "after", alias = "cursor")]
     pub cursor: Option<String>,
     /// Page size, clamped to 1..=100.
     #[param(schema_with = payment_limit_schema)]
@@ -1369,6 +1373,21 @@ pub struct DisputeListQuery {
 
 fn payment_limit_schema() -> utoipa::openapi::schema::Object {
     sanvi_http::openapi::page_limit_schema(100, 20).build()
+}
+
+#[cfg(test)]
+mod pagination_contract_tests {
+    use super::*;
+    #[test]
+    fn canonical_after_and_legacy_cursor_deserialize_identically() {
+        for name in ["after", "cursor"] {
+            let value = serde_json::json!({name: "opaque-next-page"});
+            let payment: PaymentListQuery = serde_json::from_value(value.clone()).unwrap();
+            let dispute: DisputeListQuery = serde_json::from_value(value).unwrap();
+            assert_eq!(payment.cursor.as_deref(), Some("opaque-next-page"));
+            assert_eq!(dispute.cursor.as_deref(), Some("opaque-next-page"));
+        }
+    }
 }
 
 /// Body for `POST /api/v1/tenant/payments/{id}/refund`.

@@ -13,6 +13,9 @@ actix-http.workspace = true
 actix-service.workspace = true
 actix-web.workspace = true
 anyhow.workspace = true
+sqlx.workspace = true
+sanvi-persistence.workspace = true
+async-trait.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 hex.workspace = true
@@ -35,6 +38,7 @@ utoipa-scalar.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+sanvi-testsupport.workspace = true
 brotli.workspace = true
 flate2.workspace = true
 opentelemetry_sdk.workspace = true

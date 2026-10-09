@@ -28,6 +28,7 @@ use crate::domain::values::SuspensionReason;
 /// Application state visible to this context's handlers.
 #[derive(Clone)]
 pub struct TenancyState {
+    pub quotas: Option<Arc<sanvi_http::quotas::QuotaService>>,
     pub provision: Arc<ProvisionTenant>,
     pub activate: Arc<ActivateTenant>,
     pub suspend: Arc<SuspendTenant>,
@@ -87,6 +88,34 @@ fn tenant_id(path: &web::Path<String>) -> Result<TenantId, ApiError> {
 
 /// Idempotency window for provisioning.
 const IDEMPOTENCY_TTL: Duration = Duration::from_secs(60);
+
+/// `POST /api/v1/platform/tenants` — provision a new tenant.
+#[utoipa::path(
+    get, path = "/api/v1/tenant/usage", tag = "tenancy", operation_id = "get_tenant_usage",
+    responses(
+        (status = 200, description = "Current-period usage and plan limits", body = sanvi_http::quotas::TenantUsage),
+        (status = 401, description = "Authentication required", body = ProblemDetail),
+        (status = 403, description = "Usage permission required", body = ProblemDetail),
+        (status = 503, description = "Counters unavailable", body = ProblemDetail)
+    )
+)]
+pub async fn get_usage(
+    state: web::Data<TenancyState>,
+    current: CurrentTenant,
+    _subject: sanvi_http::CurrentSubject,
+    _guard: RequiredPermission,
+) -> Result<HttpResponse, ApiError> {
+    let counters = state
+        .quotas
+        .as_ref()
+        .ok_or_else(|| ApiError::service_unavailable("usage unavailable"))?;
+    Ok(HttpResponse::Ok().json(
+        counters
+            .usage(current.0.tenant_id)
+            .await
+            .map_err(ApiError::from)?,
+    ))
+}
 
 /// `POST /api/v1/platform/tenants` — provision a new tenant.
 #[utoipa::path(
@@ -593,6 +622,7 @@ pub fn state_for_tests(ids: Arc<dyn sanvi_kernel::RawIdGenerator>) -> TenancySta
     ));
 
     TenancyState {
+        quotas: None,
         provision: Arc::new(ProvisionTenant::new(
             tx_manager.clone(),
             tenants.clone(),

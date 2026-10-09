@@ -1,3 +1,2247 @@
+components:
+  schemas:
+    AccountView:
+      properties:
+        display_name:
+          type: string
+        external_id:
+          type: string
+      required:
+      - external_id
+      - display_name
+      type: object
+    Ad:
+      properties:
+        creative:
+          $ref: '#/components/schemas/Creative'
+        external_id:
+          description: |-
+            The platform's own id for this ad, once one has been recorded — the
+            only key that correlates a review observation (which arrives keyed by
+            platform id) back onto this ad. `None` for ads the platform has never
+            echoed an id for; a platform that assigns ids at creation must persist
+            them here, or its verdicts can never be matched.
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        landing_url:
+          type: string
+        review:
+          $ref: '#/components/schemas/AdReview'
+          description: |-
+            Last review observation pulled from the platform. Absent (pending,
+            never checked) until a poll happens — ads only get reviewed once they
+            are published.
+        tracking_template:
+          type:
+          - string
+          - 'null'
+      required:
+      - id
+      - creative
+      - landing_url
+      type: object
+    AdGroup:
+      properties:
+        ads:
+          items:
+            $ref: '#/components/schemas/Ad'
+          type: array
+        bid:
+          $ref: '#/components/schemas/BidSettings'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        name:
+          type: string
+        targeting:
+          $ref: '#/components/schemas/Targeting'
+      required:
+      - id
+      - name
+      - targeting
+      - bid
+      - ads
+      type: object
+    AdReview:
+      description: |-
+        The platform's review verdict for one ad. `reasons` preserves the
+        platform's own policy wording verbatim — a paraphrased rejection is worse
+        than useless when the tenant has to fix the ad in the native tool.
+      properties:
+        checked_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        reasons:
+          items:
+            type: string
+          type: array
+        state:
+          $ref: '#/components/schemas/AdReviewState'
+      required:
+      - state
+      type: object
+    AdReviewState:
+      enum:
+      - pending
+      - approved
+      - rejected
+      type: string
+    AdReviewStatusView:
+      description: |-
+        One ad's refreshed review state, addressed by its platform-facing id so a
+        client can correlate against the campaign tree it already has.
+      properties:
+        ad_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        review:
+          $ref: '#/components/schemas/AdReview'
+      required:
+      - ad_id
+      - review
+      type: object
+    AdsFreshnessSummaryView:
+      properties:
+        stalled_connections:
+          format: int32
+          minimum: 0
+          type: integer
+        total_connections:
+          format: int32
+          minimum: 0
+          type: integer
+        worst_lag_hours:
+          format: double
+          type:
+          - number
+          - 'null'
+      required:
+      - total_connections
+      - stalled_connections
+      type: object
+    AdvertisingConnectionView:
+      properties:
+        account_name:
+          type:
+          - string
+          - 'null'
+        currency:
+          type: string
+        external_account_id:
+          type: string
+        health:
+          $ref: '#/components/schemas/ConnectionHealthView'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        platform:
+          type: string
+        status:
+          type: string
+        timezone:
+          type: string
+      required:
+      - id
+      - platform
+      - external_account_id
+      - currency
+      - timezone
+      - status
+      - health
+      type: object
+    AdvertisingCreateConnectionRequest:
+      properties:
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        currency:
+          example: JPY
+          type: string
+        external_account_id:
+          type: string
+        timezone:
+          example: Asia/Tokyo
+          type: string
+      required:
+      - connection_id
+      - external_account_id
+      - currency
+      - timezone
+      type: object
+    AdvertisingMoney:
+      properties:
+        amount_minor:
+          format: int64
+          type: integer
+        currency:
+          type: string
+      required:
+      - amount_minor
+      - currency
+      type: object
+    AlertCondition:
+      enum:
+      - settled_breach
+      - provisional_lower_bound_breach
+      - provisional_warning
+      - stale_data_warning
+      - spend_anomaly
+      - threshold80
+      type: string
+    AssetMetadata:
+      properties:
+        aspect_ratio:
+          type: string
+        duration_seconds:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        file_size_bytes:
+          format: int64
+          minimum: 0
+          type: integer
+        height_px:
+          format: int32
+          minimum: 0
+          type: integer
+        is_video:
+          type: boolean
+        width_px:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+      - width_px
+      - height_px
+      - file_size_bytes
+      - is_video
+      - aspect_ratio
+      type: object
+    Audience:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        external_ref:
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        included_identifiers:
+          items:
+            $ref: '#/components/schemas/HashedIdentifier'
+          type: array
+        last_synced_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
+        platform:
+          $ref: '#/components/schemas/PlatformKey'
+        status:
+          $ref: '#/components/schemas/AudienceStatus'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - id
+      - tenant_id
+      - platform
+      - name
+      - status
+      - included_identifiers
+      - created_at
+      type: object
+    AudienceStatus:
+      oneOf:
+      - properties:
+          status:
+            enum:
+            - building
+            type: string
+        required:
+        - status
+        type: object
+      - properties:
+          status:
+            enum:
+            - active
+            type: string
+        required:
+        - status
+        type: object
+      - properties:
+          reason:
+            type: string
+          status:
+            enum:
+            - failed
+            type: string
+        required:
+        - reason
+        - status
+        type: object
+    BidSettings:
+      properties:
+        maximum_bid:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/AdvertisingMoney'
+        strategy:
+          type: string
+      required:
+      - strategy
+      type: object
+    Budget:
+      properties:
+        amount:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        kind:
+          $ref: '#/components/schemas/BudgetType'
+      required:
+      - kind
+      - amount
+      type: object
+    BudgetActionsConfigured:
+      properties:
+        auto_pause:
+          type: boolean
+        auto_resume_on_rollover:
+          type: boolean
+        threshold_100:
+          type: string
+        threshold_80:
+          type: string
+      required:
+      - threshold_80
+      - threshold_100
+      - auto_pause
+      - auto_resume_on_rollover
+      type: object
+    BudgetAlert:
+      properties:
+        acknowledged_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        acknowledged_by:
+          type:
+          - string
+          - 'null'
+        auto_paused:
+          type: boolean
+        campaign_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        cap_amount:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        cap_id:
+          type:
+          - string
+          - 'null'
+        condition:
+          $ref: '#/components/schemas/AlertCondition'
+        created_at:
+          format: date-time
+          type: string
+        data_freshness:
+          $ref: '#/components/schemas/DataFreshness'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        period_start:
+          format: date
+          type: string
+        spend:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        threshold:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+      - id
+      - tenant_id
+      - period
+      - period_start
+      - threshold
+      - condition
+      - spend
+      - cap_amount
+      - data_freshness
+      - auto_paused
+      - created_at
+      type: object
+    BudgetAlertsView:
+      properties:
+        alerts:
+          items:
+            $ref: '#/components/schemas/BudgetAlert'
+          type: array
+      required:
+      - alerts
+      type: object
+    BudgetCap:
+      properties:
+        amount:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        auto_pause:
+          type: boolean
+        auto_resume_on_rollover:
+          type: boolean
+        campaign_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        declared_fx_basis:
+          type:
+          - string
+          - 'null'
+        effective_currency:
+          type: string
+        fx_rate_date:
+          format: date
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        version:
+          format: int64
+          type: integer
+      required:
+      - id
+      - tenant_id
+      - period
+      - amount
+      - effective_currency
+      - auto_pause
+      - auto_resume_on_rollover
+      - version
+      - created_at
+      - updated_at
+      type: object
+    BudgetCapsView:
+      properties:
+        caps:
+          items:
+            $ref: '#/components/schemas/BudgetCap'
+          type: array
+      required:
+      - caps
+      type: object
+    BudgetPeriod:
+      enum:
+      - daily
+      - monthly
+      type: string
+    BudgetType:
+      enum:
+      - daily
+      - lifetime
+      - campaign_budget_optimization
+      type: string
+    Campaign:
+      properties:
+        ad_groups:
+          items:
+            $ref: '#/components/schemas/AdGroup'
+          type: array
+        budget:
+          $ref: '#/components/schemas/Budget'
+        drift:
+          $ref: '#/components/schemas/DriftState'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        name:
+          type: string
+        objective:
+          $ref: '#/components/schemas/Objective'
+        schedule:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Schedule'
+        status:
+          $ref: '#/components/schemas/CampaignStatus'
+      required:
+      - id
+      - name
+      - status
+      - objective
+      - budget
+      - ad_groups
+      - drift
+      type: object
+    CampaignChange:
+      properties:
+        actor_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        after_state:
+          $ref: '#/components/schemas/Campaign'
+        attribution:
+          type:
+          - string
+          - 'null'
+        before_state:
+          $ref: '#/components/schemas/Campaign'
+        campaign_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        changed_fields:
+          items:
+            type: string
+          type: array
+        created_at:
+          format: date-time
+          type: string
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        metadata: {}
+        mutation_id:
+          format: uuid
+          type:
+          - string
+          - 'null'
+        revision:
+          format: int64
+          type: integer
+        source:
+          $ref: '#/components/schemas/ChangeSource'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - id
+      - tenant_id
+      - campaign_id
+      - revision
+      - source
+      - changed_fields
+      - before_state
+      - after_state
+      - created_at
+      type: object
+    CampaignChangesView:
+      properties:
+        changes:
+          items:
+            $ref: '#/components/schemas/CampaignChange'
+          type: array
+      required:
+      - changes
+      type: object
+    CampaignReviewStatusView:
+      properties:
+        ads:
+          items:
+            $ref: '#/components/schemas/AdReviewStatusView'
+          type: array
+        campaign_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        unmatched_platform_ads:
+          $ref: '#/components/schemas/UnmatchedPlatformAds'
+          description: |-
+            What the platform listed that this campaign's tree cannot account
+            for. Non-empty means the poll could not fully correlate — an
+            all-pending `ads` list alongside platform-listed ids here is a
+            correlation gap, not a clean "everything still in review".
+      required:
+      - campaign_id
+      - ads
+      - unmatched_platform_ads
+      type: object
+    CampaignStatus:
+      enum:
+      - draft
+      - publishing
+      - active
+      - paused
+      - ended
+      - archived
+      type: string
+    CampaignView:
+      description: |-
+        One campaign plus the envelope fields the domain model does not carry:
+        which connection it belongs to and the platform-assigned id once
+        published.
+      properties:
+        campaign:
+          $ref: '#/components/schemas/Campaign'
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        external_id:
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        platform:
+          example: google_ads
+          type: string
+        revision:
+          format: int64
+          type: integer
+      required:
+      - id
+      - connection_id
+      - platform
+      - revision
+      - campaign
+      type: object
+    CampaignsView:
+      properties:
+        campaigns:
+          items:
+            $ref: '#/components/schemas/CampaignView'
+          type: array
+      required:
+      - campaigns
+      type: object
+    CapabilityMatrix:
+      description: Data consumed by both the validator and the frontend form engine.
+      properties:
+        budget_types:
+          items:
+            $ref: '#/components/schemas/BudgetType'
+          type: array
+          uniqueItems: true
+        creative_placements:
+          items:
+            $ref: '#/components/schemas/CreativePlacement'
+          type: array
+        matrix_version:
+          type: string
+        minimum_budgets_minor:
+          additionalProperties:
+            additionalProperties:
+              format: int64
+              type: integer
+            propertyNames:
+              enum:
+              - daily
+              - lifetime
+              - campaign_budget_optimization
+              type: string
+            type: object
+          propertyNames:
+            type: string
+          type: object
+        objectives:
+          items:
+            $ref: '#/components/schemas/Objective'
+          type: array
+          uniqueItems: true
+        schedule_granularity:
+          $ref: '#/components/schemas/ScheduleGranularity'
+        targeting_dimensions:
+          items:
+            $ref: '#/components/schemas/TargetingDimension'
+          type: array
+          uniqueItems: true
+        text_limits:
+          additionalProperties:
+            additionalProperties:
+              minimum: 0
+              type: integer
+            propertyNames:
+              type: string
+            type: object
+          description: Locale -> field name -> inclusive character limit.
+          propertyNames:
+            type: string
+          type: object
+      required:
+      - matrix_version
+      - objectives
+      - budget_types
+      - minimum_budgets_minor
+      - schedule_granularity
+      - targeting_dimensions
+      - creative_placements
+      - text_limits
+      type: object
+    ChangeSource:
+      enum:
+      - sanvi
+      - platform
+      type: string
+    ClickIds:
+      properties:
+        capture_time:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        fbc:
+          type:
+          - string
+          - 'null'
+        fbp:
+          type:
+          - string
+          - 'null'
+        gbraid:
+          type:
+          - string
+          - 'null'
+        gclid:
+          type:
+          - string
+          - 'null'
+        landing_url:
+          type:
+          - string
+          - 'null'
+        wbraid:
+          type:
+          - string
+          - 'null'
+      type: object
+    ConnectionAttentionView:
+      properties:
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        last_error:
+          type:
+          - string
+          - 'null'
+        platform:
+          type: string
+        reconnect_required:
+          type: boolean
+        scopes_missing:
+          items:
+            type: string
+          type: array
+        stalled:
+          type: boolean
+        status:
+          type: string
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - tenant_id
+      - connection_id
+      - platform
+      - status
+      - reconnect_required
+      - scopes_missing
+      - stalled
+      type: object
+    ConnectionFreshnessView:
+      properties:
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        lag_hours:
+          format: double
+          type:
+          - number
+          - 'null'
+        last_ingested_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        platform:
+          type: string
+        stalled:
+          description: |-
+            Ingestion is older than the configured freshness threshold — the
+            dashboard's "sync failed" / "still updating" state, never presented
+            as current.
+          type: boolean
+      required:
+      - connection_id
+      - platform
+      - stalled
+      type: object
+    ConnectionHealthView:
+      properties:
+        can_sync:
+          type: boolean
+        can_upload_conversions:
+          type: boolean
+        last_error:
+          type:
+          - string
+          - 'null'
+        last_synced_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        reconnect_required:
+          type: boolean
+        scopes_missing:
+          items:
+            type: string
+          type: array
+        token_expires_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+      required:
+      - can_sync
+      - can_upload_conversions
+      - scopes_missing
+      - reconnect_required
+      type: object
+    ConnectionState:
+      enum:
+      - not_connected
+      - connected
+      type: string
+    ConnectionsView:
+      properties:
+        connections:
+          items:
+            $ref: '#/components/schemas/AdvertisingConnectionView'
+          type: array
+      required:
+      - connections
+      type: object
+    ConsentSnapshot:
+      description: Capture-time directive proof required by every outbound upload.
+      properties:
+        answers:
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+          type: object
+        jurisdiction:
+          type: string
+        purposes_asked:
+          items:
+            type: string
+          type: array
+        resolver_version:
+          type: string
+        signal_source:
+          type: string
+      required:
+      - resolver_version
+      - jurisdiction
+      - purposes_asked
+      - answers
+      - signal_source
+      type: object
+    ConversionDiagnostics:
+      properties:
+        captured_at:
+          format: date-time
+          type: string
+        event:
+          $ref: '#/components/schemas/ConversionEvent'
+      required:
+      - event
+      - captured_at
+      type: object
+    ConversionEvent:
+      properties:
+        click_ids:
+          $ref: '#/components/schemas/ClickIds'
+        consent:
+          $ref: '#/components/schemas/ConsentSnapshot'
+        event_id:
+          type: string
+        hashed_identifiers:
+          additionalProperties:
+            $ref: '#/components/schemas/HashedIdentifier'
+          propertyNames:
+            type: string
+          type: object
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        name:
+          type: string
+        occurred_at:
+          format: date-time
+          type: string
+        order_ref:
+          type:
+          - string
+          - 'null'
+        subject_key:
+          $ref: '#/components/schemas/SubjectKeyRef'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        upload_states:
+          additionalProperties:
+            $ref: '#/components/schemas/UploadState'
+          propertyNames:
+            description: Adapter-owned identifier. Domain code never switches on a platform name.
+            type: string
+          type: object
+        value:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/AdvertisingMoney'
+        value_source:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/ValueSource'
+      required:
+      - id
+      - tenant_id
+      - event_id
+      - name
+      - occurred_at
+      - click_ids
+      - hashed_identifiers
+      - consent
+      type: object
+    CreateAdGroupRequest:
+      properties:
+        bid:
+          $ref: '#/components/schemas/BidSettings'
+        name:
+          type: string
+        targeting:
+          $ref: '#/components/schemas/Targeting'
+      required:
+      - name
+      - targeting
+      - bid
+      type: object
+    CreateAdRequest:
+      properties:
+        creative:
+          $ref: '#/components/schemas/Creative'
+        landing_url:
+          type: string
+        tracking_template:
+          type:
+          - string
+          - 'null'
+      required:
+      - creative
+      - landing_url
+      type: object
+    CreateAudienceRequest:
+      properties:
+        name:
+          type: string
+        platform:
+          $ref: '#/components/schemas/PlatformKey'
+      required:
+      - name
+      - platform
+      type: object
+    CreateCampaignRequest:
+      properties:
+        budget:
+          $ref: '#/components/schemas/Budget'
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        name:
+          type: string
+        objective:
+          example: sales
+          type: string
+        schedule:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Schedule'
+      required:
+      - connection_id
+      - name
+      - objective
+      - budget
+      type: object
+    CreateCreativeRequest:
+      properties:
+        asset_references:
+          items:
+            type: string
+          type: array
+        assets:
+          items:
+            $ref: '#/components/schemas/AssetMetadata'
+          type: array
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        placement:
+          type: string
+        texts:
+          items:
+            $ref: '#/components/schemas/CreativeText'
+          type: array
+      required:
+      - connection_id
+      - placement
+      - texts
+      - asset_references
+      type: object
+    Creative:
+      properties:
+        asset_references:
+          items:
+            type: string
+          type: array
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        placement:
+          type: string
+        texts:
+          items:
+            $ref: '#/components/schemas/CreativeText'
+          type: array
+      required:
+      - id
+      - placement
+      - texts
+      - asset_references
+      type: object
+    CreativeAssetSpec:
+      properties:
+        aspect_ratios:
+          items:
+            type: string
+          type: array
+        image_required:
+          description: |-
+            Placement-set-level requirement (whether at least one image asset is required for the placement set).
+            Not enforced per asset.
+          type: boolean
+        max_duration_seconds:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        max_file_size_bytes:
+          format: int64
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        min_duration_seconds:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        min_height_px:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        min_width_px:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        video_allowed:
+          type: boolean
+      required:
+      - image_required
+      - video_allowed
+      - aspect_ratios
+      type: object
+    CreativePlacement:
+      properties:
+        asset_spec:
+          $ref: '#/components/schemas/CreativeAssetSpec'
+        key:
+          type: string
+      required:
+      - key
+      - asset_spec
+      type: object
+    CreativePreviewView:
+      properties:
+        asset_references:
+          items:
+            type: string
+          type: array
+        body:
+          type:
+          - string
+          - 'null'
+        headline:
+          type:
+          - string
+          - 'null'
+        placement:
+          type: string
+        spec:
+          $ref: '#/components/schemas/CreativeAssetSpec'
+      required:
+      - placement
+      - asset_references
+      - spec
+      type: object
+    CreativePreviewsView:
+      properties:
+        previews:
+          items:
+            $ref: '#/components/schemas/CreativePreviewView'
+          type: array
+      required:
+      - previews
+      type: object
+    CreativeText:
+      properties:
+        body:
+          type: string
+        headline:
+          type: string
+        locale:
+          type: string
+      required:
+      - locale
+      - headline
+      - body
+      type: object
+    CreativeView:
+      properties:
+        assets:
+          items:
+            $ref: '#/components/schemas/AssetMetadata'
+          type: array
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        creative:
+          $ref: '#/components/schemas/Creative'
+        external_id:
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        platform:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - id
+      - connection_id
+      - platform
+      - creative
+      - created_at
+      - updated_at
+      type: object
+    CreativesView:
+      properties:
+        creatives:
+          items:
+            $ref: '#/components/schemas/CreativeView'
+          type: array
+      required:
+      - creatives
+      type: object
+    DataFreshness:
+      properties:
+        is_settled:
+          type: boolean
+        is_stale:
+          type: boolean
+        lag_hours:
+          format: double
+          type:
+          - number
+          - 'null'
+        last_synced_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+      required:
+      - is_settled
+      - is_stale
+      type: object
+    DriftResolution:
+      enum:
+      - keep_theirs
+      - reapply_ours
+      type: string
+    DriftState:
+      properties:
+        changed_fields:
+          items:
+            type: string
+          type: array
+        drifted:
+          type: boolean
+      required:
+      - drifted
+      - changed_fields
+      type: object
+    DryRunEvaluationResult:
+      properties:
+        cap_amount:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        condition:
+          type: string
+        current_spend:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        percentage:
+          format: double
+          type: number
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        scope:
+          type: string
+        would_auto_pause:
+          type: boolean
+        would_breach_100:
+          type: boolean
+        would_breach_80:
+          type: boolean
+      required:
+      - scope
+      - period
+      - cap_amount
+      - current_spend
+      - percentage
+      - would_breach_80
+      - would_breach_100
+      - would_auto_pause
+      - condition
+      type: object
+    HashedIdentifier:
+      type: string
+    MetricPoint:
+      description: |-
+        One rollup row (TASK-016, slice 10.7). The grain depends on the
+        request's `group_by`: `campaign` populates both `platform` and
+        `campaign_id`; `platform` populates only `platform`; `tenant` leaves
+        both `None`. Tenant is supplied by the authenticated route scope.
+
+        `conversion_value` (the platform's own attribution) and `sanvi_revenue`
+        (Sanvi's order-based view) are always both present, always labelled
+        separately — never blended into one number (NFR-1006). Same for
+        `roas_platform`/`roas_sanvi`: each is `null` on zero spend, never `∞`.
+      properties:
+        campaign_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        clicks:
+          format: int64
+          type: integer
+        conversion_value:
+          $ref: '#/components/schemas/MoneyView'
+          description: |-
+            Platform-reported conversion value — attribution the ad platform's
+            own model made.
+        conversions:
+          format: double
+          type: number
+        date:
+          example: 2026-08-24
+          format: date
+          type: string
+        impressions:
+          format: int64
+          type: integer
+        platform:
+          example: google_ads
+          type:
+          - string
+          - 'null'
+        rendered_spend:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RenderedMoneyView'
+        restating:
+          description: |-
+            Still inside the platform's restatement window — this day's numbers
+            may still change on a later ingest.
+          type: boolean
+        roas_platform:
+          format: double
+          type:
+          - number
+          - 'null'
+        roas_sanvi:
+          format: double
+          type:
+          - number
+          - 'null'
+        sanvi_revenue:
+          $ref: '#/components/schemas/MoneyView'
+          description: |-
+            Sanvi's own order-based revenue view. Never summed with
+            `conversion_value` — see the type's doc comment.
+        spend:
+          $ref: '#/components/schemas/MoneyView'
+      required:
+      - date
+      - impressions
+      - clicks
+      - spend
+      - conversions
+      - conversion_value
+      - sanvi_revenue
+      - restating
+      type: object
+    MetricsFreshnessView:
+      properties:
+        connections:
+          items:
+            $ref: '#/components/schemas/ConnectionFreshnessView'
+          type: array
+      required:
+      - connections
+      type: object
+    MetricsQueryResponse:
+      properties:
+        rows:
+          items:
+            $ref: '#/components/schemas/MetricPoint'
+          type: array
+      required:
+      - rows
+      type: object
+    MetricsSummaryResponse:
+      properties:
+        compared:
+          items:
+            $ref: '#/components/schemas/MetricsSummaryRow'
+          type:
+          - array
+          - 'null'
+        current:
+          items:
+            $ref: '#/components/schemas/MetricsSummaryRow'
+          type: array
+      required:
+      - current
+      type: object
+    MetricsSummaryRow:
+      description: |-
+        One currency's totals across the whole requested range — the range
+        itself collapsed, so unlike [`MetricPoint`] there is one row per
+        currency, not per day.
+      properties:
+        clicks:
+          format: int64
+          type: integer
+        conversion_value:
+          $ref: '#/components/schemas/MoneyView'
+        conversions:
+          format: double
+          type: number
+        currency:
+          type: string
+        impressions:
+          format: int64
+          type: integer
+        restating:
+          description: |-
+            `true` if any day in the range is still inside its platform's
+            restatement window.
+          type: boolean
+        roas_platform:
+          format: double
+          type:
+          - number
+          - 'null'
+        roas_sanvi:
+          format: double
+          type:
+          - number
+          - 'null'
+        sanvi_revenue:
+          $ref: '#/components/schemas/MoneyView'
+        spend:
+          $ref: '#/components/schemas/MoneyView'
+      required:
+      - currency
+      - impressions
+      - clicks
+      - spend
+      - conversions
+      - conversion_value
+      - sanvi_revenue
+      - restating
+      type: object
+    MoneyView:
+      description: |-
+        A stored amount is always integer minor units plus the originating ad
+        account's ISO-4217 currency. JPY ¥2,000 is represented as `2000` / `JPY`.
+      properties:
+        amount_minor:
+          example: 2000
+          format: int64
+          type: integer
+        currency:
+          example: JPY
+          type: string
+      required:
+      - amount_minor
+      - currency
+      type: object
+    Objective:
+      type: string
+    PatchAdGroupRequest:
+      properties:
+        bid:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BidSettings'
+        name:
+          type:
+          - string
+          - 'null'
+        targeting:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Targeting'
+      type: object
+    PatchAdRequest:
+      properties:
+        creative:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Creative'
+        landing_url:
+          type:
+          - string
+          - 'null'
+        tracking_template:
+          description: |-
+            `None` leaves the stored value unchanged; there is no way to clear it
+            back to unset in this slice (same limitation `PATCH /campaigns/{id}`
+            has for `schedule`).
+          type:
+          - string
+          - 'null'
+      type: object
+    PatchCampaignRequest:
+      description: |-
+        A merge patch: every field is optional and `None` leaves the stored
+        value unchanged. Used both by `PATCH` and by `validate`'s dry run.
+      properties:
+        ad_groups:
+          items:
+            $ref: '#/components/schemas/AdGroup'
+          type:
+          - array
+          - 'null'
+        budget:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Budget'
+        name:
+          type:
+          - string
+          - 'null'
+        objective:
+          example: sales
+          type:
+          - string
+          - 'null'
+        schedule:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Schedule'
+      type: object
+    PendingConnectionView:
+      properties:
+        accounts:
+          items:
+            $ref: '#/components/schemas/AccountView'
+          type: array
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        platform:
+          type: string
+        status:
+          type: string
+      required:
+      - id
+      - platform
+      - status
+      - accounts
+      type: object
+    PlatformAdsHealthReport:
+      properties:
+        connections_needing_attention:
+          items:
+            $ref: '#/components/schemas/ConnectionAttentionView'
+          type: array
+        freshness_summary:
+          $ref: '#/components/schemas/AdsFreshnessSummaryView'
+        platform_counts:
+          items:
+            $ref: '#/components/schemas/PlatformConnectionCountView'
+          type: array
+      required:
+      - platform_counts
+      - connections_needing_attention
+      - freshness_summary
+      type: object
+    PlatformConnectionCountView:
+      properties:
+        active:
+          format: int32
+          minimum: 0
+          type: integer
+        disconnected:
+          format: int32
+          minimum: 0
+          type: integer
+        expired:
+          format: int32
+          minimum: 0
+          type: integer
+        pending:
+          format: int32
+          minimum: 0
+          type: integer
+        platform:
+          type: string
+        total:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+      - platform
+      - active
+      - pending
+      - disconnected
+      - expired
+      - total
+      type: object
+    PlatformKey:
+      description: Adapter-owned identifier. Domain code never switches on a platform name.
+      type: string
+    PlatformView:
+      description: |-
+        Registry-derived catalog item. A platform without entitlement remains in
+        the list so clients can render its upgrade state rather than a dead end.
+      properties:
+        available:
+          type: boolean
+        capability_matrix:
+          $ref: '#/components/schemas/CapabilityMatrix'
+        connection_state:
+          $ref: '#/components/schemas/ConnectionState'
+        display_name:
+          example: Google Ads
+          type: string
+        entitlement_key:
+          type: string
+        key:
+          example: google_ads
+          type: string
+        upgrade_required:
+          type: boolean
+      required:
+      - key
+      - display_name
+      - entitlement_key
+      - available
+      - upgrade_required
+      - connection_state
+      - capability_matrix
+      type: object
+    PlatformsView:
+      description: |-
+        Stable envelope for the platform catalog. TASK-010 fills this only from
+        registered capability matrices; no platform name is hard-coded here.
+      properties:
+        platforms:
+          items:
+            $ref: '#/components/schemas/PlatformView'
+          type: array
+      required:
+      - platforms
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    PutBudgetCapRequest:
+      properties:
+        amount:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        auto_pause:
+          type:
+          - boolean
+          - 'null'
+        auto_resume_on_rollover:
+          type:
+          - boolean
+          - 'null'
+        confirm_below_current_spend:
+          type:
+          - boolean
+          - 'null'
+        declared_fx_basis:
+          type:
+          - string
+          - 'null'
+        dry_run:
+          type:
+          - boolean
+          - 'null'
+        fx_rate_date:
+          format: date
+          type:
+          - string
+          - 'null'
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+      required:
+      - period
+      - amount
+      type: object
+    PutBudgetCapResponse:
+      oneOf:
+      - $ref: '#/components/schemas/BudgetCap'
+      - $ref: '#/components/schemas/DryRunEvaluationResult'
+    RenderedMoneyView:
+      description: |-
+        A presentation-only conversion. Converted money is never persisted; its
+        rate date is required so chart and report values stay explainable.
+      properties:
+        amount_minor:
+          format: int64
+          type: integer
+        currency:
+          type: string
+        fx_rate_date:
+          example: 2026-08-24
+          format: date
+          type: string
+      required:
+      - amount_minor
+      - currency
+      - fx_rate_date
+      type: object
+    ResolveCampaignDriftRequest:
+      properties:
+        resolution:
+          $ref: '#/components/schemas/DriftResolution'
+        revision:
+          format: int64
+          type: integer
+      required:
+      - revision
+      - resolution
+      type: object
+    ResolvedCampaignDriftView:
+      properties:
+        campaign:
+          $ref: '#/components/schemas/Campaign'
+        replayed:
+          type: boolean
+        resolution:
+          $ref: '#/components/schemas/DriftResolution'
+        revision:
+          format: int64
+          type: integer
+      required:
+      - campaign
+      - revision
+      - resolution
+      - replayed
+      type: object
+    Schedule:
+      properties:
+        ends_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        starts_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+      type: object
+    ScheduleGranularity:
+      enum:
+      - daily
+      - hourly
+      type: string
+    SpendStatusItem:
+      properties:
+        actions_configured:
+          $ref: '#/components/schemas/BudgetActionsConfigured'
+        campaign_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        cap:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BudgetCap'
+        data_freshness:
+          $ref: '#/components/schemas/DataFreshness'
+        percentage:
+          format: double
+          type:
+          - number
+          - 'null'
+        period:
+          $ref: '#/components/schemas/BudgetPeriod'
+        projected_spend:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        provisional_lower_bound:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/AdvertisingMoney'
+        provisional_spend:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        scope:
+          type: string
+        settled_spend:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        spend_to_date:
+          $ref: '#/components/schemas/AdvertisingMoney'
+        unconvertible_spend_currencies:
+          description: |-
+            Currencies for which spend data could not be converted to the cap currency
+            because an FX rate was unavailable. When non-empty, spend totals are incomplete.
+          items:
+            type: string
+          type: array
+      required:
+      - scope
+      - period
+      - spend_to_date
+      - settled_spend
+      - provisional_spend
+      - projected_spend
+      - data_freshness
+      - actions_configured
+      type: object
+    SpendStatusReport:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/SpendStatusItem'
+          type: array
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        timezone:
+          description: |-
+            The tenant calendar timezone the report's period windows were
+            computed in (resolved from the tenant's locale settings). Surfaced on
+            the report so clients holding advertising access — but not
+            locale-settings access — render projections on the same clock
+            enforcement uses.
+          type: string
+      required:
+      - tenant_id
+      - timezone
+      - items
+      type: object
+    StartOAuthRequest:
+      properties:
+        redirect_uri:
+          type: string
+      required:
+      - redirect_uri
+      type: object
+    StartOAuthResponse:
+      properties:
+        authorization_url:
+          type: string
+        state:
+          type: string
+      required:
+      - authorization_url
+      - state
+      type: object
+    SubjectKeyRef:
+      description: |-
+        Enough of the capturing subject's identity to rebuild the exact
+        `SubjectRef` a later withdrawal re-check must query — without ever
+        persisting the raw email/phone TASK-014 forbids in this context. A
+        device ref, a tenant's own customer ref, and a platform user id are not
+        themselves the raw PII that rule targets, so they are stored verbatim;
+        an email-identified (`Contact`) subject stores nothing reconstructable,
+        and the retry path refuses rather than re-deriving a directive answer
+        against the wrong subject.
+      oneOf:
+      - properties:
+          device_ref:
+            type: string
+          kind:
+            enum:
+            - tenant_device
+            type: string
+        required:
+        - device_ref
+        - kind
+        type: object
+      - properties:
+          external_id:
+            type: string
+          kind:
+            enum:
+            - end_user
+            type: string
+        required:
+        - external_id
+        - kind
+        type: object
+      - properties:
+          kind:
+            enum:
+            - tenant_user
+            type: string
+          user_id:
+            format: int64
+            type: integer
+        required:
+        - user_id
+        - kind
+        type: object
+      - description: |-
+          Captured under an email-identified subject. No key material is
+          stored; a later withdrawal re-check has nothing safe to query and
+          must refuse rather than guess.
+        properties:
+          kind:
+            enum:
+            - contact
+            type: string
+        required:
+        - kind
+        type: object
+    Targeting:
+      description: Typed extension data. Arbitrary JSON is deliberately not admitted to the domain.
+      properties:
+        dimensions:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          propertyNames:
+            type: string
+          type: object
+        extension_fields:
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+          type: object
+      required:
+      - dimensions
+      - extension_fields
+      type: object
+    TargetingDimension:
+      type: string
+    TestTrackingEventResponse:
+      properties:
+        captured:
+          $ref: '#/components/schemas/ConversionEvent'
+        test:
+          description: |-
+            Always `true` — a marker so this synthetic call is never mistaken
+            for a real event by anything reading the response.
+          type: boolean
+      required:
+      - test
+      - captured
+      type: object
+    TrackConversionRequest:
+      properties:
+        click_ids:
+          $ref: '#/components/schemas/ClickIds'
+        currency:
+          type:
+          - string
+          - 'null'
+        device_id:
+          type:
+          - string
+          - 'null'
+        email:
+          type:
+          - string
+          - 'null'
+        event_id:
+          type: string
+        event_name:
+          type: string
+        order_ref:
+          type:
+          - string
+          - 'null'
+        phone:
+          type:
+          - string
+          - 'null'
+        value:
+          format: int64
+          type:
+          - integer
+          - 'null'
+      required:
+      - event_name
+      - event_id
+      type: object
+    TrackingSettings:
+      properties:
+        mappings:
+          additionalProperties:
+            additionalProperties:
+              type: string
+            propertyNames:
+              type: string
+            type: object
+          description: event name -> (platform key -> the platform's conversion action)
+          propertyNames:
+            type: string
+          type: object
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - tenant_id
+      - mappings
+      type: object
+    UnmatchedPlatformAds:
+      description: |-
+        What the platform listed that this campaign's tree cannot account for.
+        A published campaign whose ads were never pushed (or whose platform ids
+        were never recorded) can never match the platform's listings — surfacing
+        the gap is what keeps an all-pending response from reading as a clean,
+        successful poll when it is really "nothing correlated".
+      properties:
+        ads_without_platform_id:
+          description: |-
+            Ads in the campaign tree with no recorded platform id — these can
+            never match anything until the platform's ids are persisted onto them.
+          minimum: 0
+          type: integer
+        platform_ad_ids:
+          description: Platform-listed ad ids that matched no ad in the campaign tree.
+          items:
+            type: string
+          type: array
+      required:
+      - platform_ad_ids
+      - ads_without_platform_id
+      type: object
+    UploadState:
+      description: |-
+        Per-platform upload progress. Suppression is deliberately absent: a
+        directive suppresses the whole event, not one platform, and the frozen
+        `ConsentSnapshot` already carries which purpose was denied and by which
+        signal source. Duplicating that here would give suppression two homes
+        that can disagree.
+      oneOf:
+      - properties:
+          attempt_count:
+            format: int32
+            minimum: 0
+            type: integer
+          status:
+            enum:
+            - pending
+            type: string
+        required:
+        - status
+        type: object
+      - properties:
+          attempt_count:
+            format: int32
+            minimum: 0
+            type: integer
+          status:
+            enum:
+            - uploaded
+            type: string
+        required:
+        - status
+        type: object
+      - properties:
+          attempt_count:
+            format: int32
+            minimum: 0
+            type: integer
+          reason:
+            type: string
+          status:
+            enum:
+            - failed
+            type: string
+        required:
+        - reason
+        - status
+        type: object
+      - properties:
+          attempts:
+            format: int32
+            minimum: 0
+            type: integer
+          reason:
+            type: string
+          status:
+            enum:
+            - parked
+            type: string
+        required:
+        - reason
+        - attempts
+        - status
+        type: object
+      - properties:
+          status:
+            enum:
+            - retracted
+            type: string
+        required:
+        - status
+        type: object
+      - properties:
+          reason:
+            type: string
+          status:
+            enum:
+            - unpropagated
+            type: string
+        required:
+        - reason
+        - status
+        type: object
+    ValidationResultView:
+      properties:
+        violations:
+          description: Empty means valid. Same shape a failed create or patch would carry.
+          items:
+            $ref: '#/components/schemas/ValidationViolation'
+          type: array
+      required:
+      - violations
+      type: object
+    ValidationViolation:
+      properties:
+        code:
+          type: string
+        field_path:
+          type: string
+        message:
+          type: string
+      required:
+      - field_path
+      - code
+      - message
+      type: object
+    ValueSource:
+      enum:
+      - payment_record
+      - client_reported
+      type: string
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -19,7 +2263,7 @@ paths:
           description: Cross-tenant advertising connection health and freshness overview
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing platform.tenant.read permission
@@ -74,19 +2318,19 @@ paths:
           description: One page of the tenant's audiences
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
@@ -109,13 +2353,13 @@ paths:
           description: Draft audience created
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid audience parameters
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission
@@ -144,13 +2388,13 @@ paths:
           description: Audience refreshed
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Audience not found
@@ -203,19 +2447,19 @@ paths:
           description: Budget alerts history
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
@@ -240,13 +2484,13 @@ paths:
           description: Acknowledged budget alert
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.budget.manage permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Budget alert not found
@@ -285,19 +2529,19 @@ paths:
           description: One page of the budget caps defined for this tenant
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
@@ -329,13 +2573,13 @@ paths:
           description: Budget cap created or updated (an applied write carries an `ETag` header with the new version), or dry-run simulation result
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.budget.manage permission
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: 'Cap conflict, distinguished by the problem `reason` member: `cap_version_required` (update without If-Match), `stale_revision` (lost version race), `cap_below_current_spend` (lowering below period spend without confirmation)'
@@ -374,19 +2618,19 @@ paths:
           description: One page of the tenant's campaigns, newest first
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
@@ -417,25 +2661,25 @@ paths:
           description: Draft campaign created. Never touches the platform.
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed Idempotency-Key or invalid campaign fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Connection not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Connection is not active
@@ -464,13 +2708,13 @@ paths:
           description: The campaign's current intent and revision
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
@@ -517,31 +2761,31 @@ paths:
           description: Intent updated; if published, the edit was also pushed to the platform
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign or creative not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale revision or idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -589,31 +2833,31 @@ paths:
           description: Ad group appended; if published, pushed to the platform
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale revision or idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -671,31 +2915,31 @@ paths:
           description: Ad group updated; if published, pushed to the platform
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed headers or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign or ad group not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale revision or idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -753,31 +2997,31 @@ paths:
           description: Ad appended; if published, pushed to the platform
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign, ad group or creative not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale revision or idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -845,31 +3089,31 @@ paths:
           description: Ad updated; if published, pushed to the platform
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed headers, invalid creative id, or invalid fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign, ad group, ad or creative not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale revision or idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -903,13 +3147,13 @@ paths:
           description: Campaign budget cap (carries an `ETag` header with the cap version)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No budget cap found for this campaign and period
@@ -951,13 +3195,13 @@ paths:
           description: Campaign budget cap created/updated (an applied write carries an `ETag` header with the new version) or dry run result
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.budget.manage permission
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: 'Cap conflict, distinguished by the problem `reason` member: `cap_version_required` (update without If-Match), `stale_revision` (lost version race), `cap_below_current_spend` (lowering below period spend without confirmation)'
@@ -1006,25 +3250,25 @@ paths:
           description: 'Newest-first attributed change log: actor, source (sanvi|platform), before/after state'
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
@@ -1066,31 +3310,31 @@ paths:
           description: Drift resolution applied or replayed
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing or malformed idempotency key, or invalid resolution
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale revision, idempotency conflict, or resolution in progress
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -1130,31 +3374,31 @@ paths:
           description: Paused on the platform
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed Idempotency-Key
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign is not yet published, or an idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -1190,31 +3434,31 @@ paths:
           description: Live on the platform; external_id is now set. Replaying publish on an already-published campaign is a no-op success.
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign fails platform validation (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -1250,31 +3494,31 @@ paths:
           description: Resumed on the platform
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed Idempotency-Key
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign is not yet published, or an idempotency conflict
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -1303,25 +3547,25 @@ paths:
           description: Fresh per-ad review verdicts; rejection wording is the platform's own
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not published yet — review has no meaning for a draft
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign or connection not found
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Platform adapter unavailable
@@ -1360,19 +3604,19 @@ paths:
           description: Field-addressed violations; empty means valid. Never writes.
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid objective in the candidate body
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Campaign not found
@@ -1390,7 +3634,7 @@ paths:
           description: Every connection with server-computed health
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
@@ -1402,30 +3646,30 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateConnectionRequest'
+              $ref: '#/components/schemas/AdvertisingCreateConnectionRequest'
         required: true
       responses:
         '200':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConnectionView'
+                $ref: '#/components/schemas/AdvertisingConnectionView'
           description: Connection finalized and active
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Chosen account was not among the fetched accounts, or invalid currency/timezone
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.connect permission or fresh MFA missing
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Connection not found
@@ -1450,13 +3694,13 @@ paths:
           description: Disconnected in Sanvi; the platform side is untouched
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.connect permission or fresh MFA missing
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Connection not found
@@ -1499,13 +3743,13 @@ paths:
           description: Code redeemed; connection is pending account selection
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Forged, expired, replayed, or cross-tenant state, or the code could not be exchanged
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.connect permission
@@ -1536,13 +3780,13 @@ paths:
           description: Authorization URL and opaque state; the frontend never constructs the URL and never sees a token
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown platform or missing redirect_uri
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.connect permission, missing platform entitlement, or fresh MFA missing
@@ -1583,19 +3827,19 @@ paths:
           description: Captured conversion events, newest first
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
@@ -1624,13 +3868,13 @@ paths:
           description: Conversion event diagnostics story
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Conversion not found
@@ -1659,19 +3903,19 @@ paths:
           description: Conversion event re-queued for upload
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Conversion not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Conversion retry refused
@@ -1710,19 +3954,19 @@ paths:
           description: One page of the tenant's creatives on entitled platforms
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission or advertising platform entitlement
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
@@ -1753,25 +3997,25 @@ paths:
           description: Creative created with upload-time matrix validation.
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed Idempotency-Key or invalid creative fields (advertising/campaign-invalid carries field violations)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Connection not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Connection is not active
@@ -1796,13 +4040,13 @@ paths:
           description: Creative deleted
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.campaign.write permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Creative not found
@@ -1830,13 +4074,13 @@ paths:
           description: Stored creative specification and metadata
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Creative not found
@@ -1870,13 +4114,13 @@ paths:
           description: Spec-rendered placement previews
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission or platform entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Creative not found
@@ -1941,13 +4185,13 @@ paths:
           description: Rollup rows for the requested range and grain, both ROAS numbers labelled separately
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid date range, unknown group_by, or a span exceeding the configured maximum
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
@@ -2000,13 +4244,13 @@ paths:
           description: The same labelled columns as /ads/metrics, streamed as CSV — no blended ROAS column
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid date range, unknown group_by, an unsupported query parameter (e.g. render_currency), or a span exceeding the configured maximum
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
@@ -2024,7 +4268,7 @@ paths:
           description: Per-connection last-ingested-at and lag — what a stalled sync looks like, not a guess based on the clock
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
@@ -2064,13 +4308,13 @@ paths:
           description: Whole-range totals per currency, with an optional prior-period comparison
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid date range or a span exceeding the configured maximum
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission
@@ -2088,7 +4332,7 @@ paths:
           description: Registry-derived, versioned advertising capability catalog
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission or both advertising platform entitlements
@@ -2112,7 +4356,7 @@ paths:
           description: Spend status and run-rate projection across tenant and campaign scopes
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.read permission
@@ -2130,7 +4374,7 @@ paths:
           description: Event-name to platform-conversion-action mappings
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.connect permission
@@ -2149,7 +4393,7 @@ paths:
           description: Settings saved
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.connect permission
@@ -2173,7 +4417,7 @@ paths:
           description: What was captured, the resolver's decision, and why
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.metrics.read permission

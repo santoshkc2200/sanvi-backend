@@ -405,6 +405,24 @@ rotate-credentials *args:
 openapi:
     ./scripts/check-openapi.sh
 
+spec-lint *args:
+    bash ./scripts/spec-lint.sh {{args}}
+
+spec-freeze-check *args:
+    bash ./scripts/spec-freeze-check.sh {{args}}
+
+api-docs *args:
+    bash ./scripts/api-docs.sh {{args}}
+
+api-docs-check:
+    bash ./scripts/api-docs.sh --check
+
+test-quotas:
+    bash ./scripts/test-quotas.sh
+
+replay-suite candidate="local":
+    bash ./scripts/replay-suite.sh {{candidate}}
+
 i18n:
     cargo run -p sanvi-cli -- i18n check
 
@@ -414,7 +432,7 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test test-dependency-matrix check-timeouts check-migration-expand-contract rolling-restart-dry-run
+ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test test-perf openapi spec-lint spec-freeze-check api-docs-check replay-suite route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test test-dependency-matrix check-timeouts check-migration-expand-contract rolling-restart-dry-run
 
 # TASK-019 (FR-1103): run the k6 load shapes against a running API and
 # write benchmarks/<scenario>/<tag>.json. Point PERF_BASE_URL at the API
@@ -491,4 +509,4 @@ ga-checklist-check:
     ./scripts/check-ga-checklist.sh
 
 # `ci` with the low-noise variants of the two chattiest gates.
-ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test test-dependency-matrix check-timeouts check-migration-expand-contract rolling-restart-dry-run
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet test-perf openapi spec-lint spec-freeze-check api-docs-check replay-suite route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test test-dependency-matrix check-timeouts check-migration-expand-contract rolling-restart-dry-run

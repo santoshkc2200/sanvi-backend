@@ -84,11 +84,46 @@ pub async fn create_media_asset(
     body: web::Json<CreateAssetInput>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let key = idempotency_key(&request)?;
-    let view = state
+    let runtime = request.app_data::<web::Data<sanvi_http::quota_middleware::QuotaRuntime>>();
+    let reservation = if let Some(runtime) = runtime {
+        let payload = serde_json::to_vec(&*body)
+            .map_err(|_| ApiError::internal("media payload serialization failed"))?;
+        runtime
+            .reserve_external_payload(
+                tenant.0.tenant_id,
+                sanvi_http::quotas::QuotaDimension::StorageBytes,
+                &key,
+                body.size_bytes,
+                &payload,
+            )
+            .await?
+    } else {
+        None
+    };
+    let result = state
         .create_asset_upload
-        .execute(tenant.0.tenant_id, key, body.into_inner())
-        .await
-        .map_err(media_problem)?;
+        .execute(tenant.0.tenant_id, key.clone(), body.into_inner())
+        .await;
+    if let (Some(runtime), Some(ticket)) = (runtime, &reservation) {
+        use sanvi_http::external_quotas::ExternalOutcome;
+        let outcome = match &result {
+            Ok(view) => ExternalOutcome::Accepted {
+                asset_id: Some(view.asset_id.clone()),
+            },
+            Err(MediaError::BadRequest { .. } | MediaError::NotFound { .. }) => {
+                ExternalOutcome::Rejected
+            }
+            Err(_) => ExternalOutcome::Ambiguous,
+        };
+        runtime.finish_external(ticket, outcome).await?;
+    }
+    let view = result.map_err(media_problem)?;
+    if let Some(runtime) = runtime {
+        // Also attempt binding after a shadow-mode accounting outage.
+        runtime
+            .bind_asset(tenant.0.tenant_id, &key, &view.asset_id)
+            .await?;
+    }
     Ok(HttpResponse::Created().json(view))
 }
 
@@ -200,12 +235,25 @@ pub async fn delete_media_asset(
     tenant: CurrentTenant,
     _permission: RequiredPermission,
     asset_id: web::Path<String>,
+    request: HttpRequest,
 ) -> Result<HttpResponse, actix_web::Error> {
-    state
+    let result = state
         .delete_media_asset
-        .execute(tenant.0.tenant_id, asset_id.into_inner())
-        .await
-        .map_err(media_problem)?;
+        .execute(tenant.0.tenant_id, asset_id.to_string())
+        .await;
+    if matches!(&result, Ok(()) | Err(MediaError::NotFound { .. }))
+        && let Some(runtime) =
+            request.app_data::<web::Data<sanvi_http::quota_middleware::QuotaRuntime>>()
+        && let Err(error) = runtime.release_asset(tenant.0.tenant_id, &asset_id).await
+    {
+        if result.is_ok() {
+            return Err(error.into());
+        }
+        // A confirmed upstream 404 heals a delete whose local accounting
+        // commit previously failed. Preserve its original HTTP contract.
+        tracing::warn!(%error,"missing media asset quota release unavailable; retry reconciliation");
+    }
+    result.map_err(media_problem)?;
     Ok(HttpResponse::NoContent().finish())
 }
 

@@ -49,6 +49,7 @@ use utoipa::OpenApi;
         sanvi_tenancy::adapters::http::resume_tenant,
         sanvi_tenancy::adapters::http::archive_tenant,
         sanvi_tenancy::adapters::http::get_context,
+        sanvi_tenancy::adapters::http::get_usage,
         sanvi_tenancy::adapters::http::get_settings,
         sanvi_tenancy::adapters::http::put_settings,
         sanvi_tenancy::adapters::http::slug_availability,
@@ -252,6 +253,9 @@ use utoipa::OpenApi;
         sanvi_media::adapters::http::handlers::create_media_asset_delivery,
     ),
     components(schemas(
+        sanvi_http::quotas::TenantUsage,
+        sanvi_http::quotas::QuotaDimension,
+        sanvi_http::quotas::DimensionUsage,
         ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
         RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView,
         CampaignView, CampaignsView, CreateCampaignRequest, PatchCampaignRequest,

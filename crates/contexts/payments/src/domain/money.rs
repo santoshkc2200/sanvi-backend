@@ -51,6 +51,7 @@ impl Currency {
 /// A minor-unit amount: `2000` + `JPY` is ¥2,000; `1999` + `USD` is
 /// $19.99. Amounts are non-negative (direction is the caller's concept).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = PaymentsMoney)]
 pub struct Money {
     /// Integer count of the currency's minor units — ¥2,000 is `2000`.
     #[schema(example = 2000)]

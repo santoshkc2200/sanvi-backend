@@ -11,6 +11,7 @@ use utoipa::ToSchema;
 
 /// An amount in the currency's minor unit (cents for USD/JPY).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
+#[schema(as = DomainsMoney)]
 pub struct Money {
     pub minor: i64,
     pub currency: String,

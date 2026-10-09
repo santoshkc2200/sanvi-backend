@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform.external_quota_reservations (tenant_id,dimension,key_hash,amount,period_start)\n            VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING amount",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "amount"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "51bf0ee76bc97131163b5cd76773fef2e7b0e7e4151588dd67949ffc6d3cf3b0"
+}

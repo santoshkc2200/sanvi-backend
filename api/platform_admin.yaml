@@ -1,3 +1,419 @@
+components:
+  schemas:
+    ApplicationFeeView:
+      description: One tenant's application-fee configuration (operator console).
+      properties:
+        basis_points:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        enabled:
+          description: Off everywhere by default in 0.10.0.
+          type: boolean
+        fixed_amount_minor:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        fixed_currency:
+          type:
+          - string
+          - 'null'
+        minimum_minor:
+          format: int64
+          type: integer
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - tenant_id
+      - enabled
+      - minimum_minor
+      type: object
+    ApprovalStatus:
+      enum:
+      - pending
+      - approved
+      - rejected
+      - executed
+      type: string
+    ApprovalView:
+      description: One approval request as exposed by the API.
+      properties:
+        action_type:
+          type: string
+        decided_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        decided_by:
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        payload: {}
+        requested_at:
+          format: date-time
+          type: string
+        requested_by:
+          type: string
+        status:
+          $ref: '#/components/schemas/ApprovalStatus'
+      required:
+      - id
+      - requested_by
+      - action_type
+      - payload
+      - status
+      - requested_at
+      type: object
+    CreateImpersonationRequest:
+      properties:
+        duration_minutes:
+          format: int32
+          minimum: 0
+          type: integer
+        mode:
+          $ref: '#/components/schemas/ImpersonationMode'
+        reason:
+          type: string
+        target_user_id:
+          type: string
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - tenant_id
+      - target_user_id
+      - reason
+      - duration_minutes
+      type: object
+    GrantEntitlementRequest:
+      properties:
+        enabled:
+          type: boolean
+        expires_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        feature_key:
+          type: string
+        limit:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        reason:
+          type:
+          - string
+          - 'null'
+      required:
+      - feature_key
+      type: object
+    GrantEntitlementResultView:
+      oneOf:
+      - enum:
+        - granted
+        type: string
+      - properties:
+          approval_required:
+            properties:
+              approval_id:
+                type: string
+            required:
+            - approval_id
+            type: object
+        required:
+        - approval_required
+        type: object
+    ImpersonationGrantView:
+      description: One grant as exposed by the API.
+      properties:
+        actor_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        mode:
+          $ref: '#/components/schemas/ImpersonationMode'
+        reason:
+          type: string
+        revoked_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        revoked_by:
+          type:
+          - string
+          - 'null'
+        target_user_id:
+          type: string
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - id
+      - actor_id
+      - tenant_id
+      - target_user_id
+      - reason
+      - mode
+      - created_at
+      - expires_at
+      type: object
+    ImpersonationMode:
+      description: |-
+        How much the impersonated session may do (mirrors the HTTP layer's
+        mode; the adapter converts).
+      enum:
+      - read_only
+      - read_write
+      type: string
+    OverrideView:
+      description: One stored override row (operator console).
+      properties:
+        enabled:
+          type: boolean
+        expires_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        feature:
+          type: string
+        granted_by:
+          type:
+          - string
+          - 'null'
+        granted_reason:
+          type:
+          - string
+          - 'null'
+        limit:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - tenant_id
+      - feature
+      - enabled
+      - updated_at
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    SetApplicationFeeRequest:
+      properties:
+        basis_points:
+          description: Basis points of the charge total (1..=10000).
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        enabled:
+          description: Master switch. Enabling without a component is a validation error.
+          type: boolean
+        fixed_amount_minor:
+          description: Flat component in minor units, applied to charges in its currency.
+          format: int64
+          type:
+          - integer
+          - 'null'
+        fixed_currency:
+          type:
+          - string
+          - 'null'
+        minimum_minor:
+          description: |-
+            Floor on the computed fee, minor units of the charge currency
+            (currency-aware by interpretation: JPY minor units are whole yen;
+            USD minor units are cents).
+          format: int64
+          type: integer
+        reason:
+          description: Why the change is being made — audited with the actor.
+          type:
+          - string
+          - 'null'
+      type: object
+    TenantAdminPageView:
+      description: One page of the operator tenant search.
+      properties:
+        next_after:
+          description: Canonical cursor for the next request's after parameter.
+          type:
+          - string
+          - 'null'
+        next_cursor:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TenantViewCursorView'
+        tenants:
+          items:
+            $ref: '#/components/schemas/TenantAdminView'
+          type: array
+      required:
+      - tenants
+      type: object
+    TenantAdminView:
+      description: One row of the platform admin tenant search.
+      properties:
+        active_impersonations:
+          description: Active impersonation grants into this tenant.
+          format: int32
+          minimum: 0
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        default_locale:
+          type: string
+        display_name:
+          type: string
+        member_count:
+          description: Active members (identity projection).
+          format: int32
+          minimum: 0
+          type: integer
+        override_count:
+          description: Non-expired entitlement overrides (access context).
+          format: int32
+          minimum: 0
+          type: integer
+        region:
+          type: string
+        slug:
+          type: string
+        status:
+          type: string
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - tenant_id
+      - slug
+      - display_name
+      - status
+      - region
+      - default_locale
+      - created_at
+      - member_count
+      - override_count
+      - active_impersonations
+      type: object
+    TenantViewCursorView:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - created_at
+      - tenant_id
+      type: object
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -23,22 +439,11 @@ paths:
         required: false
         schema:
           type: string
-      - description: 'Cursor: created_at of the last row.'
+      - description: Opaque next-page cursor returned as next_after; pass it unchanged.
         in: query
-        name: after_created_at
+        name: after
         required: false
         schema:
-          format: date-time
-          type: string
-      - description: 'Cursor: tenant id of the last row.'
-        in: query
-        name: after_id
-        required: false
-        schema:
-          examples:
-          - '873698342314721281'
-          format: snowflake-id
-          pattern: ^[1-9][0-9]{0,18}$
           type: string
       - in: query
         name: limit
@@ -61,13 +466,13 @@ paths:
           description: One page of tenant views
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid filter
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
@@ -97,13 +502,13 @@ paths:
           description: The tenant view
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Tenant not found
@@ -145,19 +550,19 @@ paths:
           description: Pending requests
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout — the request exceeded its budget
@@ -187,19 +592,19 @@ paths:
           description: Approved and executed
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied, self-approval, or fresh MFA missing
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Approval not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Approval no longer pending
@@ -231,19 +636,19 @@ paths:
           description: Rejected
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied, self-approval, or fresh MFA missing
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Approval not found
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Approval no longer pending
@@ -295,19 +700,19 @@ paths:
           description: Active grants
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout — the request exceeded its budget
@@ -331,13 +736,13 @@ paths:
           description: Grant created
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid request
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied, target not a member, or fresh MFA missing
@@ -370,13 +775,13 @@ paths:
           description: Revoked grant
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied or fresh MFA missing
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Grant not found
@@ -402,7 +807,7 @@ paths:
           description: Disabled
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied or fresh MFA missing
@@ -433,7 +838,7 @@ paths:
           description: The configuration (disabled when never configured)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
@@ -471,13 +876,13 @@ paths:
           description: Configuration stored
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid configuration
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied or fresh MFA missing
@@ -513,7 +918,7 @@ paths:
           description: Override rows
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied
@@ -550,13 +955,13 @@ paths:
           description: Granted (or approval required)
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid request
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied or fresh MFA missing
@@ -591,7 +996,7 @@ paths:
           description: Revoked
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Permission denied or fresh MFA missing

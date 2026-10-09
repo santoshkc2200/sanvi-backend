@@ -1532,6 +1532,22 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/tenant/usage",
+      "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::get_usage",
+      "permission": "tenancy.settings.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional + commercial tenant/credential counting",
+      "evidence": [
+        "crates/contexts/tenancy/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      }
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/tenant/settings",
       "handler": "crates/contexts/tenancy/src/adapters/http/handlers.rs::get_settings",
       "permission": "tenancy.settings.read",

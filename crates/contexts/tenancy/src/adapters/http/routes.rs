@@ -9,9 +9,9 @@ use actix_web::web;
 use sanvi_http::{ResourceSpec, require_permission};
 
 use super::handlers::{
-    activate_tenant, archive_tenant, get_context, get_settings, get_tenant, list_tenants,
-    provision_tenant, public_tenant_context, put_settings, resume_tenant, slug_availability,
-    suspend_tenant,
+    activate_tenant, archive_tenant, get_context, get_settings, get_tenant, get_usage,
+    list_tenants, provision_tenant, public_tenant_context, put_settings, resume_tenant,
+    slug_availability, suspend_tenant,
 };
 
 /// Platform-scoped tenant administration (classified as a public middleware
@@ -37,6 +37,11 @@ pub fn platform_routes(cfg: &mut web::ServiceConfig) {
 /// invitation routes — two scopes with the same path would shadow each
 /// other in actix's router.
 pub fn tenant_scope_routes(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::resource("/usage")
+            .app_data(require_permission!("tenancy.settings.read", tenant))
+            .route(web::get().to(get_usage)),
+    );
     let settings_map = sanvi_http::PermissionMap::new(vec![
         (
             Method::GET,
@@ -80,6 +85,12 @@ pub fn public_routes(cfg: &mut web::ServiceConfig) {
 /// enumerated by the permission catalog CI test. `/api/v1/tenant/context`
 /// is the explicitly-declared public exemption (bootstrap endpoint).
 pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
+    (
+        "/api/v1/tenant/usage",
+        Method::GET,
+        "tenancy.settings.read",
+        ResourceSpec::Tenant,
+    ),
     (
         "/api/v1/platform/tenants",
         Method::POST,

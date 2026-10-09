@@ -106,10 +106,14 @@ fn default_true() -> bool {
     true
 }
 
+pub use sanvi_http::config::PlatformApiConfig;
+
 /// Aggregate configuration for the API process.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AppConfig {
+    #[serde(default)]
+    pub platform: PlatformApiConfig,
     #[serde(default)]
     pub ids: IdsConfig,
     pub server: ServerConfig,
@@ -139,6 +143,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            platform: PlatformApiConfig::default(),
             ids: IdsConfig::default(),
             server: ServerConfig::default(),
             database: DatabaseConfig::default(),

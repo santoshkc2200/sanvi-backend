@@ -206,6 +206,12 @@ async fn map_error(response: reqwest::Response) -> MediaError {
                 detail: "upload payload too large".to_string(),
             }
         }
+        408 | 429 => {
+            tracing::warn!(status = status.as_u16(), code = %problem.code, "upstream media timeout or throttle; outcome uncertain");
+            MediaError::Unavailable {
+                detail: "media service temporarily unavailable".to_string(),
+            }
+        }
         status_code if (400..500).contains(&status_code) => {
             if status_code == 401 || status_code == 403 {
                 tracing::error!(status = status_code, code = %problem.code, detail = %problem.detail, "upstream service authentication failure");
@@ -877,6 +883,35 @@ mod tests {
             matches!(&err, crate::domain::MediaError::NotFound { code, detail } if code == "not_found" && detail == "asset gone"),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn upstream_timeout_and_throttle_are_ambiguous_unavailable_errors() {
+        let mock = MockServer::start(vec![
+            (
+                408,
+                serde_json::json!({"code":"timeout","detail":"uncertain request"}),
+            ),
+            (
+                429,
+                serde_json::json!({"code":"throttled","detail":"retry later"}),
+            ),
+        ])
+        .await;
+        let adapter = super::HitoxMediaAdapter::new(crate::config::MediaConfig {
+            base_url: format!("http://{}", mock.addr),
+            service_api_key: "test-key".into(),
+        });
+        for _ in 0..2 {
+            let error = adapter
+                .get_asset(test_tenant(), "asset-1")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, crate::domain::MediaError::Unavailable { .. }),
+                "ambiguous upstream result cannot be treated as definitive rejection: {error:?}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -18,6 +18,7 @@ pub fn run(check: bool, write: bool) -> anyhow::Result<()> {
     let doc = ApiDoc::openapi();
     let mut json = serde_json::to_value(&doc).context("failed to serialize openapi document")?;
     annotate_snowflake_ids(&mut json);
+    normalize_contract(&mut json);
 
     if !check && !write {
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
@@ -160,6 +161,100 @@ fn is_snowflake_field(name: &str) -> bool {
     )
 }
 
+/// Document shared wire behavior once, without renaming transport fields.
+fn normalize_contract(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(properties) = object
+                .get_mut("properties")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for (name, schema) in properties {
+                    let string = schema.get("type").is_some_and(|kind| {
+                        kind == "string"
+                            || kind
+                                .as_array()
+                                .is_some_and(|types| types.iter().any(|kind| kind == "string"))
+                    });
+                    if name.ends_with("_at") && string {
+                        schema["format"] = serde_json::json!("date-time");
+                    }
+                }
+            }
+            if let Some(content) = object
+                .get_mut("content")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                let problem = content
+                    .get("application/json")
+                    .and_then(|m| m.get("schema"))
+                    .and_then(|s| s.get("$ref"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|r| r.ends_with("/ProblemDetail"));
+                if problem && let Some(media) = content.remove("application/json") {
+                    content.insert("application/problem+json".into(), media);
+                }
+            }
+            for child in object.values_mut() {
+                normalize_contract(child);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                normalize_contract(child);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_refs(value: &serde_json::Value, refs: &mut std::collections::BTreeSet<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str) {
+                refs.insert(reference.to_owned());
+            }
+            for child in object.values() {
+                collect_refs(child, refs);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                collect_refs(child, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn context_document(full_doc: &serde_json::Value, context: &str) -> serde_json::Value {
+    let mut result = serde_json::json!({"openapi": "3.1.0", "info": full_doc.get("info").cloned().unwrap_or_default(), "paths": extract_paths(full_doc, context), "components": {}});
+    let mut pending = std::collections::BTreeSet::new();
+    let mut visited = std::collections::BTreeSet::new();
+    collect_refs(&result, &mut pending);
+    while let Some(reference) = pending.pop_first() {
+        if !visited.insert(reference.clone()) {
+            continue;
+        }
+        if let Some(pointer) = reference.strip_prefix('#')
+            && let Some(component) = full_doc.pointer(pointer)
+        {
+            let parts = pointer.split('/').collect::<Vec<_>>();
+            if parts.len() == 4 && parts[1] == "components" {
+                result["components"][parts[2]][parts[3]] = component.clone();
+                collect_refs(component, &mut pending);
+            }
+        }
+    }
+    if let Some(schemes) = full_doc.pointer("/components/securitySchemes") {
+        result["components"]["securitySchemes"] = schemes.clone();
+    }
+    if let Some(security) = full_doc.get("security") {
+        result["security"] = security.clone();
+    }
+    result
+}
+
 /// (Re)write api/{tag}.yaml for every tag present in the generated paths.
 fn write_specs(full_doc: &serde_json::Value) -> anyhow::Result<()> {
     let dir = std::path::Path::new(API_DIR);
@@ -170,12 +265,7 @@ fn write_specs(full_doc: &serde_json::Value) -> anyhow::Result<()> {
         bail!("no tagged paths in the generated document");
     }
     for tag in tags {
-        let paths = extract_paths(full_doc, &tag);
-        let doc = serde_json::json!({
-            "openapi": "3.1.0",
-            "info": full_doc.get("info").cloned().unwrap_or(serde_json::Value::Null),
-            "paths": paths,
-        });
+        let doc = context_document(full_doc, &tag);
         let yaml = serde_yaml::to_string(&doc).context("failed to serialize yaml")?;
         let path = dir.join(format!("{tag}.yaml"));
         std::fs::write(&path, yaml)?;
@@ -249,6 +339,16 @@ fn check_context(
             committed_yaml
         );
     }
+    let generated = context_document(full_doc, context);
+    let nonempty = |v: &serde_json::Value| v.as_object().is_some_and(|o| !o.is_empty());
+    if generated.get("components").filter(|v| nonempty(v))
+        != committed.get("components").filter(|v| nonempty(v))
+    {
+        bail!(
+            "component schemas differ from {}; regenerate the complete document",
+            path.display()
+        );
+    }
     Ok(())
 }
 
@@ -280,6 +380,71 @@ fn extract_paths(doc: &serde_json::Value, context: &str) -> BTreeMap<String, ser
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn merged_context_connection_schemas_cannot_overwrite_each_other() {
+        let document = serde_json::to_value(ApiDoc::openapi()).unwrap();
+        let paths = &document["paths"];
+        let payment = &paths["/api/v1/tenant/payments/connections/{id}"]["get"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["$ref"];
+        let advertising = &document["components"]["schemas"]["ConnectionsView"]["properties"]["connections"]
+            ["items"]["$ref"];
+        assert!(advertising.is_string());
+        assert_ne!(
+            payment, advertising,
+            "different wire DTOs must not share one schema name"
+        );
+        let payment_schema = document
+            .pointer(payment.as_str().unwrap().trim_start_matches('#'))
+            .unwrap();
+        assert!(payment_schema["properties"]["provider"].is_object());
+        assert!(payment_schema["properties"]["capabilities"].is_object());
+        let payment_request = &paths["/api/v1/tenant/payments/connections"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["$ref"];
+        let advertising_request = &paths["/api/v1/tenant/ads/connections"]["post"]["requestBody"]["content"]
+            ["application/json"]["schema"]["$ref"];
+        assert_ne!(payment_request, advertising_request);
+    }
+
+    #[test]
+    fn identical_shared_primitive_schemas_match_directly_before_merge() {
+        let schema = |value| {
+            let mut json = serde_json::to_value(value).unwrap();
+            json.as_object_mut().unwrap().remove("description");
+            json
+        };
+        let identity = schema(<sanvi_identity::domain::Locale as utoipa::PartialSchema>::schema());
+        let localization =
+            schema(<sanvi_localization::domain::Locale as utoipa::PartialSchema>::schema());
+        let tenancy = schema(<sanvi_tenancy::domain::Locale as utoipa::PartialSchema>::schema());
+        assert_eq!(identity, localization);
+        assert_eq!(identity, tenancy);
+        let admin = schema(<sanvi_platform_admin::domain::impersonation::ImpersonationMode as utoipa::PartialSchema>::schema());
+        let http = schema(<sanvi_http::ImpersonationMode as utoipa::PartialSchema>::schema());
+        assert_eq!(admin, http);
+    }
+
+    #[test]
+    fn public_contract_normalizes_problem_media_and_timestamps() {
+        let mut document = json!({"paths": {"/api/v1/things": {"get": {"responses": {"400": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProblemDetail"}}}}}}}}, "components": {"schemas": {"Thing": {"properties": {"created_at": {"type": "string"}}}}}});
+        normalize_contract(&mut document);
+        let content = &document["paths"]["/api/v1/things"]["get"]["responses"]["400"]["content"];
+        assert!(content["application/problem+json"].is_object());
+        assert!(content.get("application/json").is_none());
+        assert_eq!(
+            document["components"]["schemas"]["Thing"]["properties"]["created_at"]["format"],
+            "date-time"
+        );
+    }
+
+    #[test]
+    fn split_document_retains_reachable_component_schemas() {
+        let document = json!({"info": {}, "paths": {"/api/v1/things": {"get": {"tags": ["things"], "responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}}}}}}, "components": {"schemas": {"Thing": {"properties": {"nested": {"$ref": "#/components/schemas/Nested"}}}, "Nested": {"type": "string"}, "Unused": {"type": "integer"}}}});
+        let split = context_document(&document, "things");
+        assert!(split["components"]["schemas"]["Thing"].is_object());
+        assert!(split["components"]["schemas"]["Nested"].is_object());
+        assert!(split["components"]["schemas"].get("Unused").is_none());
+    }
 
     #[test]
     fn extract_paths_filters_by_tag() {

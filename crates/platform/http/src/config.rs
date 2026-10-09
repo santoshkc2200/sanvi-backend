@@ -3,6 +3,14 @@ use serde::{Deserialize, Serialize};
 use crate::abuse::AbuseSurface;
 use crate::compression::CompressionConfig;
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PlatformApiConfig {
+    /// Flags only enable rejection; counting remains live while disabled.
+    pub rate_limits: bool,
+    pub quotas: bool,
+}
+
 /// HTTP server settings. All values are validated together at startup.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -727,6 +735,21 @@ impl WindowQuota {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn commercial_enforcement_defaults_to_counting_only() {
+        let config: super::PlatformApiConfig =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!config.rate_limits);
+        assert!(!config.quotas);
+        let enabled: super::PlatformApiConfig = serde_json::from_value(serde_json::json!({
+            "rate_limits": true,
+            "quotas": true
+        }))
+        .unwrap();
+        assert!(enabled.rate_limits);
+        assert!(enabled.quotas);
+    }
+
     use super::*;
 
     #[test]

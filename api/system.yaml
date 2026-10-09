@@ -1,3 +1,201 @@
+components:
+  schemas:
+    BuildDetails:
+      description: |-
+        Release stamp for field measurements (`GET /api/v1/system/build`,
+        FR-1102): the exact build that served a response, so a latency sample
+        from RUM, the error tracker, or a status page can always be attributed.
+        Carries no tenant data and nothing but the four stamp fields.
+      properties:
+        built_at:
+          description: RFC 3339 build timestamp (UTC).
+          example: 2026-08-15T09:00:00Z
+          format: date-time
+          type: string
+        commit:
+          description: Git commit the binary was built from.
+          example: 3d0a5c1e
+          type: string
+        environment:
+          description: |-
+            Deployment environment the process was configured for
+            (`local`, `staging`, `production`).
+          example: staging
+          type: string
+        version:
+          description: Semantic version of the running binary.
+          example: 0.1.0
+          type: string
+      required:
+      - commit
+      - version
+      - built_at
+      - environment
+      type: object
+    BuildInfo:
+      description: Immutable build/version information, captured at compile time.
+      properties:
+        built_at:
+          description: RFC 3339 build timestamp (UTC).
+          example: 2026-08-15T09:00:00Z
+          format: date-time
+          type: string
+        commit:
+          description: Git commit the binary was built from (set by the build pipeline).
+          example: 3d0a5c1e
+          type: string
+        rust_version:
+          description: Rust toolchain the binary was compiled with.
+          example: 1.93.1
+          type: string
+        service_name:
+          description: OTel service name of this deployment unit.
+          example: sanvi-api
+          type: string
+        version:
+          description: Semantic version of the running binary.
+          example: 0.1.0
+          type: string
+      required:
+      - version
+      - commit
+      - built_at
+      - rust_version
+      - service_name
+      type: object
+    DependencyState:
+      description: Per-dependency readiness as a bare state — the `/ready` check row.
+      properties:
+        name:
+          description: Stable dependency name, e.g. `database`, `redis`.
+          example: database
+          type: string
+        state:
+          $ref: '#/components/schemas/HealthState'
+      required:
+      - name
+      - state
+      type: object
+    DependencyStatus:
+      description: Result of probing one dependency for readiness.
+      properties:
+        detail:
+          description: Human-readable detail, present when degraded.
+          type:
+          - string
+          - 'null'
+        name:
+          description: Stable dependency name, e.g. `database`, `redis`.
+          example: database
+          type: string
+        state:
+          $ref: '#/components/schemas/HealthState'
+      required:
+      - name
+      - state
+      type: object
+    HealthState:
+      description: Whether a dependency is healthy.
+      enum:
+      - ok
+      - degraded
+      type: string
+    LivenessResult:
+      properties:
+        status:
+          example: ok
+          type: string
+      required:
+      - status
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    Readiness:
+      description: 'Aggregate readiness answer: every dependency''s status plus the verdict.'
+      properties:
+        checks:
+          items:
+            $ref: '#/components/schemas/DependencyStatus'
+          type: array
+        status:
+          $ref: '#/components/schemas/HealthState'
+          description: '`ok` when every dependency is healthy.'
+      required:
+      - status
+      - checks
+      type: object
+    ReadinessStates:
+      description: |-
+        Readiness as states only: the `GET /api/v1/system/ready` response body,
+        on both the 200 and the 503 path. Deliberately *not* a projection of
+        [`DependencyStatus`]: that type carries a free-form `detail` for the
+        operator-facing `/readyz`, and any field it has is a field `/ready`
+        must never grow.
+      properties:
+        checks:
+          items:
+            $ref: '#/components/schemas/DependencyState'
+          type: array
+        status:
+          $ref: '#/components/schemas/HealthState'
+          description: '`ok` when every dependency is healthy.'
+      required:
+      - status
+      - checks
+      type: object
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -24,7 +222,7 @@ paths:
                 type: string
         '500':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Internal error
@@ -47,7 +245,7 @@ paths:
           description: Process is alive
         '500':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Internal error
@@ -71,16 +269,17 @@ paths:
           description: All dependencies healthy
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: '#/components/schemas/ReadinessStates'
+                $ref: '#/components/schemas/ProblemDetail'
           description: At least one dependency is degraded
       summary: |-
         Readiness as states: `GET /api/v1/system/ready` (TASK-025). The
         dependency checks run concurrently under their own budget and this
         handler wraps the fan-out in a response timeout of its own, so the
         endpoint answers within `budget + grace` no matter what a dependency
-        does — and the body reports states only, never error strings.
+        does. Successful responses report dependency states; the assembled API
+        normalizes HTTP 503 into the shared problem-details envelope.
       tags:
       - system
   /api/v1/system/version:
@@ -95,7 +294,7 @@ paths:
           description: Build information
         '500':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Internal error
@@ -114,7 +313,7 @@ paths:
           description: Process is alive
         '500':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Internal error
@@ -133,9 +332,9 @@ paths:
           description: All dependencies healthy
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: '#/components/schemas/Readiness'
+                $ref: '#/components/schemas/ProblemDetail'
           description: At least one dependency is degraded
       summary: 'Readiness: `GET /readyz`. Degrades (503) when a dependency is down.'
       tags:

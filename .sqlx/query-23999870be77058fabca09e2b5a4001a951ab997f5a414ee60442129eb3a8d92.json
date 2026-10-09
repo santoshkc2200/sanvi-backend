@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT platform.record_quota_counter($1,$2,$3,$4)::text",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "record_quota_counter",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Date",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "23999870be77058fabca09e2b5a4001a951ab997f5a414ee60442129eb3a8d92"
+}

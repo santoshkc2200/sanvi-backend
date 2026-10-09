@@ -623,3 +623,8 @@ max_event_age_secs = 86400
 # DSR credential mail is a policy decision the would-block rate informs.
 send_quota_limit = 1000
 send_quota_window_secs = 3600
+
+[platform]
+# TASK-026 counts continuously; enforcement rolls out separately.
+rate_limits = false
+quotas = false

@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT amount,period_start,accepted,ambiguous,released,active_attempts,asset_id FROM platform.external_quota_reservations WHERE tenant_id=$1 AND dimension=$2 AND key_hash=$3 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "amount"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "period_start",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "period_start"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "accepted",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "accepted"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "ambiguous",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "ambiguous"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "released",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "released"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "active_attempts",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "active_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "asset_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform.external_quota_reservations",
+            "name": "asset_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "345169775acb0cdafcfdde0e812d6ec1b1ba1e7cb687b4b0fde88cce5b749287"
+}

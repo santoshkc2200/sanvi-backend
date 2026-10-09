@@ -1,0 +1,404 @@
+components:
+  schemas:
+    CatalogView:
+      description: |-
+        The catalog the frontend consumes: every message for one domain in one
+        locale, plus a revision (ETag) that changes whenever content does.
+      properties:
+        domain:
+          type: string
+        locale:
+          type: string
+        messages:
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+          type: object
+        revision:
+          type: string
+      required:
+      - domain
+      - locale
+      - revision
+      - messages
+      type: object
+    LocalizationLocale:
+      description: |-
+        A validated, canonicalised BCP-47 language tag.
+
+        Canonicalisation: language lowercase, script title-case, region
+        uppercase (`ja-jp` → `ja-JP`, `EN` → `en`). Only well-formed tags
+        accepted: 2–3 letter language, optional 4-letter script, optional 2-letter
+        or 3-digit region. This is deliberately *not* full BCP-47 (no variants,
+        no extensions): the backend only needs the granularity it can translate
+        and format with.
+      type: string
+    LocalizationSettingsView:
+      properties:
+        default_locale:
+          type: string
+        enabled_locales:
+          items:
+            type: string
+          type: array
+        timezone:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - default_locale
+      - enabled_locales
+      - timezone
+      - updated_at
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    SupportedLocale:
+      description: A supported locale row from `localization.supported_locales`.
+      properties:
+        code:
+          $ref: '#/components/schemas/LocalizationLocale'
+        name_en:
+          type: string
+        name_native:
+          type: string
+        sort_order:
+          format: int32
+          type: integer
+      required:
+      - code
+      - name_native
+      - name_en
+      - sort_order
+      type: object
+    SupportedLocalesView:
+      properties:
+        default:
+          type: string
+        locales:
+          items:
+            $ref: '#/components/schemas/SupportedLocale'
+          type: array
+      required:
+      - default
+      - locales
+      type: object
+    TranslationPatch:
+      description: One override in a PUT body.
+      properties:
+        key:
+          type: string
+        locale:
+          type: string
+        value:
+          type: string
+      required:
+      - key
+      - locale
+      - value
+      type: object
+    TranslationView:
+      properties:
+        key:
+          type: string
+        locale:
+          type: string
+        scope:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        value:
+          type: string
+      required:
+      - scope
+      - key
+      - locale
+      - value
+      - updated_at
+      type: object
+    UpdateLocalizationSettingsCommand:
+      properties:
+        acting_locale:
+          description: |-
+            The locale the change was made under (the admin's negotiated
+            locale), carried on the event so downstream work renders correctly.
+          type: string
+        default_locale:
+          type: string
+        enabled_locales:
+          items:
+            type: string
+          type: array
+        timezone:
+          type: string
+      required:
+      - default_locale
+      - enabled_locales
+      - timezone
+      type: object
+info:
+  description: Multi-tenant SaaS platform API (v1)
+  license:
+    identifier: MIT
+    name: MIT
+  title: Sanvi API
+  version: 0.10.0
+openapi: 3.1.0
+paths:
+  /api/v1/platform/localization/translations:
+    get:
+      operationId: get_platform_translations
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Platform catalog overrides
+      summary: '`GET /api/v1/platform/localization/translations`.'
+      tags:
+      - localization
+    put:
+      operationId: put_platform_translations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              items:
+                $ref: '#/components/schemas/TranslationPatch'
+              type: array
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Updated platform overrides
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid override
+      summary: '`PUT /api/v1/platform/localization/translations`.'
+      tags:
+      - localization
+  /api/v1/public/locales:
+    get:
+      operationId: get_public_locales
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportedLocalesView'
+          description: Supported locales
+      summary: |-
+        `GET /api/v1/public/locales` — the platform's enabled locale set.///
+        Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+        enabled, the anonymous response is served from the server-side SSR cache
+        keyed by (tenant, locale, theme revision, device class) with
+        single-flight on miss; a theme publish or content change invalidates the
+        affected entries within ~2 s (the entry TTL is a backstop only).
+        Requests carrying an `Authorization` header are never served from or
+        written to the cache, and responses carrying `Set-Cookie` are never
+        stored. Varies on `Accept-Language`.
+      tags:
+      - localization
+  /api/v1/public/messages/{domain}:
+    get:
+      operationId: get_public_messages
+      parameters:
+      - description: Catalog domain (billing, emails, errors, privacy)
+        in: path
+        name: domain
+        required: true
+        schema:
+          type: string
+      - description: Requested locale (defaults to en)
+        in: query
+        name: locale
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogView'
+          description: Message catalog
+        '304':
+          description: Not modified (ETag match)
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Unknown domain
+      summary: |-
+        `GET /api/v1/public/messages/{domain}?locale=` — catalog delivery for
+        the frontend, ETag-cached.///
+        Cache semantics (TASK-022, FR-1111): when `platform.ssr_cache` is
+        enabled, the anonymous response is served from the server-side SSR cache
+        keyed by (tenant, locale, theme revision, device class) with
+        single-flight on miss; a theme publish or content change invalidates the
+        affected entries within ~2 s (the entry TTL is a backstop only).
+        Requests carrying an `Authorization` header are never served from or
+        written to the cache, and responses carrying `Set-Cookie` are never
+        stored. Varies on `Accept-Language`.
+      tags:
+      - localization
+  /api/v1/tenant/localization/overrides:
+    get:
+      operationId: get_localization_overrides
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Tenant copy overrides
+      summary: '`GET /api/v1/tenant/localization/overrides`.'
+      tags:
+      - localization
+    put:
+      operationId: put_localization_overrides
+      requestBody:
+        content:
+          application/json:
+            schema:
+              items:
+                $ref: '#/components/schemas/TranslationPatch'
+              type: array
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TranslationView'
+                type: array
+          description: Updated overrides
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid override
+      summary: '`PUT /api/v1/tenant/localization/overrides`.'
+      tags:
+      - localization
+  /api/v1/tenant/localization/settings:
+    get:
+      operationId: get_localization_settings
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalizationSettingsView'
+          description: Tenant localization settings
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+      summary: '`GET /api/v1/tenant/localization/settings`.'
+      tags:
+      - localization
+    put:
+      operationId: put_localization_settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLocalizationSettingsCommand'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalizationSettingsView'
+          description: Updated settings
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid settings
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Settings conflict
+      summary: '`PUT /api/v1/tenant/localization/settings`.'
+      tags:
+      - localization

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.external_quota_reservations SET payload_hash=$4,next_attempt=$5,active_attempts=$6 WHERE tenant_id=$1 AND dimension=$2 AND key_hash=$3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a64427ffa631e8b9761ad14d4117c896a13e18aa5c8d03b59ab184d482cc36ff"
+}

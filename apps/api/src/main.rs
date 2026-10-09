@@ -209,7 +209,15 @@ async fn main() -> ExitCode {
                         Arc::new(sanvi_http::abuse::AbuseCounter::new(redis.clone())),
                         config.notification.send_quota_limit,
                         config.notification.send_quota_window_secs,
-                    ),
+                    )
+                    .with_commercial_quota(sanvi_http::quota_middleware::QuotaRuntime {
+                        service: tenancy
+                            .quotas
+                            .as_ref()
+                            .expect("production tenancy owns counters")
+                            .clone(),
+                        enabled: config.platform.quotas,
+                    }),
             ))
         } else {
             tracing::info!("notification service not configured; Lane B mail is logged only");
