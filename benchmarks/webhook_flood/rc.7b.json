@@ -1,0 +1,34 @@
+{
+  "scenario": "webhook_flood",
+  "tag": "rc.7b",
+  "seed": "1",
+  "offered_rate_rps": 100,
+  "duration": "60s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 16,
+    "os": "Windows 11 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 1.65775,
+    "http_req_duration_p95_ms": 3.445974999999998,
+    "http_req_duration_p99_ms": 6.370149999999979,
+    "http_req_duration_avg_ms": 1.8592041486171296,
+    "http_reqs_total": 6002,
+    "http_req_failed_rate": 0,
+    "iterations_total": 6001,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "lab: unsigned events, so the receiver rejects at signature verification",
+    "the verified-HMAC-over-raw-body path is the shape under load"
+  ]
+}

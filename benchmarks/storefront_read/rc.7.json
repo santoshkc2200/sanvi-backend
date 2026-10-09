@@ -1,0 +1,34 @@
+{
+  "scenario": "storefront_read",
+  "tag": "rc.7",
+  "seed": "1",
+  "offered_rate_rps": 50,
+  "duration": "60s",
+  "machine_profile": {
+    "cores": 20,
+    "mem_gb": 16,
+    "os": "Windows 11 26200",
+    "arch": "x86_64"
+  },
+  "build": {
+    "built_at": "unknown",
+    "commit": "unknown",
+    "environment": "local",
+    "version": "0.10.0"
+  },
+  "stats_version": 2,
+  "metrics": {
+    "http_req_duration_p50_ms": 3.9734,
+    "http_req_duration_p95_ms": 6.17812,
+    "http_req_duration_p99_ms": 9.30495399999998,
+    "http_req_duration_avg_ms": 4.168262202232213,
+    "http_reqs_total": 6003,
+    "http_req_failed_rate": 0,
+    "iterations_total": 3001,
+    "dropped_iterations_total": 0
+  },
+  "notes": [
+    "lab: anonymous storefront SSR bootstrap (tenant-context + public theme)",
+    "journey budget from the plan: p95 <= 200 ms"
+  ]
+}

@@ -1,6 +1,6 @@
 # TASK-023: 11.4 Resilience, degradation & zero-downtime restarts
 
-**Phase:** 11 · **Status:** todo · **Size:** L
+**Phase:** 11 · **Status:** in-progress · **Size:** L
 **Requirement(s):** FR-1112, FR-1113, FR-1114, FR-1115, NFR-1105, NFR-1106
 **Depends on:** TASK-021, **phase 10 merged**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -131,19 +131,118 @@ explicit annotation. Rolling restart under k6 load in the compose stack.
 - A rolling restart under load produces zero non-2xx attributable to the deploy, across both a restart
   and a revert to the previous image.
 
+## Execution record (slices as committed)
+
+- **11.4a** (`feat(resilience): 503 platform/overloaded problem type,
+  degraded-mode header, breaker/registry/retry-budget primitives`) — Step 1,
+  contract first: `ApiError::Overloaded` — `503` with the distinct
+  `platform/overloaded` problem slug and `Retry-After`, kept deliberately
+  separate from service-unavailable so client backoff is right in both
+  directions (NFR-1106); `X-Sanvi-Degraded` behind `platform.degraded_mode`;
+  the new `sanvi-resilience` platform crate: three-state `CircuitBreaker`
+  with per-name metrics, `DegradationRegistry`, `JobRetryBudget`. No
+  behaviour change while both flags stay off.
+- **11.4b** (`feat(resilience): dependency matrix, injection suite, adapter
+  degradation rules`) — Steps 2–4. The matrix
+  (`docs/runbooks/dependency-matrix.md`) names one injection test per row and
+  `scripts/check-dependency-matrix.sh` enforces both directions (row without
+  test, test file without row), each failure self-tested. Every outbound
+  adapter runs under the matrix contract: Keto/Stripe/media gain breakers
+  (5 failures / 30 s cooldown) and the shared degradation registry; Kratos
+  pins its 5 s deadline; Google/Meta sinks gain short-deadline constructors;
+  the `DegradedAuthorizer` denies writes and serves cached reads within the
+  30 s grace window; Stripe retries ride one `Idempotency-Key`; ad-platform
+  outages park conversions with their directive snapshot; object-storage
+  reads degrade to a marked placeholder while uploads fail honest 503.
+  `tests/resilience`: 27 tests — one per matrix row plus transport probes,
+  healthy controls and breaker probes, each injecting its failure (fault
+  server, closed port, failing port implementation, or a real query against
+  the test Postgres). `PermissionGate::check` threads a write flag so the
+  degraded authorizer can apply the outage rule; `AssetView` gains the
+  placeholder marker.
+- **11.4c** (`feat(resilience): timeout gate, load shedding with per-tenant
+  fairness`) — Steps 5–6. `scripts/check-timeouts.sh` fails the build on a
+  reqwest client without `.timeout()` (self-test plants one and proves it is
+  caught; the 17 production clients already set deadlines). The
+  `LoadShedding` middleware admits above the TASK-021 measured ceiling
+  (`in_flight_ceiling` 2000), on pool probe-wait pressure
+  (`PoolMetrics::with_pressure`), and per-tenant shares under contention —
+  `503 platform/overloaded` with `Retry-After`; webhooks, payment callbacks,
+  health and the build probe are never shed. Counters are process-global
+  (built once by the composition root, like the degraded registry). Streams
+  were already `MAXLEN`-bounded on every append, so queues cannot grow
+  unbounded.
+- **11.4d** (`feat(resilience): scheduler retry budgets, outbox DLQ triage
+  and replay`) — Step 7. The leader-elected scheduler applies one
+  `JobRetryBudget` per job name: past `max_consecutive_failures` the job
+  suspends (skipped with a warning) instead of burning capacity, until the
+  skip window lapses for a probe run or the operator intervenes. The missing
+  operator path back was the outbox DLQ table: `sanvi_messaging` gains
+  `list_dead_letters`/`replay_dead_letter` (atomic move back to the outbox
+  with a fresh budget) surfaced as `sanvi-cli dlq list|replay`.
+- **11.4e** (`feat(resilience): expand/contract migration gate,
+  rolling-restart drill`) — Step 8.
+  `scripts/check-migration-expand-contract.sh` fails CI on an UP migration
+  touching a live column (drop/rename/type/widening, unpaired constraint
+  drops, undefaulted NOT NULL, unbackfilled SET NOT NULL) without a
+  same-file contract step or an explicit `-- expand-contract:`/`-- compat:`
+  annotation; pre-gate history is baselined with reasons
+  (`scripts/migration-expand-contract-baseline.txt`), old files untouched
+  (sqlx checksums). Staging compose gains drain-covering grace periods
+  (api 45 s over the 30 s server timeout, worker 90 s) and faster health
+  gating; `scripts/rolling-restart.sh` runs the k6 roll and the revert pass
+  with a zero-non-2xx acceptance (`scripts/check-restart-result.py`;
+  `--dry-run` validates restart-readiness for CI);
+  `docs/runbooks/rolling-restart.md` records the procedure and the
+  worker-first ordering. The live execution needs the staging host.
+- **fix** (`fix(resilience): enforce degraded-mode recovery safety`) — the
+  degraded header now survives actix's middleware-error path (errors render
+  outside the middleware stack; the wrapped `ResponseError` re-renders with
+  the header); tenant-aware shedding fixes; the production cached-authorizer
+  chain cannot bypass a fresh check nor fabricate keto recovery
+  (`fresh_authorization.rs`); Redis recovery tests hardened; the deploy
+  controller (`scripts/deploy-staging.sh`) and result checker wired into
+  `main.yml`/`pr.yml` (staging deploys now health-gate through the
+  controller; the forward/revert sequence, failed-candidate, drain-guard and
+  artifact-failure cases are CI-tested with command-boundary doubles in
+  `scripts/test-deploy-staging.py`).
+- **close** (this commit) — the full Verification block ran once (fmt,
+  workspace clippy `-D warnings`, layering, `scripts/test.sh --quiet`
+  1403/1403, openapi clean, dependency-matrix gate + 27/27 injection suite,
+  check-timeouts, expand/contract, `rolling-restart --dry-run` + both
+  controller self-tests, all three gate self-tests re-run). `just perf`
+  passed on the first candidate and every repeat (0 failed / 0 dropped);
+  `perf-compare rc.6 rc.7` flags tail metrics that the same-binary repeat
+  set (rc.7b/c/d) demonstrates to be host noise under a measured 98.7 %-core
+  co-tenant — medians do not move, and the flag-on storefront run's p50 is
+  identical to flag-off. Recorded, not waived:
+  [`benchmarks/resilience-2026-10-09.md`](../../../benchmarks/resilience-2026-10-09.md);
+  the quiet-host re-confirmation is TASK-030's benchmark re-run.
+
 ## Definition of done
 
-- [ ] Every dependency-matrix row has a passing injection test asserting the documented behaviour.
-- [ ] `just check-timeouts` blocks a timeout-less client, proven in the PR.
-- [ ] A hot tenant saturating its share leaves other tenants inside their budgets.
-- [ ] Shedding engages at the measured ceiling, returns `503 + Retry-After`, recovers cleanly, and
+- [x] Every dependency-matrix row has a passing injection test asserting the documented behaviour.
+- [x] `just check-timeouts` blocks a timeout-less client, proven in the PR.
+- [x] A hot tenant saturating its share leaves other tenants inside their budgets.
+- [x] Shedding engages at the measured ceiling, returns `503 + Retry-After`, recovers cleanly, and
       **never sheds a webhook or a payment callback**.
-- [ ] A simulated Stripe outage produces no double charge; queued retries settle under idempotency keys.
-- [ ] A simulated ad-platform outage queues conversions with their directive snapshot; none are dropped
+- [x] A simulated Stripe outage produces no double charge; queued retries settle under idempotency keys.
+- [x] A simulated ad-platform outage queues conversions with their directive snapshot; none are dropped
       and none upload without it.
-- [ ] Poison messages reach the DLQ and are replayable; retry budgets terminate a failing job.
-- [ ] The expand/contract check fails on an unannotated migration touching a live column.
+- [x] Poison messages reach the DLQ and are replayable; retry budgets terminate a failing job.
+- [x] The expand/contract check fails on an unannotated migration touching a live column.
 - [ ] Rolling restart and revert under load drop zero requests.
+
+      The mechanism is proven as far as this repo can reach: the controller's
+      forward/revert sequence, failed-candidate, drain-guard and
+      artifact-failure cases are CI-tested
+      (`scripts/test-deploy-staging.py`), the zero-non-2xx acceptance is
+      self-tested (`scripts/test-restart-result.py`), and
+      `rolling-restart --dry-run` validates the stack's restart-readiness.
+      The drill itself (`scripts/rolling-restart.sh` under k6 load) runs on
+      the staging host only and stays open as the GA checklist's manual line
+      ("Rolling restart and revert under load drop zero requests") — the
+      task reopens as done when that artifact lands.
 
 ## Verification
 
