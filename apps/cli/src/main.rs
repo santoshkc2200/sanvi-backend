@@ -20,6 +20,7 @@ mod openapi;
 mod payments;
 mod seed_scale;
 mod tenant;
+mod tenant_restore;
 mod theme;
 
 use std::{process::ExitCode, sync::Arc};
@@ -110,6 +111,19 @@ enum Command {
     Dlq {
         #[command(subcommand)]
         action: DlqAction,
+    },
+    /// Phase-11 (TASK-025): restore one tenant's rows from a restored
+    /// snapshot into the live system, without touching any other tenant.
+    TenantRestore {
+        /// The tenant slug to restore.
+        #[arg(long)]
+        tenant: String,
+        /// DSN of the snapshot database (a restored backup) to read from.
+        #[arg(long)]
+        from_dsn: String,
+        /// Print the per-table plan and write nothing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
     },
     /// Load, validate and print the configuration.
     Config,
@@ -762,6 +776,27 @@ async fn main() -> ExitCode {
                 }
             }
         }
+        Command::TenantRestore {
+            tenant,
+            from_dsn,
+            dry_run,
+        } => match tenant_restore::run(
+            &cli.env,
+            tenant_restore::TenantRestoreArgs {
+                tenant_slug: tenant,
+                from_dsn,
+                dry_run,
+            },
+            ids.clone(),
+        )
+        .await
+        {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("tenant-restore failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Config => match config::check(&cli.env) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {

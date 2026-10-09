@@ -43,5 +43,7 @@ uuid.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+hex.workspace = true
 sanvi-testsupport.workspace = true
+sha2.workspace = true
 sqlx.workspace = true

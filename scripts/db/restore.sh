@@ -54,7 +54,9 @@ session_dir="$root/.drill/$SESSION"
 [[ -f "$session_dir/manifest.json" ]] || { echo "restore: no manifest for session $SESSION" >&2; exit 2; }
 
 PG_IMAGE="postgres:18"
-RESTORE_CONTAINER="sanvi-drill-restore"
+# One restore at a time per name; a second concurrent restore (e.g. keeping
+# a snapshot up while rehearsing tenant-restore against another) overrides it.
+RESTORE_CONTAINER="${DRILL_RESTORE_CONTAINER:-sanvi-drill-restore}"
 DB_NAME="sanvi_scale_drill"
 DB_USER="postgres"
 DB_PASSWORD="drill-local-only"
@@ -73,6 +75,10 @@ BACKUP_VOLUME="sanvi_drill_backup_${SESSION}"
 PGDATA_VOLUME="sanvi_drill_restore_pgdata_${SESSION}"
 docker volume inspect "$WAL_VOLUME" >/dev/null 2>&1 || { echo "restore: volume $WAL_VOLUME missing" >&2; exit 2; }
 docker volume inspect "$BACKUP_VOLUME" >/dev/null 2>&1 || { echo "restore: volume $BACKUP_VOLUME missing" >&2; exit 2; }
+# The restored data directory must be born clean: a volume left by an
+# earlier restore carries stale recovery configuration (a pinned target, a
+# recovery.signal) that silently bends this restore. Kill it and start over.
+docker volume rm "$PGDATA_VOLUME" >/dev/null 2>&1 || true
 docker volume create "$PGDATA_VOLUME" >/dev/null
 
 if [[ -n "$TARGET_TIME" ]]; then

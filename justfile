@@ -390,8 +390,13 @@ dr-pitr *args:
     #!/usr/bin/env bash
     set -euo pipefail
     session="$(./scripts/db/backup.sh | sed -n 's/^backup: session \(.*\) complete$/\1/p')"
-    target="$(jq -r '.pitr_target' ".drill/$session/markers.json")"
+    target="$(jq -r '.pitr_target' < ".drill/$session/markers.json")"
     ./scripts/db/restore.sh --session "$session" --target-time "$target" {{args}}
+
+# TASK-025 (FR-1119/NFR-1107): one tenant's rows back to a snapshot state
+# inside the live system. Start with --dry-run; it writes nothing.
+tenant-restore *args:
+    cargo run -p sanvi-cli -- tenant-restore {{args}}
 
 openapi:
     ./scripts/check-openapi.sh
