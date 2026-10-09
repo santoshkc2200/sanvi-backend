@@ -45,9 +45,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-for tool in docker jq; do
+for tool in docker jq openssl; do
     command -v "$tool" >/dev/null 2>&1 || { echo "restore: $tool is required" >&2; exit 1; }
 done
+export DRILL_BACKUP_PASSPHRASE="${DRILL_BACKUP_PASSPHRASE:-drill-local-only}"
 
 [[ -n "$SESSION" ]] || { echo "restore: --session is required" >&2; exit 2; }
 session_dir="$root/.drill/$SESSION"
@@ -70,15 +71,24 @@ if port_in_use "$HOST_PORT"; then
     exit 1
 fi
 
-WAL_VOLUME="sanvi_drill_wal_${SESSION}"
-BACKUP_VOLUME="sanvi_drill_backup_${SESSION}"
-PGDATA_VOLUME="sanvi_drill_restore_pgdata_${SESSION}"
-docker volume inspect "$WAL_VOLUME" >/dev/null 2>&1 || { echo "restore: volume $WAL_VOLUME missing" >&2; exit 2; }
-docker volume inspect "$BACKUP_VOLUME" >/dev/null 2>&1 || { echo "restore: volume $BACKUP_VOLUME missing" >&2; exit 2; }
+[[ -f "$session_dir/base.tar.enc" ]] || { echo "restore: encrypted backup missing" >&2; exit 2; }
+restore_id="${RESTORE_CONTAINER}-${HOST_PORT}"
+WAL_VOLUME="sanvi_drill_replay_wal_${restore_id}"
+BACKUP_VOLUME="sanvi_drill_replay_base_${restore_id}"
+PGDATA_VOLUME="sanvi_drill_replay_pgdata_${restore_id}"
+# A stopped --keep container can still hold its old data volume. Remove it
+# before resetting ALL materialization volumes, otherwise stale WAL survives.
+docker rm -f -v "$RESTORE_CONTAINER" >/dev/null 2>&1 || true
+for volume in "$WAL_VOLUME" "$BACKUP_VOLUME" "$PGDATA_VOLUME"; do
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+        docker volume rm "$volume" >/dev/null
+    fi
+done
+docker volume create "$WAL_VOLUME" >/dev/null
+docker volume create "$BACKUP_VOLUME" >/dev/null
 # The restored data directory must be born clean: a volume left by an
 # earlier restore carries stale recovery configuration (a pinned target, a
 # recovery.signal) that silently bends this restore. Kill it and start over.
-docker volume rm "$PGDATA_VOLUME" >/dev/null 2>&1 || true
 docker volume create "$PGDATA_VOLUME" >/dev/null
 
 if [[ -n "$TARGET_TIME" ]]; then
@@ -91,25 +101,25 @@ cleanup() {
     if [[ "$KEEP" == "1" ]]; then
         echo "restore: kept $RESTORE_CONTAINER up (port $HOST_PORT) for inspection"
     else
-        docker rm -f "$RESTORE_CONTAINER" >/dev/null 2>&1 || true
+        docker rm -f -v "$RESTORE_CONTAINER" >/dev/null 2>&1 || true
+        docker volume rm "$PGDATA_VOLUME" "$WAL_VOLUME" "$BACKUP_VOLUME" >/dev/null 2>&1 || true
     fi
 }
 trap cleanup EXIT
-docker rm -f "$RESTORE_CONTAINER" >/dev/null 2>&1 || true
 
 echo "restore: session $SESSION (${scenario})"
 
 # The recovery configuration, written before the server starts. With a
 # target, recovery stops at the target and promotes; without one, it
 # consumes the archive to its end and promotes there.
-TARGET_BLOCK=""
-if [[ -n "$TARGET_TIME" ]]; then
-    TARGET_BLOCK="echo \"recovery_target_time = '$TARGET_TIME'\" >> \"\$PGDATA/postgresql.auto.conf\"
-     echo \"recovery_target_action = 'promote'\" >> \"\$PGDATA/postgresql.auto.conf\""
-fi
-
-T_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 T_START_EPOCH="$(date -u +%s)"
+T_START="$(date -u -d "@$T_START_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+
+# Include decrypt/materialize in RTO; pipefail rejects corrupt artifacts.
+openssl enc -d -aes-256-cbc -pbkdf2 -pass env:DRILL_BACKUP_PASSPHRASE \
+    < "$session_dir/base.tar.enc" \
+    | docker run --rm -i -v "${BACKUP_VOLUME}:/backup" -v "${WAL_VOLUME}:/wal_archive" \
+        "$PG_IMAGE" sh -c 'set -e; cd /backup; tar -xf -; cp -a wal_archive/. /wal_archive/; rm -rf wal_archive'
 
 docker run -d --name "$RESTORE_CONTAINER" \
     -p "127.0.0.1:${HOST_PORT}:5432" \
@@ -155,8 +165,8 @@ wait_restored() {
     return 1
 }
 wait_restored
-T_READY="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 T_READY_EPOCH="$(date -u +%s)"
+T_READY="$(date -u -d "@$T_READY_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
 RESTORE_SECONDS=$((T_READY_EPOCH - T_START_EPOCH))
 
 psql_restore() {
@@ -241,6 +251,11 @@ dupes="$(psql_restore -c 'SELECT count(*) FROM (SELECT tenant_id, external_payme
 [[ "$dupes" == "0" ]] || fail "payment records torn: $dupes duplicate external ids"
 echo "restore: payment records consistent"
 
+# Rehearse the degraded-mode read-only procedure in this restore window.
+if [[ "$REHEARSE" == "1" ]]; then
+    bash scripts/db/degraded-mode.sh "$RESTORE_CONTAINER"
+fi
+
 # --- report ---------------------------------------------------------------------
 restored_at="$(psql_restore -c "SELECT max(occurred_at) FROM audit.entries")"
 end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -248,11 +263,13 @@ cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)"
 os="$(uname -s) $(uname -r)"
 
 if [[ "$REHEARSE" == "1" ]]; then
-    LOSS_SECONDS=""
+    LOSS_SECONDS=0
     if [[ -n "$TARGET_TIME" ]]; then
         TARGET_EPOCH="$(date -u -d "$TARGET_TIME" +%s)"
-        NOW_EPOCH="$(date -u +%s)"
-        LOSS_SECONDS=$((NOW_EPOCH - TARGET_EPOCH))
+        SOURCE_TIME="$(jq -er '.source_quiesced_at' < "$session_dir/markers.json")"
+        SOURCE_EPOCH="$(date -u -d "$SOURCE_TIME" +%s)"
+        LOSS_SECONDS=$((SOURCE_EPOCH - TARGET_EPOCH))
+        [[ "$LOSS_SECONDS" -ge 0 ]] || fail "target is later than the recorded source horizon"
     fi
     mkdir -p benchmarks/dr
     report="benchmarks/dr/restore-${scenario}-${SESSION}.json"
@@ -280,13 +297,13 @@ if [[ "$REHEARSE" == "1" ]]; then
           rto_label: "local — docker on this host, not a production number",
           pitr_target: (if $target == "" then null else $target end),
           data_loss_window: (if $scenario == "pitr" then
-                "target → drill end (by design; see data_loss_window_basis)"
+                "target → recorded quiesced source horizon (intentional PITR loss)"
              else "0s against the quiesced source; see data_loss_window_basis" end),
           data_loss_window_seconds: (if $loss_seconds == "" then null else ($loss_seconds | tonumber) end),
           data_loss_window_basis: $window_basis,
           restored_audit_max_occurred_at: $restored_audit_max,
           machine: {cores: ($cores | tonumber), os: $os},
-          checks: {audit_chain: $audit, markers: "consistent", outbox: "consistent", payments: "consistent"},
+          checks: {audit_chain: $audit, markers: "consistent", outbox: "consistent", payments: "consistent", degraded_mode: "read-only commands rehearsed; writes rejected with 25006"},
           build: {cli: "sanvi-cli 0.10.0"}}' > "$report"
     echo "restore: report written — $report"
 fi

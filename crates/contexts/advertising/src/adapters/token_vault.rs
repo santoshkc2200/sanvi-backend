@@ -136,6 +136,16 @@ pub struct SqlxTenantEnvelopeCrypto {
 }
 
 impl SqlxTenantEnvelopeCrypto {
+    /// Rewrap without changing token ciphertext. Persist with the new KEK id
+    /// atomically, then restart cached-DEK users before retiring the old KEK.
+    pub fn rewrap_dek(
+        &self,
+        wrapped: &[u8],
+        replacement: &Self,
+    ) -> Result<Vec<u8>, AdvertisingError> {
+        replacement.wrap(&self.unwrap(wrapped)?)
+    }
+
     /// `kek` must be exactly 32 bytes (validated by `AdvertisingConfig`).
     pub fn new(kek: [u8; 32], kek_id: String) -> Self {
         Self {
@@ -265,6 +275,19 @@ mod tests {
         let wrapped = crypto.wrap(&dek).unwrap();
         let unwrapped = crypto.unwrap(&wrapped).unwrap();
         assert_eq!(unwrapped, dek);
+    }
+
+    #[test]
+    fn rewrap_preserves_dek_and_retires_old_kek() {
+        let old = crypto();
+        let new = SqlxTenantEnvelopeCrypto::new([8; 32], "replacement".into());
+        let dek = [3; 32];
+        let wrapped = old.wrap(&dek).unwrap();
+        let rewrapped = old.rewrap_dek(&wrapped, &new).unwrap();
+        assert_eq!(new.unwrap(&rewrapped).unwrap(), dek);
+        assert!(old.unwrap(&rewrapped).is_err());
+        assert!(new.rewrap_dek(&wrapped, &old).is_err());
+        assert!(old.rewrap_dek(&[0; 5], &new).is_err());
     }
 
     #[test]

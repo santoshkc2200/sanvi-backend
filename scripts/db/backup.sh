@@ -12,18 +12,16 @@
 # before the base backup, one after, each writing real audit-chain and
 # outbox rows — are what the PITR consistency checks read.
 #
-# Everything heavy stays inside the session's docker volumes (no host bind
-# mounts — the same Windows rule `scripts/test-db.sh` follows); the session
-# directory holds only small text artifacts the host writes itself:
+# Clear-text data lives in disposable Docker volumes (no host bind mounts).
+# The retained encrypted artifact and small manifests live in the session:
 #
 #   .drill/<session>/manifest.json     timestamps, markers, counts, profile
 #   .drill/<session>/base.tar.enc      the backup set, encrypted at rest
-#                                      (AES-256-CBC/PBKDF2), when openssl
-#                                      is available
+#                                      (AES-256-CBC/PBKDF2; openssl required)
 #
 # WAL archives and the base backup live in the per-session docker volumes
-# `sanvi_drill_wal_<sid>` / `sanvi_drill_backup_<sid>`; the restore half
-# mounts them. Old session directories are pruned by --retention-days — the
+# `sanvi_drill_wal_<sid>` / `sanvi_drill_backup_<sid>` until encryption,
+# then cleanup removes them. Old sessions are pruned by --retention-days — the
 # local drill's stand-in for the phase-05 backup policy (the managed policy
 # is parked in docs/release/needs-humans.md).
 #
@@ -50,9 +48,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-for tool in docker jq; do
+for tool in docker jq openssl; do
     command -v "$tool" >/dev/null 2>&1 || { echo "backup: $tool is required" >&2; exit 1; }
 done
+export DRILL_BACKUP_PASSPHRASE="${DRILL_BACKUP_PASSPHRASE:-drill-local-only}"
 
 PG_IMAGE="postgres:18"
 SRC_CONTAINER="sanvi-drill-src"
@@ -81,7 +80,9 @@ docker volume create "$WAL_VOLUME" >/dev/null
 docker volume create "$BACKUP_VOLUME" >/dev/null
 
 cleanup() {
-    docker rm -f "$SRC_CONTAINER" >/dev/null 2>&1 || true
+    docker rm -f -v "$SRC_CONTAINER" >/dev/null 2>&1 || true
+    # Only the encrypted archive is retained; clear-text volumes are ephemeral.
+    docker volume rm "$WAL_VOLUME" "$BACKUP_VOLUME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -217,6 +218,7 @@ echo "backup: WAL archive holds $ARCHIVE_FILES segment(s)"
 # --- manifest -----------------------------------------------------------------
 psql_src -c "SELECT json_build_object(
     'markers', (SELECT json_object_agg(name, at) FROM drill.markers),
+    'source_quiesced_at', clock_timestamp(),
     'pitr_target', ((SELECT at FROM drill.markers WHERE name = 'A2_last_pre_backup') + interval '1 second')
 )::text" | jq '.' > "$session_dir/markers.json"
 
@@ -252,15 +254,12 @@ jq -n \
       volumes: {wal_archive: $wal, base_backup: $backup}}' > "$session_dir/manifest.json"
 
 # --- the encrypted artifact ---------------------------------------------------
-if command -v openssl >/dev/null 2>&1; then
-    docker exec "$SRC_CONTAINER" tar -C /backup -cf - base \
+    # Restore must consume the encrypted base AND WAL archive.
+    docker exec "$SRC_CONTAINER" tar -cf - -C /backup base -C / wal_archive \
         | openssl enc -aes-256-cbc -pbkdf2 -salt \
-            -pass "pass:${DRILL_BACKUP_PASSPHRASE:-drill-local-only}" \
+            -pass env:DRILL_BACKUP_PASSPHRASE \
         > "$session_dir/base.tar.enc"
     echo "backup: encrypted artifact base.tar.enc written ($(du -h "$session_dir/base.tar.enc" | cut -f1))"
-else
-    echo "backup: openssl not found; kept the base in volume $BACKUP_VOLUME only (local-only)" >&2
-fi
 
 # Retention: prune session directories older than the window.
 if [[ "$RETENTION_DAYS" != "0" ]]; then

@@ -1,6 +1,6 @@
 # TASK-025: 11.6 Recovery drills, secret rotation & health probes
 
-**Phase:** 11 · **Status:** todo · **Size:** M
+**Phase:** 11 · **Status:** done · **Size:** M
 **Requirement(s):** FR-1118, FR-1119, FR-1120, NFR-1107
 **Depends on:** TASK-023, TASK-024, **phase 10 merged**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -117,6 +117,14 @@ credential.
 **Verify:** `just rotate-credentials --rehearse` records a per-credential duration, **and asserts every
 old credential is rejected afterwards** — the half that usually gets skipped.
 
+**Scope decision (2026-10-09, user-approved):** complete a local rehearsal and
+park live provider operations. The command rotates disposable PostgreSQL/Redis
+credentials and exercises replacement/retirement with production signing,
+webhook and envelope crypto. Provider issuance/revocation, deployment-wide key
+migrations, rollout/overlap windows and old-session invalidation are explicitly
+parked, with procedures in `docs/runbooks/rotation/providers.md` and
+`docs/release/needs-humans.md`. Local signature rejection is not provider revocation.
+
 ### Step 7: Write and rehearse the degraded-mode procedure
 
 **Files:** Create `docs/runbooks/degraded-mode.md`
@@ -129,17 +137,17 @@ restore drill.
 
 ## Definition of done
 
-- [ ] `/health` returns with the database stopped, asserted by a test.
-- [ ] `/ready` leaks nothing; the snapshot test passes.
-- [ ] SIGTERM drains in-flight work; no request is dropped.
-- [ ] A full restore drill records a duration, data-loss window, machine profile, and date, labelled
+- [x] `/health` returns with the database stopped, asserted by a test.
+- [x] `/ready` leaks nothing; the snapshot test passes.
+- [x] SIGTERM drains in-flight work; no request is dropped.
+- [x] A full restore drill records a duration, data-loss window, machine profile, and date, labelled
       local.
-- [ ] PITR restores to a chosen timestamp; the audit chain verifies and the outbox is duplicate-safe.
-- [ ] Single-tenant restore returns the target's rows and leaves a neighbour byte-identical, with an
+- [x] PITR restores to a chosen timestamp; the audit chain verifies and the outbox is duplicate-safe.
+- [x] Single-tenant restore returns the target's rows and leaves a neighbour byte-identical, with an
       audit entry.
-- [ ] Every credential rotates end to end with a duration and a runbook, and every old credential is
-      proven rejected.
-- [ ] The degraded-mode procedure is written and its commands were executed.
+- [x] Every locally rehearsed credential has a duration, runbook, replacement-acceptance proof and
+      old-credential rejection proof; live provider/deployment operations are parked per the scope decision above.
+- [x] The degraded-mode procedure is written and its commands were executed.
 
 ## Verification
 
@@ -167,6 +175,42 @@ Continuous WAL archiving to an encrypted store with independently audited access
 production RPO/RTO validation, external probes, the public status page, on-call rotation, escalation
 policy, and the shadow week — see [`../../release/needs-humans.md`](../../release/needs-humans.md).
 The monthly restore rehearsal schedule is parked with them; the drill script it would run is built here.
+
+## Completion evidence — 2026-10-09
+
+Closing commit: `feat(ops): complete local recovery and credential rotation drills (TASK-025)`.
+Earlier implementation: `c497542` (probes/shutdown), `24a5b3e` (restore/PITR),
+`33e6114` (single-tenant restore). This slice finishes rotation, degraded-mode,
+encrypted-artifact replay and verification; the user-owned `AGENTS.md` change is excluded.
+
+| Proof | Executed result |
+| --- | --- |
+| Workspace suite (`bash scripts/test.sh --quiet`) | 1,415 / 1,415 pass across 68 binaries, zero skipped; includes DB-outage probes, states-only readiness snapshots, graceful request drain, worker shutdown, physical PITR and tenant-restore dry-run/apply + neighbour checksums + audit |
+| Format / lint | `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings` pass |
+| Contract / route matrix | `target/debug/sanvi-cli openapi --check` passes all 14 contexts; `python -X utf8 scripts/generate-route-matrix.py` complete/current |
+| Full encrypted restore | `bash scripts/db/rehearse-recovery.sh`: seed 1, 48,608 rows, 147 tenants; 15 s local RTO including decrypt/materialize, 0 s loss against quiesced source; audit chain verifies 28,720 entries |
+| Encrypted PITR | Same backup to `2026-10-09T06:37:31.572719+00:00`; 15 s local RTO; 3 s intentional loss vs recorded source horizon (not time spent running the rehearsal); 28,719 audit entries, post-target marker absent, outbox/payments consistent |
+| Local targets | RTO 15 s ≤ 3,600 s; full RPO 0 s / intentional PITR loss 3 s ≤ 300 s. These are local fixture results, not production validation |
+| Rotation | `target/debug/sanvi-cli rotate-credentials --rehearse`: 4,499 ms total; ten measured credential classes, each replacement accepted / retired rejected. PostgreSQL/Redis reject authentication specifically, not arbitrary connection failures; signing uses still-valid tokens, OAuth requires signature rejection; persisted DEKs rewrapped with production crypto |
+| Degraded procedure | Both restore reports record the executed `sanvi_app` read-only SELECT, SQLSTATE `25006` write rejection, and fresh read-write recovery command; edge maintenance/messages remain parked |
+| Extraction negative control | `bash scripts/db/test-encrypted-restore.sh` passes. Temporarily restoring the swallowed extraction-error behavior makes this test fail (`extraction failure reached the PostgreSQL recovery wait`), fixed behavior passes; no success report or leftover materialization volumes |
+| Fresh review | Three P2 findings fixed: stale replay volumes, swallowed extraction errors, retained anonymous PGDATA volumes. The subsequent full suite and final physical drills pass |
+
+Reports: `benchmarks/dr/restore-full-20261009T063716Z.json`,
+`benchmarks/dr/restore-pitr-20261009T063716Z.json`, `benchmarks/dr/rotation-local.json`.
+Machine: Windows x86_64, 20 logical cores, Docker, Postgres 18 / Redis 8.
+Sub-millisecond signing checks legitimately record 0 ms at millisecond resolution.
+
+Rulings: resume the existing implementation in the current checkout, saving
+completion on `codex/task025-completion`; provider/deployment operations are
+parked under the explicit user-approved local scope (cost if misapplied: no
+production revocation evidence, documented rather than inferred). Readiness's
+fixed dependency list is exempt from pagination; the report's public credential
+kind is a reasoned `not-a-secret` exemption. Both gate omissions were found by
+the first full-suite run and verified by the subsequent green run. Backup
+cleanup now removes plaintext source volumes and restore consumes encrypted
+base+WAL, with decrypt time in RTO. A remote is configured, but this completion
+has not been pushed and no CI or staging run is claimed.
 
 ---
 *On completion: satisfy every line in `## Definition of done`, run the verification commands, then

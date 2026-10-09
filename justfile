@@ -398,6 +398,10 @@ dr-pitr *args:
 tenant-restore *args:
     cargo run -p sanvi-cli -- tenant-restore {{args}}
 
+# Disposable local services; live provider revocations are parked explicitly.
+rotate-credentials *args:
+    cargo run -p sanvi-cli -- rotate-credentials {{args}}
+
 openapi:
     ./scripts/check-openapi.sh
 

@@ -76,3 +76,4 @@ get_tenant_payment | single payment with its embedded refunds/dispute references
 oauth_callback | single connection view produced by completing one handshake
 get_domain_instructions | instruction document for the one named domain
 search_domains | per-query availability document; the embedded array is the TLD pricing for the one searched term
+ready | fixed startup-configured dependency states for the readiness probe, never tenant rows or client-controlled cardinality

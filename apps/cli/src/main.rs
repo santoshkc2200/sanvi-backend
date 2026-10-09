@@ -18,6 +18,7 @@ mod i18n;
 mod migrate;
 mod openapi;
 mod payments;
+mod rotate_credentials;
 mod seed_scale;
 mod tenant;
 mod tenant_restore;
@@ -42,6 +43,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Rehearse credential rotation using disposable local services and keys.
+    RotateCredentials {
+        /// Required: this command never rotates deployment credentials.
+        #[arg(long, required = true)]
+        rehearse: bool,
+        /// Write measured, secret-free JSON evidence here.
+        #[arg(long, default_value = "benchmarks/dr/rotation-local.json")]
+        report: std::path::PathBuf,
+    },
     /// Run database migrations (migrator role).
     Migrate {
         #[command(subcommand)]
@@ -466,6 +476,16 @@ async fn main() -> ExitCode {
     let ids: Arc<dyn RawIdGenerator> = Arc::new(SnowflakeGenerator::new(node_id));
 
     match cli.command {
+        Command::RotateCredentials {
+            rehearse: _,
+            report,
+        } => match rotate_credentials::run(&report).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("rotation rehearsal failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Migrate {
             action,
             user,

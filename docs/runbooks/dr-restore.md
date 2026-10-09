@@ -38,8 +38,14 @@ Two `entitlement grant` transactions — one before the base backup, one
 after — write real audit-chain and outbox rows, with the marker timestamps
 recorded; the PITR target is one second after the last pre-backup marker.
 
-The retained artifact is the session directory's `base.tar.enc`
-(AES-256-CBC/PBKDF2, passphrase `DRILL_BACKUP_PASSPHRASE`). Session
+The retained artifact is the session directory's `base.tar.enc`, containing
+both the base backup and the archived WAL. Restore decrypts this artifact into
+fresh, disposable replay volumes; decryption/materialization count toward RTO.
+Source and replay containers remove their anonymous data volumes on cleanup,
+and backup clear-text volumes are removed. `--keep` deliberately retains the
+restored database for inspection; operators must remove its data/replay volumes
+after that inspection. The archive uses AES-256-CBC/PBKDF2 with passphrase
+`DRILL_BACKUP_PASSPHRASE`. Session
 directories are pruned at `--retention-days` (default 30) — the local
 stand-in for the phase-05 backup policy, which needs managed storage to be
 real.
@@ -51,7 +57,7 @@ failing, and the drill would prove nothing past the base backup.
 ### 2. Restore and time it (`scripts/db/restore.sh`)
 
 Restores the base backup into a **clean** container, replays the archived
-WAL, and measures from container start to read-write service — that number
+WAL, and measures from decryption start to read-write service — that number
 is the local RTO. Default: replay to the end of the archive. With
 `--target-time`: point-in-time recovery to that instant.
 
@@ -81,6 +87,12 @@ state inside the live system, nobody else's rows move. See
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-09 | full | seed 1 · 48,608 rows · 147 tenants | **2 s** (`benchmarks/dr/restore-full-20261009T050241Z.json`) | 0 s vs. quiesced source (replayed to last archived record) | verified, 28,720 entries | 20 cores, Windows/MINGW64, Docker |
 | 2026-10-09 | pitr | seed 1 · 48,608 rows · 147 tenants | **1 s** (`benchmarks/dr/restore-pitr-20261009T050724Z.json`) | 11 s (by design: pinned to `2026-10-09T05:07:37.499907+00:00`) | verified, 28,719 entries — post-backup transaction correctly absent | 20 cores, Windows/MINGW64, Docker |
+| 2026-10-09 | full, encrypted artifact replay + read-only rehearsal | seed 1 · 48,608 rows · 147 tenants | **15 s**, includes decrypt/materialize (`benchmarks/dr/restore-full-20261009T063716Z.json`) | 0 s vs. quiesced source | verified, 28,720 entries | 20 cores, Windows/MINGW64, Docker |
+| 2026-10-09 | pitr, encrypted artifact replay + read-only rehearsal | same backup | **15 s**, includes decrypt/materialize (`benchmarks/dr/restore-pitr-20261009T063716Z.json`) | 3 s intentional loss vs. recorded source horizon | verified, 28,719 entries; outbox/payment checks pass | same host |
+
+The first two historical reports measured only container recovery and PITR
+target age at drill end. The final reports include decryption in RTO and measure
+PITR loss against the recorded source horizon; elapsed rehearsal time is not RPO.
 
 Both reports carry `rto_label: "local — docker on this host, not a
 production number"`. The CI-resident form of the same drill — a true
@@ -94,6 +106,7 @@ every PR.
 just dr-restore --rehearse   # backup + full restore + checks + report
 just dr-pitr --rehearse      # backup + restore pinned to the recorded target
 just test-health-without-db  # the probes a restore-deploy cycle depends on
+bash scripts/db/test-encrypted-restore.sh # invalid decrypted archive fails before recovery
 ```
 
 Portable form (no `just`):

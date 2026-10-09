@@ -1,0 +1,29 @@
+{
+  "scenario": "full",
+  "session": "20261009T063716Z",
+  "date": "2026-10-09",
+  "started_at": "2026-10-09T06:37:41Z",
+  "ready_at": "2026-10-09T06:37:56Z",
+  "finished_at": "2026-10-09T06:38:01Z",
+  "restore_seconds": 15,
+  "rto_label": "local — docker on this host, not a production number",
+  "pitr_target": null,
+  "data_loss_window": "0s against the quiesced source; see data_loss_window_basis",
+  "data_loss_window_seconds": 0,
+  "data_loss_window_basis": "replayed to the last archived WAL record; the source was quiesced with pg_switch_wal before measuring",
+  "restored_audit_max_occurred_at": "2026-10-09 06:37:33.398754+00",
+  "machine": {
+    "cores": 20,
+    "os": "MINGW64_NT-10.0-26200 3.3.6-bec3d608-341.x86_64"
+  },
+  "checks": {
+    "audit_chain": "audit chain verified (28720 entries)",
+    "markers": "consistent",
+    "outbox": "consistent",
+    "payments": "consistent",
+    "degraded_mode": "read-only commands rehearsed; writes rejected with 25006"
+  },
+  "build": {
+    "cli": "sanvi-cli 0.10.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "scenario": "pitr",
+  "session": "20261009T063716Z",
+  "date": "2026-10-09",
+  "started_at": "2026-10-09T06:38:06Z",
+  "ready_at": "2026-10-09T06:38:21Z",
+  "finished_at": "2026-10-09T06:38:26Z",
+  "restore_seconds": 15,
+  "rto_label": "local — docker on this host, not a production number",
+  "pitr_target": "2026-10-09T06:37:31.572719+00:00",
+  "data_loss_window": "target → recorded quiesced source horizon (intentional PITR loss)",
+  "data_loss_window_seconds": 3,
+  "data_loss_window_basis": "by design: recovery was pinned to the recorded target",
+  "restored_audit_max_occurred_at": "2026-10-09 06:37:29.71919+00",
+  "machine": {
+    "cores": 20,
+    "os": "MINGW64_NT-10.0-26200 3.3.6-bec3d608-341.x86_64"
+  },
+  "checks": {
+    "audit_chain": "audit chain verified (28719 entries)",
+    "markers": "consistent",
+    "outbox": "consistent",
+    "payments": "consistent",
+    "degraded_mode": "read-only commands rehearsed; writes rejected with 25006"
+  },
+  "build": {
+    "cli": "sanvi-cli 0.10.0"
+  }
+}

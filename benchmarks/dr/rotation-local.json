@@ -1,0 +1,105 @@
+{
+  "credentials": [
+    {
+      "credential": "postgres",
+      "duration_ms": 2210,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/database-redis.md"
+    },
+    {
+      "credential": "redis",
+      "duration_ms": 1013,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/database-redis.md"
+    },
+    {
+      "credential": "tenant_signing",
+      "duration_ms": 0,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/signing-webhooks.md"
+    },
+    {
+      "credential": "tracking_signing",
+      "duration_ms": 0,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/signing-webhooks.md"
+    },
+    {
+      "credential": "oauth_state_signing",
+      "duration_ms": 0,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/signing-webhooks.md"
+    },
+    {
+      "credential": "preview_signing",
+      "duration_ms": 0,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/signing-webhooks.md"
+    },
+    {
+      "credential": "billing_webhook",
+      "duration_ms": 0,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/signing-webhooks.md"
+    },
+    {
+      "credential": "connect_webhook",
+      "duration_ms": 0,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/signing-webhooks.md"
+    },
+    {
+      "credential": "privacy_kek",
+      "duration_ms": 26,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/envelope-keys.md"
+    },
+    {
+      "credential": "advertising_kek",
+      "duration_ms": 5,
+      "new_accepted": true,
+      "old_rejected": true,
+      "runbook": "docs/runbooks/rotation/envelope-keys.md"
+    }
+  ],
+  "duration_ms": 4499,
+  "finished_at": "2026-10-09T06:38:12.528714900Z",
+  "limitations": [
+    "Fresh connections tested; existing DB/Redis sessions require drain/restart",
+    "KEK drill rewraps a persisted DEK with production crypto; deployment-wide migration and ciphertext continuity require the envelope runbook",
+    "Durations are local; provider propagation and overlap windows excluded"
+  ],
+  "machine": {
+    "arch": "x86_64",
+    "cores": 20,
+    "os": "windows"
+  },
+  "non_rotating": [
+    "Connect onboarding secret: ephemeral, single use",
+    "subject and advertising DEKs: preserve during KEK rewrap; destroy subject DEKs on erasure",
+    "OAuth refresh tokens: provider revocation parked",
+    "export passphrase: per-artifact"
+  ],
+  "parked": [
+    "Kratos webhook/admin and session signing keys",
+    "Keto deployment credentials (none held by this backend)",
+    "Stripe platform and restricted API keys, provider webhook revocation",
+    "Google Ads developer token and OAuth client secret",
+    "Meta OAuth client secret",
+    "media service API key",
+    "notification send/read keys",
+    "OpenObserve OTLP auth token",
+    "domains internal shared secret"
+  ],
+  "scope": "local rehearsal; provider revocations parked",
+  "started_at": "2026-10-09T06:38:08.029168700Z"
+}

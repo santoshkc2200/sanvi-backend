@@ -37,7 +37,7 @@ serialized output, with the test that proves it.
 
 | Secret | Storage | Rotation | Blast radius | Render safety |
 | --- | --- | --- | --- | --- |
-| Privacy KEK (`SANVI__PRIVACY__KEK`, base64 32 B) | env → `PrivacyConfig.kek` (`Redacted<String>`); plaintext bytes only inside `SqlxEnvelopeCrypto.kek: [u8; 32]` (derive-less) | KEK rotation = wrap existing DEKs under new KEK id (`kek_id` is recorded beside every wrapped DEK); not yet rehearsed — TASK-025 scope | decrypt every subject's envelope-encrypted DSR data; **cannot** reach ad-account tokens (separate envelope, TASK-011) | wrapped config field; runtime carrier exempt with no-derives rule |
+| Privacy KEK (`SANVI__PRIVACY__KEK`, base64 32 B) | env → `PrivacyConfig.kek` (`Redacted<String>`); plaintext bytes only inside `SqlxEnvelopeCrypto.kek: [u8; 32]` (derive-less) | KEK rotation = wrap existing DEKs under new KEK id (`kek_id` is recorded beside every wrapped DEK); persisted-DEK local rehearsal complete in TASK-025; deployment-wide migration remains an operator procedure in `docs/runbooks/rotation/envelope-keys.md` | decrypt every subject's envelope-encrypted DSR data; **cannot** reach ad-account tokens (separate envelope, TASK-011) | wrapped config field; runtime carrier exempt with no-derives rule |
 | Per-subject DEKs | DB `privacy.subject_keys.wrapped_dek` (ciphertext of the KEK) | destroyed on erasure (crypto-shredding is the DEK row's deletion) | single subject's data | `ciphertext` class: never plaintext anywhere |
 | Advertising token KEK (`SANVI__ADVERTISING__TOKEN_KEK`) | env → `AdvertisingConfig.token_kek` (`Redacted<String>`); plaintext bytes only in `SqlxTenantEnvelopeCrypto.kek` (derive-less) | rotation adds a KEK id beside wrapped tenant DEKs (same shape as privacy) | decrypt every tenant's stored ad-platform refresh tokens | wrapped config field |
 | Per-tenant ad DEKs | DB `advertising.tenant_secret_keys.wrapped_dek` | platform schedule (never a DSR — a subject's erasure must not reach a live ad credential, TASK-011 design) | one tenant's ad tokens | `ciphertext` class |
@@ -101,6 +101,12 @@ serialized output, with the test that proves it.
 - **Rotation drills** for every row above are TASK-025's scope; this table is
   the input that scopes them (including "every old credential asserted
   rejected afterwards").
+  TASK-025's 2026-10-09 user-approved scope completes the local rehearsal:
+  PostgreSQL, Redis, tenant/tracking/OAuth/preview signing, billing/Connect
+  webhook verification and privacy/advertising KEK rewrap. Secret-free timings
+  and rejection evidence: `benchmarks/dr/rotation-local.json`. Live provider
+  revocation, session invalidation and deployment-wide rollouts remain parked;
+  the exhaustive credential procedures are in `docs/runbooks/rotation/`.
 - The **route/permission matrix** (`just route-matrix`) covers which routes
   accept these secrets; the IDOR sweep proves foreign tenants cannot reach
   them.
