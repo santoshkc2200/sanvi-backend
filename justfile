@@ -301,6 +301,24 @@ test-idor:
     eval "$(./scripts/test-db.sh up)"
     cargo nextest run -p sanvi-api --test integration idor_sweep
 
+# TASK-027 (FR-1127): every validation error is field-addressable — the
+# enumeration walks all thirteen HTTP contexts' error inventories and fails
+# on a flat one; the self-test plants flat samples and expects failure.
+test-error-addressability:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p sanvi-api --test integration error_addressability
+
+# TASK-027 (FR-1127): every bounded collection declares a deterministic
+# ordering tie-broken by the row's unique key, and tied sort keys hold one
+# order across repeated fetches and page boundaries (live probe).
+test-collection-ordering:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p sanvi-api --test integration collection_ordering
+
 # TASK-024 slice 11.5c: the schema-wide RLS matrix — every tenant-scoped
 # table catalog-enumerated, every child partition asserted by name. Same
 # scoping convention as test-idor: the workspace suite runs it too.

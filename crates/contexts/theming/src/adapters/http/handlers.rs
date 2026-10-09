@@ -46,15 +46,22 @@ pub fn api_error(err: ThemingError) -> ApiError {
         ThemingError::ThemeApiMismatch { found, supported } => ApiError::BadRequest {
             detail: format!("theme api {found} is not compatible with {supported}"),
         },
-        ThemingError::InvalidManifest(detail)
-        | ThemingError::InvalidTokens(detail)
-        | ThemingError::OverrideNotAllowed { path: detail }
-        | ThemingError::OverrideTypeMismatch { path: detail, .. }
-        | ThemingError::LayoutOverrideNotAllowed(detail)
-        | ThemingError::InvalidCustomCss(detail)
-        | ThemingError::InvalidBrandAsset(detail)
-        | ThemingError::InvalidState(detail)
-        | ThemingError::ContrastFailure(detail) => ApiError::BadRequest { detail },
+        // TASK-027 (FR-1127): invalid-document and override rejections are
+        // field-addressed (`validation::validation_issue` owns the paths);
+        // `InvalidState` stays flat — no request field is invalid.
+        ThemingError::InvalidManifest(_)
+        | ThemingError::InvalidTokens(_)
+        | ThemingError::OverrideNotAllowed { .. }
+        | ThemingError::OverrideTypeMismatch { .. }
+        | ThemingError::LayoutOverrideNotAllowed(_)
+        | ThemingError::InvalidCustomCss(_)
+        | ThemingError::InvalidBrandAsset(_)
+        | ThemingError::ContrastFailure(_) => {
+            let (detail, issues) = super::validation::validation_issue(&err)
+                .expect("document rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
+        ThemingError::InvalidState(detail) => ApiError::BadRequest { detail },
         ThemingError::LayoutOverrideNotEntitled(detail)
         | ThemingError::CustomCssNotEntitled(detail) => ApiError::Forbidden { detail },
         ThemingError::NothingToRollBack => ApiError::Conflict {
@@ -644,6 +651,7 @@ fn theme_version_limit_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// `GET /api/v1/platform/themes/{key}/versions`.
+/// Ordered by published_at DESC, id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/themes/{key}/versions",

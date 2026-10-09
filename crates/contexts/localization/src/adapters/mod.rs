@@ -4,6 +4,7 @@
 
 pub mod cache;
 pub mod catalog;
+pub mod email_html;
 pub mod events;
 pub mod http;
 pub mod metrics;

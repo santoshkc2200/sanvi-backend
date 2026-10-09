@@ -16,6 +16,8 @@ use crate::domain::features::{Feature, FeatureKey, FeatureKind, Visibility};
 use crate::domain::roles::{Role, RoleScope};
 use crate::domain::{AccessError, ResolvedEntitlement};
 
+use super::validation;
+
 /// Application state visible to this context's handlers.
 #[derive(Clone)]
 pub struct AccessState {
@@ -35,13 +37,20 @@ pub struct AccessState {
 /// boundary).
 pub fn api_error(err: AccessError) -> ApiError {
     match err {
-        AccessError::InvalidPermission(detail)
-        | AccessError::InvalidRoleScope(detail)
-        | AccessError::InvalidRoleKey(detail)
-        | AccessError::InvalidFeatureKey(detail)
-        | AccessError::InvalidFeatureDefinition(detail)
-        | AccessError::InvalidEntitlement(detail)
-        | AccessError::InvalidLimit(detail) => ApiError::BadRequest { detail },
+        // TASK-027 (FR-1127): invalid-input rejections are field-addressed
+        // (`validation::validation_issue` owns the field paths).
+        AccessError::InvalidPermission(_)
+        | AccessError::InvalidRoleScope(_)
+        | AccessError::InvalidRoleKey(_)
+        | AccessError::InvalidFeatureKey(_)
+        | AccessError::InvalidFeatureDefinition(_)
+        | AccessError::InvalidEntitlement(_)
+        | AccessError::InvalidLimit(_)
+        | AccessError::PermissionScopeMismatch { .. } => {
+            let (detail, issues) =
+                validation::validation_issue(&err).expect("input rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
         AccessError::RoleAlreadyExists { key } | AccessError::FeatureAlreadyExists { key } => {
             ApiError::Conflict {
                 detail: format!("'{key}' already exists"),
@@ -55,9 +64,6 @@ pub fn api_error(err: AccessError) -> ApiError {
         },
         AccessError::SystemRoleImmutable { key } => ApiError::Forbidden {
             detail: format!("role '{key}' is a system role and cannot be modified"),
-        },
-        AccessError::PermissionScopeMismatch { permission, scope } => ApiError::BadRequest {
-            detail: format!("permission '{permission}' is not assignable in scope {scope}"),
         },
         AccessError::Escalation { permission } => ApiError::Forbidden {
             detail: format!("cannot grant '{permission}': you do not hold it"),

@@ -175,6 +175,17 @@ def breaking(old, new):
             elif path.endswith('/required'):
                 if set(left) != set(right):
                     errors.append(f'{path}: requiredness changed')
+            elif path.endswith('/allOf'):
+                # Composed schemas compare member-by-member: an added or
+                # changed member narrows the intersection and is breaking,
+                # an added optional property inside a member is not. A
+                # flat list inequality would flag every additive Problem
+                # Detail extension as breaking.
+                if len(right) < len(left):
+                    errors.append(f'{path}: schema alternative removed')
+                else:
+                    for index, member in enumerate(left):
+                        compare(member, right[index], f'{path}/{index}', active_refs)
             elif left != right:
                 errors.append(f'{path}: schema alternatives/security changed')
         elif left != right:

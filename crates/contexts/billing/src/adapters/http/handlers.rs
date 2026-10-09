@@ -20,6 +20,8 @@ use crate::domain::{
     BillingError, EntitlementGrant, PlanId, PlanTier, PlanVisibility, PriceId, PriceInterval,
 };
 
+use super::validation;
+
 /// Application state visible to this context's handlers.
 #[derive(Clone)]
 pub struct BillingState {
@@ -42,6 +44,9 @@ pub struct BillingState {
 /// boundary).
 pub fn api_error(err: BillingError) -> ApiError {
     match err {
+        // TASK-027 (FR-1127): invalid-input rejections are field-addressed
+        // (`validation::validation_issue` owns the field paths); webhook
+        // payloads stay flat — no request field is invalid there.
         BillingError::InvalidPlanKey(_)
         | BillingError::InvalidPlanName(_)
         | BillingError::InvalidPlanTier(_)
@@ -49,8 +54,12 @@ pub fn api_error(err: BillingError) -> ApiError {
         | BillingError::InvalidPrice(_)
         | BillingError::InvalidCurrency(_)
         | BillingError::InvalidInterval(_)
-        | BillingError::InvalidEntitlement(_)
-        | BillingError::InvalidWebhookPayload(_) => ApiError::BadRequest {
+        | BillingError::InvalidEntitlement(_) => {
+            let (detail, issues) = validation::validation_issue(&err)
+                .expect("plan and price rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
+        BillingError::InvalidWebhookPayload(_) => ApiError::BadRequest {
             detail: err.to_string(),
         },
         BillingError::PlanNotFound(name)
@@ -252,6 +261,7 @@ fn invoice_limit_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// `GET /api/v1/tenant/billing/invoices` — the tenant's invoices.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/billing/invoices",

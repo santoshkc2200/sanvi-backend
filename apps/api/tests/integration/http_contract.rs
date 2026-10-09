@@ -16,9 +16,15 @@ use sanvi_tenancy::adapters::http::state_for_tests as tenancy_state_for_tests;
 use sanvi_testsupport::test_ids;
 
 /// A lazy pool that never connects: the readiness probe is not part of this
-/// test suite (covered by the context's own tests).
+/// test suite (covered by the context's own tests). The acquire window is
+/// one second on purpose — sqlx otherwise retries the refused connects for
+/// its 30 s default, pushing every storage-touching request into the
+/// request-budget middleware's own 30 s timeout and turning
+/// `cache_headers_snapshot` into a coin flip.
 fn pool_stub() -> sanvi_persistence::PgPool {
-    sanvi_persistence::PgPool::connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
+    sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(1))
+        .connect_lazy("postgres://nobody:nothing@127.0.0.1:1/none")
         .expect("lazy pool construction never connects")
 }
 

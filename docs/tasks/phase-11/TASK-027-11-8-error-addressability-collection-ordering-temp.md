@@ -1,6 +1,6 @@
 # TASK-027: 11.8 Error addressability, collection ordering & template accessibility
 
-**Phase:** 11 · **Status:** todo · **Size:** S
+**Phase:** 11 · **Status:** done · **Size:** S
 **Requirement(s):** FR-1127
 **Depends on:** TASK-022, **phase 10 merged**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -86,14 +86,14 @@ the HTML version does.
 
 ## Definition of done
 
-- [ ] Every validation error from every context carries its field path; the enumeration test fails on a
+- [x] Every validation error from every context carries its field path; the enumeration test fails on a
       flat one.
-- [ ] A wizard payload rejected at step three names the step-three field.
-- [ ] Every collection endpoint has a specified ordering, enforced and tie-broken by id, stable across
+- [x] A wizard payload rejected at step three names the step-three field.
+- [x] Every collection endpoint has a specified ordering, enforced and tie-broken by id, stable across
       repeated fetches and page boundaries.
-- [ ] Templates pass contrast and structure checks in both locales, with an equivalent plain-text
+- [x] Templates pass contrast and structure checks in both locales, with an equivalent plain-text
       alternative.
-- [ ] No `/api/v1` response shape changed except error field addressing.
+- [x] No `/api/v1` response shape changed except error field addressing.
 
 ## Verification
 
@@ -106,6 +106,58 @@ just test-error-addressability
 just test-collection-ordering
 just i18n
 ```
+
+## Execution record (2026-10-10)
+
+- **Field addressing.** `sanvi_http::FieldIssue` and `ApiError::validation` (same 400 and
+  `bad-request` class as before; the flat message stays, the RFC 9457 `fields` extension member is
+  additive). Each of the thirteen HTTP contexts gained an exhaustive classifier
+  (`adapters/http/validation.rs`) that owns the field paths and the unchanged flat detail, one
+  constructed sample per error variant, and unit tests pinning the message-keyed grab-bag variants
+  (payments money/connection shapes, billing prices, advertising inputs, access
+  definitions/entitlements). The advertising campaign wizard's creative-parse failure now raises a
+  `Validation` violation carrying `ad_groups[i].ads[j].creative.id` instead of flattening; the
+  payments checkout addresses `amount_minor`, `currency`, `reference`, `cursor`, `status`.
+- **Enumeration gate.** `apps/api/tests/integration/error_addressability.rs` walks all thirteen
+  inventories and fails on a classified-validation sample with no field, an empty path, or an empty
+  message; `all_thirteen_http_contexts_are_enumerated` pins the context set;
+  `the_gate_fails_on_a_planted_flat_validation_error` is the self-test. `just test-error-addressability`.
+- **Wizard step three.** `patch_campaign_validates_and_hydrates_creatives_in_ad_groups` now proves a
+  payload rejected at the third ad group names `ad_groups[2].ads[0].creative.id` (integration, real DB).
+- **Ordering.** Every bounded collection's annotation declares `Ordered by … .` in its doc comment
+  (landed in the operation `summary`/`description`); identity memberships tie-break by `user_id`,
+  theming theme versions by `id` (the two SQL gaps). `apps/api/tests/integration/collection_ordering.rs`
+  parses the clause out of the merged document (final key must be the row's unique key; documented
+  exceptions `list_audit → seq`, `list_members → user_id`) and serves `GET /api/v1/tenant/payments`
+  through the real stack with five rows sharing one `created_at`: two independent page walks are
+  byte-identical and ids fall through id-DESC across page boundaries. `just test-collection-ordering`.
+- **Templates.** `sanvi_localization::adapters::email_html` derives the HTML alternative from the
+  rendered plain text (one `<h1>`, `<p>` paragraphs, `lang`, HTML-escaped, bare-URL lines become links
+  labelled with the locale's action — `emails.invitation.action` added to both catalogs; unlabelled
+  URLs fall back to the host). The WCAG-AA palette is measured by unit test, not eyeballed. Catalog
+  rules for both locales: templates are plain text, URLs sit on their own line, and the HTML
+  alternative must contain every sentinel fact the text carries. `RenderedNotification` carries
+  `html_body`; the dispatcher, the worker's budget/notification lane and the direct Lane-B sends
+  (identity invitation, DSR verification, export passphrase) all ship it.
+  `just i18n` green (catalog parity incl. the new key).
+- **Harness repairs the suite exposed (pre-existing defects, fixed here).** The contract harness's
+  lazy pool stub retried refused connects for sqlx's full 30 s acquire window inside the 30 s request
+  budget, making `cache_headers_snapshot` a coin flip (measured 30.0 s at HEAD too); the stub now
+  acquires with a 1 s window and the test runs in ~1 s. The regenerated `payments.yaml` made
+  `/connections/current` collection-shaped like its already-exempted sibling; the same exemption line
+  was added. The freeze gate's `allOf` comparison descends member-by-member so the additive `fields`
+  member is not misread as a changed schema alternative.
+- **Pre-existing, surfaced.** Main's committed `api/*.yaml` and `docs/api/generated/*` were stale
+  against merged code (`openapi --check` fails on a pristine main checkout: access components,
+  advertising path set). This branch regenerates them per CONTRIBUTING §3; the regeneration surfaces
+  post-freeze required-field additions (`requested_scopes`, `is_system`, …) to
+  `spec-freeze-check`, which needs the repository's reviewed-exception flow — not TASK-027's
+  verification list.
+- **Final verification.** `cargo fmt --check` clean; `cargo clippy --workspace --all-targets --
+  -D warnings` clean; full workspace suite 1,508/1,508; `openapi --check`, `spec-lint`,
+  `api-docs --check`, `i18n check`, `replay-suite`, `route-matrix`, trace-coverage, log-PII,
+  secret-scan, layering, timeouts, id-policy all green; `test-error-addressability` 4/4 and
+  `test-collection-ordering` 3/3.
 
 ## Out of scope
 

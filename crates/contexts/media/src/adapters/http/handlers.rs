@@ -6,6 +6,8 @@ use utoipa::ToSchema;
 use super::state::MediaState;
 use crate::domain::{AssetDeliveryView, CompletedPartInput, CreateAssetInput, MediaError};
 
+use super::validation;
+
 /// Maps a `MediaError` into the standard `ApiError` status vocabulary while
 /// threading the upstream `code` through as an RFC 9457 extension member —
 /// the same `.problem()` + `extensions` + `InternalError::from_response`
@@ -14,13 +16,36 @@ use crate::domain::{AssetDeliveryView, CompletedPartInput, CreateAssetInput, Med
 /// `course-media`'s `CourseApiError` reads `problem.code` directly, so this
 /// is load-bearing, not decoration — see TASK-032's "Error mapping" section.
 fn media_problem(err: MediaError) -> actix_web::Error {
-    let (code, api) = match err {
-        MediaError::BadRequest { code, detail } => (code, ApiError::BadRequest { detail }),
-        MediaError::NotFound { code, detail } => (code, ApiError::NotFound { resource: detail }),
-        MediaError::Conflict { code, detail } => (code, ApiError::Conflict { detail }),
+    // TASK-027 (FR-1127): input-shaped rejections whose message names its
+    // field are field-addressed (`validation::validation_issue` owns the
+    // field table).
+    let (code, api) = match &err {
+        MediaError::BadRequest { code, detail } => {
+            let api = match validation::validation_issue(&err) {
+                Some((detail, issues)) => ApiError::validation(detail, issues),
+                None => ApiError::BadRequest {
+                    detail: detail.clone(),
+                },
+            };
+            (code.clone(), api)
+        }
+        MediaError::NotFound { code, detail } => (
+            code.clone(),
+            ApiError::NotFound {
+                resource: detail.clone(),
+            },
+        ),
+        MediaError::Conflict { code, detail } => (
+            code.clone(),
+            ApiError::Conflict {
+                detail: detail.clone(),
+            },
+        ),
         MediaError::Unavailable { detail } => (
             "media_unavailable".to_string(),
-            ApiError::ServiceUnavailable { detail },
+            ApiError::ServiceUnavailable {
+                detail: detail.clone(),
+            },
         ),
     };
     let mut problem = api.problem();

@@ -1,5 +1,7 @@
 mod abuse_quotas;
 mod cache_headers_snapshot;
+mod collection_ordering;
+mod error_addressability;
 mod feature_catalog;
 mod headers_snapshot;
 mod http_contract;

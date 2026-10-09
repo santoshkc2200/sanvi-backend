@@ -78,3 +78,4 @@ get_domain_instructions | instruction document for the one named domain
 search_domains | per-query availability document; the embedded array is the TLD pricing for the one searched term
 ready | fixed startup-configured dependency states for the readiness probe, never tenant rows or client-controlled cardinality
 get_payment_connection | Singleton provider connection; embedded requirements are its bounded provider-defined checklist, not a tenant collection.
+get_current_payment_connection | The caller's own singleton provider connection; embedded requirements are its bounded provider-defined checklist, not a tenant collection.

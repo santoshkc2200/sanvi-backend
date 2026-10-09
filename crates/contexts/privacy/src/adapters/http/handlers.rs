@@ -28,6 +28,8 @@ use crate::domain::{
     ProcessingPurpose, RectifyPatch, SubjectRef,
 };
 
+use super::validation;
+
 /// Application state visible to this context's handlers.
 #[derive(Clone)]
 pub struct PrivacyState {
@@ -129,8 +131,15 @@ pub fn api_error(err: PrivacyError) -> ApiError {
             tracing::error!(error = %err, "privacy processing failure");
             ApiError::internal("privacy processing failed")
         }
-        other => ApiError::BadRequest {
-            detail: other.to_string(),
+        // TASK-027 (FR-1127): the remaining invalid-vocabulary rejections
+        // (the `invalid …` shapes) are field-addressed
+        // (`validation::validation_issue` owns the field names); anything
+        // else the catch-all sees stays flat.
+        other => match validation::validation_issue(&other) {
+            Some((detail, issues)) => ApiError::validation(detail, issues),
+            None => ApiError::BadRequest {
+                detail: other.to_string(),
+            },
         },
     }
 }
@@ -809,6 +818,7 @@ pub struct TenantRequestPageQuery {
     pub after: Option<String>,
 }
 
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/privacy/requests",
@@ -857,6 +867,7 @@ pub struct ListRequestsQuery {
 }
 
 /// `GET /api/v1/platform/privacy/requests` — operator view.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/privacy/requests",
@@ -948,6 +959,7 @@ pub async fn extend_dsr(
 }
 
 /// `GET /api/v1/platform/privacy/appeals` — open appeals.
+/// Ordered by id ASC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/privacy/appeals",
@@ -1066,6 +1078,7 @@ pub async fn upsert_jurisdiction(
 }
 
 /// `GET /api/v1/platform/privacy/holds` — legal holds.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/privacy/holds",
@@ -1144,6 +1157,7 @@ pub async fn release_hold(
 }
 
 /// `GET /api/v1/platform/privacy/incidents` — breach incidents.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/privacy/incidents",
@@ -1201,6 +1215,7 @@ pub async fn record_incident(
 
 /// `GET /api/v1/platform/privacy/incidents/{id}/obligations` — computed
 /// obligations.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/privacy/incidents/{id}/obligations",
@@ -1374,6 +1389,7 @@ pub async fn upsert_activity(
 
 /// `GET /api/v1/platform/privacy/assessments` — risk assessments (DPIA +
 /// US state data-protection assessments).
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/privacy/assessments",

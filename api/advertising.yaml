@@ -578,6 +578,15 @@ components:
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
+        is_system:
+          description: |-
+            Explicit automated-actor marker (frontend TASK-018). Guardrail pauses
+            set this to `true` with `actor_id: None` and
+            `attribution: "system:budget_guardrail"`; every user action sets it
+            to `false`. Derived from `attribution` (`system:` prefix) when reading
+            rows written before this field existed, so old guardrail pauses
+            resolve without a backfill migration.
+          type: boolean
         metadata: {}
         mutation_id:
           format: uuid
@@ -941,11 +950,30 @@ components:
         captured_at:
           format: date-time
           type: string
+        dedupe_key:
+          description: |-
+            The event's dedupe identity (frontend TASK-015). Duplicated from
+            `event.dedupe_key` so clients need not reach into the event to find it.
+          type: string
+        dedupe_outcome:
+          description: |-
+            Per-event dedupe outcome: `"captured"` — this row won the immutable
+            `(tenant_id, dedupe_key)` identity and any retry with the same key
+            was dropped by the idempotent insert without creating a second row.
+          type: string
+        dedupe_source:
+          description: |-
+            How the identity was derived: `"order"` when `order_ref` is present
+            (stable across webhook timing), `"client_event"` otherwise.
+          type: string
         event:
           $ref: '#/components/schemas/ConversionEvent'
       required:
       - event
       - captured_at
+      - dedupe_key
+      - dedupe_source
+      - dedupe_outcome
       type: object
     ConversionEvent:
       properties:
@@ -953,6 +981,14 @@ components:
           $ref: '#/components/schemas/ClickIds'
         consent:
           $ref: '#/components/schemas/ConsentSnapshot'
+        dedupe_key:
+          description: |-
+            Immutable storage identity. For order-backed events this is derived
+            from the order reference and event name, so a webhook state change
+            cannot turn one purchase into two captured rows. Exposed so the
+            diagnostics view (frontend TASK-015) renders the identity from data
+            instead of re-deriving it with an explainer.
+          type: string
         event_id:
           type: string
         hashed_identifiers:
@@ -1003,6 +1039,7 @@ components:
       - id
       - tenant_id
       - event_id
+      - dedupe_key
       - name
       - occurred_at
       - click_ids
@@ -1325,6 +1362,12 @@ components:
           type: number
         period:
           $ref: '#/components/schemas/BudgetPeriod'
+        projected_spend:
+          $ref: '#/components/schemas/AdvertisingMoney'
+          description: |-
+            Run-rate projection in the cap currency, computed on the same tenant
+            clock and FX basis as spend status (frontend TASK-017: retires the
+            client-side FX conversion and its rounding fallback).
         scope:
           type: string
         would_auto_pause:
@@ -1338,11 +1381,36 @@ components:
       - period
       - cap_amount
       - current_spend
+      - projected_spend
       - percentage
       - would_breach_80
       - would_breach_100
       - would_auto_pause
       - condition
+      type: object
+    FieldIssue:
+      description: |-
+        One field-addressed validation issue (TASK-027, FR-1127).
+
+        A validation error that names the input it belongs to lets a client
+        build an error summary that links back to the offending field instead
+        of guessing from a flat string. `field` is the request-body path,
+        root-relative, with bracketed indices for sequence elements
+        (`hostname`, `budget.amount.currency`,
+        `ad_groups[2].ads[0].creative.placement`) — the same grammar the
+        advertising capability matrix already speaks.
+      properties:
+        field:
+          description: Root-relative path to the offending request field.
+          type: string
+        message:
+          description: |-
+            Why this field was rejected. Human-readable; `detail` stays the
+            request-level summary and is never a replacement for it.
+          type: string
+      required:
+      - field
+      - message
       type: object
     HashedIdentifier:
       type: string
@@ -1678,6 +1746,15 @@ components:
         key:
           example: google_ads
           type: string
+        requested_scopes:
+          description: |-
+            OAuth scopes requested at connect time (frontend TASK-011). Sourced
+            from the adapter's `required_scopes()` — the same list health uses
+            to compute `scopes_missing` — so the pre-connect screen enumerates
+            permissions from data instead of hard-coding them.
+          items:
+            type: string
+          type: array
         upgrade_required:
           type: boolean
       required:
@@ -1688,6 +1765,7 @@ components:
       - upgrade_required
       - connection_state
       - capability_matrix
+      - requested_scopes
       type: object
     PlatformsView:
       description: |-
@@ -1716,6 +1794,17 @@ components:
           detail:
             description: Human-readable explanation of this specific occurrence.
             type: string
+          fields:
+            description: |-
+              The fields a validation rejection names (TASK-027, FR-1127), as an
+              RFC 9457 extension member. Present only when the error is
+              field-addressed; the human-readable `detail` is never removed from
+              an error that grows field addressing.
+            items:
+              $ref: '#/components/schemas/FieldIssue'
+            type:
+            - array
+            - 'null'
           instance:
             description: URI of the offending resource, if any.
             type:
@@ -2109,6 +2198,23 @@ components:
       - tenant_id
       - mappings
       type: object
+    TrackingSiteKeyView:
+      properties:
+        origin:
+          type: string
+        site_key:
+          type: string
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - site_key
+      - tenant_id
+      - origin
+      type: object
     UnmatchedPlatformAds:
       description: |-
         What the platform listed that this campaign's tree cannot account for.
@@ -2334,6 +2440,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by id DESC.
       tags:
       - advertising
     post:
@@ -2463,6 +2570,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by id DESC.
       tags:
       - advertising
   /api/v1/tenant/ads/budget-alerts/{alert_id}/acknowledge:
@@ -2545,6 +2653,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by id DESC.
       tags:
       - advertising
     put:
@@ -2634,6 +2743,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by created_at DESC, id DESC.
       tags:
       - advertising
     post:
@@ -3272,6 +3382,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by id DESC.
       tags:
       - advertising
   /api/v1/tenant/ads/campaigns/{campaign_id}/drift:
@@ -3843,6 +3954,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by id DESC.
       tags:
       - advertising
   /api/v1/tenant/ads/conversions/{id}/diagnostics:
@@ -3970,6 +4082,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by id DESC.
       tags:
       - advertising
     post:
@@ -4421,19 +4534,19 @@ paths:
           description: Site key for the requested origin
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing or malformed origin
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing advertising.connect permission
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Tracking site-key signing secret is not configured

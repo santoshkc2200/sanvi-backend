@@ -631,6 +631,7 @@ Content-Type: application/json
 Operation: `list_invoices`
 
 `GET /api/v1/tenant/billing/invoices` — the tenant's invoices.
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 

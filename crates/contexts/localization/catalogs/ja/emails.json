@@ -1,6 +1,7 @@
 {
   "emails.invitation.subject": "{tenant} への招待",
   "emails.invitation.body": "{name} 様\n\n{tenant} への招待が届いています。次のリンクから招待をお受け取りください:\n{url}\n\nこの招待は {days, plural, one {1日} other {#日}} で失効します。",
+  "emails.invitation.action": "招待を受け取る",
   "emails.verification.subject": "認証コードのお知らせ",
   "emails.verification.body": "認証コードは {code} です。まもなく失効します。",
   "emails.security_notice.subject": "{tenant} アカウントのセキュリティ通知",

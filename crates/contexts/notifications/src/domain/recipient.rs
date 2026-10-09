@@ -14,6 +14,11 @@ pub struct RenderedNotification {
     pub locale: String,
     pub subject: String,
     pub text_body: String,
+    /// The accessible HTML alternative, derived from `text_body` by the
+    /// localization context's renderer (TASK-027, FR-1127): semantic
+    /// headings, labelled links, an AA-checked palette — never a second
+    /// copy of the content that can drift.
+    pub html_body: String,
 }
 
 #[async_trait]

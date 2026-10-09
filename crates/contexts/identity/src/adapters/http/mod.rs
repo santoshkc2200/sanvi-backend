@@ -3,6 +3,7 @@
 pub mod catalog;
 mod handlers;
 pub mod routes;
+pub mod validation;
 pub mod webhooks;
 
 pub use handlers::{

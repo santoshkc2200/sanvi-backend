@@ -5,6 +5,43 @@ use utoipa::ToSchema;
 /// Base URI for the stable `type` URIs of every problem class.
 pub const PROBLEM_TYPE_BASE: &str = "https://sanvi.dev/problems";
 
+/// One field-addressed validation issue (TASK-027, FR-1127).
+///
+/// A validation error that names the input it belongs to lets a client
+/// build an error summary that links back to the offending field instead
+/// of guessing from a flat string. `field` is the request-body path,
+/// root-relative, with bracketed indices for sequence elements
+/// (`hostname`, `budget.amount.currency`,
+/// `ad_groups[2].ads[0].creative.placement`) — the same grammar the
+/// advertising capability matrix already speaks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FieldIssue {
+    /// Root-relative path to the offending request field.
+    pub field: String,
+    /// Why this field was rejected. Human-readable; `detail` stays the
+    /// request-level summary and is never a replacement for it.
+    pub message: String,
+}
+
+impl FieldIssue {
+    pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            message: message.into(),
+        }
+    }
+
+    /// The `(detail, issues)` a context's field-addressing classifier
+    /// returns for a single-field rejection (TASK-027, FR-1127): the flat
+    /// detail is unchanged and the same text names the field.
+    pub fn addressing(field: &str, detail: &str) -> (String, Vec<Self>) {
+        (
+            detail.to_string(),
+            vec![Self::new(field, detail.to_string())],
+        )
+    }
+}
+
 /// RFC 9457 problem detail. This is the only error body the API produces.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProblemDetail {
@@ -30,6 +67,12 @@ pub struct ProblemDetail {
     /// suspension); absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The fields a validation rejection names (TASK-027, FR-1127), as an
+    /// RFC 9457 extension member. Present only when the error is
+    /// field-addressed; the human-readable `detail` is never removed from
+    /// an error that grows field addressing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<FieldIssue>>,
     /// RFC 9457 extension members for problem classes that carry
     /// structured extras (the disconnect conflict names its blockers,
     /// for example). Flattened onto the JSON object exactly as the RFC
@@ -56,6 +99,17 @@ pub enum ApiError {
     },
     #[error("{detail}")]
     BadRequest { detail: String },
+
+    /// A bad request that names the inputs it rejects (TASK-027, FR-1127).
+    /// Same status and `bad-request` class as [`ApiError::BadRequest`] —
+    /// field addressing is additive, so a client's class handling does not
+    /// change when an endpoint grows it. `detail` keeps the flat message;
+    /// `issues` carries one [`FieldIssue`] per rejected field.
+    #[error("{detail}")]
+    Validation {
+        detail: String,
+        issues: Vec<FieldIssue>,
+    },
 
     #[error("authentication required")]
     Unauthorized,
@@ -113,7 +167,7 @@ impl ApiError {
     /// Domain-error → HTTP status mapping. This is the single source of truth.
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
+            Self::BadRequest { .. } | Self::Validation { .. } => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
             Self::QuotaExceeded { .. } => StatusCode::FORBIDDEN,
@@ -134,7 +188,7 @@ impl ApiError {
     /// Stable `type` URI class slug.
     pub fn type_slug(&self) -> &'static str {
         match self {
-            Self::BadRequest { .. } => "bad-request",
+            Self::BadRequest { .. } | Self::Validation { .. } => "bad-request",
             Self::Unauthorized => "unauthorized",
             Self::Forbidden { .. } => "forbidden",
             Self::QuotaExceeded { .. } => "platform/quota-exceeded",
@@ -153,7 +207,7 @@ impl ApiError {
 
     pub fn title(&self) -> &'static str {
         match self {
-            Self::BadRequest { .. } => "Bad Request",
+            Self::BadRequest { .. } | Self::Validation { .. } => "Bad Request",
             Self::Unauthorized => "Unauthorized",
             Self::Forbidden { .. } => "Forbidden",
             Self::QuotaExceeded { .. } => "Quota Exceeded",
@@ -178,6 +232,10 @@ impl ApiError {
             detail: self.to_string(),
             instance: None,
             trace_id: None,
+            fields: match self {
+                Self::Validation { issues, .. } if !issues.is_empty() => Some(issues.clone()),
+                _ => None,
+            },
             reason: match self {
                 Self::ConflictReasoned { reason, .. } => Some(reason.clone()),
                 _ => None,
@@ -225,6 +283,16 @@ impl ApiError {
     pub fn bad_request(detail: impl Into<String>) -> Self {
         Self::BadRequest {
             detail: detail.into(),
+        }
+    }
+
+    /// A field-addressed bad request (TASK-027, FR-1127). `detail` keeps
+    /// the flat message the endpoint has always produced; `issues` names
+    /// the rejected fields on top.
+    pub fn validation(detail: impl Into<String>, issues: Vec<FieldIssue>) -> Self {
+        Self::Validation {
+            detail: detail.into(),
+            issues,
         }
     }
 
@@ -490,6 +558,7 @@ fn fallback_problem(
         detail: String::new(),
         instance: Some(instance.to_string()),
         trace_id,
+        fields: None,
         reason: None,
         extensions: None,
     }
@@ -581,6 +650,54 @@ mod tests {
         assert_eq!(problem.title, "Bad Request");
         assert_eq!(problem.instance.as_deref(), Some("/api/v1/system"));
         assert_eq!(problem.trace_id.as_deref(), Some("req-123"));
+    }
+
+    /// TASK-027 (FR-1127): a field-addressed validation error keeps the
+    /// `bad-request` class and the flat message, and adds the `fields`
+    /// extension member naming the rejected inputs.
+    #[test]
+    fn validation_error_keeps_the_bad_request_class_and_adds_fields() {
+        let error = ApiError::validation(
+            "campaign validation failed with 2 violation(s)",
+            vec![
+                FieldIssue::new("objective", "objective is unavailable for this platform"),
+                FieldIssue::new(
+                    "ad_groups[2].ads[0].creative.placement",
+                    "creative placement is unavailable for this platform",
+                ),
+            ],
+        );
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(error.type_slug(), "bad-request");
+        let problem = error.problem();
+        assert_eq!(
+            problem.detail,
+            "campaign validation failed with 2 violation(s)"
+        );
+        let fields = problem
+            .fields
+            .clone()
+            .expect("validation errors carry fields");
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].field, "objective");
+        assert_eq!(fields[1].field, "ad_groups[2].ads[0].creative.placement");
+
+        let json = serde_json::to_value(problem).unwrap();
+        assert_eq!(json["fields"][0]["field"], "objective");
+        assert_eq!(
+            json["fields"][0]["message"],
+            "objective is unavailable for this platform"
+        );
+    }
+
+    /// Flat errors never grow an empty `fields` member: its absence is how
+    /// a client tells a flat error from an addressed one.
+    #[test]
+    fn flat_errors_carry_no_fields_member() {
+        let json = serde_json::to_value(ApiError::bad_request("x").problem()).unwrap();
+        assert!(json.get("fields").is_none());
+        let json = serde_json::to_value(ApiError::Unauthorized.problem()).unwrap();
+        assert!(json.get("fields").is_none());
     }
 
     #[test]

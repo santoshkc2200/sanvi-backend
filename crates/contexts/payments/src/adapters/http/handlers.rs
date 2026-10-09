@@ -35,11 +35,19 @@ use crate::domain::provider::{CountryCode, ProviderKind};
 /// is attached by [`payments_problem`].
 pub fn api_error(err: PaymentsError) -> ApiError {
     match err {
-        PaymentsError::InvalidMoney(detail) | PaymentsError::InvalidConnection(detail) => {
-            ApiError::BadRequest { detail }
-        }
-        PaymentsError::InvalidCountry(detail) | PaymentsError::CountryUnsupported(detail) => {
-            ApiError::BadRequest { detail }
+        // TASK-027 (FR-1127): invalid-input rejections are field-addressed
+        // — the flat message is unchanged, the offending input is named on
+        // top. `validation::validation_issue` owns the field paths
+        // (`amount_minor`, `currency`, `reference`, `cursor`, …).
+        PaymentsError::InvalidMoney(_)
+        | PaymentsError::InvalidConnection(_)
+        | PaymentsError::InvalidCountry(_)
+        | PaymentsError::CountryUnsupported(_)
+        | PaymentsError::CurrencyUnsupported { .. }
+        | PaymentsError::RefundExceedsRemaining { .. } => {
+            let (detail, issues) = super::validation::validation_issue(&err)
+                .expect("money and connection rejections are field-addressed");
+            ApiError::validation(detail, issues)
         }
         PaymentsError::NotEntitled(feature) => ApiError::Forbidden {
             detail: format!("this requires the {feature} entitlement"),
@@ -57,16 +65,6 @@ pub fn api_error(err: PaymentsError) -> ApiError {
         PaymentsError::RateLimited(_) => ApiError::TooManyRequests {
             retry_after_secs: 60,
         },
-        PaymentsError::RefundExceedsRemaining {
-            requested_minor,
-            requested_currency,
-            remaining_minor,
-            remaining_currency,
-        } => ApiError::BadRequest {
-            detail: format!(
-                "refund of {requested_minor} {requested_currency} exceeds remaining refundable {remaining_minor} {remaining_currency}"
-            ),
-        },
         PaymentsError::CapabilityMissing { capability, detail } => ApiError::Conflict {
             detail: format!("capability {capability} is not active: {detail}"),
         },
@@ -77,9 +75,6 @@ pub fn api_error(err: PaymentsError) -> ApiError {
             detail: format!(
                 "automatic tax cannot be enabled yet ({reason}); registration and remittance are your responsibility — consult your tax advisor"
             ),
-        },
-        PaymentsError::CurrencyUnsupported { currency, detail } => ApiError::BadRequest {
-            detail: format!("currency {currency} is not supported by this connection: {detail}"),
         },
         PaymentsError::ProviderUnavailable(detail) => ApiError::BadGateway { detail },
         // The provider is still rate-limiting after the adapter's own
@@ -1461,6 +1456,7 @@ pub struct RefundAmount {
 
 /// `GET /api/v1/tenant/payments` — every documented filter combinable,
 /// cursor-paginated, tenant-scoped by RLS and indexed for the filter set.
+/// Ordered by created_at DESC, id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/payments",
@@ -1664,6 +1660,7 @@ pub async fn refund_payment(
 
 /// `GET /api/v1/tenant/payments/disputes` — disputes for this tenant,
 /// cursor-paginated.
+/// Ordered by created_at DESC, id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/payments/disputes",

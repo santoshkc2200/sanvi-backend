@@ -4,6 +4,7 @@
 pub mod catalog;
 pub mod handlers;
 pub mod routes;
+pub mod validation;
 
 pub use handlers::{PrivacyState, api_error};
 pub use routes::{

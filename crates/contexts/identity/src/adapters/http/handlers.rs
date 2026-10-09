@@ -19,6 +19,8 @@ use crate::application::{
     StartLinkChallenge, UpdateMemberRoles,
 };
 use crate::domain::IdentityError;
+
+use super::validation;
 use crate::domain::InvitationId;
 use crate::domain::user::UserId;
 
@@ -46,15 +48,23 @@ pub struct IdentityState {
 /// boundary).
 pub fn api_error(err: IdentityError) -> ApiError {
     match err {
-        IdentityError::InvalidEmail(detail)
-        | IdentityError::InvalidProvider(detail)
-        | IdentityError::InvalidLocale(detail)
-        | IdentityError::InvalidUserStatus(detail)
+        // TASK-027 (FR-1127): invalid-input rejections are field-addressed
+        // (`validation::validation_issue` owns the field paths); stored-
+        // status parses and webhook transport stay flat — no request
+        // field is invalid there.
+        IdentityError::InvalidEmail(_)
+        | IdentityError::InvalidProvider(_)
+        | IdentityError::InvalidLocale(_)
+        | IdentityError::NoRoles
+        | IdentityError::UnknownRole(_)
+        | IdentityError::RoleNotAssignable(_) => {
+            let (detail, issues) =
+                validation::validation_issue(&err).expect("input rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
+        IdentityError::InvalidUserStatus(detail)
         | IdentityError::InvalidMembershipStatus(detail)
         | IdentityError::MalformedWebhook(detail) => ApiError::BadRequest { detail },
-        IdentityError::NoRoles => ApiError::BadRequest {
-            detail: "at least one role is required".to_string(),
-        },
         IdentityError::UserNotFound { id } => ApiError::NotFound {
             resource: format!("user {id}"),
         },
@@ -93,12 +103,6 @@ pub fn api_error(err: IdentityError) -> ApiError {
         },
         IdentityError::InvitationEmailMismatch => ApiError::Forbidden {
             detail: "invitation is for a different email address".to_string(),
-        },
-        IdentityError::UnknownRole(id) => ApiError::BadRequest {
-            detail: format!("unknown role id {id}"),
-        },
-        IdentityError::RoleNotAssignable(id) => ApiError::BadRequest {
-            detail: format!("role {id} is not assignable in this tenant"),
         },
         IdentityError::LinkIntentUnavailable => ApiError::Gone {
             detail: "linking intent not found, expired or already used".to_string(),
@@ -372,6 +376,7 @@ fn member_limit_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// `GET /api/v1/tenant/members` — the tenant's members.
+/// Ordered by created_at ASC, user_id ASC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/members",
@@ -536,6 +541,7 @@ pub struct InvitationListQuery {
 }
 
 /// `GET /api/v1/tenant/invitations` — pending and accepted invitations.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/invitations",

@@ -139,6 +139,7 @@ Content-Type: application/json
 Operation: `list_platform_theme_versions`
 
 `GET /api/v1/platform/themes/{key}/versions`.
+Ordered by published_at DESC, id DESC.
 
 Responses: 200, 400, 404, 504
 

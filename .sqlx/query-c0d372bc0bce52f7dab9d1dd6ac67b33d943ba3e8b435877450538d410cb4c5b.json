@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.tenant_id, m.user_id, m.status, m.invited_by, m.created_at, u.primary_email\n             FROM identity.memberships m\n             JOIN identity.users u ON u.id = m.user_id\n             WHERE m.tenant_id = $1 ORDER BY m.created_at",
+  "query": "SELECT tenant_id, user_id, status, invited_by, created_at\n             FROM identity.memberships WHERE tenant_id = $1 ORDER BY created_at, user_id",
   "describe": {
     "columns": [
       {
@@ -57,17 +57,6 @@
             "name": "created_at"
           }
         }
-      },
-      {
-        "ordinal": 5,
-        "name": "primary_email",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "identity.users",
-            "name": "primary_email"
-          }
-        }
       }
     ],
     "parameters": {
@@ -80,9 +69,8 @@
       false,
       false,
       true,
-      false,
       false
     ]
   },
-  "hash": "9930823c12c54e47133d0f6a886512190f97e3ebc9cd7d455a384dd67610ed03"
+  "hash": "c0d372bc0bce52f7dab9d1dd6ac67b33d943ba3e8b435877450538d410cb4c5b"
 }

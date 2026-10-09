@@ -160,6 +160,15 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# macOS 27's dyld rejects proc-macro dylibs whose LINKEDIT string pool was
+# left misaligned by rustc's implicit debuginfo strip (rust-lang/rust#157750,
+# fixed in newer rustc; Linux CI never loads these under dyld). `strip = false`
+# keeps that strip pass off the affected proc-macro dylibs. The misaligned
+# layout is crate-specific — add the next proc macro whose dylib fails to
+# dlopen here, and drop the whole section once the toolchain passes 1.98.1.
+[profile.dev.package.sqlx-macros]
+strip = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

@@ -152,7 +152,7 @@ Content-Type: application/json
 
 Operation: `list_audiences`
 
-
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -335,7 +335,7 @@ Responses: 200, 403, 404
 
 Operation: `get_budget_alerts`
 
-
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -502,7 +502,7 @@ Responses: 200, 403, 404
 
 Operation: `get_budget_caps`
 
-
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -671,7 +671,7 @@ Content-Type: application/json
 
 Operation: `list_campaigns`
 
-
+Ordered by created_at DESC, id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -2604,7 +2604,7 @@ Content-Type: application/json
 
 Operation: `list_campaign_changes`
 
-
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 404, 504
 
@@ -2766,6 +2766,7 @@ Responses: 200, 400, 403, 404, 504
       ],
       "created_at": "2026-10-09T00:00:00Z",
       "id": "873698342314721281",
+      "is_system": true,
       "metadata": {},
       "mutation_id": "019a1ff2-c333-7a00-8123-123456789abc",
       "revision": 1,
@@ -2928,6 +2929,7 @@ Responses: 200, 400, 403, 404, 504
       ],
       "created_at": "2026-10-09T00:00:00Z",
       "id": "873698342314721281",
+      "is_system": true,
       "metadata": {},
       "mutation_id": "019a1ff2-c333-7a00-8123-123456789abc",
       "revision": 1,
@@ -4168,7 +4170,7 @@ Content-Type: application/json
 
 Operation: `list_conversions`
 
-
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -4202,6 +4204,7 @@ Responses: 200, 400, 403, 504
       "resolver_version": "example",
       "signal_source": "example"
     },
+    "dedupe_key": "example",
     "event_id": "example",
     "hashed_identifiers": {
       "example": "example"
@@ -4252,6 +4255,7 @@ Responses: 200, 400, 403, 504
       "resolver_version": "example",
       "signal_source": "example"
     },
+    "dedupe_key": "example",
     "event_id": "example",
     "hashed_identifiers": {
       "example": "example"
@@ -4294,6 +4298,9 @@ Responses: 200, 403, 404
 ```json
 {
   "captured_at": "2026-10-09T00:00:00Z",
+  "dedupe_key": "example",
+  "dedupe_outcome": "example",
+  "dedupe_source": "example",
   "event": {
     "click_ids": {
       "capture_time": "2026-10-09T00:00:00Z",
@@ -4315,6 +4322,7 @@ Responses: 200, 403, 404
       "resolver_version": "example",
       "signal_source": "example"
     },
+    "dedupe_key": "example",
     "event_id": "example",
     "hashed_identifiers": {
       "example": "example"
@@ -4345,6 +4353,9 @@ Responses: 200, 403, 404
 ```json
 {
   "captured_at": "2026-10-09T00:00:00Z",
+  "dedupe_key": "example",
+  "dedupe_outcome": "example",
+  "dedupe_source": "example",
   "event": {
     "click_ids": {
       "capture_time": "2026-10-09T00:00:00Z",
@@ -4366,6 +4377,7 @@ Responses: 200, 403, 404
       "resolver_version": "example",
       "signal_source": "example"
     },
+    "dedupe_key": "example",
     "event_id": "example",
     "hashed_identifiers": {
       "example": "example"
@@ -4427,6 +4439,7 @@ Responses: 200, 403, 404, 409
     "resolver_version": "example",
     "signal_source": "example"
   },
+  "dedupe_key": "example",
   "event_id": "example",
   "hashed_identifiers": {
     "example": "example"
@@ -4475,6 +4488,7 @@ Responses: 200, 403, 404, 409
     "resolver_version": "example",
     "signal_source": "example"
   },
+  "dedupe_key": "example",
   "event_id": "example",
   "hashed_identifiers": {
     "example": "example"
@@ -4503,7 +4517,7 @@ Responses: 200, 403, 404, 409
 
 Operation: `list_creatives`
 
-
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -5235,6 +5249,9 @@ Responses: 200, 403
       "display_name": "Google Ads",
       "entitlement_key": "example",
       "key": "google_ads",
+      "requested_scopes": [
+        "example"
+      ],
       "upgrade_required": true
     }
   ]
@@ -5292,6 +5309,9 @@ Responses: 200, 403
       "display_name": "Google Ads",
       "entitlement_key": "example",
       "key": "google_ads",
+      "requested_scopes": [
+        "example"
+      ],
       "upgrade_required": true
     }
   ]
@@ -5486,6 +5506,41 @@ Content-Type: application/json
 }
 ```
 
+## GET /api/v1/tenant/ads/tracking/site-key
+
+Operation: `get_tracking_site_key`
+
+Per-tenant tracking site-key delivery (frontend TASK-014). The admin SPA
+mints the public site key for a storefront origin and embeds it in page
+source; `/public/track` later verifies `X-Site-Key` against the same
+origin. Replaces the `PUBLIC_TRACKING_SITE_KEY` env fallback.
+
+Responses: 200, 400, 403, 503
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `origin` | query | yes | type="string" |
+
+### Response 200 (en-US / USD, cents)
+
+```json
+{
+  "origin": "example",
+  "site_key": "example",
+  "tenant_id": "873698342314721281"
+}
+```
+
+### Response 200 (ja-JP / JPY, zero-decimal yen)
+
+```json
+{
+  "origin": "example",
+  "site_key": "example",
+  "tenant_id": "873698342314721281"
+}
+```
+
 ## POST /api/v1/tenant/ads/tracking/test-event
 
 Operation: `test_tracking_event`
@@ -5578,6 +5633,7 @@ Content-Type: application/json
       "resolver_version": "example",
       "signal_source": "example"
     },
+    "dedupe_key": "example",
     "event_id": "example",
     "hashed_identifiers": {
       "example": "example"
@@ -5629,6 +5685,7 @@ Content-Type: application/json
       "resolver_version": "example",
       "signal_source": "example"
     },
+    "dedupe_key": "example",
     "event_id": "example",
     "hashed_identifiers": {
       "example": "example"

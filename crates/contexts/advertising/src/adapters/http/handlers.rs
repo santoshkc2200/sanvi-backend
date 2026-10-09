@@ -239,6 +239,15 @@ fn idempotency_key(req: &HttpRequest) -> Result<Uuid, ApiError> {
 }
 
 pub(super) fn api_error(error: AdvertisingError) -> ApiError {
+    // TASK-027 (FR-1127): input-shaped rejections are field-addressed
+    // where the message names its field; the rest keep the flat contract.
+    // `validation::validation_issue` owns the field table.
+    if let Some((detail, issues)) = super::validation::validation_issue(&error) {
+        if !issues.is_empty() {
+            return ApiError::validation(detail, issues);
+        }
+        return ApiError::BadRequest { detail };
+    }
     match error {
         AdvertisingError::InvalidInput(detail) => ApiError::BadRequest { detail },
         AdvertisingError::PlatformUnavailable(detail) => ApiError::ServiceUnavailable { detail },
@@ -291,15 +300,17 @@ pub(super) fn api_error(error: AdvertisingError) -> ApiError {
             detail: "updating an existing budget cap requires an If-Match header carrying the cap's current version; omit If-Match only when creating a cap where none exists".to_string(),
             reason: "cap_version_required".to_string(),
         },
-        // Normally intercepted by `campaign_validation_problem` so the
-        // response carries field-addressed violations; the bare mapping
-        // keeps this match exhaustive.
-        AdvertisingError::Validation(violations) => ApiError::BadRequest {
-            detail: format!(
-                "campaign validation failed with {} violation(s)",
-                violations.len()
-            ),
-        },
+        // TASK-027 (FR-1127): the generic mapping converts `Validation`'s
+        // violations to field issues. The campaign write paths normally
+        // intercept this variant earlier via `campaign_validation_problem`
+        // (the `advertising/campaign-invalid` class carries the same
+        // violations as its `violations` member); this keeps every other
+        // path field-addressed instead of flattening.
+        AdvertisingError::Validation(_) => {
+            let (detail, issues) =
+                super::validation::validation_issue(&error).expect("validation is field-addressed");
+            ApiError::validation(detail, issues)
+        }
         AdvertisingError::ConnectionTokenMissing => ApiError::Conflict {
             detail: "advertising connection has no stored credential; reconnect it".to_string(),
         },
@@ -825,6 +836,7 @@ fn ads_limit_schema() -> utoipa::openapi::schema::Object {
     sanvi_http::openapi::page_limit_schema(200, 200).build()
 }
 
+/// Ordered by created_at DESC, id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/campaigns",
@@ -1169,6 +1181,7 @@ pub async fn resume_campaign(
     Ok(HttpResponse::Ok().json(view))
 }
 
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/campaigns/{campaign_id}/changes",
@@ -2039,6 +2052,7 @@ pub async fn get_creative(
     Ok(HttpResponse::Ok().json(CreativeView::from(stored)))
 }
 
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/creatives",
@@ -2804,6 +2818,7 @@ pub struct SpendStatusQuery {
     pub period: Option<BudgetPeriod>,
 }
 
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/budget-caps",
@@ -2946,6 +2961,7 @@ pub async fn put_campaign_budget_cap(
     cap_response(result)
 }
 
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/budget-alerts",

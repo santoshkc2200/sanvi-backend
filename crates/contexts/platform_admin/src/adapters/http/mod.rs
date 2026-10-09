@@ -3,6 +3,7 @@
 pub mod catalog;
 mod handlers;
 pub mod routes;
+pub mod validation;
 
 pub use handlers::{
     __path_approve_request, __path_create_impersonation, __path_disable_application_fee,

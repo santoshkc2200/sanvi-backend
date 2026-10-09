@@ -218,6 +218,7 @@ Operation: `list_tenant_payments`
 
 `GET /api/v1/tenant/payments` — every documented filter combinable,
 cursor-paginated, tenant-scoped by RLS and indexed for the filter set.
+Ordered by created_at DESC, id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -371,6 +372,104 @@ Idempotency-Key: 019a1ff2-c333-7a00-8123-123456789abc
 ```
 
 ### Response 201 (ja-JP / JPY, zero-decimal yen)
+
+```json
+{
+  "blockers": [
+    {
+      "summary_key": "payments.blocker.card_payments_inactive"
+    }
+  ],
+  "can_accept_payments": true,
+  "capabilities": {},
+  "connected_at": "2026-10-09T00:00:00Z",
+  "country": "example",
+  "default_currency": "JPY",
+  "id": "873698342314721281",
+  "last_synced_at": "2026-10-09T00:00:00Z",
+  "provider": "stripe_connect",
+  "requirements": {
+    "currently_due": [
+      {
+        "code": "individual.verification.document",
+        "summary_key": "payments.req.id_document"
+      }
+    ],
+    "deadline": "example",
+    "eventually_due": [
+      {
+        "code": "individual.verification.document",
+        "summary_key": "payments.req.id_document"
+      }
+    ],
+    "past_due": [
+      {
+        "code": "individual.verification.document",
+        "summary_key": "payments.req.id_document"
+      }
+    ]
+  },
+  "status": "onboarding"
+}
+```
+
+## GET /api/v1/tenant/payments/connections/current
+
+Operation: `get_current_payment_connection`
+
+`GET /api/v1/tenant/payments/connections/current` - connection-id
+recovery (frontend TASK-008). The SPA persists the connection id after
+`POST /connections`, but a cleared store, a second tab, or a fresh login
+loses it; this returns the tenant's most recent still-connected row
+(`disconnected_at IS NULL`, most recent first) or 404 when the tenant
+has no current connection. Registered before `/{id}` so `current` is
+never parsed as an id.
+
+Responses: 200, 403, 404
+
+### Response 200 (en-US / USD, cents)
+
+```json
+{
+  "blockers": [
+    {
+      "summary_key": "payments.blocker.card_payments_inactive"
+    }
+  ],
+  "can_accept_payments": true,
+  "capabilities": {},
+  "connected_at": "2026-10-09T00:00:00Z",
+  "country": "example",
+  "default_currency": "USD",
+  "id": "873698342314721281",
+  "last_synced_at": "2026-10-09T00:00:00Z",
+  "provider": "stripe_connect",
+  "requirements": {
+    "currently_due": [
+      {
+        "code": "individual.verification.document",
+        "summary_key": "payments.req.id_document"
+      }
+    ],
+    "deadline": "example",
+    "eventually_due": [
+      {
+        "code": "individual.verification.document",
+        "summary_key": "payments.req.id_document"
+      }
+    ],
+    "past_due": [
+      {
+        "code": "individual.verification.document",
+        "summary_key": "payments.req.id_document"
+      }
+    ]
+  },
+  "status": "onboarding"
+}
+```
+
+### Response 200 (ja-JP / JPY, zero-decimal yen)
 
 ```json
 {
@@ -661,6 +760,7 @@ Operation: `list_tenant_disputes`
 
 `GET /api/v1/tenant/payments/disputes` — disputes for this tenant,
 cursor-paginated.
+Ordered by created_at DESC, id DESC.
 
 Responses: 200, 403, 504
 

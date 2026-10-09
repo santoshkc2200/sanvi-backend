@@ -891,10 +891,16 @@ async fn validate_and_hydrate_ad_creative(
     ad_index: usize,
     ad: &mut Ad,
 ) -> Result<(), AdvertisingError> {
-    let creative_id =
-        ad.creative.id.parse::<CreativeId>().map_err(|error| {
-            AdvertisingError::InvalidInput(format!("invalid creative id: {error}"))
-        })?;
+    // A parse failure here is a field rejection at a step-three-deep path:
+    // raising it as a `Validation` violation keeps `ad_groups[i].ads[j]
+    // .creative.id` addressable instead of flattening to the envelope
+    // (TASK-027, FR-1127).
+    let creative_id = ad.creative.id.parse::<CreativeId>().map_err(|error| {
+        AdvertisingError::Validation(vec![ValidationViolation::invalid(
+            format!("ad_groups[{group_index}].ads[{ad_index}].creative.id"),
+            format!("invalid creative id: {error}"),
+        )])
+    })?;
     let stored_creative = creatives
         .find(scope, tenant_id, creative_id)
         .await?

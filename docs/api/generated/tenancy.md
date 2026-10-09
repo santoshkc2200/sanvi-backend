@@ -9,6 +9,7 @@ Examples: en-US / USD and ja-JP / JPY. Integer minor units: USD 1299 = $12.99; J
 Operation: `list_tenants`
 
 `GET /api/v1/platform/tenants` — list tenants (cursor pagination).
+Ordered by created_at DESC, id DESC.
 
 Responses: 200, 400, 500, 504
 

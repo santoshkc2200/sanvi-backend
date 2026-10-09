@@ -522,6 +522,30 @@ components:
       - kind
       - value
       type: object
+    FieldIssue:
+      description: |-
+        One field-addressed validation issue (TASK-027, FR-1127).
+
+        A validation error that names the input it belongs to lets a client
+        build an error summary that links back to the offending field instead
+        of guessing from a flat string. `field` is the request-body path,
+        root-relative, with bracketed indices for sequence elements
+        (`hostname`, `budget.amount.currency`,
+        `ad_groups[2].ads[0].creative.placement`) — the same grammar the
+        advertising capability matrix already speaks.
+      properties:
+        field:
+          description: Root-relative path to the offending request field.
+          type: string
+        message:
+          description: |-
+            Why this field was rejected. Human-readable; `detail` stays the
+            request-level summary and is never a replacement for it.
+          type: string
+      required:
+      - field
+      - message
+      type: object
     GetDirectivesOutput:
       properties:
         snapshot:
@@ -864,6 +888,17 @@ components:
           detail:
             description: Human-readable explanation of this specific occurrence.
             type: string
+          fields:
+            description: |-
+              The fields a validation rejection names (TASK-027, FR-1127), as an
+              RFC 9457 extension member. Present only when the error is
+              field-addressed; the human-readable `detail` is never removed from
+              an error that grows field addressing.
+            items:
+              $ref: '#/components/schemas/FieldIssue'
+            type:
+            - array
+            - 'null'
           instance:
             description: URI of the offending resource, if any.
             type:
@@ -1849,7 +1884,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
-      summary: '`GET /api/v1/platform/privacy/appeals` — open appeals.'
+      summary: |-
+        `GET /api/v1/platform/privacy/appeals` — open appeals.
+        Ordered by id ASC.
       tags:
       - privacy
   /api/v1/platform/privacy/appeals/{id}/decision:
@@ -1944,6 +1981,7 @@ paths:
       summary: |-
         `GET /api/v1/platform/privacy/assessments` — risk assessments (DPIA +
         US state data-protection assessments).
+        Ordered by id DESC.
       tags:
       - privacy
     post:
@@ -2015,7 +2053,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
-      summary: '`GET /api/v1/platform/privacy/holds` — legal holds.'
+      summary: |-
+        `GET /api/v1/platform/privacy/holds` — legal holds.
+        Ordered by id DESC.
       tags:
       - privacy
     post:
@@ -2109,7 +2149,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
-      summary: '`GET /api/v1/platform/privacy/incidents` — breach incidents.'
+      summary: |-
+        `GET /api/v1/platform/privacy/incidents` — breach incidents.
+        Ordered by id DESC.
       tags:
       - privacy
     post:
@@ -2224,6 +2266,7 @@ paths:
       summary: |-
         `GET /api/v1/platform/privacy/incidents/{id}/obligations` — computed
         obligations.
+        Ordered by id DESC.
       tags:
       - privacy
   /api/v1/platform/privacy/jurisdictions:
@@ -2314,7 +2357,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
-      summary: '`GET /api/v1/platform/privacy/requests` — operator view.'
+      summary: |-
+        `GET /api/v1/platform/privacy/requests` — operator view.
+        Ordered by id DESC.
       tags:
       - privacy
   /api/v1/platform/privacy/requests/{id}/extend:
@@ -2923,6 +2968,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout - the request exceeded its budget
+      summary: Ordered by id DESC.
       tags:
       - privacy
     post:

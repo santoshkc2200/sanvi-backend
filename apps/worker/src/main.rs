@@ -261,11 +261,18 @@ impl CopyRenderer for WorkerCopyRenderer {
 
         let subject = self.localizer.render(&context, subject_key, &loc_args);
         let text_body = self.localizer.render(&context, body_key, &loc_args);
+        let html_body = sanvi_localization::adapters::email_html::email_html(
+            &context.locale,
+            &subject,
+            &text_body,
+            None,
+        );
 
         Ok(RenderedNotification {
             locale: context.locale,
             subject,
             text_body,
+            html_body,
         })
     }
 }
@@ -392,6 +399,12 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
             "emails.verification.body",
             &[("code", LocalizationArg::from(code))],
         );
+        let html = sanvi_localization::adapters::email_html::email_html(
+            &context.locale,
+            &subject,
+            &body,
+            None,
+        );
 
         let Some(gateway) = &self.gateway else {
             tracing::info!(
@@ -415,7 +428,7 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
                 recipient: to,
                 subject: &subject,
                 text_body: &body,
-                html_body: None,
+                html_body: Some(&html),
                 idempotency_key: &key,
             })
             .await
@@ -460,6 +473,12 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
         };
 
         let tenant = subject_ref.tenant_id.map(|id| id.to_string());
+        let html = sanvi_localization::adapters::email_html::email_html(
+            &context.locale,
+            &subject,
+            &body,
+            None,
+        );
         let key = build_idempotency_key("privacy", "export", &request, &secret_fingerprint(token));
         gateway
             .enqueue_email(EnqueueEmail {
@@ -467,7 +486,7 @@ impl PrivacyNotificationsTrait for WorkerPrivacyNotifications {
                 recipient,
                 subject: &subject,
                 text_body: &body,
-                html_body: None,
+                html_body: Some(&html),
                 idempotency_key: &key,
             })
             .await

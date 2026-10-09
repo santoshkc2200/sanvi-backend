@@ -16,26 +16,28 @@ use crate::adapters::http::state::LocalizationState;
 use crate::application::{TranslationPatch, UpdateLocalizationSettingsCommand};
 use crate::domain::{Locale, LocalizationError};
 
+use super::validation;
+
 /// The localization context's domain-error → HTTP mapping.
 pub fn api_error(err: LocalizationError) -> ApiError {
     match err {
-        LocalizationError::InvalidLocale(detail)
-        | LocalizationError::InvalidTimezone(detail)
-        | LocalizationError::InvalidOverride { detail, .. }
-        | LocalizationError::InvalidAddress(detail) => ApiError::BadRequest { detail },
-        LocalizationError::UnsupportedLocale(detail) => ApiError::BadRequest {
-            detail: format!("locale '{detail}' is not supported on this platform"),
-        },
+        // TASK-027 (FR-1127): settings and override rejections are
+        // field-addressed (`validation::validation_issue` owns the paths).
+        LocalizationError::InvalidLocale(_)
+        | LocalizationError::InvalidTimezone(_)
+        | LocalizationError::InvalidOverride { .. }
+        | LocalizationError::InvalidAddress(_)
+        | LocalizationError::UnsupportedLocale(_)
+        | LocalizationError::UnknownMessageKey(_)
+        | LocalizationError::InvalidPattern { .. } => {
+            let (detail, issues) =
+                validation::validation_issue(&err).expect("locale rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
         LocalizationError::UnknownDomain(detail) => ApiError::NotFound {
             resource: format!("message domain {detail}"),
         },
-        LocalizationError::UnknownMessageKey(detail) => ApiError::BadRequest {
-            detail: format!("unknown message key '{detail}'"),
-        },
         LocalizationError::SettingsConflict(detail) => ApiError::Conflict { detail },
-        LocalizationError::InvalidPattern { key, detail } => ApiError::BadRequest {
-            detail: format!("invalid message pattern for '{key}': {detail}"),
-        },
         LocalizationError::UnknownCurrency(detail) => {
             ApiError::internal(format!("currency {detail} is not in the exponent table"))
         }

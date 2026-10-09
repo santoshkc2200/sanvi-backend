@@ -16,15 +16,24 @@ use crate::application::{
 };
 use crate::domain::{CustomDomainId, DomainOrderId, DomainsError};
 
+use super::validation;
+
 /// The domains context's domain-error → HTTP mapping.
 pub fn api_error(err: DomainsError) -> ApiError {
     match err {
-        DomainsError::InvalidHostname(detail)
-        | DomainsError::HostnameOnPlatformDomain(detail)
-        | DomainsError::UnsupportedTld(detail)
-        | DomainsError::DomainUnavailable(detail)
-        | DomainsError::OrderNotModifiable(detail) => ApiError::BadRequest { detail },
-        DomainsError::HostnameReserved(detail) => ApiError::BadRequest { detail },
+        // TASK-027 (FR-1127): invalid-input rejections are field-addressed
+        // — the flat message is unchanged, the offending input is named on
+        // top. `validation::validation_issue` owns the field paths.
+        DomainsError::InvalidHostname(_)
+        | DomainsError::HostnameReserved(_)
+        | DomainsError::HostnameOnPlatformDomain(_)
+        | DomainsError::UnsupportedTld(_)
+        | DomainsError::DomainUnavailable(_) => {
+            let (detail, issues) = validation::validation_issue(&err)
+                .expect("hostname rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
+        DomainsError::OrderNotModifiable(detail) => ApiError::BadRequest { detail },
         DomainsError::OrderNonRefundable => ApiError::BadRequest {
             detail: "registrations are non-refundable once the registrar accepts them".to_string(),
         },
@@ -182,6 +191,7 @@ fn domain_limit_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// `GET /api/v1/tenant/domains`.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/domains",
@@ -434,6 +444,7 @@ pub async fn place_domain_order(
 }
 
 /// `GET /api/v1/tenant/domains/orders`.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/domains/orders",
@@ -686,6 +697,7 @@ fn platform_domain_limit_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// `GET /api/v1/platform/domains`.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/domains",

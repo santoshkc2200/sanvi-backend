@@ -9,6 +9,7 @@ Examples: en-US / USD and ja-JP / JPY. Integer minor units: USD 1299 = $12.99; J
 Operation: `list_platform_domains`
 
 `GET /api/v1/platform/domains`.
+Ordered by id DESC.
 
 Responses: 200, 400, 504
 
@@ -139,6 +140,7 @@ Content-Type: application/json
 Operation: `list_custom_domains`
 
 `GET /api/v1/tenant/domains`.
+Ordered by id DESC.
 
 Responses: 200, 400, 504
 
@@ -266,6 +268,7 @@ Content-Type: application/json
 Operation: `list_domain_orders`
 
 `GET /api/v1/tenant/domains/orders`.
+Ordered by id DESC.
 
 Responses: 200, 400, 504
 

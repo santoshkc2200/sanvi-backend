@@ -48,12 +48,19 @@ pub struct TenancyState {
 /// boundary).
 pub fn api_error(err: TenancyError) -> ApiError {
     match err {
-        TenancyError::InvalidSlug(detail)
-        | TenancyError::InvalidDisplayName(detail)
-        | TenancyError::InvalidRegion(detail)
-        | TenancyError::InvalidLocale(detail)
-        | TenancyError::InvalidSuspensionReason(detail)
-        | TenancyError::InvalidSettings(detail) => ApiError::BadRequest { detail },
+        // TASK-027 (FR-1127): invalid-input rejections are field-addressed
+        // — the flat message is unchanged, the offending input is named on
+        // top. `validation::validation_issue` owns the field paths.
+        TenancyError::InvalidSlug(_)
+        | TenancyError::InvalidDisplayName(_)
+        | TenancyError::InvalidRegion(_)
+        | TenancyError::InvalidLocale(_)
+        | TenancyError::InvalidSuspensionReason(_)
+        | TenancyError::InvalidSettings(_) => {
+            let (detail, issues) = super::validation::validation_issue(&err)
+                .expect("input rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
         TenancyError::SlugReserved { slug } | TenancyError::SlugTaken { slug } => {
             ApiError::Conflict {
                 detail: format!("slug '{slug}' is unavailable"),
@@ -199,6 +206,7 @@ pub async fn provision_tenant(
 }
 
 /// `GET /api/v1/platform/tenants` — list tenants (cursor pagination).
+/// Ordered by created_at DESC, id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/tenants",

@@ -126,8 +126,11 @@ impl MembershipRepository for SqlxMembershipRepository {
         tenant_id: TenantId,
     ) -> Result<Vec<Membership>, IdentityError> {
         let rows = sqlx::query!(
+            // TASK-027 (FR-1127): deterministic ordering tie-broken by
+            // user_id — the row's identity within the tenant — so equal
+            // created_at values cannot reshuffle between fetches.
             "SELECT tenant_id, user_id, status, invited_by, created_at
-             FROM identity.memberships WHERE tenant_id = $1 ORDER BY created_at",
+             FROM identity.memberships WHERE tenant_id = $1 ORDER BY created_at, user_id",
             tenant_id.as_i64(),
         )
         .fetch_all(&mut **scope.tx_mut().as_inner())

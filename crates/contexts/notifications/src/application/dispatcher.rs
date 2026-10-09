@@ -138,12 +138,14 @@ impl NotificationDispatcher {
                 &recipient_key,
             );
 
+            // TASK-027 (FR-1127): the HTML alternative ships with every
+            // rendered notification — same content, accessible structure.
             let enqueue_req = EnqueueEmail {
                 tenant_id: tenant_id_owned.as_deref(),
                 recipient: &recipient.email,
                 subject: &rendered.subject,
                 text_body: &rendered.text_body,
-                html_body: None,
+                html_body: Some(&rendered.html_body),
                 idempotency_key: &idempotency_key,
             };
 
@@ -262,6 +264,7 @@ mod tests {
                 locale: "en".to_string(),
                 subject: "Test Subject".to_string(),
                 text_body: "Test Body".to_string(),
+                html_body: "<p>Test Body</p>".to_string(),
             })
         }
     }

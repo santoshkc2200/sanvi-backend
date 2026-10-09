@@ -15,6 +15,8 @@ use crate::application::{
     RejectRequest, RevokeImpersonation, SearchTenantAdminViews,
 };
 use crate::domain::PlatformAdminError;
+
+use super::validation;
 use crate::domain::approvals::ApprovalId;
 use crate::domain::impersonation::{ImpersonationGrantId, ImpersonationMode};
 use crate::domain::ports::{EntitlementAdmin, GrantOverrideOutcome};
@@ -42,15 +44,19 @@ pub struct PlatformAdminState {
 /// this boundary).
 pub fn api_error(err: PlatformAdminError) -> ApiError {
     match err {
+        // TASK-027 (FR-1127): invalid-input rejections are field-addressed
+        // (`validation::validation_issue` owns the field paths).
         PlatformAdminError::MissingReason
         | PlatformAdminError::InvalidDuration
         | PlatformAdminError::DurationTooLong { .. }
         | PlatformAdminError::InvalidActionType(_)
         | PlatformAdminError::InvalidSearch(_)
         | PlatformAdminError::InvalidEntitlement(_)
-        | PlatformAdminError::InvalidFeeConfig(_) => ApiError::BadRequest {
-            detail: err.to_string(),
-        },
+        | PlatformAdminError::InvalidFeeConfig(_) => {
+            let (detail, issues) =
+                validation::validation_issue(&err).expect("input rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
         PlatformAdminError::FeatureNotFound(name) => ApiError::NotFound {
             resource: format!("feature {name}"),
         },
@@ -175,6 +181,7 @@ pub struct TenantViewCursorView {
 }
 
 /// `GET /api/v1/platform/admin/tenants` — operator tenant search.
+/// Ordered by created_at DESC, id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/admin/tenants",
@@ -340,6 +347,7 @@ fn impersonation_limit_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// `GET /api/v1/platform/impersonations` — active grants.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/impersonations",
@@ -588,6 +596,7 @@ fn approval_limit_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// `GET /api/v1/platform/approvals` — pending four-eyes requests.
+/// Ordered by id ASC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/approvals",

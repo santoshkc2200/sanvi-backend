@@ -10,6 +10,8 @@ use utoipa::ToSchema;
 use crate::application::{AuditPage, ListAuditLog};
 use crate::domain::{AuditCursor, AuditEntry, AuditError, AuditFilters};
 
+use super::validation;
+
 /// Application state visible to this context's handlers.
 #[derive(Clone)]
 pub struct AuditState {
@@ -20,9 +22,15 @@ pub struct AuditState {
 /// boundary).
 pub fn api_error(err: AuditError) -> ApiError {
     match err {
-        AuditError::InvalidActorType(detail)
-        | AuditError::InvalidAction(detail)
-        | AuditError::InvalidCursor(detail) => ApiError::BadRequest { detail },
+        // TASK-027 (FR-1127): filter rejections are field-addressed
+        // (`validation::validation_issue` owns the query-param names).
+        AuditError::InvalidActorType(_)
+        | AuditError::InvalidAction(_)
+        | AuditError::InvalidCursor(_) => {
+            let (detail, issues) =
+                validation::validation_issue(&err).expect("filter rejections are field-addressed");
+            ApiError::validation(detail, issues)
+        }
         AuditError::ChainMismatch { .. } => ApiError::Internal {
             detail: "audit chain integrity failure".to_string(),
         },
@@ -83,6 +91,7 @@ impl From<AuditPage> for AuditPageView {
 /// Supports filters (`tenant_id`, `actor_id`, `action`, `since`, `until`)
 /// and cursor pagination (`after` = the `seq` of the last entry of the
 /// previous page).
+/// Ordered by seq DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/platform/audit",

@@ -3,6 +3,7 @@
 pub mod catalog;
 mod handlers;
 pub mod routes;
+pub mod validation;
 
 pub use handlers::{
     __path_create_role, __path_define_feature, __path_delete_role, __path_deprecate_feature,

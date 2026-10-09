@@ -520,6 +520,7 @@ fn conversion_limit_schema() -> utoipa::openapi::schema::Object {
     sanvi_http::openapi::page_limit_schema(200, 200).build()
 }
 
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/conversions",
@@ -627,6 +628,7 @@ pub struct AudienceListQuery {
     pub after: Option<String>,
 }
 
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/tenant/ads/audiences",

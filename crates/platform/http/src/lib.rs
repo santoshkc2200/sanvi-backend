@@ -56,7 +56,7 @@ pub use config::{
     WindowQuota,
 };
 pub use degraded::{DEGRADED_HEADER, DegradedHeaderLayer};
-pub use error::{ApiError, PROBLEM_TYPE_BASE, ProblemDetail, ProblemTranslator};
+pub use error::{ApiError, FieldIssue, PROBLEM_TYPE_BASE, ProblemDetail, ProblemTranslator};
 pub use etag::{ConditionalEtag, etag_for_bytes, if_none_match_matches};
 pub use features::{FeatureGate, RequiredAnyFeature, RequiredFeature};
 pub use impersonation::{

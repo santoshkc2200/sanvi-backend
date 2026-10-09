@@ -3,6 +3,7 @@
 pub mod handlers;
 pub mod routes;
 pub mod state;
+pub mod validation;
 pub mod webhooks;
 
 pub use state::PaymentsState;

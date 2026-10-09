@@ -118,6 +118,7 @@ Content-Type: application/json
 Operation: `list_appeals`
 
 `GET /api/v1/platform/privacy/appeals` — open appeals.
+Ordered by id ASC.
 
 Responses: 200, 400, 403, 504
 
@@ -231,6 +232,7 @@ Operation: `list_assessments`
 
 `GET /api/v1/platform/privacy/assessments` — risk assessments (DPIA +
 US state data-protection assessments).
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -348,6 +350,7 @@ Content-Type: application/json
 Operation: `list_holds`
 
 `GET /api/v1/platform/privacy/holds` — legal holds.
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -452,6 +455,7 @@ Responses: 200
 Operation: `list_incidents`
 
 `GET /api/v1/platform/privacy/incidents` — breach incidents.
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -648,6 +652,7 @@ Operation: `list_obligations`
 
 `GET /api/v1/platform/privacy/incidents/{id}/obligations` — computed
 obligations.
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -855,6 +860,7 @@ Content-Type: application/json
 Operation: `list_dsrs`
 
 `GET /api/v1/platform/privacy/requests` — operator view.
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 
@@ -2126,7 +2132,7 @@ Responses: 200
 
 Operation: `list_tenant_dsrs`
 
-
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 

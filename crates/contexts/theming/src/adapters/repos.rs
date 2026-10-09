@@ -207,7 +207,7 @@ impl ThemeRepository for SqlxThemeRepository {
             "SELECT id, theme_id, semver, theme_api_range, manifest, tokens, artifact_uri,
                     artifact_digest, published_at, yanked_at
              FROM theming.theme_versions WHERE theme_id = $1
-             ORDER BY published_at DESC",
+             ORDER BY published_at DESC, id DESC",
             theme_id.as_i64()
         )
         .fetch_all(pool)

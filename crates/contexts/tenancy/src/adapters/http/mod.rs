@@ -3,6 +3,7 @@
 
 mod handlers;
 mod routes;
+pub mod validation;
 
 pub use handlers::{
     __path_activate_tenant, __path_archive_tenant, __path_get_context, __path_get_settings,

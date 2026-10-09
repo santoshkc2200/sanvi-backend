@@ -232,6 +232,7 @@ Responses: 204, 401, 404
 Operation: `list_invitations`
 
 `GET /api/v1/tenant/invitations` — pending and accepted invitations.
+Ordered by id DESC.
 
 Responses: 200, 400, 401, 504
 
@@ -445,6 +446,7 @@ Responses: 200, 404
 Operation: `list_members`
 
 `GET /api/v1/tenant/members` — the tenant's members.
+Ordered by created_at ASC, user_id ASC.
 
 Responses: 200, 400, 401, 403, 504
 

@@ -9,6 +9,7 @@ Examples: en-US / USD and ja-JP / JPY. Integer minor units: USD 1299 = $12.99; J
 Operation: `search_tenant_admin_views`
 
 `GET /api/v1/platform/admin/tenants` — operator tenant search.
+Ordered by created_at DESC, id DESC.
 
 Responses: 200, 400, 403
 
@@ -116,6 +117,7 @@ Responses: 200, 403, 404
 Operation: `list_pending_approvals`
 
 `GET /api/v1/platform/approvals` — pending four-eyes requests.
+Ordered by id ASC.
 
 Responses: 200, 400, 403, 504
 
@@ -248,6 +250,7 @@ Responses: 200, 403, 404, 409
 Operation: `list_impersonations`
 
 `GET /api/v1/platform/impersonations` — active grants.
+Ordered by id DESC.
 
 Responses: 200, 400, 403, 504
 

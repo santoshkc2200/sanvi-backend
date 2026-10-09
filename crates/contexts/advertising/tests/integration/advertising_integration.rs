@@ -1734,7 +1734,8 @@ async fn add_ad_rejects_missing_creative_id() {
         Err(sanvi_advertising::domain::AdvertisingError::CreativeNotFound)
     ));
 
-    // 2. Non-UUID string -> InvalidInput
+    // 2. Non-UUID string -> Validation naming the field (TASK-027): the
+    //    same hydration path the PATCH tree uses addresses the rejection.
     let err_invalid = add_ad
         .execute(
             tenant_id,
@@ -1759,10 +1760,14 @@ async fn add_ad_rejects_missing_creative_id() {
             },
         )
         .await;
-    assert!(matches!(
-        err_invalid,
-        Err(sanvi_advertising::domain::AdvertisingError::InvalidInput(_))
-    ));
+    match err_invalid {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert_eq!(violations.len(), 1);
+            assert_eq!(violations[0].field_path, "ad_groups[0].ads[0].creative.id");
+            assert_eq!(violations[0].code, "invalid");
+        }
+        other => panic!("expected field-addressed Validation error, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -2486,7 +2491,9 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
         .await
         .unwrap();
 
-    // 1. Non-UUID creative id in PATCH ad_groups -> InvalidInput.
+    // 1. Non-UUID creative id in PATCH ad_groups -> Validation naming the
+    //    exact step-deep field (TASK-027, FR-1127): a parse failure is a
+    //    field rejection, not a flat envelope error.
     let err_invalid_uuid = patch
         .execute(
             tenant_id,
@@ -2521,10 +2528,68 @@ async fn patch_campaign_validates_and_hydrates_creatives_in_ad_groups() {
             },
         )
         .await;
-    assert!(matches!(
-        err_invalid_uuid,
-        Err(sanvi_advertising::domain::AdvertisingError::InvalidInput(_))
-    ));
+    match err_invalid_uuid {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert_eq!(violations.len(), 1);
+            assert_eq!(violations[0].field_path, "ad_groups[0].ads[0].creative.id");
+            assert_eq!(violations[0].code, "invalid");
+        }
+        other => panic!("expected field-addressed Validation error, got {other:?}"),
+    }
+
+    // 1b. A wizard payload rejected at step three names the step-three
+    //     field: the same malformed creative id in the *third* ad group
+    //     must come back as `ad_groups[2]…`, not the envelope.
+    let groups = (0..3)
+        .map(|index| sanvi_advertising::domain::AdGroup {
+            id: Uuid::now_v7().to_string(),
+            name: format!("Group {index}"),
+            targeting: Targeting::default(),
+            bid: BidSettings {
+                strategy: "manual_cpc".to_string(),
+                maximum_bid: None,
+            },
+            // Only the third group carries an ad, so the violation cannot
+            // be attributed to any earlier step.
+            ads: if index == 2 {
+                vec![sanvi_advertising::domain::Ad {
+                    id: Uuid::now_v7().to_string(),
+                    external_id: None,
+                    creative: Creative {
+                        id: "not-a-uuid".to_string(),
+                        placement: "feed".to_string(),
+                        texts: vec![],
+                        asset_references: vec![],
+                    },
+                    landing_url: "https://example.com".to_string(),
+                    tracking_template: None,
+                    review: Default::default(),
+                }]
+            } else {
+                Vec::new()
+            },
+        })
+        .collect::<Vec<_>>();
+    let err_step_three = patch
+        .execute(
+            tenant_id,
+            draft.id,
+            draft.revision,
+            Uuid::now_v7(),
+            actor_id,
+            CampaignFields {
+                ad_groups: Some(groups),
+                ..Default::default()
+            },
+        )
+        .await;
+    match err_step_three {
+        Err(sanvi_advertising::domain::AdvertisingError::Validation(violations)) => {
+            assert_eq!(violations.len(), 1);
+            assert_eq!(violations[0].field_path, "ad_groups[2].ads[0].creative.id");
+        }
+        other => panic!("expected step-three field violation, got {other:?}"),
+    }
 
     // 2. Unpersisted snowflake creative id -> CreativeNotFound.
     let missing_uuid = CreativeId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
