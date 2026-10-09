@@ -10,7 +10,7 @@ use sanvi_http::{ApiError, ProblemDetail};
 
 use crate::{
     application::{CheckLiveness, CheckReadiness, GetBuildDetails, GetBuildInfo, LivenessResult},
-    domain::{BuildDetails, BuildInfo, Readiness},
+    domain::{BuildDetails, BuildInfo, HealthState, Readiness, ReadinessStates},
 };
 
 /// Application state visible to this context's handlers.
@@ -76,6 +76,71 @@ pub async fn readyz(state: web::Data<SystemState>, req: HttpRequest) -> impl Res
                 .map(|id| id.to_string()),
         );
         HttpResponse::ServiceUnavailable().json(problem)
+    }
+}
+
+/// Liveness under the versioned API: `GET /api/v1/system/health` (TASK-025).
+/// Identical semantics to `GET /healthz` — process aliveness only, never a
+/// database or cache touch — so an orchestrator that can only reach the
+/// API surface gets a probe that cannot turn a slow database into
+/// "every instance unhealthy".
+#[utoipa::path(
+    get,
+    path = "/api/v1/system/health",
+    tag = "system",
+    operation_id = "health",
+    responses(
+        (status = 200, description = "Process is alive", body = LivenessResult),
+        (status = 500, description = "Internal error", body = ProblemDetail)
+    )
+)]
+pub async fn health(state: web::Data<SystemState>) -> impl Responder {
+    HttpResponse::Ok().json(state.liveness.execute())
+}
+
+/// Readiness as states: `GET /api/v1/system/ready` (TASK-025). The
+/// dependency checks run concurrently under their own budget and this
+/// handler wraps the fan-out in a response timeout of its own, so the
+/// endpoint answers within `budget + grace` no matter what a dependency
+/// does — and the body reports states only, never error strings.
+#[utoipa::path(
+    get,
+    path = "/api/v1/system/ready",
+    tag = "system",
+    operation_id = "ready",
+    responses(
+        (status = 200, description = "All dependencies healthy", body = ReadinessStates),
+        (status = 503, description = "At least one dependency is degraded", body = ReadinessStates)
+    )
+)]
+pub async fn ready(state: web::Data<SystemState>) -> impl Responder {
+    // Budget plus a grace slice for scheduling: the endpoint's own ceiling.
+    // On timeout the honest answer is degraded — a probe that cannot finish
+    // within its budget is not a ready dependency.
+    let grace = std::time::Duration::from_secs(1);
+    let states =
+        match tokio::time::timeout(state.readiness.budget() + grace, state.readiness.execute())
+            .await
+        {
+            Ok(output) => output.readiness.states(),
+            Err(_) => ReadinessStates {
+                status: HealthState::Degraded,
+                checks: state
+                    .readiness
+                    .dependency_names()
+                    .into_iter()
+                    .map(|name| crate::domain::DependencyState {
+                        name,
+                        state: HealthState::Degraded,
+                    })
+                    .collect(),
+            },
+        };
+
+    if states.status == HealthState::Ok {
+        HttpResponse::Ok().json(states)
+    } else {
+        HttpResponse::ServiceUnavailable().json(states)
     }
 }
 

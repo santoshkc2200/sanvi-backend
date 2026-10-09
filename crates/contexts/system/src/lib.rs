@@ -13,7 +13,10 @@ pub mod application;
 pub mod domain;
 
 pub use adapters::http::{SystemApiDoc, SystemState, state_for_tests};
-pub use domain::{BuildDetails, BuildInfo, DependencyStatus, HealthState, Readiness};
+pub use domain::{
+    BuildDetails, BuildInfo, DependencyState, DependencyStatus, HealthState, Readiness,
+    ReadinessStates,
+};
 
 /// Wire routes into an actix `ServiceConfig` at the given scope.
 pub mod routes {

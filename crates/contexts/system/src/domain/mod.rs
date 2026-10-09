@@ -10,5 +10,5 @@ pub mod ports;
 
 pub use build_info::{BuildDetails, BuildInfo};
 pub use error::SystemError;
-pub use health::{DependencyStatus, HealthState, Readiness};
+pub use health::{DependencyState, DependencyStatus, HealthState, Readiness, ReadinessStates};
 pub use ports::HealthProbe;

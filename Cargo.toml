@@ -26,6 +26,8 @@ members = [
     "crates/contexts/notifications",
     "apps/api",
     "tests/resilience",
+    "tests/system",
+    "tests/recovery",
     "apps/worker",
     "apps/cli",
 ]

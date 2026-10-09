@@ -1,0 +1,22 @@
+[package]
+name = "recovery-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+sanvi-audit.workspace = true
+sanvi-kernel.workspace = true
+sanvi-persistence.workspace = true
+sanvi-testsupport.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+testcontainers.workspace = true
+testcontainers-modules.workspace = true
+uuid.workspace = true

@@ -37,6 +37,8 @@ use utoipa::OpenApi;
     paths(
         sanvi_system::adapters::http::healthz,
         sanvi_system::adapters::http::readyz,
+        sanvi_system::adapters::http::health,
+        sanvi_system::adapters::http::ready,
         sanvi_system::adapters::http::version,
         sanvi_system::adapters::http::build,
         sanvi_tenancy::adapters::http::provision_tenant,

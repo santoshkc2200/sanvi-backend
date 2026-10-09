@@ -363,6 +363,15 @@ check-migration-expand-contract-self-test:
 rolling-restart-dry-run:
     ./scripts/rolling-restart.sh --dry-run
 
+# TASK-025 (FR-1118): liveness must never touch the database. Drops a real
+# test database under a live probe and asserts `/api/v1/system/health`
+# still answers 200 while `/ready` degrades — the outage-amplifier guard.
+test-health-without-db:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p system-tests --test probes
+
 openapi:
     ./scripts/check-openapi.sh
 

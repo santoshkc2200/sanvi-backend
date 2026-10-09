@@ -51,6 +51,45 @@ impl Readiness {
     pub fn is_ready(&self) -> bool {
         self.status == HealthState::Ok
     }
+
+    /// The states-only projection served by `GET /api/v1/system/ready`
+    /// (TASK-025). A readiness endpoint is a reconnaissance endpoint if it
+    /// is honest to the wrong audience, so this view carries the verdict
+    /// and nothing else — no error strings, no hostnames, no versions.
+    pub fn states(&self) -> ReadinessStates {
+        ReadinessStates {
+            status: self.status,
+            checks: self
+                .checks
+                .iter()
+                .map(|check| DependencyState {
+                    name: check.name.clone(),
+                    state: check.state,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Per-dependency readiness as a bare state — the `/ready` check row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DependencyState {
+    /// Stable dependency name, e.g. `database`, `redis`.
+    #[schema(example = "database")]
+    pub name: String,
+    pub state: HealthState,
+}
+
+/// Readiness as states only: the `GET /api/v1/system/ready` response body,
+/// on both the 200 and the 503 path. Deliberately *not* a projection of
+/// [`DependencyStatus`]: that type carries a free-form `detail` for the
+/// operator-facing `/readyz`, and any field it has is a field `/ready`
+/// must never grow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ReadinessStates {
+    /// `ok` when every dependency is healthy.
+    pub status: HealthState,
+    pub checks: Vec<DependencyState>,
 }
 
 #[cfg(test)]

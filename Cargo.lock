@@ -2960,6 +2960,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "recovery-tests"
+version = "0.10.0"
+dependencies = [
+ "chrono",
+ "sanvi-audit",
+ "sanvi-kernel",
+ "sanvi-persistence",
+ "sanvi-testsupport",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "redis"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4607,6 +4625,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "system-tests"
+version = "0.10.0"
+dependencies = [
+ "actix-http",
+ "actix-web",
+ "async-trait",
+ "sanvi-system",
+ "sanvi-testsupport",
+ "serde_json",
+ "sqlx",
+ "tokio",
 ]
 
 [[package]]

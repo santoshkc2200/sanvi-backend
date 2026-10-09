@@ -4,8 +4,8 @@ mod handlers;
 mod routes;
 
 pub use handlers::{
-    __path_build, __path_healthz, __path_readyz, __path_version, SystemState, build, healthz,
-    readyz, state_for_tests, version,
+    __path_build, __path_health, __path_healthz, __path_ready, __path_readyz, __path_version,
+    SystemState, build, health, healthz, ready, readyz, state_for_tests, version,
 };
 pub use routes::{api_routes, health_routes};
 
@@ -18,6 +18,8 @@ use utoipa::OpenApi;
     paths(
         handlers::healthz,
         handlers::readyz,
+        handlers::health,
+        handlers::ready,
         handlers::version,
         handlers::build
     ),
@@ -27,6 +29,8 @@ use utoipa::OpenApi;
         crate::domain::HealthState,
         crate::domain::DependencyStatus,
         crate::domain::Readiness,
+        crate::domain::DependencyState,
+        crate::domain::ReadinessStates,
         crate::application::LivenessResult,
         crate::application::ReadinessOutput,
     ))

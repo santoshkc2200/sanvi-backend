@@ -1631,6 +1631,40 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/v1/system/health",
+      "handler": "crates/contexts/system/src/adapters/http/handlers.rs::health",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/system/src/adapters/http/handlers.rs",
+        "crates/contexts/system/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/system",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/system\")"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/ready",
+      "handler": "crates/contexts/system/src/adapters/http/handlers.rs::ready",
+      "permission": "exempt: public bootstrap/disclosure endpoint (no permission key)",
+      "tenant": "not tenant-scoped: public platform data",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/system/src/adapters/http/handlers.rs",
+        "crates/contexts/system/src/adapters/http/routes.rs"
+      ],
+      "mount_prefix": "/api/v1/system",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/system\")"
+      }
+    },
+    {
       "method": "PATCH",
       "path": "/api/v1/platform/features/{key}",
       "handler": "crates/contexts/access/src/adapters/http/handlers.rs::update_feature",

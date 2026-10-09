@@ -104,7 +104,7 @@ jobs:
       # resilience-tests is Docker-backed (the dependency-matrix injection
       # suite, TASK-023) and runs in the integration job's derived crate
       # list below — not here, where it would run twice.
-      - run: cargo nextest run --profile ci --workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy --exclude resilience-tests
+      - run: cargo nextest run --profile ci --workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy --exclude resilience-tests --exclude system-tests --exclude recovery-tests
         env:
           SQLX_OFFLINE: "true"
 

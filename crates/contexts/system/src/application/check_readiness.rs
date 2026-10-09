@@ -20,6 +20,19 @@ impl CheckReadiness {
         Self { probes, budget }
     }
 
+    /// The per-probe time budget, exposed so the HTTP layer can wrap the
+    /// whole fan-out in a response timeout of its own (TASK-025): a probe
+    /// that wedges below `tokio::spawn` still cannot hang the endpoint.
+    pub fn budget(&self) -> Duration {
+        self.budget
+    }
+
+    /// Stable dependency names, for answering with per-dependency states
+    /// when the fan-out itself is abandoned on timeout.
+    pub fn dependency_names(&self) -> Vec<String> {
+        self.probes.iter().map(|(name, _)| name.clone()).collect()
+    }
+
     /// Probe every dependency concurrently under a shared time budget.
     #[tracing::instrument(name = "system.check_readiness", skip_all)]
     pub async fn execute(&self) -> ReadinessOutput {
