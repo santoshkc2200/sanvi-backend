@@ -4,8 +4,9 @@
 //! - [`server::bind`] builds the actix server with configured workers,
 //!   timeouts, keep-alive and graceful shutdown.
 //! - [`middleware::stack`] applies the canonical middleware chain (see its
-//!   docs for the full order): metrics → … → CORS → abuse quota →
-//!   compression → etag → security headers → error handlers.
+//!   docs for the full order): metrics → … → CORS → security headers →
+//!   plan limits → monthly quotas → abuse quota → compression → etag →
+//!   cache headers → error handlers.
 //! - [`compression`] encodes responses above a size floor, never twice.
 //! - [`etag`] stamps validators on GET/HEAD and answers `304`.
 //! - [`error`] defines the RFC 9457 `application/problem+json` model and the
@@ -13,14 +14,17 @@
 //! - [`openapi`] hosts the generated OpenAPI document and Scalar UI.
 
 pub mod abuse;
+pub mod api_limits;
 pub mod authn;
 pub mod authz;
 pub mod cache_headers;
 pub mod compression;
 pub mod config;
 pub mod degraded;
+pub mod deprecation;
 pub mod error;
 pub mod etag;
+pub mod external_quotas;
 pub mod features;
 pub mod impersonation;
 pub mod load_shed;
@@ -28,6 +32,8 @@ pub mod locale;
 pub mod metrics;
 pub mod middleware;
 pub mod openapi;
+pub mod quota_middleware;
+pub mod quotas;
 pub mod rate_limit;
 pub mod server;
 pub mod ssr_cache;

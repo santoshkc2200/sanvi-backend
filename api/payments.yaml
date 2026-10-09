@@ -1,3 +1,920 @@
+components:
+  schemas:
+    BlockerView:
+      description: One reason the connection cannot take payments yet, keyed for i18n.
+      properties:
+        summary_key:
+          example: payments.blocker.card_payments_inactive
+          type: string
+      required:
+      - summary_key
+      type: object
+    CheckoutConfigView:
+      description: |-
+        What the storefront needs before it can render a Pay button:
+        readiness and the settlement currency. Derived from the tenant's live
+        connection by the same gate the checkout itself applies.
+      properties:
+        can_accept_payments:
+          description: |-
+            Server-computed from the v2 `card_payments` capability, exactly as
+            `POST /tenant/checkout` computes it. The storefront renders this;
+            it never recomputes readiness of its own.
+          type: boolean
+        cannot_accept_reason:
+          description: |-
+            The i18n key for *why* not (`payments.blocker.*`), so the
+            storefront can show a reason next to a disabled button instead of
+            waiting for a 409. `null` when payments are accepted.
+          example: payments.blocker.card_payments_inactive
+          type:
+          - string
+          - 'null'
+        currency:
+          description: |-
+            The connected account's settlement currency. The storefront must
+            price in this currency; anything else is refused at creation.
+          example: JPY
+          type:
+          - string
+          - 'null'
+        tax_enabled:
+          description: |-
+            Whether a checkout started now would have automatic tax applied,
+            read from the tenant's stored tax settings by the same rule the
+            session creation applies. The storefront renders its tax note from
+            this; it never assumes tax is on.
+          type: boolean
+      required:
+      - can_accept_payments
+      - tax_enabled
+      type: object
+    CheckoutView:
+      description: |-
+        The checkout as the storefront sees it. `status` is the only source
+        the confirmation page trusts: derived from webhook-recorded truth,
+        never from the redirect.
+      properties:
+        amount_minor:
+          example: 2000
+          format: int64
+          type: integer
+        conversion_event_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        currency:
+          example: JPY
+          type: string
+        customer_ref:
+          type:
+          - object
+          - 'null'
+        expires_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        failure_code:
+          description: |-
+            Server-issued exactly once per order when paid; identical on every
+            refresh of the confirmation page, so phase 10's conversion
+            pipeline cannot double-count.
+            The provider's decline/failure code for the newest failed attempt
+            (`card_declined`, `insufficient_funds`, …), so the storefront can
+            tell a buyer *why*. The provider's own message is deliberately not
+            exposed: the storefront renders its own localized copy.
+          example: card_declined
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        reference:
+          type: string
+        status:
+          description: '`pending` | `paid` | `failed` | `expired` | `canceled`.'
+          example: pending
+          type: string
+        url:
+          description: |-
+            The provider-hosted payment URL, while the checkout can still be
+            paid. Absent once terminal.
+          example: https://checkout.stripe.com/c/pay/cs_…
+          type:
+          - string
+          - 'null'
+      required:
+      - id
+      - status
+      - reference
+      - amount_minor
+      - currency
+      - created_at
+      type: object
+    ConnectionSessionView:
+      description: |-
+        A short-lived Account Session for the embedded onboarding component.
+        Fetched per render; never persisted, never logged, single-render.
+      properties:
+        client_secret:
+          description: |-
+            The provider's embedded-components client secret. Handle like a
+            credential: no caching, no logging, one render.
+          type: string
+        components:
+          description: |-
+            The embedded components enabled on this session:
+            `account_onboarding`, `notification_banner`, and `account_management`.
+          items:
+            type: string
+          type: array
+        connection_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        provider:
+          example: stripe_connect
+          type: string
+      required:
+      - connection_id
+      - provider
+      - client_secret
+      - expires_at
+      - components
+      type: object
+    CreateCheckoutRequest:
+      description: |-
+        `POST /api/v1/tenant/checkout` — create a checkout session on the
+        tenant's connected account (09.4, direct charges). Idempotency-Key is
+        required: a double-clicked buy button must not create two sessions.
+      properties:
+        amount_minor:
+          description: Minor units — ¥2,000 is `2000` (JPY is zero-decimal).
+          example: 2000
+          format: int64
+          type: integer
+        cancel_url:
+          example: https://shop.tenant.test/cart
+          type: string
+        currency:
+          description: |-
+            ISO-4217 code; must match the connected account's settlement
+            currency.
+          example: JPY
+          type: string
+        customer_ref:
+          description: |-
+            Free-form customer/order context (provider-passthrough; no card
+            data ever). Rate limiting buckets one key per distinct value.
+          type:
+          - object
+          - 'null'
+        locale:
+          description: Presentation locale for the hosted page (`ja`, `en-US`, …).
+          type:
+          - string
+          - 'null'
+        reference:
+          description: The merchant's order reference, echoed on every read model.
+          example: order-2026-0821
+          type: string
+        success_url:
+          description: |-
+            Redirect target on a **verified** tenant domain (phase 08). A
+            success URL on any other host is rejected outright.
+          example: https://shop.tenant.test/thanks
+          type: string
+      required:
+      - reference
+      - amount_minor
+      - currency
+      - success_url
+      - cancel_url
+      type: object
+    DisputeListView:
+      description: Cursor-paginated dispute list.
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/DisputeView'
+          type: array
+        next_cursor:
+          type:
+          - string
+          - 'null'
+      required:
+      - items
+      type: object
+    DisputeView:
+      description: One dispute plus its dashboard deep link (read-only).
+      properties:
+        amount_minor:
+          format: int64
+          type: integer
+        charge_id:
+          type:
+          - string
+          - 'null'
+        created_at:
+          format: date-time
+          type: string
+        currency:
+          type: string
+        dashboard_url:
+          type:
+          - string
+          - 'null'
+        due_by:
+          type:
+          - string
+          - 'null'
+        external_dispute_id:
+          type: string
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        payment_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        reason:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+      required:
+      - id
+      - payment_id
+      - external_dispute_id
+      - status
+      - amount_minor
+      - currency
+      - created_at
+      type: object
+    PaymentDetailView:
+      description: |-
+        The payment detail the support UI renders: payment + its refunds +
+        disputes + timeline.
+
+        The timeline is a first-class projection derived from stored events
+        (created, succeeded/failed, refunded, disputed, paid out), each with
+        a timestamp and an actor where one exists.
+      properties:
+        checkout_reference:
+          type:
+          - string
+          - 'null'
+        disputes:
+          items:
+            $ref: '#/components/schemas/DisputeView'
+          type: array
+        payment:
+          $ref: '#/components/schemas/PaymentView'
+        refunds:
+          items:
+            $ref: '#/components/schemas/RefundView'
+          type: array
+        timeline:
+          items:
+            $ref: '#/components/schemas/TimelineEntry'
+          type: array
+      required:
+      - payment
+      - refunds
+      - disputes
+      - timeline
+      type: object
+    PaymentListView:
+      description: Cursor-paginated payment list.
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/PaymentView'
+          type: array
+        next_cursor:
+          type:
+          - string
+          - 'null'
+      required:
+      - items
+      type: object
+    PaymentView:
+      description: One payment as the tenant sees it in the list.
+      properties:
+        amount_minor:
+          format: int64
+          type: integer
+        captured_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        checkout_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        created_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        currency:
+          type: string
+        external_payment_id:
+          type: string
+        failure_code:
+          type:
+          - string
+          - 'null'
+        failure_message:
+          type:
+          - string
+          - 'null'
+        fee_currency:
+          type:
+          - string
+          - 'null'
+        fee_minor:
+          description: |-
+            The provider-reported fee on this payment. When the platform's
+            application fee is enabled for the tenant, this is where it is
+            disclosed — a platform fee the merchant cannot see is not
+            acceptable, whatever the contract says.
+          format: int64
+          type:
+          - integer
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        payout_status:
+          description: |-
+            Payout status once payout reconciliation includes this payment
+            (`pending` | `paid` | `failed`; null until then).
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+      required:
+      - id
+      - external_payment_id
+      - status
+      - amount_minor
+      - currency
+      type: object
+    PaymentsConnectionView:
+      description: |-
+        A tenant's connection to a payment provider: identifiers and status
+        only — no PII, no credentials (the session secret is a separate,
+        never-persisted response).
+      properties:
+        blockers:
+          description: |-
+            Why checkout is blocked right now, if it is — server-computed,
+            ordered, empty once active with nothing past due.
+          items:
+            $ref: '#/components/schemas/BlockerView'
+          type: array
+        can_accept_payments:
+          description: |-
+            Server-computed from the v2 `card_payments` capability — never a
+            deprecated boolean. The frontend renders this; it never recomputes
+            readiness from capability strings (one definition, one place).
+          type: boolean
+        capabilities:
+          description: |-
+            The capability map as flat `name → status` strings
+            (`{"card_payments": "active"}`), normalised from the provider's
+            stored JSON (flat or v2-nested).
+        connected_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        country:
+          type:
+          - string
+          - 'null'
+        default_currency:
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        last_synced_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        provider:
+          example: stripe_connect
+          type: string
+        requirements:
+          $ref: '#/components/schemas/RequirementsView'
+          description: Outstanding requirements with their i18n render keys and deadline.
+        status:
+          example: onboarding
+          type: string
+      required:
+      - id
+      - provider
+      - status
+      - capabilities
+      - requirements
+      - blockers
+      - can_accept_payments
+      type: object
+    PaymentsCreateConnectionRequest:
+      description: |-
+        `POST /api/v1/tenant/payments/connections` — start (or resume) a
+        connection. Idempotent per `Idempotency-Key`: a retry returns the
+        same connection; a crash between provider-side creation and
+        persistence adopts the same account.
+      properties:
+        country:
+          description: |-
+            ISO-3166-1 alpha-2 country the tenant trades from; defaults to the
+            tenant's region.
+          example: JP
+          type:
+          - string
+          - 'null'
+        default_currency:
+          description: ISO-4217 default currency for the connected account.
+          example: JPY
+          type:
+          - string
+          - 'null'
+        provider:
+          description: Provider kind, as listed by the catalog.
+          example: stripe_connect
+          type: string
+      required:
+      - provider
+      type: object
+    PaymentsMoney:
+      description: |-
+        A minor-unit amount: `2000` + `JPY` is ¥2,000; `1999` + `USD` is
+        $19.99. Amounts are non-negative (direction is the caller's concept).
+      properties:
+        amount_minor:
+          description: Integer count of the currency's minor units — ¥2,000 is `2000`.
+          example: 2000
+          format: int64
+          type: integer
+        currency:
+          description: Uppercase ISO-4217 code; zero-decimal currencies are honored.
+          example: JPY
+          type: string
+      required:
+      - amount_minor
+      - currency
+      type: object
+    PayoutView:
+      description: |-
+        One payout as the tenant's list renders it. Read-only: payout
+        management lives in the provider's own dashboard / embedded component.
+      properties:
+        amount_minor:
+          format: int64
+          type: integer
+        arrival_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        currency:
+          type: string
+        external_payout_id:
+          type: string
+        status:
+          description: |-
+            `pending` | `paid` | `failed`. A failed payout is alerted, not
+            just listed — the tenant's money is stuck at the provider.
+          example: paid
+          type: string
+      required:
+      - external_payout_id
+      - amount_minor
+      - currency
+      - status
+      type: object
+    PayoutsListView:
+      properties:
+        payouts:
+          description: Newest first; empty before a connection exists.
+          items:
+            $ref: '#/components/schemas/PayoutView'
+          type: array
+      required:
+      - payouts
+      type: object
+    PlatformFeeDisclosure:
+      description: |-
+        The platform's fee disclosure for this tenant (their payment settings).
+        A platform fee the merchant cannot see is not acceptable, whatever the
+        contract says.
+      properties:
+        basis_points:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        enabled:
+          description: Fees are off for this tenant unless stated here.
+          type: boolean
+        fixed_currency:
+          type:
+          - string
+          - 'null'
+        fixed_minor:
+          format: int64
+          type:
+          - integer
+          - 'null'
+        minimum_minor:
+          format: int64
+          type: integer
+      required:
+      - enabled
+      - minimum_minor
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    ProviderView:
+      description: |-
+        One connectable provider as the settings page renders it. Derived
+        from the adapter's [`crate::domain::ports::ProviderDescriptor`] —
+        never hardcoded per provider anywhere in this layer or the handlers.
+      properties:
+        available:
+          description: Whether *this tenant* may connect (country support).
+          example: true
+          type: boolean
+        display_name:
+          description: Human-readable name for cards and menus.
+          example: Stripe
+          type: string
+        kind:
+          description: Stable provider identifier (`stripe_connect`, `fake`).
+          example: stripe_connect
+          type: string
+        requires_onboarding:
+          description: Whether connecting requires an onboarding flow.
+          example: true
+          type: boolean
+        supported_countries:
+          description: ISO-3166-1 alpha-2 countries whose tenants may connect.
+          example:
+          - US
+          - JP
+          - GB
+          - DE
+          items:
+            type: string
+          type: array
+      required:
+      - kind
+      - available
+      - display_name
+      - supported_countries
+      - requires_onboarding
+      type: object
+    ProvidersView:
+      description: |-
+        `GET /api/v1/tenant/payments/providers` — the catalog envelope,
+        derived from the provider registry.
+      properties:
+        providers:
+          description: Connectable providers, in stable kind order.
+          items:
+            $ref: '#/components/schemas/ProviderView'
+          type: array
+      required:
+      - providers
+      type: object
+    RefundAmount:
+      properties:
+        currency:
+          example: JPY
+          type: string
+        minor_units:
+          example: 500
+          format: int64
+          type: integer
+      required:
+      - minor_units
+      - currency
+      type: object
+    RefundRequest:
+      description: Body for `POST /api/v1/tenant/payments/{id}/refund`.
+      properties:
+        amount:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RefundAmount'
+            description: Minor-unit amount or `null` for a full refund (remaining amount).
+        note:
+          description: Optional free-form note (support context, not the audit reason).
+          type:
+          - string
+          - 'null'
+        reason:
+          description: |-
+            Why the refund is being issued — required, audited and shown in
+            the timeline. Empty is rejected.
+          type: string
+      required:
+      - reason
+      type: object
+    RefundView:
+      description: One refund record.
+      properties:
+        amount_minor:
+          format: int64
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        created_by:
+          type:
+          - string
+          - 'null'
+        currency:
+          type: string
+        external_refund_id:
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        payment_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        reason:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+      required:
+      - id
+      - payment_id
+      - amount_minor
+      - currency
+      - status
+      - created_at
+      type: object
+    RequirementEntryView:
+      description: |-
+        One outstanding provider requirement, with the i18n message key the
+        frontend renders it from. The mapping is data
+        (`payments.requirement_keys`); a code the map has not learned falls
+        back to `payments.req.unmapped`, whose catalog entry shows the raw code
+        plus Stripe's requirements help link — new requirements degrade,
+        never break.
+      properties:
+        code:
+          description: The provider's requirement code, verbatim.
+          example: individual.verification.document
+          type: string
+        summary_key:
+          description: The i18n key to render (`payments.req.*`).
+          example: payments.req.id_document
+          type: string
+      required:
+      - code
+      - summary_key
+      type: object
+    RequirementsView:
+      description: |-
+        The connection's outstanding-requirements summary, projected with
+        render keys.
+      properties:
+        currently_due:
+          items:
+            $ref: '#/components/schemas/RequirementEntryView'
+          type: array
+        deadline:
+          type:
+          - string
+          - 'null'
+        eventually_due:
+          items:
+            $ref: '#/components/schemas/RequirementEntryView'
+          type: array
+        past_due:
+          items:
+            $ref: '#/components/schemas/RequirementEntryView'
+          type: array
+      required:
+      - currently_due
+      - eventually_due
+      - past_due
+      type: object
+    TaxSettingsView:
+      description: |-
+        The tenant-facing automatic-tax state plus the standing legal
+        statement: registration and remittance are the tenant's responsibility;
+        Sanvi never advises on where or whether to register.
+      properties:
+        active_registrations:
+          format: int32
+          minimum: 0
+          type: integer
+        disclaimer:
+          description: 'Always present, always the same: we never advise.'
+          type: string
+        enabled:
+          type: boolean
+        last_checked_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        liability_account:
+          description: |-
+            The liable connected-account id when enabled (`{ type: 'account' }`
+            routing) — with direct charges the connected account is the
+            merchant of record.
+          type:
+          - string
+          - 'null'
+        platform_fee:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/PlatformFeeDisclosure'
+            description: |-
+              The platform's fee on this tenant's payments, when one is enabled
+              (off by default in 0.10.0). Disclosed here and on every affected
+              payment — a platform fee the merchant cannot see is not acceptable,
+              whatever the contract says.
+        provider_status:
+          type: string
+        warning:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TaxWarningView'
+      required:
+      - enabled
+      - provider_status
+      - active_registrations
+      - disclaimer
+      type: object
+    TaxWarningView:
+      properties:
+        code:
+          description: Stable i18n key (`payments.tax.warning.*`).
+          type: string
+        detail:
+          type: string
+        detected_at:
+          format: date-time
+          type: string
+      required:
+      - code
+      - detail
+      - detected_at
+      type: object
+    TimelineEntry:
+      description: One entry in the payment's timeline.
+      properties:
+        actor:
+          description: |-
+            Who caused this entry, when a human exists (refunds). Webhook-
+            derived entries have no actor — the provider did.
+          type:
+          - string
+          - 'null'
+        amount:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/PaymentsMoney'
+            description: |-
+              Money attached to the entry (payment total, refund portion,
+              dispute amount), when relevant.
+        at:
+          type: string
+        detail:
+          description: |-
+            Human detail (failure code, refund reason, dispute reason,
+            status detail), when relevant.
+          type:
+          - string
+          - 'null'
+        kind:
+          description: |-
+            Stable kind: `created`, `succeeded`, `failed`, `canceled`,
+            `refunded`, `disputed`, `dispute_closed`, `paid_out` (09.6).
+          example: refunded
+          type: string
+      required:
+      - kind
+      - at
+      type: object
+    UpdateTaxSettingsRequest:
+      properties:
+        enabled:
+          description: |-
+            Enable requires the compliance preflight to pass right now; disable
+            always succeeds (and is a tenant-facing change requiring notice:
+            mid-period it changes what customers are charged).
+          type: boolean
+      required:
+      - enabled
+      type: object
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -39,37 +956,37 @@ paths:
           description: Session created on the connected account
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed request, non-positive amount, or a redirect URL off the verified-domain allow-list (payments/domain-not-allowed)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.checkout permission or the payments.stripe_connect entitlement
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The connected account cannot accept payments (payments/connection-not-active)
         '429':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Rate limit exceeded per tenant, client or customer reference (payments/rate-limited)
         '502':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider unavailable (payments/provider-unavailable)
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The payments.checkout flag is off (payments/provider-unavailable)
@@ -92,13 +1009,13 @@ paths:
           description: Whether the tenant's connected account can accept payments, why not, its settlement currency, and whether automatic tax applies
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.checkout permission or the entitlement
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The payments.checkout flag is off (payments/provider-unavailable)
@@ -131,19 +1048,19 @@ paths:
           description: The webhook-truthful checkout state (the only thing the confirmation page trusts)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.checkout permission or the entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such checkout for this tenant
         '503':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The payments.checkout flag is off (payments/provider-unavailable)
@@ -196,7 +1113,7 @@ paths:
           type: string
       - description: Pagination cursor (opaque).
         in: query
-        name: cursor
+        name: after
         required: false
         schema:
           type: string
@@ -221,19 +1138,19 @@ paths:
           description: One page of payments
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed filter (unknown status, bad currency)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout — the request exceeded its budget
@@ -257,42 +1174,42 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateConnectionRequest'
+              $ref: '#/components/schemas/PaymentsCreateConnectionRequest'
         required: true
       responses:
         '201':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConnectionView'
+                $ref: '#/components/schemas/PaymentsConnectionView'
           description: Connection created (or the same one returned on an idempotent retry)
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed Idempotency-Key, provider, country or currency
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.manage permission or the payments.stripe_connect entitlement
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: An active connection already exists (payments/connection-exists)
         '429':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider rate limit exhausted (payments/provider-rate-limited)
         '502':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider unavailable (payments/provider-unavailable)
@@ -368,29 +1285,29 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConnectionView'
+                $ref: '#/components/schemas/PaymentsConnectionView'
           description: 'Disconnected (or already disconnected: idempotent replay)'
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed Idempotency-Key
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.manage permission or the payments.stripe_connect entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such connection for this tenant
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: 'Money is still moving on this connection; the problem body names the blockers as extension members: blockers: [{code, summary_key}] with code in {in_flight_payments, open_disputes, pending_payouts} (payments/disconnect-blocked)'
@@ -420,17 +1337,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConnectionView'
+                $ref: '#/components/schemas/PaymentsConnectionView'
           description: Status, capabilities, requirements, blockers and the server-computed can_accept_payments
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such connection for this tenant
@@ -475,31 +1392,31 @@ paths:
           description: Account Session client secret + enabled components
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing/malformed Idempotency-Key
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.manage permission or the entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such connection for this tenant
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Connection is disconnected or rejected (payments/connection-not-active)
         '502':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider unavailable (payments/provider-unavailable)
@@ -538,7 +1455,7 @@ paths:
           type: string
       - description: Pagination cursor (opaque).
         in: query
-        name: cursor
+        name: after
         required: false
         schema:
           type: string
@@ -563,13 +1480,13 @@ paths:
           description: One page of disputes
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout — the request exceeded its budget
@@ -629,7 +1546,7 @@ paths:
           description: CSV bytes (text/csv)
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
@@ -650,13 +1567,13 @@ paths:
           description: The connected account's payout history, newest first
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
         '502':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider unavailable (payments/provider-unavailable)
@@ -696,7 +1613,7 @@ paths:
           description: Connectable providers, derived from the provider registry
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission (the catalog is not entitlement-gated)
@@ -715,7 +1632,7 @@ paths:
           description: The tenant's automatic-tax state with the legal statement
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
@@ -739,25 +1656,25 @@ paths:
           description: The updated tax settings
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed request
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.manage permission or the entitlement
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Preflight failed — the response names the exact missing step (payments/tax-preflight-failed)
         '502':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider unavailable (payments/provider-unavailable)
@@ -793,13 +1710,13 @@ paths:
           description: Payment detail with timeline, refunds and disputes
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.read permission or the entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such payment for this tenant
@@ -858,31 +1775,31 @@ paths:
           description: Refund issued on the connected account
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing reason, malformed amount, over-refund (payments/over-refund reports remaining), currency mismatch
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing payments.refund permission or the entitlement
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: No such payment for this tenant
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Idempotency-Key reuse with a different amount/reason (payments/idempotency-conflict) or already fully refunded
         '502':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Provider unavailable (payments/provider-unavailable)

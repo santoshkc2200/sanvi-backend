@@ -75,7 +75,7 @@ pub(crate) fn test_app_with(
     let build_info = BuildInfo::new(
         "0.1.0-test".into(),
         "test".into(),
-        "now".into(),
+        "2026-10-09T00:00:00Z".into(),
         "test".into(),
         "sanvi-api-test".into(),
     );

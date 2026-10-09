@@ -1,3 +1,197 @@
+components:
+  schemas:
+    CatalogView:
+      description: |-
+        The catalog the frontend consumes: every message for one domain in one
+        locale, plus a revision (ETag) that changes whenever content does.
+      properties:
+        domain:
+          type: string
+        locale:
+          type: string
+        messages:
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+          type: object
+        revision:
+          type: string
+      required:
+      - domain
+      - locale
+      - revision
+      - messages
+      type: object
+    LocalizationLocale:
+      description: |-
+        A validated, canonicalised BCP-47 language tag.
+
+        Canonicalisation: language lowercase, script title-case, region
+        uppercase (`ja-jp` → `ja-JP`, `EN` → `en`). Only well-formed tags
+        accepted: 2–3 letter language, optional 4-letter script, optional 2-letter
+        or 3-digit region. This is deliberately *not* full BCP-47 (no variants,
+        no extensions): the backend only needs the granularity it can translate
+        and format with.
+      type: string
+    LocalizationSettingsView:
+      properties:
+        default_locale:
+          type: string
+        enabled_locales:
+          items:
+            type: string
+          type: array
+        timezone:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - default_locale
+      - enabled_locales
+      - timezone
+      - updated_at
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    SupportedLocale:
+      description: A supported locale row from `localization.supported_locales`.
+      properties:
+        code:
+          $ref: '#/components/schemas/LocalizationLocale'
+        name_en:
+          type: string
+        name_native:
+          type: string
+        sort_order:
+          format: int32
+          type: integer
+      required:
+      - code
+      - name_native
+      - name_en
+      - sort_order
+      type: object
+    SupportedLocalesView:
+      properties:
+        default:
+          type: string
+        locales:
+          items:
+            $ref: '#/components/schemas/SupportedLocale'
+          type: array
+      required:
+      - default
+      - locales
+      type: object
+    TranslationPatch:
+      description: One override in a PUT body.
+      properties:
+        key:
+          type: string
+        locale:
+          type: string
+        value:
+          type: string
+      required:
+      - key
+      - locale
+      - value
+      type: object
+    TranslationView:
+      properties:
+        key:
+          type: string
+        locale:
+          type: string
+        scope:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        value:
+          type: string
+      required:
+      - scope
+      - key
+      - locale
+      - value
+      - updated_at
+      type: object
+    UpdateLocalizationSettingsCommand:
+      properties:
+        acting_locale:
+          description: |-
+            The locale the change was made under (the admin's negotiated
+            locale), carried on the event so downstream work renders correctly.
+          type: string
+        default_locale:
+          type: string
+        enabled_locales:
+          items:
+            type: string
+          type: array
+        timezone:
+          type: string
+      required:
+      - default_locale
+      - enabled_locales
+      - timezone
+      type: object
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -43,7 +237,7 @@ paths:
           description: Updated platform overrides
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid override
@@ -99,7 +293,7 @@ paths:
           description: Not modified (ETag match)
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown domain
@@ -152,7 +346,7 @@ paths:
           description: Updated overrides
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid override
@@ -171,7 +365,7 @@ paths:
           description: Tenant localization settings
         '404':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Tenant not found
@@ -195,13 +389,13 @@ paths:
           description: Updated settings
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid settings
         '409':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Settings conflict

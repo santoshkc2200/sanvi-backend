@@ -1,3 +1,168 @@
+components:
+  schemas:
+    ActorType:
+      description: |-
+        Who performed the action. `User` is a tenant user; `PlatformAdmin` is an
+        operator on the platform host; `System` is an automated process (jobs,
+        lifecycle sweeps).
+      enum:
+      - user
+      - platform_admin
+      - system
+      type: string
+    AuditEntry:
+      description: |-
+        A chained audit entry.
+
+        `seq` is the chain's ordering authority (assigned by the database on
+        INSERT); it is deliberately *not* covered by the hash because the
+        database assigns it after the hash is computed. Ordering integrity comes
+        from the append-only grants + trigger; content and link integrity from
+        the hash chain.
+      properties:
+        action:
+          type: string
+        actor_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        actor_type:
+          $ref: '#/components/schemas/ActorType'
+        after: {}
+        before: {}
+        hash:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type: array
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        ip:
+          type: string
+        occurred_at:
+          format: date-time
+          type: string
+        on_behalf_of:
+          type:
+          - string
+          - 'null'
+        prev_hash:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type: array
+        request_id:
+          type:
+          - string
+          - 'null'
+        resource_id:
+          type:
+          - string
+          - 'null'
+        resource_type:
+          type:
+          - string
+          - 'null'
+        seq:
+          format: int64
+          type: integer
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        user_agent:
+          type: string
+      required:
+      - seq
+      - id
+      - occurred_at
+      - actor_type
+      - action
+      - ip
+      - user_agent
+      - prev_hash
+      - hash
+      type: object
+    AuditPageView:
+      description: One page of audit entries.
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+          type: array
+        next_cursor:
+          format: int64
+          type:
+          - integer
+          - 'null'
+      required:
+      - entries
+      type: object
+    ProblemDetail:
+      allOf:
+      - description: |-
+          RFC 9457 extension members for problem classes that carry
+          structured extras (the disconnect conflict names its blockers,
+          for example). Flattened onto the JSON object exactly as the RFC
+          prescribes; carrying them here keeps the error-enrichment layer
+          from stripping them. Absent otherwise.
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: |-
+              Machine-readable reason for statuses that carry one (e.g. tenant
+              suspension); absent otherwise.
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: |-
+              Correlates with the trace in OpenObserve: the W3C trace id of the
+              span serving the request (the same trace the `traceparent` response
+              header references), falling back to the request id when the request
+              ran outside any OpenTelemetry context.
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -60,8 +225,7 @@ paths:
         name: after
         required: false
         schema:
-          format: int64
-          type: integer
+          type: string
       - in: query
         name: limit
         required: false
@@ -83,19 +247,19 @@ paths:
           description: One page of audit entries, newest first
         '400':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Invalid filter value
         '403':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing platform.audit.read
         '504':
           content:
-            application/json:
+            application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Statement timeout — the request exceeded its budget

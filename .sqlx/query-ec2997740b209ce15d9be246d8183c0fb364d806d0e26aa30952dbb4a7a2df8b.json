@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform.quota_policies (tenant_id,enforce,limits,upgrade_path) VALUES ($1,$2,$3,$4)\n            ON CONFLICT (tenant_id) DO UPDATE SET enforce=EXCLUDED.enforce,limits=EXCLUDED.limits,upgrade_path=EXCLUDED.upgrade_path",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec2997740b209ce15d9be246d8183c0fb364d806d0e26aa30952dbb4a7a2df8b"
+}

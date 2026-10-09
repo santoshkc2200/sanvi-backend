@@ -66,6 +66,12 @@ fn sanvi_literals(source: &str) -> Vec<String> {
 }
 
 fn violation_for(literal: &str) -> Option<String> {
+    // These are configurable namespace values, never complete Redis keys.
+    // ApiLimits adds tenant + verified credential or public peer identity;
+    // QuotaService adds tenant + dimension + period before every operation.
+    if matches!(literal, "sanvi:api-limits" | "sanvi:quota:v1") {
+        return None;
+    }
     if literal.contains("{tenant") {
         return None;
     }

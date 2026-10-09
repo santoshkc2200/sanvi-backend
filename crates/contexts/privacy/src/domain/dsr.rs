@@ -488,6 +488,7 @@ pub struct ExportArtifact {
 
 /// A verification challenge (email OTP).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(as = PrivacyVerificationChallenge)]
 pub struct VerificationChallenge {
     #[schema(value_type = String)]
     pub id: VerificationChallengeId,

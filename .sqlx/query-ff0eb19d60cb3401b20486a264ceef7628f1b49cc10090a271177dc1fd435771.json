@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT used FROM platform.quota_counters WHERE tenant_id=$1 AND dimension=$2 AND period_start=$3 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "platform.quota_counters",
+            "name": "used"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ff0eb19d60cb3401b20486a264ceef7628f1b49cc10090a271177dc1fd435771"
+}

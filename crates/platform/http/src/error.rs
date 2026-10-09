@@ -47,6 +47,13 @@ pub struct ProblemDetail {
 /// handlers.
 #[derive(Debug, Clone, thiserror::Error, ToSchema)]
 pub enum ApiError {
+    #[error("{dimension} quota exceeded ({used}/{limit}); upgrade via {upgrade_path}")]
+    QuotaExceeded {
+        dimension: String,
+        used: u64,
+        limit: u64,
+        upgrade_path: String,
+    },
     #[error("{detail}")]
     BadRequest { detail: String },
 
@@ -109,6 +116,7 @@ impl ApiError {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden { .. } => StatusCode::FORBIDDEN,
+            Self::QuotaExceeded { .. } => StatusCode::FORBIDDEN,
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::Conflict { .. } | Self::ConflictReasoned { .. } => StatusCode::CONFLICT,
             Self::Gone { .. } => StatusCode::GONE,
@@ -129,6 +137,7 @@ impl ApiError {
             Self::BadRequest { .. } => "bad-request",
             Self::Unauthorized => "unauthorized",
             Self::Forbidden { .. } => "forbidden",
+            Self::QuotaExceeded { .. } => "platform/quota-exceeded",
             Self::NotFound { .. } => "not-found",
             Self::Conflict { .. } | Self::ConflictReasoned { .. } => "conflict",
             Self::Gone { .. } => "gone",
@@ -147,6 +156,7 @@ impl ApiError {
             Self::BadRequest { .. } => "Bad Request",
             Self::Unauthorized => "Unauthorized",
             Self::Forbidden { .. } => "Forbidden",
+            Self::QuotaExceeded { .. } => "Quota Exceeded",
             Self::NotFound { .. } => "Not Found",
             Self::Conflict { .. } | Self::ConflictReasoned { .. } => "Conflict",
             Self::Gone { .. } => "Gone",
@@ -172,7 +182,24 @@ impl ApiError {
                 Self::ConflictReasoned { reason, .. } => Some(reason.clone()),
                 _ => None,
             },
-            extensions: None,
+            extensions: match self {
+                Self::QuotaExceeded {
+                    dimension,
+                    used,
+                    limit,
+                    upgrade_path,
+                } => Some(
+                    [
+                        ("dimension".to_string(), serde_json::json!(dimension)),
+                        ("used".to_string(), serde_json::json!(used)),
+                        ("limit".to_string(), serde_json::json!(limit)),
+                        ("upgrade_path".to_string(), serde_json::json!(upgrade_path)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                _ => None,
+            },
         }
     }
 
@@ -211,6 +238,19 @@ impl ApiError {
     /// else stays the opaque internal class: infrastructure detail is for the
     /// logs, not the client.
     pub fn from_storage_detail(detail: &str) -> Self {
+        if let Some((_, marker)) = detail.split_once("quota_exceeded|") {
+            let fields: Vec<_> = marker.split('|').collect();
+            if fields.len() >= 4
+                && let (Ok(used), Ok(limit)) = (fields[1].parse(), fields[2].parse())
+            {
+                return Self::QuotaExceeded {
+                    dimension: fields[0].to_string(),
+                    used,
+                    limit,
+                    upgrade_path: fields[3].lines().next().unwrap_or_default().to_string(),
+                };
+            }
+        }
         if detail.contains("canceling statement due to statement timeout") {
             Self::RequestTimeout
         } else {
@@ -235,6 +275,28 @@ impl ResponseError for ApiError {
             );
         }
         response
+    }
+}
+
+impl From<crate::quotas::QuotaError> for ApiError {
+    fn from(error: crate::quotas::QuotaError) -> Self {
+        match error {
+            crate::quotas::QuotaError::Exceeded {
+                dimension,
+                used,
+                limit,
+                upgrade_path,
+            } => Self::QuotaExceeded {
+                dimension: dimension.to_string(),
+                used,
+                limit,
+                upgrade_path,
+            },
+            other => {
+                tracing::error!(error = %other, "quota service failed");
+                Self::service_unavailable("quota accounting temporarily unavailable")
+            }
+        }
     }
 }
 
@@ -336,6 +398,29 @@ where
             Ok(enrich(res).await)
         })
     }
+}
+
+/// Protective layers outside ErrorHandlers must normalize their own
+/// short-circuits. Preserve response metadata while replacing body headers.
+pub(crate) async fn normalize_boundary_error(
+    res: ServiceResponse<BoxBody>,
+) -> ServiceResponse<BoxBody> {
+    if !res.status().is_client_error() && !res.status().is_server_error() {
+        return res;
+    }
+    let headers = res.headers().clone();
+    let mut res = enrich(res).await;
+    for (name, value) in headers.iter() {
+        if !matches!(
+            *name,
+            actix_web::http::header::CONTENT_TYPE
+                | actix_web::http::header::CONTENT_LENGTH
+                | actix_web::http::header::CONTENT_ENCODING
+        ) {
+            res.headers_mut().append(name.clone(), value.clone());
+        }
+    }
+    res
 }
 
 /// Normalize one response into problem+json when it is an error.
@@ -443,6 +528,18 @@ fn localize_problem(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quota_storage_error_names_dimension_and_upgrade_path() {
+        let problem = ApiError::from_storage_detail(
+            "database error: quota_exceeded|seats|11|10|/api/v1/tenant/billing/checkout",
+        )
+        .problem();
+        assert_eq!(problem.status, 403);
+        assert!(problem.r#type.ends_with("/platform/quota-exceeded"));
+        let json = serde_json::to_value(problem).unwrap();
+        assert_eq!(json["dimension"], "seats");
+        assert_eq!(json["upgrade_path"], "/api/v1/tenant/billing/checkout");
+    }
     use super::*;
 
     #[test]

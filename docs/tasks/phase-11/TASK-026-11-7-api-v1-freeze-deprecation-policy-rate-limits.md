@@ -1,6 +1,6 @@
 # TASK-026: 11.7 API v1 freeze, deprecation machinery, rate limits & quotas
 
-**Phase:** 11 · **Status:** todo · **Size:** M
+**Phase:** 11 · **Status:** done · **Size:** M
 **Requirement(s):** FR-1122, FR-1123, FR-1124, FR-1125, FR-1126, NFR-1106
 **Depends on:** TASK-021, TASK-023, **phase 10 merged**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -12,7 +12,7 @@
 
 ## Goal
 
-Turn thirteen independently-grown OpenAPI documents into one public contract, freeze it behind a gate
+Turn fourteen independently-grown OpenAPI documents into one public contract, freeze it behind a gate
 that the build enforces, and put enforceable, **visible** limits around it.
 
 ## Why this shape
@@ -39,7 +39,7 @@ Everything else the backlog wants to add "while we're in there" goes to post-GA.
 
 ## File ownership map
 
-- all thirteen `api/*.yaml` plus `api/shared/*.yaml` — problem types, pagination parameters
+- all fourteen `api/*.yaml` plus `api/shared/*.yaml` — problem types, pagination parameters
 - `crates/platform/http/**` — rate-limit middleware, `RateLimit-*` and deprecation headers
 - a new quota-counting module — Postgres reconciliation with a Redis fast path
 - `scripts/spec-lint.sh`, `scripts/spec-freeze-check.sh`, `tests/replay/**`
@@ -47,7 +47,7 @@ Everything else the backlog wants to add "while we're in there" goes to post-GA.
 
 ## Steps
 
-### Step 1: Run the consistency pass across all thirteen documents
+### Step 1: Run the consistency pass across all fourteen documents
 
 **Files:** Modify `api/*.yaml`, `api/shared/*.yaml`
 
@@ -55,7 +55,7 @@ Everything else the backlog wants to add "while we're in there" goes to post-GA.
 filtering and sorting grammar, timestamp and money representation, enum naming, and the
 problem-details envelope with one namespaced type registry.
 
-**Verify:** read all thirteen as one API and record the inconsistencies fixed in the PR. `just openapi`
+**Verify:** read all fourteen as one API and record the inconsistencies fixed in the PR. `just openapi`
 clean.
 
 ### Step 2: Extract the style guide and enforce it
@@ -138,19 +138,19 @@ zero-decimal handling appear in the examples, not in a footnote.**
 
 ## Definition of done
 
-- [ ] All thirteen specs pass `just spec-lint`, and the linter blocks a deliberately inconsistent
+- [x] All fourteen specs pass `just spec-lint`, and the linter blocks a deliberately inconsistent
       endpoint.
-- [ ] `/api/v1` is frozen; the gate fails on a removed field, a narrowed enum, and a changed
+- [x] `/api/v1` is frozen; the gate fails on a removed field, a narrowed enum, and a changed
       required-ness, and passes on an additive change.
-- [ ] Deprecation headers and changelog generation work end to end against a test deprecation.
-- [ ] Per-plan rate limits enforce with correct headers, and the derivation from the capacity constants
+- [x] Deprecation headers and changelog generation work end to end against a test deprecation.
+- [x] Per-plan rate limits enforce with correct headers, and the derivation from the capacity constants
       is recorded next to the numbers.
-- [ ] `429` and `503` are never conflated, proven by a test.
-- [ ] Quota counting survives a worker restart and a Redis flush.
-- [ ] `GET /api/v1/tenant/usage` returns the same numbers enforcement uses.
-- [ ] A quota breach names the upgrade path.
-- [ ] `just replay-suite` is green and fails on a broken response shape.
-- [ ] Public API docs are generated with per-journey, per-locale examples including JPY.
+- [x] `429` and `503` are never conflated, proven by a test.
+- [x] Quota counting survives a worker restart and a Redis flush.
+- [x] `GET /api/v1/tenant/usage` returns the same numbers enforcement uses.
+- [x] A quota breach names the upgrade path.
+- [x] `just replay-suite` is green and fails on a broken response shape.
+- [x] Public API docs are generated with per-journey, per-locale examples including JPY.
 
 ## Verification
 
@@ -164,6 +164,60 @@ just spec-freeze-check
 just replay-suite rc.8
 just test-quotas
 ```
+
+## Execution record
+
+Completed 2026-10-09 on `codex/task-026-api-freeze-quotas` in the managed
+`task026-api-freeze` worktree, based on `3d9fe2c`. Implementation and both completion
+records share the commit titled `feat(platform): freeze API v1 and add durable quotas`.
+
+The inventory contains fourteen contexts, including media. The consistency pass
+bundles reachable schemas, namespaces twelve colliding schema declarations,
+standardizes pagination on `after`/`limit` while retaining legacy input aliases,
+and records timestamp, money, and problem-response conventions. Readiness 503
+annotations now describe the problem response emitted by the assembled app.
+The immutable launch snapshot and PR-base comparison protect both initial and
+subsequently added public fields. Breaking exceptions require an independent
+collaborator's approval of the current head as well as the reviewed label.
+
+Verified equivalents were used because `just` is not installed on this Windows
+host; `PYTHONUTF8=1` and `SQLX_OFFLINE=true` were set for portable checks.
+
+| Required verification | Observed result |
+| --- | --- |
+| `cargo fmt --check` | Pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Pass |
+| `bash scripts/test.sh --quiet --test-threads 4` | 1,461/1,461 across 69 binaries; nextest `c1f97d76-48d1-425c-9ba6-d614f40c6a6e` |
+| `target/debug/sanvi-cli.exe openapi --check` | All fourteen contexts pass |
+| `bash scripts/spec-lint.sh` | All fourteen contexts pass |
+| `bash scripts/spec-freeze-check.sh --base-ref 3d9fe2c3031958e557c19b218c62febbbf0e1788` | Pass; fifteen frozen YAML files including shared registry |
+| `bash scripts/replay-suite.sh rc.8` | 21/21 Rust cases; real system and tenant usage captures validate |
+| `bash scripts/test-quotas.sh` | 20/20 counter/reservation tests plus 1/1 HTTP usage test |
+| `bash scripts/api-docs.sh --check` | Fourteen generated context documents; en-US/USD and ja-JP/JPY journeys |
+| Python contract / deprecation mutation suites | 16/16 and 4/4; registry and changelog check pass |
+
+An actual captured usage response was copied and deliberately corrupted: a string
+`dimensions.api_requests.used` and missing `limit` both fail the production replay
+CLI. Mutation proofs also reject removed fields, narrowed enums, requiredness
+changes, repeated-reference restrictions, and removal of fields added after launch.
+Independent review findings were fixed with regressions for verified-subject quota
+accounting, correlated problem responses retaining rate headers, canonical-stack
+tracking floods, ambiguous media timeouts, and nested usage maps.
+
+Counters cover all six dimensions. PostgreSQL remains authoritative; Redis reads
+are validated against the committed version and value. Producer triggers and
+external reservations preserve atomicity and retry safety. Both enforcement flags
+default to false while counting stays live. Unknown external outcomes retain
+reservations for reconciliation; shadow-mode accounting outages can leave usage
+incomplete, as documented in the API policy.
+
+Layering, migration compatibility, ID policy, secret scan, and the regenerated
+route matrix passed locally. A default-concurrency run hit a transient existing
+Redis healthy-control timeout; its isolated rerun and the final full run passed.
+The additional CI test-coverage gate reports the pre-existing `recovery-tests`
+exclusion in the base workflow; this task does not change that exclusion, and the
+local full suite includes those tests. Remote CI and production threshold tuning
+were not executed. The worktree is preserved; no merge or deployment is included.
 
 ## Out of scope
 

@@ -1,0 +1,127 @@
+components:
+  parameters:
+    After:
+      description: Opaque cursor from the previous page, passed unchanged.
+      in: query
+      name: after
+      required: false
+      schema:
+        type: string
+    Limit:
+      description: Bounded page size; each operation declares its resource-specific
+        maximum and default.
+      in: query
+      name: limit
+      required: false
+      schema:
+        minimum: 1
+        type: integer
+  schemas:
+    ProblemDetail:
+      allOf:
+      - description: 'RFC 9457 extension members for problem classes that carry
+
+          structured extras (the disconnect conflict names its blockers,
+
+          for example). Flattened onto the JSON object exactly as the RFC
+
+          prescribes; carrying them here keeps the error-enrichment layer
+
+          from stripping them. Absent otherwise.'
+        type:
+        - object
+        - 'null'
+      - properties:
+          detail:
+            description: Human-readable explanation of this specific occurrence.
+            type: string
+          instance:
+            description: URI of the offending resource, if any.
+            type:
+            - string
+            - 'null'
+          reason:
+            description: 'Machine-readable reason for statuses that carry one (e.g.
+              tenant
+
+              suspension); absent otherwise.'
+            type:
+            - string
+            - 'null'
+          status:
+            description: HTTP status code (mirrors the response code).
+            format: int32
+            minimum: 0
+            type: integer
+          title:
+            description: Short, human-readable, stable title.
+            type: string
+          trace_id:
+            description: 'Correlates with the trace in OpenObserve: the W3C trace
+              id of the
+
+              span serving the request (the same trace the `traceparent` response
+
+              header references), falling back to the request id when the request
+
+              ran outside any OpenTelemetry context.'
+            type:
+            - string
+            - 'null'
+          type:
+            description: Stable URI identifying the error class.
+            example: https://sanvi.dev/problems/bad-request
+            type: string
+        required:
+        - type
+        - title
+        - status
+        - detail
+        type: object
+      description: RFC 9457 problem detail. This is the only error body the API produces.
+    ProblemType:
+      enum:
+      - https://sanvi.dev/problems/advertising/budget-cap-reached
+      - https://sanvi.dev/problems/advertising/campaign-invalid
+      - https://sanvi.dev/problems/advertising/capability-unsupported
+      - https://sanvi.dev/problems/advertising/connection-not-active
+      - https://sanvi.dev/problems/advertising/directive-suppressed
+      - https://sanvi.dev/problems/advertising/platform-unavailable
+      - https://sanvi.dev/problems/advertising/token-expired
+      - https://sanvi.dev/problems/bad-gateway
+      - https://sanvi.dev/problems/bad-request
+      - https://sanvi.dev/problems/conflict
+      - https://sanvi.dev/problems/entitlement-required
+      - https://sanvi.dev/problems/forbidden
+      - https://sanvi.dev/problems/gone
+      - https://sanvi.dev/problems/internal-error
+      - https://sanvi.dev/problems/not-found
+      - https://sanvi.dev/problems/payments/capability-missing
+      - https://sanvi.dev/problems/payments/connection-exists
+      - https://sanvi.dev/problems/payments/connection-not-active
+      - https://sanvi.dev/problems/payments/country-unsupported
+      - https://sanvi.dev/problems/payments/currency-unsupported
+      - https://sanvi.dev/problems/payments/disconnect-blocked
+      - https://sanvi.dev/problems/payments/domain-not-allowed
+      - https://sanvi.dev/problems/payments/idempotency-conflict
+      - https://sanvi.dev/problems/payments/invalid-country
+      - https://sanvi.dev/problems/payments/over-refund
+      - https://sanvi.dev/problems/payments/provider-auth
+      - https://sanvi.dev/problems/payments/provider-rate-limited
+      - https://sanvi.dev/problems/payments/provider-unavailable
+      - https://sanvi.dev/problems/payments/rate-limited
+      - https://sanvi.dev/problems/payments/tax-preflight-failed
+      - https://sanvi.dev/problems/platform/overloaded
+      - https://sanvi.dev/problems/platform/quota-exceeded
+      - https://sanvi.dev/problems/request-timeout
+      - https://sanvi.dev/problems/service-unavailable
+      - https://sanvi.dev/problems/tenant-suspended
+      - https://sanvi.dev/problems/too-many-requests
+      - https://sanvi.dev/problems/unauthorized
+      format: uri
+      type: string
+info:
+  title: Shared v1 wire conventions
+  version: 1.0.0
+openapi: 3.1.0
+paths: {}

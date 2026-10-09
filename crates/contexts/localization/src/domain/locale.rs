@@ -54,6 +54,7 @@ impl fmt::Display for LocaleSource {
 /// no extensions): the backend only needs the granularity it can translate
 /// and format with.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[schema(as = LocalizationLocale)]
 pub struct Locale(String);
 
 impl Locale {

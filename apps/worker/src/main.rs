@@ -756,6 +756,8 @@ impl WorkerPoolConfig {
 #[serde(rename_all = "snake_case")]
 pub struct WorkerConfig {
     #[serde(default)]
+    pub platform: sanvi_http::config::PlatformApiConfig,
+    #[serde(default)]
     pub ids: IdsConfig,
     pub database: DatabaseConfig,
     #[serde(default)]
@@ -909,6 +911,16 @@ async fn main() -> ExitCode {
 
     // --- tenancy consumer: keeps resolution caches coherent -----------------
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
+    let quota_runtime = sanvi_http::quota_middleware::QuotaRuntime {
+        service: Arc::new(sanvi_http::quotas::QuotaService::new(
+            tx_manager.clone(),
+            Arc::new(sanvi_http::quotas::PgQuotaPlanProvider::new(
+                tx_manager.clone(),
+            )),
+            Some(redis.clone()),
+        )),
+        enabled: config.platform.quotas,
+    };
     let tenants: Arc<dyn sanvi_tenancy::domain::TenantRepository> =
         Arc::new(SqlxTenantRepository::new());
     let resolution_cache = Arc::new(RedisTenantResolutionCache::new(
@@ -1488,11 +1500,15 @@ async fn main() -> ExitCode {
     let privacy_notification_gateway: Option<std::sync::Arc<dyn NotificationGatewayPort>> =
         if notifications_enabled {
             Some(std::sync::Arc::new(
-                HttpNotificationGateway::new(config.notification.clone()).with_abuse_counter(
-                    std::sync::Arc::new(sanvi_http::abuse::AbuseCounter::new(Some(redis.clone()))),
-                    config.notification.send_quota_limit,
-                    config.notification.send_quota_window_secs,
-                ),
+                HttpNotificationGateway::new(config.notification.clone())
+                    .with_abuse_counter(
+                        std::sync::Arc::new(sanvi_http::abuse::AbuseCounter::new(Some(
+                            redis.clone(),
+                        ))),
+                        config.notification.send_quota_limit,
+                        config.notification.send_quota_window_secs,
+                    )
+                    .with_commercial_quota(quota_runtime.clone()),
             ))
         } else {
             None
@@ -3114,11 +3130,13 @@ async fn main() -> ExitCode {
         Vec::new()
     } else {
         let notif_gateway = Arc::new(
-            HttpNotificationGateway::new(config.notification.clone()).with_abuse_counter(
-                Arc::new(sanvi_http::abuse::AbuseCounter::new(Some(redis.clone()))),
-                config.notification.send_quota_limit,
-                config.notification.send_quota_window_secs,
-            ),
+            HttpNotificationGateway::new(config.notification.clone())
+                .with_abuse_counter(
+                    Arc::new(sanvi_http::abuse::AbuseCounter::new(Some(redis.clone()))),
+                    config.notification.send_quota_limit,
+                    config.notification.send_quota_window_secs,
+                )
+                .with_commercial_quota(quota_runtime.clone()),
         );
         let notif_directory = Arc::new(WorkerRecipientDirectory {
             tx_manager: tx_manager.clone(),

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.external_quota_reservations SET asset_id=$3,accepted=true WHERE tenant_id=$1 AND dimension='storage_bytes' AND key_hash=$2 AND NOT released",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b1c728859e29c85b54edb17bbbe4f538d07eed3c5a782708f61abca9d9b31e6b"
+}

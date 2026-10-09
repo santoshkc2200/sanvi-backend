@@ -102,6 +102,7 @@ pub enum BudgetType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = AdvertisingMoney)]
 pub struct Money {
     pub amount_minor: i64,
     pub currency: String,

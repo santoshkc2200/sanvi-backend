@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.external_quota_reservations SET ambiguous=true WHERE tenant_id=$1 AND dimension=$2 AND key_hash=$3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "579855dec610b05167375bd33bd3c9f119c04fd2c9a023b546671313759af334"
+}

@@ -19,6 +19,7 @@ Rules:
 | context | use case | entries | spans | tenant refs | state |
 | --- | --- | --- | --- | --- | --- |
 | access | check_permission.rs | 1 | 1 | yes | covered
+| access | degraded_authorizer.rs | 0 | 0 | no | n/a
 | access | entitlements.rs | 5 | 5 | yes | covered
 | access | feature_gate.rs | 2 | 2 | yes | covered
 | access | features.rs | 4 | 4 | yes | covered

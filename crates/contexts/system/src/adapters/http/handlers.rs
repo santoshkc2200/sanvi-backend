@@ -45,7 +45,7 @@ pub async fn healthz(state: web::Data<SystemState>) -> impl Responder {
     operation_id = "readiness",
     responses(
         (status = 200, description = "All dependencies healthy", body = Readiness),
-        (status = 503, description = "At least one dependency is degraded", body = Readiness)
+        (status = 503, description = "At least one dependency is degraded", body = ProblemDetail, content_type = "application/problem+json")
     )
 )]
 pub async fn readyz(state: web::Data<SystemState>, req: HttpRequest) -> impl Responder {
@@ -102,7 +102,8 @@ pub async fn health(state: web::Data<SystemState>) -> impl Responder {
 /// dependency checks run concurrently under their own budget and this
 /// handler wraps the fan-out in a response timeout of its own, so the
 /// endpoint answers within `budget + grace` no matter what a dependency
-/// does — and the body reports states only, never error strings.
+/// does. Successful responses report dependency states; the assembled API
+/// normalizes HTTP 503 into the shared problem-details envelope.
 #[utoipa::path(
     get,
     path = "/api/v1/system/ready",
@@ -110,7 +111,7 @@ pub async fn health(state: web::Data<SystemState>) -> impl Responder {
     operation_id = "ready",
     responses(
         (status = 200, description = "All dependencies healthy", body = ReadinessStates),
-        (status = 503, description = "At least one dependency is degraded", body = ReadinessStates)
+        (status = 503, description = "At least one dependency is degraded", body = ProblemDetail, content_type = "application/problem+json")
     )
 )]
 pub async fn ready(state: web::Data<SystemState>) -> impl Responder {

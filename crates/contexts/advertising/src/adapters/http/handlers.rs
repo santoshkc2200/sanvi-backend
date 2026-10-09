@@ -1690,6 +1690,7 @@ pub async fn oauth_callback(
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
+#[schema(as = AdvertisingCreateConnectionRequest)]
 pub struct CreateConnectionRequest {
     #[schema(value_type = String)]
     pub connection_id: ConnectionId,
@@ -1726,6 +1727,7 @@ impl From<ConnectionHealth> for ConnectionHealthView {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[schema(as = AdvertisingConnectionView)]
 pub struct ConnectionView {
     #[schema(value_type = String)]
     pub id: ConnectionId,

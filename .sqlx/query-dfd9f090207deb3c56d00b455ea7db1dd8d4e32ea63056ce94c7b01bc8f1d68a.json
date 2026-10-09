@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.external_quota_reservations SET active_attempts=$4,accepted=$5,ambiguous=$6,released=$7,asset_id=COALESCE(asset_id,$8) WHERE tenant_id=$1 AND dimension=$2 AND key_hash=$3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8Array",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dfd9f090207deb3c56d00b455ea7db1dd8d4e32ea63056ce94c7b01bc8f1d68a"
+}

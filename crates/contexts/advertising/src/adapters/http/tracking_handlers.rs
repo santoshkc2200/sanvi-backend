@@ -306,6 +306,39 @@ pub async fn public_track_conversion(
         Ok(settings) => settings,
         Err(_) => return accepted(),
     };
+    if let Some(runtime) = req.app_data::<web::Data<sanvi_http::quota_middleware::QuotaRuntime>>() {
+        let accounting = async {
+            runtime
+                .service
+                .configure_enforcement(tenant_id, runtime.enabled)
+                .await?;
+            // Public tracking authenticates the tenant here, after boundary
+            // middleware. Count its API attempt in the same usage ledger.
+            runtime
+                .service
+                .record(
+                    tenant_id,
+                    sanvi_http::quotas::QuotaDimension::ApiRequests,
+                    1,
+                    false,
+                )
+                .await?;
+            if runtime.enabled {
+                runtime
+                    .service
+                    .enforce(tenant_id, sanvi_http::quotas::QuotaDimension::ApiRequests)
+                    .await?;
+            }
+            Ok::<_, sanvi_http::quotas::QuotaError>(())
+        }
+        .await;
+        if let Err(error) = accounting {
+            tracing::warn!(%error,"public tracking quota admission failed");
+            if runtime.enabled {
+                return accepted();
+            }
+        }
+    }
     let platforms = resolve_platforms(&settings, &body.event_name);
     let click_ids = extract_server_click_ids(&req, &body.click_ids);
     let command = build_command(tenant_id, &body, click_ids, platforms);

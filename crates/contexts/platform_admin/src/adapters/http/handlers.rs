@@ -97,10 +97,13 @@ pub struct TenantSearchQuery {
     pub query: Option<String>,
     /// Tenant status filter.
     pub status: Option<String>,
+    /// Opaque next-page cursor returned as next_after; pass it unchanged.
+    pub after: Option<String>,
     /// Cursor: created_at of the last row.
+    #[param(ignore)]
     pub after_created_at: Option<DateTime<Utc>>,
     /// Cursor: tenant id of the last row.
-    #[param(value_type = Option<String>)]
+    #[param(ignore)]
     pub after_id: Option<TenantId>,
     /// Page size, clamped to 1..=100.
     #[param(schema_with = admin_limit_schema)]
@@ -115,7 +118,53 @@ fn admin_limit_schema() -> utoipa::openapi::schema::Object {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TenantAdminPageView {
     pub tenants: Vec<TenantAdminView>,
+    /// Canonical cursor for the next request's after parameter.
+    pub next_after: Option<String>,
     pub next_cursor: Option<TenantViewCursorView>,
+}
+
+fn encode_tenant_cursor(cursor: &TenantViewCursor) -> String {
+    format!("v1|{}|{}", cursor.created_at.to_rfc3339(), cursor.tenant_id)
+}
+
+fn decode_tenant_cursor(raw: &str) -> Result<TenantViewCursor, ApiError> {
+    if raw.len() > 100 {
+        return Err(ApiError::bad_request("invalid after cursor"));
+    }
+    let parts = raw.split('|').collect::<Vec<_>>();
+    if parts.len() != 3 || parts[0] != "v1" {
+        return Err(ApiError::bad_request("invalid after cursor"));
+    }
+    Ok(TenantViewCursor {
+        created_at: parts[1]
+            .parse()
+            .map_err(|_| ApiError::bad_request("invalid after cursor"))?,
+        tenant_id: parts[2]
+            .parse()
+            .map_err(|_| ApiError::bad_request("invalid after cursor"))?,
+    })
+}
+
+#[cfg(test)]
+mod pagination_contract_tests {
+    use super::*;
+    #[test]
+    fn compound_cursor_round_trips_and_invalid_cursor_is_rejected() {
+        let cursor = TenantViewCursor {
+            created_at: "2026-10-09T00:00:00Z".parse().unwrap(),
+            tenant_id: "873698342314721281".parse().unwrap(),
+        };
+        let decoded = decode_tenant_cursor(&encode_tenant_cursor(&cursor)).unwrap();
+        assert_eq!(decoded, cursor);
+        for invalid in [
+            "",
+            "bad",
+            "v1|2026-10-09T00:00:00Z|0",
+            "v1|now|873698342314721281",
+        ] {
+            assert!(decode_tenant_cursor(invalid).is_err(), "{invalid}");
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -144,7 +193,7 @@ pub async fn search_tenant_admin_views(
     _subject: CurrentSubject,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
-    let after = match (query.after_created_at, query.after_id) {
+    let legacy_after = match (query.after_created_at, query.after_id) {
         (Some(created_at), Some(tenant_id)) => Some(TenantViewCursor {
             created_at,
             tenant_id,
@@ -155,6 +204,15 @@ pub async fn search_tenant_admin_views(
                 detail: "after_created_at and after_id must be provided together".to_string(),
             });
         }
+    };
+    let after = match (&query.after, legacy_after) {
+        (Some(_), Some(_)) => {
+            return Err(ApiError::bad_request(
+                "use after or legacy cursor fields, not both",
+            ));
+        }
+        (Some(raw), None) => Some(decode_tenant_cursor(raw)?),
+        (None, cursor) => cursor,
     };
     let (tenants, next_cursor) = state
         .search_tenants
@@ -168,6 +226,7 @@ pub async fn search_tenant_admin_views(
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().json(TenantAdminPageView {
         tenants,
+        next_after: next_cursor.as_ref().map(encode_tenant_cursor),
         next_cursor: next_cursor.map(|cursor| TenantViewCursorView {
             created_at: cursor.created_at,
             tenant_id: cursor.tenant_id,

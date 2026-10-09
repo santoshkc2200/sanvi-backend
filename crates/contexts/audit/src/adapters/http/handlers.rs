@@ -50,6 +50,7 @@ pub struct AuditQuery {
     /// Exclusive upper bound.
     pub until: Option<chrono::DateTime<chrono::Utc>>,
     /// Cursor: seq of the last entry of the previous page.
+    #[param(value_type = Option<String>)]
     pub after: Option<i64>,
     /// Page size, clamped to 1..=200.
     #[param(schema_with = audit_limit_schema)]

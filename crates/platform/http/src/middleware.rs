@@ -53,10 +53,11 @@ const PUBLIC_CROSS_ORIGIN_PATHS: &[&str] = &["/api/v1/public/track"];
 ///
 /// Outermost → innermost:
 /// metrics → request id → tracing span → traceparent header → concurrency
-/// limit → panic catch → rate limit → tenant resolution → authentication →
-/// impersonation → locale negotiation → tenant rate limit → request timeout
-/// → body normalize → CORS → abuse quota → compression → etag → security
-/// headers → error handlers.
+/// limit → panic catch → rate limit → tenant resolution → load shedding →
+/// authentication → impersonation → SSR cache → locale negotiation → tenant
+/// rate limit → request timeout → body normalize → CORS → security headers →
+/// plan rate limits → monthly quotas → abuse quota → compression → etag →
+/// cache headers → error handlers. Deprecation headers wrap protective responses.
 ///
 /// `tenant` is `None` until the tenancy context is wired (phase 01+); without
 /// it every route behaves as a public route. `authn` is `None` until the
@@ -136,7 +137,6 @@ where
         .wrap(crate::cache_headers::CacheHeadersLayer::new(
             config.cache_headers.clone(),
         ))
-        .wrap(SecurityHeaders { hsts })
         // Validators over the identity bytes, before compression encodes
         // them; compression outside the ETag so a 304 never carries a
         // `Content-Encoding` and validators stay encoding-independent.
@@ -151,6 +151,11 @@ where
             std::sync::Arc::new(crate::abuse::AbuseCounter::new(redis.clone())),
             config.abuse.clone(),
         ))
+        .wrap(crate::quota_middleware::QuotaLayer)
+        .wrap(crate::api_limits::ApiLimitLayer)
+        // Both commercial and abuse drops must receive the same headers as
+        // accepted tracking beacons. CORS and locale remain outside as well.
+        .wrap(SecurityHeaders { hsts })
         .wrap(cors)
         .wrap(NormalizeBody)
         .wrap(RequestTimeout {
@@ -173,6 +178,7 @@ where
         })
         .wrap(CatchPanic)
         .wrap(ConcurrencyLimit::new(config.max_concurrency))
+        .wrap(crate::deprecation::DeprecationLayer::default())
         // Actix runs the last registered wrapper first. Stamp after all
         // short-circuiting protective layers and error normalization.
         .wrap(degraded)
@@ -205,6 +211,15 @@ fn build_cors(config: &CorsConfig) -> actix_cors::Cors {
                 .any(|allowed| allowed == origin.to_str().unwrap_or_default())
         })
         .allowed_methods(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+        .expose_headers([
+            "retry-after",
+            "ratelimit-limit",
+            "ratelimit-remaining",
+            "ratelimit-reset",
+            "deprecation",
+            "sunset",
+            "link",
+        ])
         .allowed_headers([
             header::CONTENT_TYPE,
             header::AUTHORIZATION,
@@ -315,6 +330,44 @@ mod cors_tests {
             .await,
             200
         );
+    }
+
+    #[actix_web::test]
+    async fn browser_clients_can_read_limit_and_deprecation_headers() {
+        let app = test::init_service(App::new().wrap(cors()).route(
+            "/api/v1/public/catalog",
+            web::get().to(|| async { HttpResponse::Ok().finish() }),
+        ))
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/v1/public/catalog")
+                .insert_header((header::ORIGIN, "https://console.example.com"))
+                .to_request(),
+        )
+        .await;
+        let exposed = response
+            .headers()
+            .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        for name in [
+            "retry-after",
+            "ratelimit-limit",
+            "ratelimit-remaining",
+            "ratelimit-reset",
+            "deprecation",
+            "sunset",
+            "link",
+        ] {
+            assert!(
+                exposed
+                    .split(',')
+                    .any(|value| value.trim().eq_ignore_ascii_case(name)),
+                "missing exposed header {name}: {exposed}"
+            );
+        }
     }
 }
 
@@ -695,6 +748,11 @@ where
             match limiter.try_acquire(&ip).await {
                 Ok(()) => svc.call(req).await,
                 Err(crate::rate_limit::LimitError::Denied { retry_after_secs }) => {
+                    if path == "/api/v1/public/track" {
+                        req.extensions_mut()
+                            .insert(crate::api_limits::TrackingRateLimitDrop);
+                        return svc.call(req).await;
+                    }
                     tracing::warn!(
                         client_ip = %ip,
                         request_id = %request_id.map(|id| id.to_string()).unwrap_or_default(),
@@ -715,11 +773,20 @@ where
                     tracing::warn!("rate limit backend unavailable; failing open");
                     svc.call(req).await
                 }
-                Err(crate::rate_limit::LimitError::BackendUnavailable) => Ok(req.into_response(
-                    crate::error::ApiError::service_unavailable("rate limit backend unavailable")
+                Err(crate::rate_limit::LimitError::BackendUnavailable) => {
+                    if path == "/api/v1/public/track" {
+                        req.extensions_mut()
+                            .insert(crate::api_limits::TrackingRateLimitDrop);
+                        return svc.call(req).await;
+                    }
+                    Ok(req.into_response(
+                        crate::error::ApiError::service_unavailable(
+                            "rate limit backend unavailable",
+                        )
                         .error_response()
                         .map_into_boxed_body(),
-                )),
+                    ))
+                }
             }
         })
     }

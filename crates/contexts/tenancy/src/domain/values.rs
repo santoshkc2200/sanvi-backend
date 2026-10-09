@@ -200,6 +200,7 @@ impl fmt::Display for DataRegion {
 
 /// BCP 47-ish locale tag (e.g. `en`, `ja`, `en-GB`). Phase 06 consumes it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[schema(as = TenancyLocale)]
 pub struct Locale(String);
 
 impl Locale {

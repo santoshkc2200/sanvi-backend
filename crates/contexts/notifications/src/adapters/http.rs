@@ -12,6 +12,18 @@ use crate::domain::{
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+fn quota_notification_error(error: sanvi_http::ApiError) -> NotificationError {
+    if error.status().is_server_error() {
+        NotificationError::Unavailable {
+            detail: error.to_string(),
+        }
+    } else {
+        NotificationError::Conflict {
+            detail: error.to_string(),
+        }
+    }
+}
+
 pub struct HttpNotificationGateway {
     http: reqwest::Client,
     base_url: String,
@@ -23,6 +35,7 @@ pub struct HttpNotificationGateway {
     /// policy decision this slice does not make, and the quota's job is to
     /// produce the number that decision will be made from.
     send_quota: Option<SendQuota>,
+    commercial_quota: Option<sanvi_http::quota_middleware::QuotaRuntime>,
 }
 
 /// The counter half of the gateway's abuse quota, attached by the
@@ -56,6 +69,7 @@ impl HttpNotificationGateway {
             base_url: config.base_url,
             send_api_key: config.send_api_key,
             send_quota: None,
+            commercial_quota: None,
         }
     }
 
@@ -72,6 +86,14 @@ impl HttpNotificationGateway {
             counter,
             quota: sanvi_http::WindowQuota { limit, window_secs },
         });
+        self
+    }
+
+    pub fn with_commercial_quota(
+        mut self,
+        quota: sanvi_http::quota_middleware::QuotaRuntime,
+    ) -> Self {
+        self.commercial_quota = Some(quota);
         self
     }
 
@@ -147,6 +169,37 @@ impl NotificationGatewayPort for HttpNotificationGateway {
             });
         }
 
+        let req_body = EnqueueRequestBody {
+            tenant_id: email.tenant_id,
+            recipient: email.recipient,
+            subject: email.subject,
+            text_body: email.text_body,
+            html_body: email.html_body,
+        };
+        let reservation =
+            if let (Some(runtime), Some(tenant)) = (&self.commercial_quota, email.tenant_id) {
+                let tenant = tenant.parse().map_err(|_| NotificationError::Invalid {
+                    code: "invalid_tenant".into(),
+                    detail: "invalid tenant id".into(),
+                })?;
+                let payload =
+                    serde_json::to_vec(&req_body).map_err(|_| NotificationError::Unavailable {
+                        detail: "notification payload serialization failed".into(),
+                    })?;
+                runtime
+                    .reserve_external_payload(
+                        tenant,
+                        sanvi_http::quotas::QuotaDimension::NotificationSends,
+                        email.idempotency_key,
+                        1,
+                        &payload,
+                    )
+                    .await
+                    .map_err(quota_notification_error)?
+            } else {
+                None
+            };
+
         // Count the send against the tenant's window before it leaves the
         // process. Shadow only: the verdict is recorded, the send proceeds.
         if let Some(send_quota) = &self.send_quota {
@@ -172,14 +225,6 @@ impl NotificationGatewayPort for HttpNotificationGateway {
         let url = self.endpoint_url("/v1/notifications");
         let request_id = uuid::Uuid::now_v7().to_string();
 
-        let req_body = EnqueueRequestBody {
-            tenant_id: email.tenant_id,
-            recipient: email.recipient,
-            subject: email.subject,
-            text_body: email.text_body,
-            html_body: email.html_body,
-        };
-
         let response = match self
             .http
             .post(&url)
@@ -194,6 +239,16 @@ impl NotificationGatewayPort for HttpNotificationGateway {
             Err(err) => {
                 // NEVER log recipient address, rendered body, or api key!
                 tracing::warn!(error = %err, "notification service request failed");
+                if let (Some(runtime), Some(ticket)) = (&self.commercial_quota, &reservation)
+                    && let Err(error) = runtime
+                        .finish_external(
+                            ticket,
+                            sanvi_http::external_quotas::ExternalOutcome::Ambiguous,
+                        )
+                        .await
+                {
+                    tracing::warn!(%error,"notification quota settlement unavailable");
+                }
                 return Err(NotificationError::Unavailable {
                     detail: err.to_string(),
                 });
@@ -201,6 +256,23 @@ impl NotificationGatewayPort for HttpNotificationGateway {
         };
 
         let status = response.status();
+        if let (Some(runtime), Some(ticket)) = (&self.commercial_quota, &reservation) {
+            use sanvi_http::external_quotas::ExternalOutcome;
+            let outcome = if status.as_u16() == 202 {
+                // The enqueue was accepted even if decoding its body fails.
+                ExternalOutcome::Accepted { asset_id: None }
+            } else if (400..500).contains(&status.as_u16())
+                && !matches!(status.as_u16(), 401 | 403 | 408 | 409 | 429)
+            {
+                ExternalOutcome::Rejected
+            } else {
+                ExternalOutcome::Ambiguous
+            };
+            runtime
+                .finish_external(ticket, outcome)
+                .await
+                .map_err(quota_notification_error)?;
+        }
         if status.as_u16() == 202 {
             let body: EnqueueResponseBody =
                 response
@@ -275,6 +347,18 @@ mod send_quota_tests {
     use super::*;
     use crate::domain::EnqueueEmail;
     use std::sync::Arc;
+
+    #[test]
+    fn quota_accounting_infrastructure_failure_remains_retryable() {
+        let error = quota_notification_error(sanvi_http::ApiError::service_unavailable(
+            "accounting temporarily unavailable",
+        ));
+        assert!(matches!(error, NotificationError::Unavailable { .. }));
+        let error = quota_notification_error(sanvi_http::ApiError::Conflict {
+            detail: "retired key".into(),
+        });
+        assert!(matches!(error, NotificationError::Conflict { .. }));
+    }
 
     fn gateway(
         limit: u64,

@@ -146,6 +146,7 @@ impl DomainStatus {
 /// The ownership challenge: a high-entropy token the tenant publishes as a
 /// TXT record at `_sanvi-challenge.<hostname>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(as = DomainsVerificationChallenge)]
 pub struct VerificationChallenge {
     pub token: String,
     /// Always `txt` today; the type drives the checker.
