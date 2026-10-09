@@ -164,6 +164,7 @@ impl ResolveCampaignDrift {
                     before_state: before,
                     after_state: updated.intent.clone(),
                     attribution: None,
+                    is_system: false,
                     metadata: None,
                     created_at: Utc::now(),
                 },

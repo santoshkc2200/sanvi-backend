@@ -304,6 +304,38 @@ paths:
         order, so a crashed response never orphans an account.
       tags:
       - payments
+  /api/v1/tenant/payments/connections/current:
+    get:
+      operationId: get_current_payment_connection
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionView'
+          description: The tenant's current connection, most recent still-connected row
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing payments.read permission or the entitlement
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No current connection for this tenant
+      summary: |-
+        `GET /api/v1/tenant/payments/connections/current` - connection-id
+        recovery (frontend TASK-008). The SPA persists the connection id after
+        `POST /connections`, but a cleared store, a second tab, or a fresh login
+        loses it; this returns the tenant's most recent still-connected row
+        (`disconnected_at IS NULL`, most recent first) or 404 when the tenant
+        has no current connection. Registered before `/{id}` so `current` is
+        never parsed as an id.
+      tags:
+      - payments
   /api/v1/tenant/payments/connections/{id}:
     delete:
       description: |-

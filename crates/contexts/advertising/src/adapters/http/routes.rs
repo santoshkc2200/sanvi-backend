@@ -624,6 +624,11 @@ pub fn tracking_tenant_routes(cfg: &mut web::ServiceConfig) {
             .route(web::put().to(super::tracking_handlers::put_tracking_settings)),
     );
     cfg.service(
+        web::resource("/ads/tracking/site-key")
+            .app_data(PermissionMap::new(vec![(Method::GET, connect)]))
+            .route(web::get().to(super::tracking_handlers::get_tracking_site_key)),
+    );
+    cfg.service(
         web::resource("/ads/tracking/test-event")
             .app_data(PermissionMap::new(vec![(Method::POST, metrics_read)]))
             .route(web::post().to(super::tracking_handlers::test_tracking_event)),

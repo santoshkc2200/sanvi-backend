@@ -38,6 +38,10 @@ pub struct DryRunEvaluationResult {
     pub period: BudgetPeriod,
     pub cap_amount: Money,
     pub current_spend: Money,
+    /// Run-rate projection in the cap currency, computed on the same tenant
+    /// clock and FX basis as spend status (frontend TASK-017: retires the
+    /// client-side FX conversion and its rounding fallback).
+    pub projected_spend: Money,
     pub percentage: f64,
     pub would_breach_80: bool,
     pub would_breach_100: bool,
@@ -221,6 +225,7 @@ impl PutBudgetCap {
             )));
         }
         let current_spend = spend_details.total;
+        let projected_spend = spend_details.projected;
 
         if cmd.dry_run {
             let percentage =
@@ -246,6 +251,7 @@ impl PutBudgetCap {
                 period: cmd.period,
                 cap_amount: cmd.amount,
                 current_spend,
+                projected_spend,
                 percentage,
                 would_breach_80,
                 would_breach_100,

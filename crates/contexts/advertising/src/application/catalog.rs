@@ -23,6 +23,21 @@ impl ListPlatformCatalog {
             .map(|adapter| adapter.descriptor())
             .collect()
     }
+
+    /// Catalog entries paired with the adapter's OAuth scopes. The HTTP
+    /// `PlatformView` reads this so the pre-connect screen enumerates
+    /// requested permissions from data (frontend TASK-011) instead of
+    /// hard-coding per-platform scope lists.
+    pub fn execute_with_scopes(&self) -> Vec<(PlatformDescriptor, Vec<String>)> {
+        self.registry
+            .adapters()
+            .into_iter()
+            .map(|adapter| {
+                let scopes = adapter.required_scopes();
+                (adapter.descriptor(), scopes)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

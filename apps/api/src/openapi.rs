@@ -10,7 +10,7 @@ use sanvi_advertising::adapters::http::handlers::{
     StartOAuthRequest, StartOAuthResponse, ValidationResultView,
 };
 use sanvi_advertising::adapters::http::tracking_handlers::{
-    CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest,
+    CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest, TrackingSiteKeyView,
 };
 use sanvi_advertising::application::AdReviewStatusView;
 use sanvi_advertising::application::{
@@ -184,6 +184,7 @@ use utoipa::OpenApi;
         sanvi_payments::adapters::http::handlers::create_payment_connection,
         sanvi_payments::adapters::http::handlers::create_payment_connection_session,
         sanvi_payments::adapters::http::handlers::get_payment_connection,
+        sanvi_payments::adapters::http::handlers::get_current_payment_connection,
         sanvi_payments::adapters::http::handlers::delete_payment_connection,
         sanvi_payments::adapters::http::handlers::create_tenant_checkout,
         sanvi_payments::adapters::http::handlers::get_tenant_checkout,
@@ -237,6 +238,7 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::tracking_handlers::public_track_conversion,
         sanvi_advertising::adapters::http::tracking_handlers::get_tracking_settings,
         sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
+        sanvi_advertising::adapters::http::tracking_handlers::get_tracking_site_key,
         sanvi_advertising::adapters::http::tracking_handlers::test_tracking_event,
         sanvi_advertising::adapters::http::tracking_handlers::list_conversions,
         sanvi_advertising::adapters::http::tracking_handlers::get_conversion_diagnostics,
@@ -261,7 +263,8 @@ use utoipa::OpenApi;
         OAuthCallbackQuery, AccountView, PendingConnectionView, CreateConnectionRequest,
         ConnectionHealthView, ConnectionView, ConnectionsView,
         CreateCreativeRequest, CreativeView, CreativesView, CreativePreviewView, CreativePreviewsView,
-        TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, ConversionEvent,
+        TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, TrackingSiteKeyView,
+        ConversionEvent,
         ConversionDiagnostics, ConsentSnapshot, ClickIds, ValueSource,
         UploadReceipt, UploadState, AdvertisingMoney, HashedIdentifier,
         CreateAudienceRequest, Audience, AudienceStatus,

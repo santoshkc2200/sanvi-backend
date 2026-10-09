@@ -2155,6 +2155,51 @@ paths:
           description: Missing advertising.connect permission
       tags:
       - advertising
+  /api/v1/tenant/ads/tracking/site-key:
+    get:
+      operationId: get_tracking_site_key
+      parameters:
+      - description: |-
+          Storefront origin to mint the site key for (must match the `Origin`
+          header the pixel will later post with, e.g.
+          `https://shop.example.com`).
+        in: query
+        name: origin
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackingSiteKeyView'
+          description: Site key for the requested origin
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing or malformed origin
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Missing advertising.connect permission
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tracking site-key signing secret is not configured
+      summary: |-
+        Per-tenant tracking site-key delivery (frontend TASK-014). The admin SPA
+        mints the public site key for a storefront origin and embeds it in page
+        source; `/public/track` later verifies `X-Site-Key` against the same
+        origin. Replaces the `PUBLIC_TRACKING_SITE_KEY` env fallback.
+      tags:
+      - advertising
   /api/v1/tenant/ads/tracking/test-event:
     post:
       operationId: test_tracking_event

@@ -52,6 +52,14 @@ pub struct CampaignChange {
     pub actor_id: Option<UserId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<String>,
+    /// Explicit automated-actor marker (frontend TASK-018). Guardrail pauses
+    /// set this to `true` with `actor_id: None` and
+    /// `attribution: "system:budget_guardrail"`; every user action sets it
+    /// to `false`. Derived from `attribution` (`system:` prefix) when reading
+    /// rows written before this field existed, so old guardrail pauses
+    /// resolve without a backfill migration.
+    #[serde(default)]
+    pub is_system: bool,
     pub source: ChangeSource,
     pub changed_fields: Vec<String>,
     pub before_state: Campaign,

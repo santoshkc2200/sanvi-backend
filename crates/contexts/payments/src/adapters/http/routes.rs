@@ -11,9 +11,10 @@ use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
 use super::handlers::{
     create_payment_connection, create_payment_connection_session, create_tenant_checkout,
-    delete_payment_connection, export_payments, get_payment, get_payment_connection,
-    get_tax_settings, get_tenant_checkout, get_tenant_checkout_config, list_disputes,
-    list_payment_providers, list_payments, list_payouts, put_tax_settings, refund_payment,
+    delete_payment_connection, export_payments, get_current_payment_connection, get_payment,
+    get_payment_connection, get_tax_settings, get_tenant_checkout, get_tenant_checkout_config,
+    list_disputes, list_payment_providers, list_payments, list_payouts, put_tax_settings,
+    refund_payment,
 };
 
 /// The entitlement every payments route is gated on (403, not 404 — the
@@ -48,6 +49,12 @@ pub fn payments_tenant_scope_routes(cfg: &mut web::ServiceConfig) {
             .app_data(PermissionMap::new(vec![(Method::POST, manage)]))
             .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
             .route(web::post().to(create_payment_connection)),
+    )
+    .service(
+        web::resource("/payments/connections/current")
+            .app_data(PermissionMap::new(vec![(Method::GET, read)]))
+            .app_data(sanvi_http::RequiredFeature::declared(PAYMENTS_ENTITLEMENT))
+            .route(web::get().to(get_current_payment_connection)),
     )
     .service(
         web::resource("/payments/connections/{id}")
@@ -152,6 +159,12 @@ pub const PERMISSIONED_ROUTES: &[(&str, Method, &str, ResourceSpec)] = &[
         "/api/v1/tenant/payments/connections",
         Method::POST,
         "payments.manage",
+        ResourceSpec::Tenant,
+    ),
+    (
+        "/api/v1/tenant/payments/connections/current",
+        Method::GET,
+        "payments.read",
         ResourceSpec::Tenant,
     ),
     (

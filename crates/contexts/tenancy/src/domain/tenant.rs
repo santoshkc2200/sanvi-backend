@@ -11,6 +11,14 @@ use crate::domain::{TenancyError, events::TenantEvent};
 /// Tenant lifecycle:
 /// `provisioning → active → suspended → archived → purged` with
 /// `suspended → active` (resume) and `suspended → archived`.
+///
+/// `restoring` is the transient single-tenant-restore marker (frontend
+/// TASK-025 follow-up, CLI `tenant-restore`): the restore sets
+/// `tenancy.tenants.status = 'restoring'` before the apply so the
+/// resolution middleware answers 423 with `reason: "restoring"` and the
+/// shell gates; the anchor upsert then overwrites it with the snapshot's
+/// status on success, while a failed apply leaves the tenant locked until
+/// an operator intervenes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TenantStatus {
@@ -19,6 +27,7 @@ pub enum TenantStatus {
     Suspended,
     Archived,
     Purged,
+    Restoring,
 }
 
 impl TenantStatus {
@@ -29,6 +38,7 @@ impl TenantStatus {
             Self::Suspended => "suspended",
             Self::Archived => "archived",
             Self::Purged => "purged",
+            Self::Restoring => "restoring",
         }
     }
 
@@ -40,6 +50,7 @@ impl TenantStatus {
             "suspended" => Ok(Self::Suspended),
             "archived" => Ok(Self::Archived),
             "purged" => Ok(Self::Purged),
+            "restoring" => Ok(Self::Restoring),
             other => Err(TenancyError::InvalidStatus(format!(
                 "unknown tenant status: {other}"
             ))),

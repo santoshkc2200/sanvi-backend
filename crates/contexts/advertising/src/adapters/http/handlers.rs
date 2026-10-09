@@ -56,6 +56,11 @@ pub struct PlatformView {
     pub upgrade_required: bool,
     pub connection_state: ConnectionState,
     pub capability_matrix: CapabilityMatrix,
+    /// OAuth scopes requested at connect time (frontend TASK-011). Sourced
+    /// from the adapter's `required_scopes()` — the same list health uses
+    /// to compute `scopes_missing` — so the pre-connect screen enumerates
+    /// permissions from data instead of hard-coding them.
+    pub requested_scopes: Vec<String>,
 }
 
 /// A stored amount is always integer minor units plus the originating ad
@@ -186,7 +191,7 @@ pub async fn list_ad_platforms(
     // Read config so the state is intentional, without exposing any value.
     let _api_version = &state.config.google_ads_api_version;
     let mut platforms = Vec::new();
-    for descriptor in state.catalog.execute() {
+    for (descriptor, requested_scopes) in state.catalog.execute_with_scopes() {
         let available = feature_gate
             .check(tenant.0.tenant_id, &descriptor.entitlement_key)
             .await?;
@@ -198,6 +203,7 @@ pub async fn list_ad_platforms(
             upgrade_required: !available,
             connection_state: ConnectionState::NotConnected,
             capability_matrix: descriptor.capability_matrix,
+            requested_scopes,
         });
     }
     Ok(HttpResponse::Ok()

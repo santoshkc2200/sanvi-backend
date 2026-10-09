@@ -209,7 +209,14 @@ impl TryFrom<CampaignChangeRow> for CampaignChange {
                 .map(UserId::try_from)
                 .transpose()
                 .map_err(|e| AdvertisingError::Storage(e.to_string()))?,
-            attribution: row.attribution,
+            attribution: row.attribution.clone(),
+            // No `is_system` column exists: rows written before the explicit
+            // marker derive it from the `system:` attribution prefix, so old
+            // guardrail pauses resolve as system actors without a backfill.
+            is_system: row
+                .attribution
+                .as_deref()
+                .is_some_and(|a| a.starts_with("system:")),
             source,
             changed_fields: serde_json::from_value(row.changed_fields).map_err(|error| {
                 AdvertisingError::Storage(format!("invalid campaign change fields: {error}"))

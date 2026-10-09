@@ -66,7 +66,6 @@ impl GetConversionDiagnostics {
             .find_by_id(&mut scope, tenant_id, id)
             .await?
             .ok_or(AdvertisingError::ConversionNotFound)?;
-        let captured_at = event.occurred_at;
-        Ok(ConversionDiagnostics { event, captured_at })
+        Ok(ConversionDiagnostics::for_event(event))
     }
 }

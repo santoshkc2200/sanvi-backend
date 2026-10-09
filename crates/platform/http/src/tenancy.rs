@@ -45,7 +45,9 @@ pub struct TenantContext {
 }
 
 /// Tenant lifecycle state as observed at runtime. Only `Active` tenants serve
-/// traffic; `Suspended` returns 423 except on the allow-list.
+/// traffic; every other state returns 423 except on the allow-list, with the
+/// machine-readable `reason` naming the state (`restoring` included, so the
+/// shell gates during a single-tenant restore).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TenantRuntimeStatus {
@@ -53,6 +55,7 @@ pub enum TenantRuntimeStatus {
     Active,
     Suspended,
     Archived,
+    Restoring,
 }
 
 /// How the tenant was resolved. Most-specific sources win; the source is
@@ -285,7 +288,7 @@ fn not_found_response(
 
 /// Build the 423 problem body for a tenant that isn't `Active`. `reason` is
 /// the machine-readable differentiator (`"suspended"`, `"provisioning"`,
-/// `"archived"`); title and `type` follow it so a provisioning or archived
+/// `"archived"`, `"restoring"`); title and `type` follow it so a restoring
 /// tenant isn't reported as "suspended".
 fn locked_problem(
     status: TenantRuntimeStatus,
@@ -296,6 +299,7 @@ fn locked_problem(
         TenantRuntimeStatus::Suspended => ("Tenant Suspended", "suspended"),
         TenantRuntimeStatus::Provisioning => ("Tenant Provisioning", "provisioning"),
         TenantRuntimeStatus::Archived => ("Tenant Archived", "archived"),
+        TenantRuntimeStatus::Restoring => ("Tenant Restoring", "restoring"),
         TenantRuntimeStatus::Active => unreachable!("Active tenants are never locked"),
     };
     let mut problem = ApiError::TenantSuspended
@@ -494,11 +498,13 @@ mod tests {
     fn provisioning_and_archived_tenants_are_also_locked_except_on_the_allowlist() {
         // Only Active tenants serve traffic (phase-01 domain invariant):
         // Provisioning hasn't finished setup and Archived is read-only, so
-        // both must be gated exactly like Suspended.
+        // both must be gated exactly like Suspended. Restoring joins them:
+        // a tenant mid-restore must not serve traffic.
         let policy = policy();
         for status in [
             TenantRuntimeStatus::Provisioning,
             TenantRuntimeStatus::Archived,
+            TenantRuntimeStatus::Restoring,
         ] {
             assert_eq!(
                 status_for_resolution(&policy, "/api/v1/tenant/settings", status),
@@ -517,6 +523,7 @@ mod tests {
             (TenantRuntimeStatus::Suspended, "suspended"),
             (TenantRuntimeStatus::Provisioning, "provisioning"),
             (TenantRuntimeStatus::Archived, "archived"),
+            (TenantRuntimeStatus::Restoring, "restoring"),
         ] {
             let problem = locked_problem(status, "/api/v1/tenant/settings", None);
             assert_eq!(problem.status, StatusCode::LOCKED.as_u16());

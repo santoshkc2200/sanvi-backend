@@ -341,6 +341,73 @@ pub async fn get_tracking_settings(
     Ok(HttpResponse::Ok().json(settings))
 }
 
+#[derive(Debug, Clone, serde::Serialize, ToSchema)]
+pub struct TrackingSiteKeyView {
+    pub site_key: String,
+    #[schema(value_type = String)]
+    pub tenant_id: TenantId,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TrackingSiteKeyQuery {
+    /// Storefront origin to mint the site key for (must match the `Origin`
+    /// header the pixel will later post with, e.g.
+    /// `https://shop.example.com`).
+    pub origin: String,
+}
+
+/// Per-tenant tracking site-key delivery (frontend TASK-014). The admin SPA
+/// mints the public site key for a storefront origin and embeds it in page
+/// source; `/public/track` later verifies `X-Site-Key` against the same
+/// origin. Replaces the `PUBLIC_TRACKING_SITE_KEY` env fallback.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/ads/tracking/site-key",
+    tag = "advertising",
+    operation_id = "get_tracking_site_key",
+    params(TrackingSiteKeyQuery),
+    responses(
+        (status = 200, description = "Site key for the requested origin", body = TrackingSiteKeyView),
+        (status = 400, description = "Missing or malformed origin", body = ProblemDetail),
+        (status = 403, description = "Missing advertising.connect permission", body = ProblemDetail),
+        (status = 503, description = "Tracking site-key signing secret is not configured", body = ProblemDetail)
+    )
+)]
+pub async fn get_tracking_site_key(
+    tenant: CurrentTenant,
+    _permission: RequiredPermission,
+    query: web::Query<TrackingSiteKeyQuery>,
+    state: web::Data<AdvertisingState>,
+) -> Result<HttpResponse, ApiError> {
+    let origin = query.origin.trim().to_string();
+    if origin.is_empty() || origin.len() > 2048 {
+        return Err(ApiError::BadRequest {
+            detail: "origin query parameter is required".to_string(),
+        });
+    }
+    let site_key = crate::application::tracking::site_key::generate_site_key(
+        &state.config.tracking_site_key_signing_secret,
+        tenant.0.tenant_id,
+        &origin,
+    )
+    .map_err(|e| match e {
+        crate::domain::AdvertisingError::InvalidInput(detail)
+            if detail.contains("signing secret") =>
+        {
+            ApiError::ServiceUnavailable { detail }
+        }
+        crate::domain::AdvertisingError::InvalidInput(detail) => ApiError::BadRequest { detail },
+        other => api_error(other),
+    })?;
+    Ok(HttpResponse::Ok().json(TrackingSiteKeyView {
+        site_key,
+        tenant_id: tenant.0.tenant_id,
+        origin,
+    }))
+}
+
 #[utoipa::path(
     put,
     path = "/api/v1/tenant/ads/tracking/settings",

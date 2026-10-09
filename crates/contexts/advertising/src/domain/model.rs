@@ -469,8 +469,9 @@ pub struct ConversionEvent {
     pub event_id: String,
     /// Immutable storage identity. For order-backed events this is derived
     /// from the order reference and event name, so a webhook state change
-    /// cannot turn one purchase into two captured rows.
-    #[serde(skip)]
+    /// cannot turn one purchase into two captured rows. Exposed so the
+    /// diagnostics view (frontend TASK-015) renders the identity from data
+    /// instead of re-deriving it with an explainer.
     pub dedupe_key: String,
     pub name: String,
     pub occurred_at: DateTime<Utc>,
@@ -494,6 +495,35 @@ fn default_subject_key() -> SubjectKeyRef {
 pub struct ConversionDiagnostics {
     pub event: ConversionEvent,
     pub captured_at: DateTime<Utc>,
+    /// The event's dedupe identity (frontend TASK-015). Duplicated from
+    /// `event.dedupe_key` so clients need not reach into the event to find it.
+    pub dedupe_key: String,
+    /// How the identity was derived: `"order"` when `order_ref` is present
+    /// (stable across webhook timing), `"client_event"` otherwise.
+    pub dedupe_source: String,
+    /// Per-event dedupe outcome: `"captured"` — this row won the immutable
+    /// `(tenant_id, dedupe_key)` identity and any retry with the same key
+    /// was dropped by the idempotent insert without creating a second row.
+    pub dedupe_outcome: String,
+}
+
+impl ConversionDiagnostics {
+    pub fn for_event(event: ConversionEvent) -> Self {
+        let captured_at = event.occurred_at;
+        let dedupe_key = event.dedupe_key.clone();
+        let dedupe_source = if event.order_ref.is_some() {
+            "order".to_string()
+        } else {
+            "client_event".to_string()
+        };
+        Self {
+            event,
+            captured_at,
+            dedupe_key,
+            dedupe_source,
+            dedupe_outcome: "captured".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

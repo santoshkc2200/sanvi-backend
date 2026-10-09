@@ -44,6 +44,7 @@ pub fn tenant_context_from(tenant: &Tenant, source: ResolutionSource) -> TenantC
             crate::domain::TenantStatus::Suspended => TenantRuntimeStatus::Suspended,
             crate::domain::TenantStatus::Archived => TenantRuntimeStatus::Archived,
             crate::domain::TenantStatus::Purged => TenantRuntimeStatus::Archived,
+            crate::domain::TenantStatus::Restoring => TenantRuntimeStatus::Restoring,
         },
         region: tenant.region().to_string(),
         default_locale: tenant.default_locale().to_string(),

@@ -23,6 +23,14 @@
 //! construction and a restore must never rewrite history — it joins the
 //! history instead.
 //!
+//! Shell gating (frontend TASK-025 follow-up): before the apply, the live
+//! `tenancy.tenants` row is marked `status = 'restoring'` in its own
+//! transaction, so the resolution middleware answers 423 with
+//! `reason: "restoring"` for the whole apply. The anchor upsert then
+//! overwrites it with the snapshot's status on success; a failed apply
+//! leaves the tenant locked in `restoring` until an operator intervenes
+//! (fail closed, never serve half-restored rows).
+//!
 //! `--dry-run` prints the per-table plan and writes nothing.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -196,6 +204,27 @@ pub async fn run(
         live_pool.close().await;
         snapshot_pool.close().await;
         return Ok(());
+    }
+
+    // --- mark restoring: its own transaction, before the apply ------------
+    // The middleware gates every non-active status with 423; `restoring`
+    // carries `reason: "restoring"` so the shell gates for the whole apply.
+    // A failed apply leaves this marker in place (fail closed).
+    {
+        let mut mark_scope = live_tx
+            .begin_unscoped("tenant_restore: mark restoring", "cli:tenant-restore")
+            .await?;
+        sqlx::query(
+            "UPDATE tenancy.tenants SET status = 'restoring', updated_at = now() WHERE id = $1",
+        )
+        .bind(tenant_id)
+        .execute(&mut **mark_scope.tx_mut().as_inner())
+        .await?;
+        mark_scope.commit().await?;
+        println!(
+            "tenant-restore: tenant '{}' (id {tenant_id}) marked restoring — serving 423 restoring until the apply completes",
+            args.tenant_slug
+        );
     }
 
     // --- the apply: one transaction, audited ------------------------------

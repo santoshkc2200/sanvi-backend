@@ -572,6 +572,55 @@ pub struct DisconnectBlockerView {
     pub summary_key: String,
 }
 
+/// `GET /api/v1/tenant/payments/connections/current` - connection-id
+/// recovery (frontend TASK-008). The SPA persists the connection id after
+/// `POST /connections`, but a cleared store, a second tab, or a fresh login
+/// loses it; this returns the tenant's most recent still-connected row
+/// (`disconnected_at IS NULL`, most recent first) or 404 when the tenant
+/// has no current connection. Registered before `/{id}` so `current` is
+/// never parsed as an id.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tenant/payments/connections/current",
+    tag = "payments",
+    operation_id = "get_current_payment_connection",
+    responses(
+        (status = 200, description = "The tenant's current connection, most recent still-connected row", body = ConnectionView),
+        (status = 403, description = "Missing payments.read permission or the entitlement", body = ProblemDetail),
+        (status = 404, description = "No current connection for this tenant", body = ProblemDetail)
+    )
+)]
+pub async fn get_current_payment_connection(
+    state: web::Data<PaymentsState>,
+    tenant: CurrentTenant,
+    _subject: CurrentSubject,
+    _permission: RequiredPermission,
+    _entitlement: RequiredFeature,
+) -> Result<HttpResponse, actix_web::Error> {
+    let mut scope = state
+        .tx
+        .begin_for(tenant.0.tenant_id.as_i64())
+        .await
+        .map_err(|err| payments_problem(PaymentsError::Storage(err.to_string())))?;
+    let connections = state
+        .connections
+        .list(&mut scope, tenant.0.tenant_id)
+        .await
+        .map_err(payments_problem)?;
+    let _ = scope.rollback().await;
+    let current = connections
+        .into_iter()
+        .find(|c| c.disconnected_at.is_none());
+    match current {
+        Some(connection) => {
+            Ok(HttpResponse::Ok().json(ConnectionView::of(&connection, &state.config)))
+        }
+        None => Err(actix_web::Error::from(ApiError::NotFound {
+            resource: "connection".to_string(),
+        })),
+    }
+}
+
 /// `GET /api/v1/tenant/payments/connections/{id}` — the connection's
 /// status, capabilities, outstanding requirements (with i18n render keys
 /// and deadline), blockers, and the server-computed `can_accept_payments`
