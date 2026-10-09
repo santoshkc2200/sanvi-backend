@@ -45,16 +45,27 @@ impl CheckPermission {
         permission: &Permission,
         resource: &ResourceRef,
     ) -> Result<Decision, AccessError> {
+        self.check_raw_verified(user_id, permission, resource)
+            .await
+            .map(|(decision, _)| decision)
+    }
+
+    async fn check_raw_verified(
+        &self,
+        user_id: UserId,
+        permission: &Permission,
+        resource: &ResourceRef,
+    ) -> Result<(Decision, bool), AccessError> {
         let Some(def) = lookup(permission.as_str()) else {
             // Fail closed on undeclared permissions (also caught by the
             // catalog CI test).
             tracing::warn!(permission = %permission, "authorization check for undeclared permission");
-            return Ok(Decision::Denied);
+            return Ok((Decision::Denied, false));
         };
 
         match def.scope {
             // Any authenticated subject may (the gate guarantees a subject).
-            PermissionScope::Authenticated => return Ok(Decision::Allowed),
+            PermissionScope::Authenticated => return Ok((Decision::Allowed, false)),
             PermissionScope::Platform | PermissionScope::Tenant => {}
         }
 
@@ -66,7 +77,7 @@ impl CheckPermission {
             _ => {
                 // Misconfiguration (e.g. tenant permission on a user
                 // resource): deny rather than widen.
-                return Ok(Decision::Denied);
+                return Ok((Decision::Denied, false));
             }
         };
 
@@ -86,15 +97,18 @@ impl CheckPermission {
             .map(|role| role_tuple_object(role, tenant_id))
             .collect();
         if objects.is_empty() {
-            return Ok(Decision::Denied);
+            return Ok((Decision::Denied, false));
         }
 
         let results = self.store.check_membership(user_id, &objects).await?;
-        Ok(if results.into_iter().any(|allowed| allowed) {
-            Decision::Allowed
-        } else {
-            Decision::Denied
-        })
+        Ok((
+            if results.into_iter().any(|allowed| allowed) {
+                Decision::Allowed
+            } else {
+                Decision::Denied
+            },
+            true,
+        ))
     }
 }
 
@@ -153,6 +167,21 @@ impl CachedAuthorizer {
 
 #[async_trait::async_trait]
 impl Authorizer for CachedAuthorizer {
+    async fn check_fresh(
+        &self,
+        user_id: UserId,
+        permission: &Permission,
+        resource: &ResourceRef,
+    ) -> Result<(Decision, bool), AccessError> {
+        let key = self.cache_key(user_id, permission.as_str(), resource);
+        let (decision, verified) = self
+            .inner
+            .check_raw_verified(user_id, permission, resource)
+            .await?;
+        self.cache.put(&key, decision, self.ttl_secs).await;
+        Ok((decision, verified))
+    }
+
     async fn check(
         &self,
         user_id: UserId,
@@ -163,8 +192,8 @@ impl Authorizer for CachedAuthorizer {
         if let Some(decision) = self.cache.get(&key).await {
             return Ok(decision);
         }
-        let decision = self.inner.check_raw(user_id, permission, resource).await?;
-        self.cache.put(&key, decision, self.ttl_secs).await;
-        Ok(decision)
+        self.check_fresh(user_id, permission, resource)
+            .await
+            .map(|(decision, _)| decision)
     }
 }

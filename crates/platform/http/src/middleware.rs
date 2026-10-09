@@ -70,8 +70,8 @@ const PUBLIC_CROSS_ORIGIN_PATHS: &[&str] = &["/api/v1/public/track"];
 /// localized. `load_shed` is the process-global shedding state built once by
 /// the composition root (TASK-023); `None` (most tests) is a pass-through.
 /// The shedder sits inside tenant resolution so per-tenant fairness can read
-/// the resolved tenant, and outside the rate limiter so a shed request
-/// costs no Redis round trip.
+/// the resolved tenant. The outer per-IP limiter observes Redis health;
+/// the inner tenant limiter runs only after admission.
 ///
 /// The tracing span wraps every protective middleware, so one span covers a
 /// request from accept to first byte; `tracing-actix-web` maps response
@@ -107,7 +107,12 @@ where
         > + 'static,
 {
     let cors = build_cors(&config.cors);
-    let limiter = Arc::new(RateLimiter::new(&config.rate_limit, redis.clone()));
+    let degradation = load_shed.as_ref().and_then(|state| state.degradation());
+    let observe = |limiter: RateLimiter| match &degradation {
+        Some(registry) => limiter.with_degradation(registry.clone()),
+        None => limiter,
+    };
+    let limiter = Arc::new(observe(RateLimiter::new(&config.rate_limit, redis.clone())));
     // The directive is digits and fixed ASCII by construction, so rendering
     // it cannot fail; HSTS is enabled by the staging/production overlays
     // and absent in plain-HTTP local development.
@@ -122,21 +127,12 @@ where
         .as_ref()
         .and_then(|parts| parts.policy.tenant_rate_limit.as_ref())
         .filter(|rate_config| rate_config.enabled)
-        .map(|rate_config| Arc::new(RateLimiter::new(rate_config, redis.clone())));
+        .map(|rate_config| Arc::new(observe(RateLimiter::new(rate_config, redis.clone()))));
 
     app
-        // The degraded-mode header is outermost (TASK-023): the error
-        // handlers beneath it rebuild error bodies and drop their headers,
-        // so the stamp must land after them — every response the app can
-        // produce, a shed 503 included, carries `X-Sanvi-Degraded` while
-        // any dependency runs degraded. The flag-off assembly is a
-        // pass-through.
-        .wrap(degraded)
         .wrap(crate::error::ErrorHandlersLayer)
-        // Per-app cache headers (TASK-022 11.3e) outermost but two — the
-        // degraded-mode header (above) takes the outermost slot — so the
-        // policy holds on every response the app can produce, whatever the
-        // middleware short-circuits beneath it.
+        // Per-app cache headers for responses reaching the inner stack.
+        // Degraded headers are stamped outside the protective layers below.
         .wrap(crate::cache_headers::CacheHeadersLayer::new(
             config.cache_headers.clone(),
         ))
@@ -169,14 +165,17 @@ where
         .wrap(ssr_cache)
         .wrap(ImpersonationLayer::new(impersonation))
         .wrap(AuthnLayer::new(authn))
-        .wrap(TenantResolutionLayer::new(tenant))
         .wrap(crate::load_shed::LoadShedding::new(load_shed))
+        .wrap(TenantResolutionLayer::new(tenant))
         .wrap(RateLimit {
             limiter,
             config: config.rate_limit.clone(),
         })
         .wrap(CatchPanic)
         .wrap(ConcurrencyLimit::new(config.max_concurrency))
+        // Actix runs the last registered wrapper first. Stamp after all
+        // short-circuiting protective layers and error normalization.
+        .wrap(degraded)
         // Inside the request span: the traceparent response header and the
         // error bodies' trace_id must name *this server's* span, which only
         // exists while `TracingLogger` holds it entered. Wrapping after it

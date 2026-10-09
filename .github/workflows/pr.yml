@@ -101,7 +101,10 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --profile ci --workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy
+      # resilience-tests is Docker-backed (the dependency-matrix injection
+      # suite, TASK-023) and runs in the integration job's derived crate
+      # list below — not here, where it would run twice.
+      - run: cargo nextest run --profile ci --workspace --exclude sanvi-persistence --exclude sanvi-messaging --exclude sanvi-tenancy --exclude resilience-tests
         env:
           SQLX_OFFLINE: "true"
 
@@ -267,6 +270,28 @@ jobs:
         run: cargo --version
       - uses: Swatinem/rust-cache@v2
       - run: ./scripts/check-openapi.sh
+
+  resilience-gates:
+    name: Resilience gates (+ self-tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # TASK-023: the dependency-matrix manifest gate (both directions),
+      # the no-unbounded-client gate, and the expand/contract migration
+      # gate, each with the self-test proving it fails on a planted
+      # violation. The injection suite itself (`-p resilience-tests`) runs
+      # in the integration job's derived crate list. The rolling-restart
+      # dry-run validates the compose restart-readiness the live drill
+      # (staging host only) depends on.
+      - run: ./scripts/check-dependency-matrix.sh
+      - run: ./scripts/check-dependency-matrix.sh --self-test
+      - run: ./scripts/check-timeouts.sh
+      - run: ./scripts/check-timeouts.sh --self-test
+      - run: ./scripts/check-migration-expand-contract.sh
+      - run: ./scripts/check-migration-expand-contract.sh --self-test
+      - run: ./scripts/rolling-restart.sh --dry-run
+      - run: python3 scripts/test-restart-result.py
+      - run: python3 scripts/test-deploy-staging.py
 
   i18n:
     name: i18n catalog gate (100 % ja coverage)

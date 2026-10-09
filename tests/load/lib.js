@@ -58,7 +58,7 @@ export function tenant_slugs(count) {
 
 // The tenant base domain in local development (configs/local.toml).
 export function host_for(slug) {
-  return `${slug}.localhost`;
+  return `${slug}.${__ENV.PERF_HOST_DOMAIN || 'localhost'}`;
 }
 
 // `GET /api/v1/system/build` (FR-1102): the stamp that names the build

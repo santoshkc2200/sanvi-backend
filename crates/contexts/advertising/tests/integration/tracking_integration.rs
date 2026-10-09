@@ -2468,10 +2468,16 @@ async fn upload_sweep_outage_parks_conversions_with_their_directive_snapshot() {
     );
 
     // Sweep five times: meta fails each time, then parks at the ceiling.
+    // Google uploads once (attempt 1) and stays uploaded — the sweep only
+    // attempts what is still pending.
     for attempt in 1..=5 {
         let report = worker.execute(100).await.unwrap();
         assert_eq!(report.failed + report.parked, 1, "attempt {attempt}");
-        assert_eq!(report.uploaded, 1, "google uploads on attempt {attempt}");
+        if attempt == 1 {
+            assert_eq!(report.uploaded, 1, "google uploads on attempt 1");
+        } else {
+            assert_eq!(report.uploaded, 0, "google stays uploaded after attempt 1");
+        }
     }
 
     // Meta parked; google uploaded.

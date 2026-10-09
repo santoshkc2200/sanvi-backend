@@ -890,7 +890,7 @@ pub fn build_access_state(
         cache.clone(),
         degradation.clone(),
     ));
-    let authorizer: Arc<dyn Authorizer> = cached_authorizer;
+    let authorizer: Arc<dyn Authorizer> = degraded_authorizer.clone();
     let gate: Arc<dyn PermissionGate> = Arc::new(AccessGate {
         authorizer: degraded_authorizer.clone(),
     });

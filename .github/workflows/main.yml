@@ -101,7 +101,16 @@ jobs:
     needs: migrate
     environment: staging
     steps:
-      - name: deploy via SSH (docker compose pull + up)
+      - uses: actions/checkout@v7
+      - name: copy deployment controller and proxy configuration
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          source: "docker-compose.staging.yml,deployment/nginx.conf,scripts/deploy-staging.sh"
+          target: /opt/sanvi
+      - name: deploy via SSH (health-gated traffic switch)
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.STAGING_HOST }}
@@ -118,8 +127,7 @@ jobs:
             cd /opt/sanvi
             export API_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:sha-${{ github.sha }}"
             export WORKER_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:sha-${{ github.sha }}"
-            docker compose -f docker-compose.staging.yml pull api worker
-            docker compose -f docker-compose.staging.yml up -d --no-deps api worker
+            bash scripts/deploy-staging.sh
             docker compose -f docker-compose.staging.yml ps
 
   smoke:
@@ -142,6 +150,15 @@ jobs:
     environment: staging
     if: github.event_name == 'workflow_dispatch'
     steps:
+      - uses: actions/checkout@v7
+      - name: copy deployment controller and proxy configuration
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          source: "docker-compose.staging.yml,deployment/nginx.conf,scripts/deploy-staging.sh"
+          target: /opt/sanvi
       - name: revert to the requested image
         uses: appleboy/ssh-action@v1
         with:
@@ -154,12 +171,8 @@ jobs:
           script: |
             set -e
             cd /opt/sanvi
-            CURRENT="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
-              "$(docker ps -aq --filter name=sanvi-api)" 2>/dev/null || echo unknown)"
             export API_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ github.event.inputs.image_tag }}"
             export WORKER_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ github.event.inputs.image_tag }}"
-            echo "currently running revision: $CURRENT"
             echo "rolling back to: $API_IMAGE"
-            docker compose -f docker-compose.staging.yml pull api worker
-            docker compose -f docker-compose.staging.yml up -d --no-deps api worker
+            bash scripts/deploy-staging.sh
             docker compose -f docker-compose.staging.yml ps

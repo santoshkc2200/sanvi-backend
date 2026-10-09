@@ -1,14 +1,14 @@
 name: sanvi
 
 services:
-  api:
+  api: &api
     # The :latest fallback is only for an operator running `docker compose
     # up` by hand; the CI pipeline (.github/workflows/main.yml) always sets
     # API_IMAGE/WORKER_IMAGE explicitly to a specific sha-<commit> tag, both
     # on deploy and on rollback, so a real deploy never floats on :latest.
     image: ${API_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}
     init: true
-    environment:
+    environment: &api_environment
       SANVI_ENV: production
       SANVI__SERVER__HOST: 0.0.0.0
       SANVI__SERVER__PORT: 8080
@@ -19,16 +19,10 @@ services:
       # SANVI__REDIS__URL
       # SANVI__TELEMETRY__OTLP__AUTH_TOKEN (OpenObserve ingestion credential;
       # the API refuses to start without it once OTLP is enabled)
-    ports:
-      - "127.0.0.1:8080:8080"
+    expose: ["8080"]
     restart: unless-stopped
-    # TASK-023 (FR-1112): the rolling-restart contract. SIGTERM drains
-    # in-flight requests up to `server.shutdown_timeout_secs` (30 s), so
-    # the compose grace period must exceed it or the orchestrator kills
-    # requests the server would have finished. The 10 s healthcheck
-    # interval detects the replacement quickly, shrinking the window in
-    # which new connections have nowhere to land (see
-    # docs/runbooks/rolling-restart.md for the drill that proves it).
+    # Both slots stay alive during a traffic switch. SIGTERM grace also
+    # protects in-flight work when an already-drained slot is replaced.
     stop_grace_period: 45s
     healthcheck:
       # The runtime image is distroless (no shell, no curl); sanvi-cli
@@ -38,6 +32,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  api_next:
+    <<: *api
+    environment:
+      <<: *api_environment
+      SANVI__IDS__NODE_ID: 203
+
+  api_proxy:
+    image: nginx:1.28-alpine
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./deployment/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Directory mount: atomic replacement of active.conf is visible on reload.
+      - ./.deploy/proxy:/etc/nginx/sanvi:ro
+    restart: unless-stopped
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
 
   worker:
     image: ${WORKER_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}

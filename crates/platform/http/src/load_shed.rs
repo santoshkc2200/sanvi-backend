@@ -45,6 +45,7 @@ pub struct LoadShedState {
     in_flight: AtomicUsize,
     per_tenant: Mutex<HashMap<String, usize>>,
     pressure: Option<Arc<sanvi_resilience::PoolPressure>>,
+    degradation: Option<Arc<sanvi_resilience::DegradationRegistry>>,
 }
 
 /// What [`LoadShedState::admit`] decided.
@@ -91,7 +92,21 @@ impl LoadShedState {
             in_flight: AtomicUsize::new(0),
             per_tenant: Mutex::new(HashMap::new()),
             pressure,
+            degradation: None,
         }
+    }
+
+    /// Share the outage signal with admission control and the rate limiters.
+    pub fn with_degradation(
+        mut self,
+        registry: Arc<sanvi_resilience::DegradationRegistry>,
+    ) -> Self {
+        self.degradation = Some(registry);
+        self
+    }
+
+    pub(crate) fn degradation(&self) -> Option<Arc<sanvi_resilience::DegradationRegistry>> {
+        self.degradation.clone()
     }
 
     /// Test/current-depth introspection: requests currently admitted.
@@ -132,7 +147,16 @@ impl LoadShedState {
             return AdmitOutcome::Shed(ShedReason::PoolPressure);
         }
         let global = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-        if global > self.config.in_flight_ceiling {
+        let ceiling = if self
+            .degradation
+            .as_ref()
+            .is_some_and(|r| r.is_active(sanvi_resilience::DegradationReason::Redis))
+        {
+            (self.config.in_flight_ceiling / 2).max(1)
+        } else {
+            self.config.in_flight_ceiling
+        };
+        if global > ceiling {
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
             return AdmitOutcome::Shed(ShedReason::GlobalCeiling);
         }

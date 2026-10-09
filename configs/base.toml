@@ -74,6 +74,17 @@ per_tenant_in_flight = 200
 fairness_knee = 1000
 pool_wait_micros = 250000
 retry_after_secs = 5
+exempt_prefixes = [
+  "/internal/webhooks/",
+  "/internal/kratos/",
+  "/api/v1/webhooks",
+  "/api/v1/billing/webhooks",
+  "/api/v1/payments/webhooks",
+  "/healthz",
+  "/readyz",
+  "/metrics",
+  "/api/v1/system/build",
+]
 
 # The platform.degraded_mode flag (TASK-023, FR-1113), off by default:
 # responses look ordinary even when a dependency is degraded. When

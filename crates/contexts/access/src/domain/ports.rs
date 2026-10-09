@@ -29,6 +29,20 @@ pub trait Authorizer: Send + Sync {
         permission: &Permission,
         resource: &ResourceRef,
     ) -> Result<Decision, AccessError>;
+
+    /// Check the backend directly when a cached allow cannot establish
+    /// availability (mutations and recovery from a known outage). The bool
+    /// is true only when the decision actually contacted the backend.
+    async fn check_fresh(
+        &self,
+        user_id: UserId,
+        permission: &Permission,
+        resource: &ResourceRef,
+    ) -> Result<(Decision, bool), AccessError> {
+        self.check(user_id, permission, resource)
+            .await
+            .map(|decision| (decision, true))
+    }
 }
 
 /// A concrete resource reference (mirrors the platform's shape; the gate

@@ -76,9 +76,31 @@ impl DegradedAuthorizer {
         resource: &ResourceRef,
         write: bool,
     ) -> Result<Decision, AccessError> {
-        match self.inner.check(user_id, permission, resource).await {
-            Ok(decision) => {
-                self.recovered().await;
+        // A cache hit cannot prove that Keto has recovered, and cannot
+        // authorize a mutation without contacting the backend.
+        let result = if write
+            || self
+                .degradation
+                .is_active(sanvi_resilience::DegradationReason::Keto)
+        {
+            self.inner.check_fresh(user_id, permission, resource).await
+        } else {
+            self.inner
+                .check(user_id, permission, resource)
+                .await
+                .map(|decision| (decision, false))
+        };
+        match result {
+            Ok((decision, verified)) => {
+                if verified {
+                    self.recovered().await;
+                } else if write
+                    && self
+                        .degradation
+                        .is_active(sanvi_resilience::DegradationReason::Keto)
+                {
+                    return Ok(Decision::Denied);
+                }
                 return Ok(decision);
             }
             // Storage errors are Postgres's row of the matrix, not Keto's:
@@ -139,9 +161,9 @@ impl Authorizer for DegradedAuthorizer {
         permission: &Permission,
         resource: &ResourceRef,
     ) -> Result<Decision, AccessError> {
-        // The trait-level default is a read: the HTTP gate threads the
-        // write flag through [`Self::check_with_mode`] directly.
-        self.check_with_mode(user_id, permission, resource, false)
+        // Callers without HTTP method context may mutate state. Require a
+        // fresh decision; the HTTP gate explicitly opts reads into grace.
+        self.check_with_mode(user_id, permission, resource, true)
             .await
     }
 }
@@ -150,6 +172,54 @@ impl Authorizer for DegradedAuthorizer {
 mod tests {
     use super::*;
     use crate::domain::ports::PermissionStore;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn cached_allow_cannot_authorize_a_write_or_clear_a_known_outage() {
+        struct CachedAllow;
+        #[async_trait::async_trait]
+        impl Authorizer for CachedAllow {
+            async fn check(
+                &self,
+                _: UserId,
+                _: &Permission,
+                _: &ResourceRef,
+            ) -> Result<Decision, AccessError> {
+                Ok(Decision::Allowed)
+            }
+            async fn check_fresh(
+                &self,
+                _: UserId,
+                _: &Permission,
+                _: &ResourceRef,
+            ) -> Result<(Decision, bool), AccessError> {
+                Err(AccessError::BackendUnreachable("down".into()))
+            }
+        }
+        let registry = Arc::new(DegradationRegistry::default());
+        let authorizer = DegradedAuthorizer::new(
+            Arc::new(CachedAllow),
+            Arc::new(FakeDecisionCache::new()),
+            registry.clone(),
+        );
+        assert_eq!(
+            authorizer
+                .check_with_mode(subject(), &permission(), &resource(), true)
+                .await
+                .unwrap(),
+            Decision::Denied
+        );
+        assert!(registry.is_active(sanvi_resilience::DegradationReason::Keto));
+        // A cached allow for another key is not evidence of recovery.
+        assert_eq!(
+            authorizer
+                .check_with_mode(subject(), &permission(), &resource(), false)
+                .await
+                .unwrap(),
+            Decision::Denied
+        );
+        assert!(registry.is_active(sanvi_resilience::DegradationReason::Keto));
+    }
 
     struct FailingAuthorizer {
         err: AccessError,
@@ -164,6 +234,37 @@ mod tests {
             _resource: &ResourceRef,
         ) -> Result<Decision, AccessError> {
             Err(self.err.clone())
+        }
+    }
+
+    /// Port fake: the application layer must not reach into adapters,
+    /// even in tests (layering gate) — so the cache double lives here.
+    struct FakeDecisionCache {
+        entries: tokio::sync::Mutex<HashMap<String, Decision>>,
+    }
+
+    impl FakeDecisionCache {
+        fn new() -> Self {
+            Self {
+                entries: tokio::sync::Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DecisionCache for FakeDecisionCache {
+        async fn get(&self, key: &str) -> Option<Decision> {
+            self.entries.lock().await.get(key).cloned()
+        }
+
+        async fn put(&self, key: &str, decision: Decision, _ttl_secs: u64) {
+            self.entries.lock().await.insert(key.to_string(), decision);
+        }
+
+        async fn invalidate_user(&self, _user_id: UserId) {}
+
+        async fn invalidate_all(&self) {
+            self.entries.lock().await.clear();
         }
     }
 
@@ -183,9 +284,7 @@ mod tests {
         let degradation = Arc::new(DegradationRegistry::default());
         let authorizer = DegradedAuthorizer::with_grace(
             Arc::new(FailingAuthorizer { err }),
-            Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(
-                1024,
-            )),
+            Arc::new(FakeDecisionCache::new()),
             degradation.clone(),
             Duration::from_millis(80),
         );
@@ -221,12 +320,19 @@ mod tests {
         // Registry carries keto.
         assert_eq!(degradation.header_value().as_deref(), Some("keto"));
     }
-
     #[tokio::test]
     async fn after_the_grace_window_cached_reads_deny_too() {
         let key = decision_cache_key(subject(), permission().as_str(), &resource());
         let (authorizer, _) = degraded(AccessError::BackendUnreachable("down".to_string())).await;
         authorizer.cache.put(&key, Decision::Allowed, 30).await;
+        // The first failure starts the outage clock; the cached read
+        // serves within the grace window.
+        let outcome = authorizer
+            .check_with_mode(subject(), &permission(), &resource(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Decision::Allowed);
+        // Past the window the same cached decision denies.
         tokio::time::sleep(Duration::from_millis(120)).await;
         let outcome = authorizer
             .check_with_mode(subject(), &permission(), &resource(), false)
@@ -242,9 +348,7 @@ mod tests {
             Arc::new(FailingAuthorizer {
                 err: AccessError::Storage("pool exhausted".to_string()),
             }),
-            Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(
-                1024,
-            )),
+            Arc::new(FakeDecisionCache::new()),
             degradation.clone(),
             Duration::from_secs(30),
         );
@@ -273,9 +377,7 @@ mod tests {
             let degradation = Arc::new(DegradationRegistry::default());
             let authorizer = DegradedAuthorizer::with_grace(
                 Arc::new(Healthy),
-                Arc::new(crate::adapters::decision_cache::InMemoryDecisionCache::new(
-                    1024,
-                )),
+                Arc::new(FakeDecisionCache::new()),
                 degradation.clone(),
                 Duration::from_secs(30),
             );

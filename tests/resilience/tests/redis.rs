@@ -44,7 +44,9 @@ async fn redis_down_fails_open_on_the_rate_limiter_and_flags_degraded() {
     // timeout fires).
     let server = RespServer::start();
     let conn = connection(&server.redis_url()).await;
-    let limiter = RateLimiter::new(&limiter_config(), Some(conn));
+    let degradation = std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default());
+    let limiter =
+        RateLimiter::new(&limiter_config(), Some(conn)).with_degradation(degradation.clone());
 
     server.set_mode(RespMode::Error);
     let outcome = limiter.try_acquire("matrix-key").await;
@@ -53,23 +55,70 @@ async fn redis_down_fails_open_on_the_rate_limiter_and_flags_degraded() {
         "an erroring Redis must report BackendUnavailable, got {outcome:?}"
     );
 
-    server.set_mode(RespMode::Blackhole);
-    let started = std::time::Instant::now();
-    let outcome = limiter.try_acquire("matrix-key").await;
-    assert!(matches!(outcome, Err(LimitError::BackendUnavailable)));
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(3),
-        "the 500ms response timeout must bound the wait, took {:?}",
-        started.elapsed()
-    );
-
     // Fail-open is the middleware's policy for BackendUnavailable
     // (`fail_open = true` in the shipping posture): a request proceeds.
     // The documented wire consequence is the degraded flag: the registry
     // carries `redis` while the backend is unavailable.
-    let degradation = sanvi_resilience::DegradationRegistry::default();
-    degradation.set(sanvi_resilience::DegradationReason::Redis, true);
     assert_eq!(degradation.header_value().as_deref(), Some("redis"));
+    let state = std::sync::Arc::new(
+        sanvi_http::LoadShedState::new(
+            sanvi_http::LoadSheddingConfig {
+                enabled: true,
+                in_flight_ceiling: 4,
+                fairness_knee: 4,
+                ..Default::default()
+            },
+            None,
+        )
+        .with_degradation(degradation.clone()),
+    );
+    let _first = state.admit("/probe", None);
+    let _second = state.admit("/probe", None);
+    assert!(
+        matches!(
+            state.admit("/probe", None),
+            sanvi_http::AdmitOutcome::Shed(_)
+        ),
+        "Redis outage must halve admission capacity"
+    );
+    assert!(matches!(
+        state.admit("/api/v1/payments/webhooks/stripe", None),
+        sanvi_http::AdmitOutcome::Admitted(_)
+    ));
+    // Recover the same connection and limiter, rather than setting the flag in the test.
+    server.set_mode(RespMode::Ok);
+    let recovery_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if limiter.try_acquire("matrix-recovered").await.is_ok() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < recovery_deadline,
+            "managed Redis connection did not recover"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(degradation.header_value(), None);
+    assert!(matches!(
+        state.admit("/probe", None),
+        sanvi_http::AdmitOutcome::Admitted(_)
+    ));
+    // A swallowed RESP reply cannot be repaired on the same socket: a
+    // blackhole proves the deadline separately from error/recovery above.
+    server.set_mode(RespMode::Blackhole);
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        limiter.try_acquire("matrix-key").await,
+        Err(LimitError::BackendUnavailable)
+    ));
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(300),
+        "the limiter's 100ms budget bounds a hung Redis"
+    );
+    assert_eq!(degradation.header_value().as_deref(), Some("redis"));
+    // The independent probe also observes the same outage.
+    sanvi_http::rate_limit::probe_redis(None, &degradation).await;
+    assert!(degradation.is_active(sanvi_resilience::DegradationReason::Redis));
 }
 
 /// Redis · healthy control — the same limiter against the shared test

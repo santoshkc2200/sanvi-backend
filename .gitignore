@@ -10,6 +10,8 @@
 .DS_Store
 *.iml
 coverage/
+/.deploy/
+__pycache__/
 lcov.info
 .cargo/advisory-db
 docker-compose.override.yml

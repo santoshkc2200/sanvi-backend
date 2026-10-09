@@ -67,6 +67,27 @@ pub struct DegradedHeaderService<S> {
     registry: Option<Arc<DegradationRegistry>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{inner}")]
+struct DegradedError {
+    inner: actix_web::Error,
+    header: HeaderValue,
+}
+
+impl actix_web::ResponseError for DegradedError {
+    fn status_code(&self) -> actix_web::http::StatusCode {
+        self.inner.as_response_error().status_code()
+    }
+    fn error_response(&self) -> actix_web::HttpResponse {
+        let mut response = self.inner.error_response();
+        response.headers_mut().insert(
+            HeaderName::from_static(DEGRADED_HEADER),
+            self.header.clone(),
+        );
+        response
+    }
+}
+
 impl<S> Service<ServiceRequest> for DegradedHeaderService<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<BoxBody>, Error = actix_web::Error>
@@ -82,7 +103,19 @@ where
         let registry = self.registry.clone();
         let fut = self.service.call(req);
         Box::pin(async move {
-            let mut res = fut.await?;
+            // Actix renders middleware errors outside this stack. Wrap
+            // their renderer; an early request clone would prevent routing.
+            let mut res = match fut.await {
+                Ok(res) => res,
+                Err(err) => {
+                    if let Some(value) = registry.as_ref().and_then(|r| r.header_value())
+                        && let Ok(header) = HeaderValue::from_str(&value)
+                    {
+                        return Err(DegradedError { inner: err, header }.into());
+                    }
+                    return Err(err);
+                }
+            };
             if let Some(registry) = registry.as_ref()
                 && let Some(value) = registry.header_value()
                 && let Ok(header_value) = HeaderValue::from_str(&value)

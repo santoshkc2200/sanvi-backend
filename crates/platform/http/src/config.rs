@@ -330,6 +330,8 @@ impl Default for LoadSheddingConfig {
             pool_wait_micros: 250_000,
             retry_after_secs: 5,
             exempt_prefixes: vec![
+                "/internal/webhooks/".to_string(),
+                "/internal/kratos/".to_string(),
                 "/api/v1/webhooks".to_string(),
                 "/api/v1/billing/webhooks".to_string(),
                 "/api/v1/payments/webhooks".to_string(),

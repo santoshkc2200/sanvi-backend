@@ -245,10 +245,19 @@ fn serve_resp(mut stream: TcpStream, mode: Arc<Mutex<RespMode>>) {
                     break;
                 }
                 while let Some(len) = command_len(&pending) {
+                    let mut pos = 0;
+                    read_line(&pending, &mut pos); // array header
+                    read_line(&pending, &mut pos); // first bulk-string length
+                    let bucket = matches!(read_line(&pending, &mut pos), Some("EVALSHA" | "EVAL"));
                     pending.drain(..len);
                     match *mode.lock().unwrap() {
                         RespMode::Ok => {
-                            if stream.write_all(b"+OK\r\n").is_err() {
+                            let reply: &[u8] = if bucket {
+                                b"*2\r\n:1\r\n$2\r\n60\r\n"
+                            } else {
+                                b"+OK\r\n"
+                            };
+                            if stream.write_all(reply).is_err() {
                                 return;
                             }
                         }

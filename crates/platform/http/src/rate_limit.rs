@@ -13,6 +13,7 @@ pub struct RateLimiter {
     conn: Option<ConnectionManager>,
     config: RateLimitConfig,
     script: redis::Script,
+    degradation: Option<std::sync::Arc<sanvi_resilience::DegradationRegistry>>,
 }
 
 // Returns `{allowed, tokens}` rather than just `allowed`, so the caller can
@@ -62,11 +63,26 @@ impl RateLimiter {
             conn,
             config: config.clone(),
             script: redis::Script::new(LUA_BUCKET),
+            degradation: None,
         }
     }
 
     pub fn config(&self) -> &RateLimitConfig {
         &self.config
+    }
+
+    pub fn with_degradation(
+        mut self,
+        registry: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
+    ) -> Self {
+        self.degradation = Some(registry);
+        self
+    }
+
+    fn note_redis(&self, failing: bool) {
+        if let Some(registry) = &self.degradation {
+            registry.set(sanvi_resilience::DegradationReason::Redis, failing);
+        }
     }
 
     /// Check and consume one token for `key`. Non-blocking from the caller's
@@ -79,6 +95,7 @@ impl RateLimiter {
     /// per-tenant limiters whose buckets are namespaced by tenant id.
     pub async fn try_acquire_bucket(&self, bucket_key: &str) -> Result<(), LimitError> {
         let Some(conn) = &self.conn else {
+            self.note_redis(true);
             return Err(LimitError::BackendUnavailable);
         };
 
@@ -88,18 +105,22 @@ impl RateLimiter {
             .as_secs();
 
         let mut conn = conn.clone();
-        let result: redis::RedisResult<(i32, String)> = self
-            .script
+        let mut invocation = self.script.prepare_invoke();
+        invocation
             .key(bucket_key)
             .arg(self.config.burst)
             .arg(self.config.per_second)
-            .arg(now)
-            .invoke_async(&mut conn)
-            .await;
+            .arg(now);
+        let result = tokio::time::timeout(
+            check_budget(),
+            invocation.invoke_async::<(i32, String)>(&mut conn),
+        )
+        .await;
+        self.note_redis(!matches!(&result, Ok(Ok(_))));
 
         match result {
-            Ok((1, _)) => Ok(()),
-            Ok((_, tokens)) => {
+            Ok(Ok((1, _))) => Ok(()),
+            Ok(Ok((_, tokens))) => {
                 let tokens: f64 = tokens.parse().unwrap_or(0.0);
                 Err(LimitError::Denied {
                     retry_after_secs: retry_after_from_tokens(
@@ -108,12 +129,34 @@ impl RateLimiter {
                     ),
                 })
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 tracing::warn!(error = %err, "rate limit check failed");
                 Err(LimitError::BackendUnavailable)
             }
+            Err(_) => Err(LimitError::BackendUnavailable),
         }
     }
+}
+
+/// Observe Redis independently of request admission so shedding cannot
+/// prevent the process from detecting recovery.
+pub async fn probe_redis(
+    conn: Option<ConnectionManager>,
+    registry: &sanvi_resilience::DegradationRegistry,
+) {
+    let healthy = if let Some(mut conn) = conn {
+        matches!(
+            tokio::time::timeout(
+                check_budget(),
+                redis::cmd("PING").query_async::<String>(&mut conn)
+            )
+            .await,
+            Ok(Ok(_))
+        )
+    } else {
+        false
+    };
+    registry.set(sanvi_resilience::DegradationReason::Redis, !healthy);
 }
 
 /// Pure bucket math used by tests to pin the Lua semantics.

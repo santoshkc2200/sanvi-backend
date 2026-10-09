@@ -19,7 +19,8 @@ acquire_timeout_secs = 5
 enabled = true
 burst = 120
 per_second = 20
-fail_open = false
+# TASK-023: Redis outages continue through the reduced admission ceiling.
+fail_open = true
 
 # NFR-1114: HSTS on the API host (and its subdomains — none exist today,
 # so the directive costs nothing) for a year. Preload submission is an

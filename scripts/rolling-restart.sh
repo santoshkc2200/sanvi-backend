@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # TASK-023 (FR-1112) drill: rolling restart (and revert) of the staging
-# compose stack under k6 load, proving zero non-2xx attributable to the
-# deploy. In-flight requests drain through SIGTERM grace; the healthcheck
-# gates the replacement before traffic expects it.
+# compose stack under k6 load. A stable proxy switches between two healthy
+# API slots; scripts/deploy-staging.sh owns deploy and revert alike.
 #
 # The live drill runs on the staging host (it recreates staging
 # containers under load) — never in CI. `--dry-run` validates everything
@@ -42,7 +41,7 @@ readiness() {
         return 1
     }
     local failures=0
-    for service in api worker; do
+    for service in api api_next worker; do
         # The service block: from its `  name:` line to the next
         # two-space key. (An awk start,end range cannot be used: the
         # opening line matches the end pattern too.)
@@ -74,6 +73,10 @@ readiness() {
         echo "readiness: FAILED — api has no healthcheck for the roll to gate on" >&2
         failures=$((failures + 1))
     fi
+    if ! grep -q '^  api_proxy:' <<<"$config"; then
+        echo 'readiness: FAILED — stable api_proxy listener is missing' >&2
+        failures=$((failures + 1))
+    fi
     return "$failures"
 }
 
@@ -94,6 +97,10 @@ if [[ -z "${API_IMAGE:-}" || -z "${WORKER_IMAGE:-}" ]]; then
 fi
 command -v k6 >/dev/null 2>&1 || { echo "refusing: k6 is required" >&2; exit 2; }
 readiness || exit 1
+if [[ ! -f "$root/.deploy/proxy/active.conf" ]]; then
+    echo 'refusing: bootstrap the two-slot deployment before running the live drill' >&2
+    exit 1
+fi
 
 ARTIFACTS="$root/benchmarks/rolling-restart"
 mkdir -p "$ARTIFACTS"
@@ -101,40 +108,33 @@ RUN_TAG="${TAG:-manual}-$(date -u +%Y%m%dT%H%M%SZ)"
 # The shape writes its own artifact (handleSummary) to
 # benchmarks/<scenario>/<tag>.json; the drill reads the failure count
 # back out of it.
-SHAPE="storefront_read"
+SHAPE="rolling_restart"
 RESULTS="$root/benchmarks/$SHAPE/$RUN_TAG.json"
+mkdir -p "$root/benchmarks/$SHAPE"
+LOG="$ARTIFACTS/$RUN_TAG.log"
 
 echo "drill $RUN_TAG: starting k6 load ($SHAPE, 5-minute window)"
 cd "$root"
-PERF_BASE_URL="$BASE_URL" PERF_TAG="$RUN_TAG" PERF_DURATION=300s PERF_SCENARIO="$SHAPE" \
-    k6 run "tests/load/$SHAPE.js" &
+PERF_HOST_DOMAIN="${PERF_HOST_DOMAIN:-platform.sanvi.app}" PERF_BASE_URL="$BASE_URL" PERF_TAG="$RUN_TAG" PERF_DURATION=300s PERF_SCENARIO="$SHAPE" \
+    k6 run "tests/load/$SHAPE.js" >"$LOG" 2>&1 &
 K6_PID=$!
 trap 'kill "$K6_PID" 2>/dev/null || true' EXIT
 
-roll() {
-    local service="$1" image="$2"
-    echo "drill $RUN_TAG: rolling $service ($image)"
-    docker compose -f "$COMPOSE" pull "$service"
-    docker compose -f "$COMPOSE" up -d --no-deps --wait "$service"
-    docker compose -f "$COMPOSE" ps "$service"
-}
-
-roll worker "$WORKER_IMAGE"
-roll api "$API_IMAGE"
+# Wait for a successful setup probe so the roll cannot finish before
+# k6 has even connected. Keep the old listener serving during setup.
+for ((attempt=0; attempt<30; attempt++)); do
+    if grep -q 'restart-load-ready' "$LOG"; then break; fi
+    kill -0 "$K6_PID" 2>/dev/null || { cat "$LOG"; exit 1; }
+    if [[ "$attempt" -eq 29 ]]; then echo 'k6 setup did not become ready' >&2; exit 1; fi
+    sleep 1
+done
+bash "$root/scripts/deploy-staging.sh"
+kill -0 "$K6_PID" 2>/dev/null || { echo 'load ended before the traffic switch' >&2; exit 1; }
 
 echo "drill $RUN_TAG: waiting for k6 to finish the window"
 wait "$K6_PID"
 trap - EXIT
 
-NON_2XX="$(python3 -c "
-import json
-data = json.load(open('$RESULTS'))
-print(int(data.get('http_reqs_total', 0) * data.get('http_req_failed_rate', 1)))
-")"
-echo "drill $RUN_TAG: non-2xx during roll: $NON_2XX (artifact: $RESULTS)"
-if [[ "$NON_2XX" != "0" ]]; then
-    echo "drill $RUN_TAG: FAILED — nonzero failures attributable to the roll; see $RESULTS" >&2
-    exit 1
-fi
+python3 "$root/scripts/check-restart-result.py" "$RESULTS"
 cp "$RESULTS" "$ARTIFACTS/$RUN_TAG.json"
 echo "drill $RUN_TAG: OK — zero non-2xx across the roll; repeat with the previous image for the revert pass"

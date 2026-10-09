@@ -112,13 +112,6 @@ async fn main() -> ExitCode {
     );
     pool_metrics.spawn_sampler(pool.clone());
 
-    // TASK-023 step 6: process-global shedding counters, built once so
-    // every worker sheds against the same ceiling and tenant shares.
-    let load_shed = std::sync::Arc::new(sanvi_http::LoadShedState::new(
-        config.server.load_shedding.clone(),
-        Some(pool_pressure),
-    ));
-
     // TASK-023: the degradation registry is process-wide and always built
     // (adapters flip reasons on it whether or not the header flag is on);
     // the `platform.degraded_mode` flag only decides whether the header
@@ -126,6 +119,10 @@ async fn main() -> ExitCode {
     let degradation = std::sync::Arc::new(sanvi_resilience::DegradationRegistry::new(Some(
         metrics.prometheus_registry(),
     )));
+    let load_shed = Arc::new(
+        sanvi_http::LoadShedState::new(config.server.load_shedding.clone(), Some(pool_pressure))
+            .with_degradation(degradation.clone()),
+    );
 
     let redis = match connect_redis(&config.redis).await {
         Ok(manager) => Some(manager),
@@ -136,6 +133,19 @@ async fn main() -> ExitCode {
             None
         }
     };
+    // The health signal runs independently of rate limiting and admission.
+    // A managed connection reconnects after an outage; no admitted request
+    // is required to restore the full ceiling.
+    sanvi_http::rate_limit::probe_redis(redis.clone(), &degradation).await;
+    let probe_conn = redis.clone();
+    let probe_registry = degradation.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            sanvi_http::rate_limit::probe_redis(probe_conn.clone(), &probe_registry).await;
+        }
+    });
 
     let system = build_system_state(
         build_info(&config),

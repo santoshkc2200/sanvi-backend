@@ -3,21 +3,38 @@
 **Owner:** platform engineering · **Source task:** TASK-023 (FR-1112) · **Drill:**
 `scripts/rolling-restart.sh`
 
-Every staging deploy runs `docker compose up -d` (recreate in place,
-single replica) — this drill proves the recreate drops nothing: k6 load
-runs across a roll to the new image and a revert to the previous one,
-and zero non-2xx may be attributable to either pass. In-flight requests
-drain through SIGTERM grace (`stop_grace_period` exceeds the server's 30 s
-`shutdown_timeout_secs`); the api healthcheck gates the replacement; the
-worker finishes its batch and unacked stream entries redeliver via
-XAUTOCLAIM (handlers are idempotent), so a worker roll loses no work.
+Every staging deploy and revert runs `bash scripts/deploy-staging.sh`.
+The stable `api_proxy` listener switches between `api` and `api_next`, each
+with a distinct Snowflake node ID. The controller starts and health-checks
+the inactive slot before reloading nginx, then waits for the old proxy
+worker PIDs to exit. Both API slots stay alive throughout the switch, so
+new connections have a destination while earlier requests finish. A slow
+drain blocks the next deployment; it never forces the serving slot down.
+The worker may replay unacked stream entries (handlers are idempotent).
+
+The first installation, including conversion of the old API's direct
+8080 binding to the stable proxy, requires a maintenance window. Bootstrap
+with pinned images using `bash scripts/deploy-staging.sh`, then run the
+live drills. Plain `docker compose up` is not a rolling-deploy procedure.
+Do not delete `.deploy/proxy/active.conf`: it records the serving slot and
+survives source updates. An interrupted switch leaves `.deploy/switch.pending`;
+the next invocation reloads and drains that configuration before reusing
+either slot. Preserve the marker until the controller completes recovery.
+The host requires Bash, util-linux `flock`,
+Docker Compose, and (for the drill) Python 3 and k6.
 
 ## Preconditions
 
 - On the staging host (`STAGING_HOST`), in `/opt/sanvi`, with `API_IMAGE`
   and `WORKER_IMAGE` pinned to sha tags (the pipeline sets both; the
   compose `:latest` fallback is never used for a drill).
-- k6 installed; scale data loaded (`sanvi-cli seed-scale`).
+- k6 installed; scale data loaded (`sanvi-cli seed-scale`), with themes published.
+- The two-slot stack already bootstrapped, with a healthy proxy. API and
+  worker images must be pinned tags or digests.
+- `PERF_HOST_DOMAIN` matches the configured tenant domain (default
+  `platform.sanvi.app` for the production overlay). `PERF_RATE` defaults
+  to 5 iterations/s (10 requests/s), below the 20/s production IP bucket;
+  raising it requires a matching rate-limit budget for the drill source.
 - `./scripts/rolling-restart.sh --dry-run` green (compose
   restart-readiness: grace periods + healthcheck).
 
@@ -30,10 +47,14 @@ API_IMAGE=<new> WORKER_IMAGE=<new> ./scripts/rolling-restart.sh \
     --tag sha-<commit> --base-url http://127.0.0.1:8080
 ```
 
-The script starts the 5-minute `storefront_read` shape, rolls the worker
-then the api with health-gated waits (`up -d --no-deps --wait`), and
-fails the run on any non-2xx in the shape artifact
-(`benchmarks/storefront_read/<tag>.json`).
+The script starts the 5-minute `rolling_restart` shape and waits for its
+successful setup probe before invoking the deploy controller. The shape
+requires every storefront request to return 200 and rejects redirects.
+`scripts/check-restart-result.py` reads the artifact's nested `metrics`
+and fails on any failure rate, dropped iteration, empty run, or missing
+measurement (`benchmarks/rolling_restart/<tag>.json`). A nonzero k6 exit
+also fails the drill. CI tests the controller's forward/revert sequence,
+failed candidate/configuration, drain guard, and artifact failure cases.
 
 ### 2. Revert
 
@@ -50,9 +71,10 @@ count blocks the release: triage with `docs/runbooks/api-down.md`
 
 ## Why this order
 
-The worker rolls first because its contract is weaker in the useful
-direction: it may replay a bounded tail (at-least-once redelivery) but
-never loses one. The api rolls second because its contract is stronger:
-in-flight requests must complete, not replay. If the api roll ever
-produces non-2xx while the worker roll stays clean, the gap is in
-serving (drain/health gating), not in background work.
+The candidate API and worker are started before traffic switches. The
+current API is never recreated by that invocation. nginx reload uses
+graceful worker retirement; a successful signal alone is insufficient,
+so the controller waits for all old worker PIDs to disappear and a new
+worker to be present. The previous API is retained until its slot is
+needed by a later deploy. An unsuccessful candidate or configuration
+validation leaves the previous listener serving traffic.

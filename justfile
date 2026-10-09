@@ -327,6 +327,42 @@ test-perf:
 test-cache-keys:
     cargo nextest run -p sanvi-cache --test ssr_cache_negative
 
+# TASK-023 (FR-1112): one injection test per dependency-matrix row. The
+# gate runs first (every row names a test that exists, every test file is
+# named by a row), then the suite itself. In CI the suite runs inside the
+# integration job's derived crate list; the gate runs in resilience-gates.
+test-dependency-matrix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/check-dependency-matrix.sh
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p resilience-tests
+
+dependency-matrix-self-test:
+    ./scripts/check-dependency-matrix.sh --self-test
+
+# TASK-023 (NFR-1105): no unbounded outbound call — every reqwest client
+# sets a timeout.
+check-timeouts:
+    ./scripts/check-timeouts.sh
+
+check-timeouts-self-test:
+    ./scripts/check-timeouts.sh --self-test
+
+# TASK-023 (FR-1112): expand/contract migrations — a live-column touch
+# needs a same-file contract step or an explicit annotation.
+check-migration-expand-contract:
+    ./scripts/check-migration-expand-contract.sh
+
+check-migration-expand-contract-self-test:
+    ./scripts/check-migration-expand-contract.sh --self-test
+
+# TASK-023 (FR-1112): rolling-restart readiness. The live drill recreates
+# staging containers under k6 load and runs on the staging host only;
+# this recipe validates the mechanisms it depends on.
+rolling-restart-dry-run:
+    ./scripts/rolling-restart.sh --dry-run
+
 openapi:
     ./scripts/check-openapi.sh
 
@@ -339,7 +375,7 @@ i18n-report:
 i18n-extract:
     cargo run -p sanvi-cli -- i18n extract
 
-ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test
+ci: fmt clippy layering connect-invariants ads-invariants id-policy ci-test-coverage test test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test test-dependency-matrix check-timeouts check-migration-expand-contract rolling-restart-dry-run
 
 # TASK-019 (FR-1103): run the k6 load shapes against a running API and
 # write benchmarks/<scenario>/<tag>.json. Point PERF_BASE_URL at the API
@@ -416,4 +452,4 @@ ga-checklist-check:
     ./scripts/check-ga-checklist.sh
 
 # `ci` with the low-noise variants of the two chattiest gates.
-ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test
+ci-quiet: fmt clippy-quiet layering connect-invariants ads-invariants id-policy ci-test-coverage test-quiet test-perf openapi route-matrix i18n ga-checklist-check trace-coverage log-pii-scan secret-scan runbook-xref alert-rules-test test-dependency-matrix check-timeouts check-migration-expand-contract rolling-restart-dry-run
