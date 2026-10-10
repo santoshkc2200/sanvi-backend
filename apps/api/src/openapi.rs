@@ -91,6 +91,8 @@ use utoipa::OpenApi;
         sanvi_platform_admin::adapters::http::get_application_fee,
         sanvi_platform_admin::adapters::http::set_application_fee,
         sanvi_platform_admin::adapters::http::disable_application_fee,
+        sanvi_platform_admin::adapters::http::request_offboarding,
+        sanvi_platform_admin::adapters::http::get_offboarding,
         sanvi_platform_admin::adapters::http::list_pending_approvals,
         sanvi_platform_admin::adapters::http::approve_request,
         sanvi_platform_admin::adapters::http::reject_request,

@@ -69,6 +69,24 @@ pub fn api_error(err: TenancyError) -> ApiError {
         TenancyError::IllegalTransition { from, to } => ApiError::Conflict {
             detail: format!("illegal tenant state transition: {from} -> {to}"),
         },
+        // TASK-028 (FR-1131): the offboarding state machine's refusals
+        // are conflicts naming the request — not 5xx, not silent.
+        TenancyError::OffboardingTransition {
+            request_id,
+            from,
+            to,
+        } => ApiError::ConflictReasoned {
+            detail: format!("offboarding request {request_id}: illegal transition {from} -> {to}"),
+            reason: "offboarding-transition".to_string(),
+        },
+        TenancyError::OffboardingExportMissing { request_id } => ApiError::ConflictReasoned {
+            detail: format!(
+                "offboarding request {request_id}: the purge is unreachable before \
+                 the export verifies (FR-1131)"
+            ),
+            reason: "offboarding-export-missing".to_string(),
+        },
+        TenancyError::Conflict(detail) => ApiError::Conflict { detail },
         TenancyError::TenantNotFound { id } => ApiError::NotFound {
             resource: format!("tenant {id}"),
         },

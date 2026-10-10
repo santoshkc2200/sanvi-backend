@@ -27,6 +27,28 @@ pub enum TenancyError {
     #[error("tenant {id} not found")]
     TenantNotFound { id: String },
 
+    /// The offboarding request's state machine refuses the move (e.g.
+    /// the purge before a verified export, or re-opening a terminal
+    /// request).
+    #[error("offboarding request {request_id}: illegal transition {from} -> {to}")]
+    OffboardingTransition {
+        request_id: i64,
+        from: String,
+        to: String,
+    },
+
+    /// The purge step was reached without a verified export (FR-1131's
+    /// hard precondition).
+    #[error(
+        "offboarding request {request_id}: the purge is unreachable before the export verifies"
+    )]
+    OffboardingExportMissing { request_id: i64 },
+
+    /// A request conflicts with the tenant's current state (e.g.
+    /// offboarding a tenant that is not archived).
+    #[error("{0}")]
+    Conflict(String),
+
     #[error("illegal state transition: {from} -> {to}")]
     IllegalTransition {
         from: &'static str,

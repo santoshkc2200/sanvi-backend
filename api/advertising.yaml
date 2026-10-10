@@ -4519,7 +4519,10 @@ paths:
       - description: |-
           Storefront origin to mint the site key for (must match the `Origin`
           header the pixel will later post with, e.g.
-          `https://shop.example.com`).
+          `https://shop.example.com`). Parsed inside the handler (not via
+          `web::Query`): extraction failures race the async authorization
+          extractors and can answer 400 for a caller who was never
+          authorized to learn anything (idor sweep finding).
         in: query
         name: origin
         required: true

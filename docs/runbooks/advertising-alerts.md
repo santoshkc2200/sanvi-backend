@@ -54,7 +54,7 @@ capturing request origin, and verify schema integrity.
 | Alert | Condition | Severity | Runbook |
 |---|---|---|---|
 | `AdConnectionRevoked` | Connection transitioned to `disconnected`/`expired` (`SELECT count(*) FROM advertising.connections WHERE status IN ('disconnected', 'expired')`) — see the runbook's "Known gap" for why `disconnected_notified_at` can't yet be used to dedupe this alert | ticket per tenant | [token revoked](./advertising-token-revoked.md) |
-| `PartitionMaintenanceFailed` | Missing future partitions for `conversion_events` or `metrics_daily` within 7 days of month start (`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'advertising' AND c.relname = format('conversion_events_%s', to_char(now() + interval '1 month', 'YYYYMM'))`) = 0 | page | [partition maintenance failure](./advertising-partition-maintenance-failure.md) |
+| `PartitionMaintenanceFailed` | From the 25th of the month on, a registry parent has no next-month partition (`SELECT count(*) FROM platform.partition_readiness_breaches(current_date) > 0`) | page | [partition maintenance failure](./advertising-partition-maintenance-failure.md) |
 
 ## Notes
 

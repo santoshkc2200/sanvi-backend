@@ -293,6 +293,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing platform.audit.read
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: 'The requested window overlaps archived storage (reason: archived-range); restore it first'
         '504':
           content:
             application/problem+json:

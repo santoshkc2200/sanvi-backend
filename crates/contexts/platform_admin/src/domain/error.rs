@@ -35,6 +35,16 @@ pub enum PlatformAdminError {
     #[error("tenant {id} not found")]
     TenantNotFound { id: TenantId },
 
+    /// The offboarding request conflicts with the tenant's state (not
+    /// archived, or an illegal record transition).
+    #[error("{0}")]
+    OffboardingConflict(String),
+
+    /// The offboarding record is not in the state the operation
+    /// requires (e.g. purging before a verified export).
+    #[error("offboarding request {0}: the purge is unreachable before the export verifies")]
+    OffboardingExportMissing(i64),
+
     #[error("approval {id} not found")]
     ApprovalNotFound { id: ApprovalId },
 

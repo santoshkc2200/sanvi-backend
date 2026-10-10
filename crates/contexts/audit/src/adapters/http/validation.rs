@@ -14,7 +14,11 @@ pub fn validation_issue(err: &AuditError) -> Option<(String, Vec<FieldIssue>)> {
         AuditError::InvalidActorType(_) => addressed("actor_type", err_text(err)),
         AuditError::InvalidAction(_) => addressed("action", err_text(err)),
         AuditError::InvalidCursor(_) => addressed("cursor", err_text(err)),
-        AuditError::ChainMismatch { .. } | AuditError::Storage(_) => None,
+        // An archived-range refusal names a window, not a field — it is
+        // a 409, not a validation issue.
+        AuditError::ArchivedRange(_, _)
+        | AuditError::ChainMismatch { .. }
+        | AuditError::Storage(_) => None,
     }
 }
 

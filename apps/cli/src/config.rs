@@ -47,6 +47,14 @@ pub struct CliConfig {
     /// along; secrets stay env-only and are not needed by CLI commands).
     #[serde(default)]
     pub payments: sanvi_payments::PaymentsConfig,
+    /// Phase 05 (TASK-028 reuse): the privacy section — archival seals
+    /// cold objects with the envelope scheme's passphrase layer, so the
+    /// KEK the exports use is the KEK archives are sealed under.
+    #[serde(default)]
+    pub privacy: sanvi_privacy::config::PrivacyConfig,
+    /// TASK-028 (FR-1129): the archival section (cold volume root).
+    #[serde(default)]
+    pub archival: sanvi_archival::config::ArchivalConfig,
 }
 
 /// Load `configs/base.toml` + `configs/{env}.toml` + `SANVI__` env overrides.
@@ -63,6 +71,7 @@ pub fn load(environment: &str) -> anyhow::Result<CliConfig> {
     config.theming.validate()?;
     config.domains.validate()?;
     config.payments.validate()?;
+    config.privacy.validate()?;
     config.ids.resolve(environment, 3)?;
     Ok(config)
 }

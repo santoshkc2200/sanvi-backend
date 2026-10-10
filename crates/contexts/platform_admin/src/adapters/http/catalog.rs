@@ -56,6 +56,18 @@ pub const ROUTES: &[RouteDef] = &[
         resource: ResourceSpec::Platform,
     },
     RouteDef {
+        method: Method::POST,
+        path: "/api/v1/platform/tenants/{id}/offboarding",
+        permission: "platform.tenant.offboard",
+        resource: ResourceSpec::Platform,
+    },
+    RouteDef {
+        method: Method::GET,
+        path: "/api/v1/platform/tenants/{id}/offboarding",
+        permission: "platform.tenant.offboard",
+        resource: ResourceSpec::Platform,
+    },
+    RouteDef {
         method: Method::GET,
         path: "/api/v1/platform/tenants/{id}/application-fee",
         permission: "platform.tenant.read",

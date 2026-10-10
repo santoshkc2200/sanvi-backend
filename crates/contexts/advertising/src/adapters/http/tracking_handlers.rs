@@ -387,7 +387,10 @@ pub struct TrackingSiteKeyView {
 pub struct TrackingSiteKeyQuery {
     /// Storefront origin to mint the site key for (must match the `Origin`
     /// header the pixel will later post with, e.g.
-    /// `https://shop.example.com`).
+    /// `https://shop.example.com`). Parsed inside the handler (not via
+    /// `web::Query`): extraction failures race the async authorization
+    /// extractors and can answer 400 for a caller who was never
+    /// authorized to learn anything (idor sweep finding).
     pub origin: String,
 }
 
@@ -411,10 +414,23 @@ pub struct TrackingSiteKeyQuery {
 pub async fn get_tracking_site_key(
     tenant: CurrentTenant,
     _permission: RequiredPermission,
-    query: web::Query<TrackingSiteKeyQuery>,
+    req: actix_web::HttpRequest,
     state: web::Data<AdvertisingState>,
 ) -> Result<HttpResponse, ApiError> {
-    let origin = query.origin.trim().to_string();
+    // Parsed after the tenant and permission extractors have run (see
+    // the query struct's doc): the denial wins the race with a bad or
+    // missing parameter, as the idor sweep demands.
+    let query =
+        web::Query::<std::collections::HashMap<String, String>>::from_query(req.query_string())
+            .map_err(|_| ApiError::BadRequest {
+                detail: "origin query parameter is required".to_string(),
+            })?;
+    let origin = query
+        .get("origin")
+        .cloned()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if origin.is_empty() || origin.len() > 2048 {
         return Err(ApiError::BadRequest {
             detail: "origin query parameter is required".to_string(),

@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 224 (216 OpenAPI operations).
+Routes: 228 (220 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -91,6 +91,8 @@ Routes: 224 (216 OpenAPI operations).
 | GET | /api/v1/platform/tenants/{id}/entitlements | crates/contexts/platform_admin/src/adapters/http/handlers.rs::list_entitlement_overrides | platform.entitlement.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | POST | /api/v1/platform/tenants/{id}/entitlements | crates/contexts/platform_admin/src/adapters/http/handlers.rs::grant_entitlement_override | platform.entitlement.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | DELETE | /api/v1/platform/tenants/{id}/entitlements/{feature} | crates/contexts/platform_admin/src/adapters/http/handlers.rs::revoke_entitlement_override | platform.entitlement.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
+| GET | /api/v1/platform/tenants/{id}/offboarding | crates/contexts/platform_admin/src/adapters/http/handlers.rs::get_offboarding | platform.tenant.offboard | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
+| POST | /api/v1/platform/tenants/{id}/offboarding | crates/contexts/platform_admin/src/adapters/http/handlers.rs::request_offboarding | platform.tenant.offboard | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | POST | /api/v1/platform/tenants/{id}/resume | crates/contexts/tenancy/src/adapters/http/handlers.rs::resume_tenant | platform.tenant.manage | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | DELETE | /api/v1/platform/tenants/{id}/subscription/override | crates/contexts/billing/src/adapters/http/handlers.rs::revoke_subscription_override | platform.subscription.override | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | POST | /api/v1/platform/tenants/{id}/subscription/override | crates/contexts/billing/src/adapters/http/handlers.rs::apply_subscription_override | platform.subscription.override | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
@@ -170,6 +172,7 @@ Routes: 224 (216 OpenAPI operations).
 | GET | /api/v1/tenant/ads/spend-status | crates/contexts/advertising/src/adapters/http/handlers.rs::get_spend_status | advertising.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/ads/tracking/settings | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::get_tracking_settings | advertising.connect | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | PUT | /api/v1/tenant/ads/tracking/settings | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::put_tracking_settings | advertising.connect | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/ads/tracking/site-key | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::get_tracking_site_key | advertising.connect | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/ads/tracking/test-event | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::test_tracking_event | advertising.metrics.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/billing/checkout-session | crates/contexts/billing/src/adapters/http/handlers.rs::create_checkout_session | billing.subscription.create | TenantContext from HttpRequest extensions | global-config-dependent +tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/billing/invoices | crates/contexts/billing/src/adapters/http/handlers.rs::list_invoices | billing.invoice.read | TenantContext from HttpRequest extensions | global-config-dependent +tenant-optional | OpenAPI |
@@ -211,6 +214,7 @@ Routes: 224 (216 OpenAPI operations).
 | PATCH | /api/v1/tenant/members/{user_id}/roles | crates/contexts/identity/src/adapters/http/handlers.rs::update_member_roles | identity.member.grant | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/payments | crates/contexts/payments/src/adapters/http/handlers.rs::list_payments | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/payments/connections | crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/connections/current | crates/contexts/payments/src/adapters/http/handlers.rs::get_current_payment_connection | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | DELETE | /api/v1/tenant/payments/connections/{id} | crates/contexts/payments/src/adapters/http/handlers.rs::delete_payment_connection | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/payments/connections/{id} | crates/contexts/payments/src/adapters/http/handlers.rs::get_payment_connection | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/payments/connections/{id}/session | crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection_session | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -258,67 +262,80 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
-| apps/api/src/config.rs | `0d1c73847afcc40b79bac292537c3e0e41afef1167eb3318a0c9cee4be54d890` |
-| apps/api/src/lib.rs | `82e6e6514e9bef9a57391aa1811c071e2f21150a9eb9f4ea5b5a7ced0975d291` |
-| apps/api/src/main.rs | `22a8b5c38f015e99e1f1884e3893ea5effb3116187658d7c9af855c6db76b16a` |
-| apps/api/src/openapi.rs | `90b86bb39b0126dbea0084f0d96125497c2b1fa02f7fb120077c531b8c2aa2b5` |
+| apps/api/src/config.rs | `bc520742a7f19b3955ca7dc5d28dcf30e67d3fd26d169a649d37c6a6a5fb80f5` |
+| apps/api/src/lib.rs | `3f53608cae9a2807b808debd0bc68a27b4045d2650caa5a1528b4865bb5f5c29` |
+| apps/api/src/main.rs | `cef10eb08f0b82a18d66c1b8a4b5f5fe0dc092c93c373d66770045cb2ee9603f` |
+| apps/api/src/openapi.rs | `0f254b54668cec53913d9cf6bcebaf30f8ab0e5c7588aa711dfaa0f2b0c27eef` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
-| crates/contexts/access/src/adapters/http/handlers.rs | `d6a57d88713136b9c1a22bc9ecdb3ad5d4106f8419a47e14ca1735503c83664a` |
-| crates/contexts/access/src/adapters/http/mod.rs | `e9552656454f1318c7b8524f70158278b0f61cdbb537de2849b196ce2f4cf7cf` |
+| crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
+| crates/contexts/access/src/adapters/http/mod.rs | `b9718a471597d11f5cb3af76a91715c20de69b6126a9073e23d5463c201bd007` |
 | crates/contexts/access/src/adapters/http/routes.rs | `80ed3de5efb15df047a8f16782cee9773db4d8be3f35da5bdff9e783aa19505c` |
-| crates/contexts/advertising/src/adapters/http/handlers.rs | `b71daaadfa6728308dc322931abea1ac5e721cc8cbcdaa8fd94e6851ab51e5df` |
-| crates/contexts/advertising/src/adapters/http/mod.rs | `e81817141cf0a09ed65c5b5ddfb6d06ca4eba0cf48464e8bc550041df23b67ac` |
-| crates/contexts/advertising/src/adapters/http/routes.rs | `f303845488a9125358a76da5c731206c8c44e5ed07e2d6803844e06dea1e612c` |
+| crates/contexts/access/src/adapters/http/validation.rs | `2f1d49c29d3667ab7066afbad3767c838ea358187a3a012f8024bf577ca7d0a8` |
+| crates/contexts/advertising/src/adapters/http/handlers.rs | `d7e6ce5b7a1d373d55f0e938b7000de9e0933333f0f20f90822e63ef0952165b` |
+| crates/contexts/advertising/src/adapters/http/mod.rs | `ffede5d48c9c71cb0210209c6561d8e9caa69e7b3d079948bb4882eb1709e8d0` |
+| crates/contexts/advertising/src/adapters/http/routes.rs | `3452d1f14ce42e698112c0889872484aa72b7b30905a204dc3a9eb4d5379d225` |
 | crates/contexts/advertising/src/adapters/http/state.rs | `8e781113d56bd279c104c7dea631be2b89699739e08aead20f632480ec318c22` |
-| crates/contexts/advertising/src/adapters/http/tracking_handlers.rs | `5cbb18ef77f3ff8d633d1615724bdf32cf2256b07b73129dcbe0cbedcaed5ee4` |
+| crates/contexts/advertising/src/adapters/http/tracking_handlers.rs | `7d9bff9bc3a6154ea4d903d2d06c115db1ed1ab15cca8c0620390119868ebe50` |
+| crates/contexts/advertising/src/adapters/http/validation.rs | `24c1daf2daebea77db631fb2b2492623f367ec38c95604adb2ea39f70bc02b28` |
 | crates/contexts/audit/src/adapters/http/catalog.rs | `f76f01c97fe5e578e2a4e63911ca9c21a1d24e8db9cf88d74ad99bc1187349e4` |
-| crates/contexts/audit/src/adapters/http/handlers.rs | `a38fa3331a579f38e9b98b4540cf17943ae42c53e39bbc650aa66cbaf0034aaa` |
-| crates/contexts/audit/src/adapters/http/mod.rs | `6066acedccbe562b8c2a3d64d0e8269e4c3b6a81d61e132d155de3b8205abcd7` |
+| crates/contexts/audit/src/adapters/http/handlers.rs | `891efde99f0bca0f874540b59ad10948e8765db5e8daf17a498d46ac73cecbf1` |
+| crates/contexts/audit/src/adapters/http/mod.rs | `6e3f445e8bf539be89cf356af9eabf10aac9f1fcf44056c52d42d8b48a08f3fa` |
 | crates/contexts/audit/src/adapters/http/routes.rs | `85e2ac6faf915fde07d435dee73e132750c52b95f952039276f5741cac8869ef` |
+| crates/contexts/audit/src/adapters/http/validation.rs | `ed38c1df6751306038d120f486d94aefd98debfe168b4ecf025a7ad1c301e5a2` |
 | crates/contexts/billing/src/adapters/http/catalog.rs | `c13f7d217e65540525e9f562d7569df9190bf3868e587d91a71d01ea49db72d2` |
-| crates/contexts/billing/src/adapters/http/handlers.rs | `a78637d03ac8655d268837af32a49fb7ef4e8d5391137f2fb52e5ec5a89b5e17` |
-| crates/contexts/billing/src/adapters/http/mod.rs | `d047c5489142bdc7d3faa160d7dc5e7a1060342465521f439d5ad68fb14d148d` |
+| crates/contexts/billing/src/adapters/http/handlers.rs | `95c9508d2c8eaa66b6be8a924988cdb99800ec16ae7c04f40075ed79bada9b65` |
+| crates/contexts/billing/src/adapters/http/mod.rs | `e113225f16241e4106d577523d79c188ba1be6566cb03e74cf9bcca32dc42e11` |
 | crates/contexts/billing/src/adapters/http/routes.rs | `2079c9d01db138285102ed334b4051f62614f003998c877c16768dbb35d27afa` |
-| crates/contexts/domains/src/adapters/http/handlers.rs | `9b109de8656a55d83da8c73bc4945997a3b0eae5cbef5b37b50a741c9c903748` |
-| crates/contexts/domains/src/adapters/http/mod.rs | `618ea8888cb33ad073c7e6e6085b2a478ea16a5c0e97374c3aa04f9ee068180f` |
+| crates/contexts/billing/src/adapters/http/validation.rs | `bda3f191fa1b6767d603fdaf1c9f2e7e93057be6a83be6391e72f46073a751b6` |
+| crates/contexts/domains/src/adapters/http/handlers.rs | `22778c39f475ac5265fabe94be351bed04b3a36c85721cbdf25e143e2300fcbb` |
+| crates/contexts/domains/src/adapters/http/mod.rs | `594e7160aba72d2eadc5da5b55a295fde2736f4fee982938d14479b1ec3b529b` |
 | crates/contexts/domains/src/adapters/http/routes.rs | `a5a84a557fac8f0bcf40e8c3cf4afe20a99443c2564f7b6e93ed37b0900c013f` |
 | crates/contexts/domains/src/adapters/http/state.rs | `fcbfb2c4707fe637956075784540272e48ef12a48c15833a3e36a9d9a3bcfed2` |
+| crates/contexts/domains/src/adapters/http/validation.rs | `13ef12def6936b092c58627e09d9df1169ebab9ad5096272f5b77fd995a94b5c` |
 | crates/contexts/identity/src/adapters/http/catalog.rs | `0fd4d03d2dc36f03a63dbe15b94d5838a4f9549319b1d5aa091c412dcfc26274` |
-| crates/contexts/identity/src/adapters/http/handlers.rs | `0fb1726214f5af1dea2e07c9a77bd2b1b267363d83659ac891b104c636b2d3f4` |
-| crates/contexts/identity/src/adapters/http/mod.rs | `7fbdb213692d6fd9eb0d9e410f9ef49b69de3f86536c28c44dff2a5c1e72c282` |
+| crates/contexts/identity/src/adapters/http/handlers.rs | `7c486580e4757638e1183411a65fffb6c5a0529e73c0169704610d7a0310fa61` |
+| crates/contexts/identity/src/adapters/http/mod.rs | `11e8e7e74805f68fa17f08fc37939bdd996bf7e63b04f4c452d836a77f94aa06` |
 | crates/contexts/identity/src/adapters/http/routes.rs | `1b27ff3d32e9a067f234258933bfac2635ef4a9f7db57109da4b0758088e66e0` |
+| crates/contexts/identity/src/adapters/http/validation.rs | `75d764561493094117d069e0952724c66712ee35b42e67161a96605efb62fb07` |
 | crates/contexts/identity/src/adapters/http/webhooks.rs | `aabd6a72515276b9f6076eb49357fde38867ca9dd769f07f2d93d6ad3fc10e7e` |
-| crates/contexts/localization/src/adapters/http/handlers.rs | `b8a8b497bd600f4d26b6c97c1fa2913aca90ebd740aaecf0d5c89400b6ce5efc` |
-| crates/contexts/localization/src/adapters/http/mod.rs | `3fbbf51409af439c8c8f8316cc8b19341962ac5db52bddc624b5260ac1d0aa88` |
+| crates/contexts/localization/src/adapters/http/handlers.rs | `a50e263be3b360b979e79170d5f457b7ea352cf92d4ef3ff690dce81dd5304e8` |
+| crates/contexts/localization/src/adapters/http/mod.rs | `5b2d2dd0413408649449b6d5f154de6668d4ffce2657357e864aeb38c5e12bdd` |
 | crates/contexts/localization/src/adapters/http/routes.rs | `ad9f0b53bb2329edaf3d04a4c6c1e0967843ed48a9dd7fd03aa3321831a53ba4` |
 | crates/contexts/localization/src/adapters/http/state.rs | `9e1ec016fe348aa33bcd9490ad0f32cc16f3326b8e20e7c3a48768ea4aaa8820` |
-| crates/contexts/media/src/adapters/http/handlers.rs | `4ed62f0f5456ba3a8e73491ac893a4aca1291ed7638090c2b329f63cb3588727` |
-| crates/contexts/media/src/adapters/http/mod.rs | `bcb76e6b79b649097731b151ee0a678a6380e7ce6d85e17d1ebdfe7215aede3d` |
+| crates/contexts/localization/src/adapters/http/validation.rs | `c1f8b4e149ae528b72e885c95f4dea95d001be1704fca980e234e5a4fba0bc05` |
+| crates/contexts/media/src/adapters/http/handlers.rs | `b75d8b3d038f56aeeb2008af037d6c5f446acb550de473b2cc274204d91a58ce` |
+| crates/contexts/media/src/adapters/http/mod.rs | `45464ed95cb32618b39db3d4205a5d78e3ffbe8c0562738175c4740ae9978c1d` |
 | crates/contexts/media/src/adapters/http/routes.rs | `615841e15acd10e2ee8cc4bc23726b2d4d323f6b1e953e49576e81de79381ba1` |
 | crates/contexts/media/src/adapters/http/state.rs | `27f2b560e83d72edeb9efa752c006cc10644054e7eea663be140c33e425b3e0d` |
-| crates/contexts/payments/src/adapters/http/handlers.rs | `2cd8776f2895d59a890bd5fbe2834f5ef71d9c021e76810c6518ed748015b5a6` |
-| crates/contexts/payments/src/adapters/http/mod.rs | `cc913985400aa765d7bae7350b784d90995c45e62ec3c6e910b78e2980d7fcff` |
-| crates/contexts/payments/src/adapters/http/routes.rs | `8778d1dfc3d02916fd635424e25e5083ee05ee1db61e27f836e36126a4fe0c09` |
+| crates/contexts/media/src/adapters/http/validation.rs | `bcf7c50cdb73b4fa42522dcee81da674c4d6ca235e11ce4f8b21e6ec94131277` |
+| crates/contexts/payments/src/adapters/http/handlers.rs | `bb009b92b994858599f158d94795d3b8544e66ef3a278ad4da2c77f7bcb1c3b6` |
+| crates/contexts/payments/src/adapters/http/mod.rs | `125d6ad33f98dad769521782af52d50f1356755ce1fe4e1e4eff4125a118d7d7` |
+| crates/contexts/payments/src/adapters/http/routes.rs | `cdf4c4250666bc9e44ab82174bddab2644f0537fc6256b918a9747fe0c941b3f` |
 | crates/contexts/payments/src/adapters/http/state.rs | `8c4a83ca6c2dd412b7b4a5d67d757a47527e0a4f1347e541bc87969a29c4f7fa` |
+| crates/contexts/payments/src/adapters/http/validation.rs | `dfe55a16f9be2417d9e4a0bf5a2de7d9733cc3cf46ca678133f9a372a9db3d02` |
 | crates/contexts/payments/src/adapters/http/webhooks.rs | `da54c25ede6e37de8f7e7aae1c2e7e556fd2976285e719fb5b9a303340be97d7` |
-| crates/contexts/platform_admin/src/adapters/http/catalog.rs | `d604a18c3d165e677f7fdd56b09c558068a5ea3d015ff74081039daed219eaac` |
-| crates/contexts/platform_admin/src/adapters/http/handlers.rs | `675a7f971e63eddbf76e28eaa9f2919ac50951fb66217a88b1d3c1a1c968de45` |
-| crates/contexts/platform_admin/src/adapters/http/mod.rs | `6cff1598d6ce1cee521e9e6f26c8889705b79061e427b5f6bf3fc36158bd5bc9` |
-| crates/contexts/platform_admin/src/adapters/http/routes.rs | `55b4769592284bac13942baf99b0091261782dd151a005170ba402790f07ff4a` |
+| crates/contexts/platform_admin/src/adapters/http/catalog.rs | `06fcf1f9de300a4ea57a0532f4e5576c07369aca1aee79f98311f15a29831587` |
+| crates/contexts/platform_admin/src/adapters/http/handlers.rs | `535b935ebcfc967aa7658bde4ef8b8b0e34eb71493b82b82b7c4ba47e6629f8f` |
+| crates/contexts/platform_admin/src/adapters/http/mod.rs | `4dbd8c2ce61074f2e805904774d4d57a7f76fb1167ab09ae8d9440213162a98d` |
+| crates/contexts/platform_admin/src/adapters/http/routes.rs | `8e5be779f7489fe13edf790c6f32a66b117bcfa08a25526bc72d1bb02acd8787` |
+| crates/contexts/platform_admin/src/adapters/http/validation.rs | `62b652f52bee73e651f699e0b84b5da8c326b2b48badb388163087c369665b35` |
 | crates/contexts/privacy/src/adapters/http/catalog.rs | `d74f6d02c7ae2a7f2587b3ade73416c52431c861291408d3d69336cc8a520ef4` |
-| crates/contexts/privacy/src/adapters/http/handlers.rs | `833cd3b9c9b5920d4cfa1315b7251202f36c3e3eb2301454bbf0717210e40932` |
-| crates/contexts/privacy/src/adapters/http/mod.rs | `0648fb98d081c026c56fe9ea1d1db4c388baae095a589f8514477d7a51cbf105` |
+| crates/contexts/privacy/src/adapters/http/handlers.rs | `50d1d1591f5fc84bd03f467f6aab96de056f2daff40603a84f8b4324f481a34e` |
+| crates/contexts/privacy/src/adapters/http/mod.rs | `6fe9359c7e703a10bce690b16a93bc317e74bf812827592e6aa55e404724a641` |
 | crates/contexts/privacy/src/adapters/http/routes.rs | `0fbbe18c262ab0aadf7e2a27f2ba41415b9f028cf62b85f9ce88cb6e625152dc` |
+| crates/contexts/privacy/src/adapters/http/validation.rs | `fc98ce44b0383e0cb2cf695e2d93895466ff47a0c0ea9a72954f87d42b18020f` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `e960b2e416f59193f64a5dcdf9838e5dd518dcd0b0e086829c2d925ecb5ec8f7` |
 | crates/contexts/system/src/adapters/http/mod.rs | `c7451cf2f661b8ab7dbd686218fb0d25b6875aa2cc3dce21970630c2e46016f0` |
 | crates/contexts/system/src/adapters/http/routes.rs | `fe6b66da6a7728ec4490dcb503ae1b4be92d3529003b49e21bec965af69e67da` |
-| crates/contexts/tenancy/src/adapters/http/handlers.rs | `8f5c992add4f88a506b97e405d8621154865d371a63e5abc789403b967a718fc` |
-| crates/contexts/tenancy/src/adapters/http/mod.rs | `dec82115e045ca1c188ae902b44c3fdbc9faff81ee49f320e03976f6ff4ed5fd` |
+| crates/contexts/tenancy/src/adapters/http/handlers.rs | `6a6d56f5ce8c2f96e3ef58586f004affbf29a62e98591c8a3bd867b7049bc71b` |
+| crates/contexts/tenancy/src/adapters/http/mod.rs | `6b616b8e2b08188272c553c09978b24f7ad6a342bbc3850d29278af27496760c` |
 | crates/contexts/tenancy/src/adapters/http/routes.rs | `994a3172f818b494941fd7d6f563cff5b8260b81279cf9aa42b73e3af0122709` |
-| crates/contexts/theming/src/adapters/http/handlers.rs | `ef48f178e8960e68a3c526f6ba3dd4f138dd888314644480faff89eb3ff56285` |
-| crates/contexts/theming/src/adapters/http/mod.rs | `70aca86decb43fa5a0998600d858406e58d607db624c84200298158bfaef5738` |
+| crates/contexts/tenancy/src/adapters/http/validation.rs | `02623201780c201e1754b43b7c78d86419875edc579bce4038ccfbbfeccc3167` |
+| crates/contexts/theming/src/adapters/http/handlers.rs | `3986777bcc0be9e048defe7a1b93486fc7e5980b2a310aac7c2aa4f732de7ce2` |
+| crates/contexts/theming/src/adapters/http/mod.rs | `e4453bcb19a63c534815a850a9ee4bd7b61c4be8e9b262d7df6dac9ba62bc78f` |
 | crates/contexts/theming/src/adapters/http/routes.rs | `768cbdada50486910864a6adac7f3d6de734192b7c2e546dfd01e04c52e7c7b0` |
 | crates/contexts/theming/src/adapters/http/state.rs | `fa4f295dd62d8c296a608e3fb5576fbe5bdb8d724742458f361ba4f0486a1e60` |
+| crates/contexts/theming/src/adapters/http/validation.rs | `ddaff393fd59b01ee9c27a4b54cf658d667faa912d3d9641897c12fc426bcc2c` |
 | crates/platform/http/src/abuse.rs | `fe3b7ff287754bdd2326b13f3a8d96abdd726d15a3578c2271394c40298c7ff3` |
 | crates/platform/http/src/api_limits.rs | `62825bda89fbf886a372b0886061bd98294b042dda75b7a7f5f75716fe9b5722` |
 | crates/platform/http/src/authn.rs | `5986cd946d5e42e793685dee62ecf3333378221ff7b4df468adf65f74a05f310` |
@@ -328,12 +345,12 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/platform/http/src/config.rs | `4ffe90870e37fb76e2e8c13e8738040a4cb1e03607589b6b5c292970e2a12b15` |
 | crates/platform/http/src/degraded.rs | `a15d6cbba1457c3762ae2e32d52794518a856d172975cbae87539e682026290b` |
 | crates/platform/http/src/deprecation.rs | `fa7534ad511123f814afe9f85b142932106b387d4c1ba7cc374c5982a0eea6b4` |
-| crates/platform/http/src/error.rs | `d02de1f0a43e86bc219d48e971b2dc08346b8dc418f20acf2848f8e2a8dca5b7` |
+| crates/platform/http/src/error.rs | `c58a70d2408a2f2669ef9d612945e2ff715b8e385b3f3861cd04bd35d036fe39` |
 | crates/platform/http/src/etag.rs | `e695e600bf9f5c7227524f459dece6b3ba52b87e0388f76e17af9bfbba32e162` |
 | crates/platform/http/src/external_quotas.rs | `949659a2a5793561b341350338605480d31797b3717e6e53906913fe04a50ae0` |
 | crates/platform/http/src/features.rs | `fc8d560cac864dff057446f468a3514f443ba5f46344d5885becec32e93c9109` |
 | crates/platform/http/src/impersonation.rs | `54e109462b3223b13a98242c208e3fd010673f6bbc5a8848111aa4b41accdb7e` |
-| crates/platform/http/src/lib.rs | `e8475973c59244da73f0137a94be4f73da8d0e31cbe171965ab663f5da348e49` |
+| crates/platform/http/src/lib.rs | `4a80e6742af6bc3e330fb2bb6e54c697e3352260717c6554923e3d1e1c325aca` |
 | crates/platform/http/src/load_shed.rs | `8afa52b0585e06eef873a6329afc03218e8cc85dedb227050157b909e8ccd77c` |
 | crates/platform/http/src/locale.rs | `a1d1658851376c3d1944209351f29582f335dde199c71b1a3474f2ffc7818628` |
 | crates/platform/http/src/metrics.rs | `21834d557e2491e57b774012a4885cb77ee8060a61405edb16189bb497a6d9f7` |
@@ -344,6 +361,6 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/platform/http/src/rate_limit.rs | `ea6d2b6071bb1b7087f73c370aef4a4fca56b6086a2da5b368c4f6300fa3e328` |
 | crates/platform/http/src/server.rs | `651ab3bcfd064f1bb8eff8db5e7127bd9c772029716e222060d24c3b5a0abb36` |
 | crates/platform/http/src/ssr_cache.rs | `0d9e81e3b28f90d6643fd3791f8c8c5d12fa5d076e306e7d4fa505e0e8823ab5` |
-| crates/platform/http/src/tenancy.rs | `ed57b2b137ed813b1f3cb0a860af57bf563bf246926facdbe60612798fb883c8` |
+| crates/platform/http/src/tenancy.rs | `913a6812a3ed7d371346ea52b54405373d35cd0baae93124ccdcf919f99a2b93` |
 | crates/platform/http/src/trace_context.rs | `72b31a752fc77a3cbbeb29e968445d302a9889ff7e5a315b36048328894daccd` |
 | crates/platform/http/src/tracing.rs | `93e56b8812d2a450f317fc28bd8bc373f47eeaa24e3b997648086ea5f70b6f71` |

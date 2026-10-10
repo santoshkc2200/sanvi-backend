@@ -16,7 +16,7 @@ pub use fees::ApplicationFeeConfig;
 pub use impersonation::{ImpersonationGrant, ImpersonationGrantId, ImpersonationMode};
 pub use ports::{
     ApplicationFeeAdmin, Clock, EntitlementAdmin, EventPublisher, GrantOverrideOutcome,
-    IdGenerator, ImpersonationGrantRepository, PendingApprovalRepository, PrivacyLock,
-    TenantAdminViewRepository,
+    IdGenerator, ImpersonationGrantRepository, OffboardingAdmin, OffboardingExportEvidence,
+    OffboardingSnapshot, PendingApprovalRepository, PrivacyLock, TenantAdminViewRepository,
 };
 pub use views::{TenantAdminView, TenantViewCursor, TenantViewSearch};

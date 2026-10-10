@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use sanvi_kernel::EventEnvelope;
 use sanvi_persistence::{PlatformScope, ScopedTx};
 
+use crate::domain::offboarding::{OffboardingRequest, OffboardingStatus, VerifiedExport};
 use crate::domain::tenant::{Tenant, TenantId, TenantStatus};
 use crate::domain::values::TenantSlug;
 use crate::domain::{TenancyError, events::TenantEvent};
@@ -89,6 +90,60 @@ pub trait TenantSettingsRepository: Send + Sync {
         scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
     ) -> Result<Vec<(String, serde_json::Value)>, TenancyError>;
+}
+
+/// Platform-scoped storage for the offboarding record (TASK-028,
+/// FR-1131). The API creates requests; the CLI executor advances them.
+#[async_trait]
+pub trait OffboardingRepository: Send + Sync {
+    /// Idempotent create: an existing `(tenant, key)` request is
+    /// returned unchanged — starting an offboarding twice must never
+    /// fork the record.
+    async fn create_or_get(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        request: &OffboardingRequest,
+    ) -> Result<OffboardingRequest, TenancyError>;
+
+    async fn find_by_id(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        request_id: i64,
+    ) -> Result<Option<OffboardingRequest>, TenancyError>;
+
+    async fn find_by_tenant_and_key(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+        key: &str,
+    ) -> Result<Option<OffboardingRequest>, TenancyError>;
+
+    /// Latest request for the tenant (the status endpoint's answer).
+    async fn latest_for_tenant(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+    ) -> Result<Option<OffboardingRequest>, TenancyError>;
+
+    /// Record the verified export (the purge gate's evidence).
+    async fn mark_exported(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        request_id: i64,
+        export: &VerifiedExport,
+    ) -> Result<(), TenancyError>;
+
+    /// Advance the status (and optionally the report/error/timestamps).
+    /// Implementations enforce the transition table; a refused move is
+    /// `TenancyError::OffboardingTransition`.
+    async fn advance(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        request_id: i64,
+        next: OffboardingStatus,
+        purge_report: Option<serde_json::Value>,
+        error: Option<String>,
+    ) -> Result<(), TenancyError>;
 }
 
 /// Slug allocation: reservations arbitrate concurrent provisions before the

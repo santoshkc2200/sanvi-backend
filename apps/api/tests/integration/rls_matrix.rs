@@ -318,11 +318,41 @@ async fn every_tenant_table_is_forced_and_canonically_isolated() {
     // what keeps the exemption honest: a new column on a table any
     // tenant-scoped query can read must be a reviewed decision, not a
     // migration accident.
-    let exempt: &[(&str, &str, &[&str])] = &[(
-        "domains",
-        "live_hostnames",
-        &["normalized_hostname", "status", "tenant_id", "updated_at"],
-    )];
+    let exempt: &[(&str, &str, &[&str])] = &[
+        (
+            "domains",
+            "live_hostnames",
+            &["normalized_hostname", "status", "tenant_id", "updated_at"],
+        ),
+        // `platform.archives` (TASK-028, FR-1129): the cold-storage
+        // registry. Its `tenant_id` is a *scope label* (whose rows an
+        // archive holds), never row ownership — the table is written and
+        // read exclusively by platform-scope maintenance (the mover, the
+        // archival sweep, offboarding), and no tenant-scoped query path
+        // touches it. The column allowlist keeps the exemption honest:
+        // a new column is a reviewed decision.
+        (
+            "platform",
+            "archives",
+            &[
+                "bytes",
+                "checksum",
+                "created_at",
+                "id",
+                "key_column",
+                "purged_at",
+                "range_end",
+                "range_start",
+                "restored_at",
+                "row_count",
+                "schema_name",
+                "status",
+                "storage_path",
+                "table_name",
+                "tenant_id",
+            ],
+        ),
+    ];
 
     for table in &tables {
         let qualified = table.qualified();
@@ -524,10 +554,14 @@ async fn every_tenant_table_is_forced_and_canonically_isolated() {
         }
     }
 
-    // The two partitioned parents this schema has today. Not hardcoding the
-    // children (they roll monthly); pinning the parents means removing
-    // partitioning cannot silently shrink this matrix.
-    for parent in ["advertising.conversion_events", "advertising.metrics_daily"] {
+    // The tenant-keyed partitioned parents this schema has today. Not
+    // hardcoding the children (they roll monthly); pinning the parents means
+    // removing partitioning cannot silently shrink this matrix.
+    for parent in [
+        "advertising.conversion_events",
+        "advertising.metrics_daily",
+        "audit.entries",
+    ] {
         assert!(
             tables
                 .iter()
@@ -536,6 +570,44 @@ async fn every_tenant_table_is_forced_and_canonically_isolated() {
              of this matrix depends on it"
         );
     }
+
+    // The platform-scoped partitioned parents (TASK-028): no tenant_id by
+    // design, so they are invisible to the tenant-table enumeration above —
+    // pin them against the raw catalog instead, or losing their
+    // partitioning would pass this matrix silently.
+    let platform_scoped_parents =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM platform.partitioned_tables")
+            .fetch_one(&pool)
+            .await
+            .expect("partition registry exists");
+    for parent in [
+        "platform.outbox",
+        "billing.webhook_events",
+        "payments.webhook_events",
+    ] {
+        let (schema, table) = parent.split_once('.').expect("qualified");
+        let kind: String = sqlx::query_scalar(
+            "SELECT c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = $1 AND c.relname = $2",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_one(&pool)
+        .await
+        .unwrap_or_else(|_| panic!("{parent}: expected the table to exist"));
+        assert_eq!(
+            kind, "p",
+            "{parent}: expected a partitioned parent (platform-scoped, so the \
+             tenant-table loop above cannot see it)"
+        );
+    }
+    // One registry row per pinned parent, and nothing enrolled that is not
+    // actually partitioned.
+    assert!(
+        platform_scoped_parents >= 6,
+        "the partition registry holds {platform_scoped_parents} parents; TASK-028 \
+         enrolled six — pin this floor up when the registry grows"
+    );
 }
 
 // ---------------------------------------------------------------------------

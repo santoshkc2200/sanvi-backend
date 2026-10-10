@@ -100,6 +100,11 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         description: "Provision and run tenant lifecycle (activate/suspend/resume/archive)",
     },
     PermissionDef {
+        key: "platform.tenant.offboard",
+        scope: PermissionScope::Platform,
+        description: "Record and read tenant offboarding requests (export-then-purge; the purge itself runs via the CLI with a typed confirmation)",
+    },
+    PermissionDef {
         key: "platform.tenant.read",
         scope: PermissionScope::Platform,
         description: "Search tenants and read the operator tenant views",

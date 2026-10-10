@@ -13,6 +13,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 sanvi-http.workspace = true
+sanvi-archival.workspace = true
 sanvi-kernel.workspace = true
 sanvi-persistence.workspace = true
 serde.workspace = true
@@ -27,6 +28,7 @@ uuid.workspace = true
 
 sanvi-privacy.workspace = true
 [dev-dependencies]
+sanvi-archival.workspace = true
 actix-http.workspace = true
 futures-util.workspace = true
 sanvi-testsupport.workspace = true

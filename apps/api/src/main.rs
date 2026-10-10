@@ -260,7 +260,12 @@ async fn main() -> ExitCode {
 
     // The audit writer/reader are shared by the access and platform_admin
     // contexts (they record; the audit context owns the schema).
-    let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);
+    let audit = build_audit_state(
+        pool.clone(),
+        ids.clone(),
+        &config.audit,
+        config.features.archival,
+    );
 
     // Construction order matters: platform_admin owns the approval gate the
     // access context consumes, but its `EntitlementAdmin` port is *the

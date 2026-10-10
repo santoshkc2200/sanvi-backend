@@ -328,6 +328,27 @@ rls-matrix:
     eval "$(./scripts/test-db.sh up)"
     cargo nextest run -p sanvi-api --test integration rls_matrix
 
+# TASK-028 (FR-1129): the archival round-trip gate — archive a range,
+# get the archived-range answer on read, restore it, and assert
+# identical rows including ordering and checksums (plus the audit
+# read-path refusal through the api-shaped composition).
+archival-roundtrip:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p sanvi-archival -p sanvi-audit
+
+# TASK-028 (FR-1128): the partition registry gate — every parent enrolled
+# in platform.partitioned_tables is partitioned, has current + next month
+# children, each child hardened (RLS + grants), and the by-the-25th
+# readiness probe fires for a missing next-month child (the alert's
+# "job disabled" case, since the probe reads the catalog, not the job).
+partition-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p sanvi-api --test integration partition_registry
+
 # TASK-021 (FR-1108/FR-1110): the perf test target — the bounded-collections
 # contract gate (11.2b) and the EXPLAIN plan gate for the profiled read
 # models (11.2d); statement-count guards (11.2e) join it as their slice

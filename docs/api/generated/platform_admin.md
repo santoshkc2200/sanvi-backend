@@ -667,6 +667,125 @@ Responses: 204, 403
 | `id` | path | yes | type="string", format="snowflake-id" |
 | `feature` | path | yes | type="string" |
 
+## GET /api/v1/platform/tenants/{id}/offboarding
+
+Operation: `get_offboarding`
+
+`GET /api/v1/platform/tenants/{id}/offboarding` — the tenant's
+offboarding status: the record, the export evidence once verified,
+and the purge report once purged (TASK-028, FR-1131).
+
+Responses: 200, 403, 404
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `id` | path | yes | type="string", format="snowflake-id" |
+
+### Response 200 (en-US / USD, cents)
+
+```json
+{
+  "completed_at": "2026-10-09T00:00:00Z",
+  "created_at": "2026-10-09T00:00:00Z",
+  "error": "example",
+  "export": null,
+  "id": "873698342314721281",
+  "idempotency_key": "example",
+  "purge_report": {},
+  "status": "example",
+  "tenant_id": "873698342314721281",
+  "updated_at": "2026-10-09T00:00:00Z"
+}
+```
+
+### Response 200 (ja-JP / JPY, zero-decimal yen)
+
+```json
+{
+  "completed_at": "2026-10-09T00:00:00Z",
+  "created_at": "2026-10-09T00:00:00Z",
+  "error": "example",
+  "export": null,
+  "id": "873698342314721281",
+  "idempotency_key": "example",
+  "purge_report": {},
+  "status": "example",
+  "tenant_id": "873698342314721281",
+  "updated_at": "2026-10-09T00:00:00Z"
+}
+```
+
+## POST /api/v1/platform/tenants/{id}/offboarding
+
+Operation: `request_offboarding`
+
+`POST /api/v1/platform/tenants/{id}/offboarding` — record the
+export-then-purge request (TASK-028, FR-1131).
+
+Responses: 200, 403, 404, 409
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `id` | path | yes | type="string", format="snowflake-id" |
+
+### Request journey (en-US / USD, cents)
+
+```http
+POST /api/v1/platform/tenants/{id}/offboarding
+Accept-Language: en-US
+Content-Type: application/json
+
+{
+  "idempotency_key": "example"
+}
+```
+
+### Request journey (ja-JP / JPY, zero-decimal yen)
+
+```http
+POST /api/v1/platform/tenants/{id}/offboarding
+Accept-Language: ja-JP
+Content-Type: application/json
+
+{
+  "idempotency_key": "example"
+}
+```
+
+### Response 200 (en-US / USD, cents)
+
+```json
+{
+  "completed_at": "2026-10-09T00:00:00Z",
+  "created_at": "2026-10-09T00:00:00Z",
+  "error": "example",
+  "export": null,
+  "id": "873698342314721281",
+  "idempotency_key": "example",
+  "purge_report": {},
+  "status": "example",
+  "tenant_id": "873698342314721281",
+  "updated_at": "2026-10-09T00:00:00Z"
+}
+```
+
+### Response 200 (ja-JP / JPY, zero-decimal yen)
+
+```json
+{
+  "completed_at": "2026-10-09T00:00:00Z",
+  "created_at": "2026-10-09T00:00:00Z",
+  "error": "example",
+  "export": null,
+  "id": "873698342314721281",
+  "idempotency_key": "example",
+  "purge_report": {},
+  "status": "example",
+  "tenant_id": "873698342314721281",
+  "updated_at": "2026-10-09T00:00:00Z"
+}
+```
+
 ## Money representation: ApplicationFeeView
 
 ### en-US

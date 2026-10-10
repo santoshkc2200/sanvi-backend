@@ -115,7 +115,12 @@ pub(crate) fn test_app_with(
             notification_gateway: None,
         },
     );
-    let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);
+    let audit = build_audit_state(
+        pool.clone(),
+        ids.clone(),
+        &config.audit,
+        config.features.archival,
+    );
     let access = build_access_state(
         pool.clone(),
         ids.clone(),

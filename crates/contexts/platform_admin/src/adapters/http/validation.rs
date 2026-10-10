@@ -27,6 +27,8 @@ pub fn validation_issue(err: &PlatformAdminError) -> Option<(String, Vec<FieldIs
         | PlatformAdminError::TargetNotMember { .. }
         | PlatformAdminError::PrivacyLocked { .. }
         | PlatformAdminError::TenantNotFound { .. }
+        | PlatformAdminError::OffboardingConflict(_)
+        | PlatformAdminError::OffboardingExportMissing(_)
         | PlatformAdminError::ApprovalNotFound { .. }
         | PlatformAdminError::ApprovalNotPending { .. }
         | PlatformAdminError::SelfApproval

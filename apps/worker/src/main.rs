@@ -574,10 +574,12 @@ pub struct SchedulerConfig {
     /// (phase 09.6) — lapsed registrations warn instead of silently
     /// under-collecting.
     pub payments_tax_check_interval_secs: u64,
-    /// Pre-create current and following advertising partitions. This starts
-    /// before any conversion endpoint exists: partition maintenance cannot be
-    /// an afterthought on the first day of a new month.
-    pub advertising_partition_maintenance_interval_secs: u64,
+    /// Pre-create current and following partitions for every registry
+    /// parent (TASK-028: one job, one registry — advertising, audit, outbox
+    /// and the webhook histories). This starts before any conversion
+    /// endpoint exists: partition maintenance cannot be an afterthought on
+    /// the first day of a new month.
+    pub partition_maintenance_interval_secs: u64,
     /// Cross-tenant campaign reconciliation sweep (TASK-012, 10.3) — the
     /// nightly safety net alongside on-demand reconciliation. Never mutates
     /// a platform; only observes and records drift.
@@ -602,6 +604,9 @@ pub struct SchedulerConfig {
     pub advertising_budget_guardrails_interval_secs: u64,
     /// Budget rollover sweep (TASK-017, 10.8).
     pub advertising_budget_rollover_interval_secs: u64,
+    /// TASK-028 (FR-1130): the archival sweep — archive-action retention
+    /// classes age out to cold storage, monthly steps per tenant.
+    pub archival_sweep_interval_secs: u64,
 }
 
 impl Default for SchedulerConfig {
@@ -632,7 +637,7 @@ impl Default for SchedulerConfig {
             payments_connection_sync_interval_secs: 3600,
             payments_metrics_interval_secs: 60,
             payments_tax_check_interval_secs: 86_400,
-            advertising_partition_maintenance_interval_secs: 86_400,
+            partition_maintenance_interval_secs: 86_400,
             advertising_reconciliation_interval_secs: 86_400,
             advertising_conversion_upload_interval_secs: 60,
             advertising_conversion_retraction_interval_secs: 60,
@@ -642,6 +647,7 @@ impl Default for SchedulerConfig {
             advertising_token_refresh_stale_after_secs: 21_600,
             advertising_budget_guardrails_interval_secs: 300,
             advertising_budget_rollover_interval_secs: 3600,
+            archival_sweep_interval_secs: 86_400,
         }
     }
 }
@@ -696,6 +702,12 @@ pub struct FeaturesConfig {
     /// destructive auto-pauses, which permission checks alone cannot do.
     #[serde(default)]
     pub advertising: bool,
+    /// TASK-028 (FR-1129) `platform.archival`: gates the archival sweep
+    /// job (archive-action retention classes aging out to cold storage).
+    /// With the flag off the job is a no-op — same rollback semantics as
+    /// `advertising`.
+    #[serde(default)]
+    pub archival: bool,
 }
 
 /// Why this process is not sending notifications, if it is not.
@@ -718,6 +730,7 @@ impl Default for FeaturesConfig {
         Self {
             notifications: default_true(),
             advertising: false,
+            archival: false,
         }
     }
 }
@@ -797,6 +810,9 @@ pub struct WorkerConfig {
     pub audit: AuditConfig,
     pub billing: BillingConfig,
     pub privacy: PrivacyConfig,
+    /// TASK-028 (FR-1129): the `[archival]` section (cold volume root).
+    #[serde(default)]
+    pub archival: sanvi_archival::config::ArchivalConfig,
     pub localization: LocalizationConfig,
     #[serde(default)]
     pub theming: ThemingConfig,
@@ -2021,6 +2037,37 @@ async fn main() -> ExitCode {
             Arc::new(sanvi_advertising::adapters::SqlxGuardrailSuspensionLedger::new()),
         ));
 
+    // TASK-028 (FR-1129/FR-1130): the archival sweep's cold storage.
+    // Only when the feature is on AND the envelope KEK is configured —
+    // an archive that cannot be decrypted is deletion with extra steps.
+    let archival_storage: Option<Arc<sanvi_archival::storage::SealedStorage>> =
+        if config.features.archival && config.privacy.encryption_enabled() {
+            let kek: [u8; 32] = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                config.privacy.kek.expose_secret(),
+            )
+            .expect("validated by PrivacyConfig")
+            .try_into()
+            .expect("validated length");
+            Some(Arc::new(sanvi_archival::storage::SealedStorage::new(
+                Arc::new(sanvi_archival::storage::LocalEncryptedVolume::new(
+                    &config.archival.volume,
+                )),
+                Arc::new(
+                    sanvi_privacy::adapters::archival_cipher::EnvelopeArchiveCipher::new(
+                        privacy_crypto.clone(),
+                        &kek,
+                    ),
+                ),
+            )))
+        } else {
+            tracing::warn!(
+                enabled = config.features.archival,
+                "platform.archival sweep disabled (feature flag or KEK)"
+            );
+            None
+        };
+
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
         Arc::new(FnJob::new(
             "advertising.budget_guardrails",
@@ -2126,19 +2173,42 @@ async fn main() -> ExitCode {
             },
         )),
         Arc::new(FnJob::new(
-            "advertising.partition_maintenance",
-            Duration::from_secs(
-                config
-                    .scheduler
-                    .advertising_partition_maintenance_interval_secs,
-            ),
+            "platform.partition_maintenance",
+            Duration::from_secs(config.scheduler.partition_maintenance_interval_secs),
             {
                 let pool = pool.clone();
                 move || {
                     let pool = pool.clone();
                     Box::pin(async move {
+                        // TASK-028 (FR-1128): one job walks one registry —
+                        // every partitioned parent in
+                        // platform.partitioned_tables gets its current and
+                        // pre-created following months, then the run is
+                        // recorded as a heartbeat and the readiness probe
+                        // (catalog-only, so it also catches this job being
+                        // disabled) is evaluated: from the 25th on, a
+                        // missing next-month child pages.
+                        sqlx::query("SELECT platform.ensure_monthly_partitions(current_date)")
+                            .execute(&pool)
+                            .await?;
+                        let breaches: Vec<(String, String, String)> = sqlx::query_as(
+                            "SELECT schema_name, table_name, missing_child
+                             FROM platform.partition_readiness_breaches(current_date)",
+                        )
+                        .fetch_all(&pool)
+                        .await?;
+                        if !breaches.is_empty() {
+                            tracing::error!(
+                                alert = "PartitionMaintenanceFailed",
+                                breaches = ?breaches,
+                                "next month's partition is missing for a registry parent (FR-1128)"
+                            );
+                        }
                         sqlx::query(
-                            "SELECT advertising.ensure_monthly_partitions((current_date + interval '1 month')::date)",
+                            "INSERT INTO platform.partition_maintenance_log (day, ran_at, ok)
+                             VALUES (current_date, now(), true)
+                             ON CONFLICT (day) DO UPDATE
+                               SET ran_at = excluded.ran_at, ok = true, detail = NULL",
                         )
                         .execute(&pool)
                         .await?;
@@ -2218,6 +2288,54 @@ async fn main() -> ExitCode {
                         .bind(anonymise_conversions)
                         .execute(&pool)
                         .await?;
+
+                        // TASK-028 (FR-1130): the run ledger. One row per
+                        // advertising class this pass actually acted on,
+                        // counted from the enforcement log of the last day
+                        // — the retention report and the staleness alert
+                        // read these rows, never a promise.
+                        let acted: Vec<(String, i64)> = sqlx::query_as(
+                            "SELECT parent_name, count(*)
+                             FROM advertising.partition_retention_log
+                             WHERE recorded_at > now() - interval '25 hours'
+                             GROUP BY parent_name",
+                        )
+                        .fetch_all(&pool)
+                        .await?;
+                        let class_of = |parent: &str| {
+                            if parent == "conversion_events" {
+                                Some("advertising_conversion_event")
+                            } else if parent == "metrics_daily" {
+                                Some("advertising_metric")
+                            } else {
+                                None
+                            }
+                        };
+                        let conversion_action = if anonymise_conversions {
+                            "anonymise"
+                        } else {
+                            "delete"
+                        };
+                        for (parent, count) in acted {
+                            if let Some(class) = class_of(&parent) {
+                                let action = if class == "advertising_metric" {
+                                    "delete"
+                                } else {
+                                    conversion_action
+                                };
+                                sqlx::query(
+                                    "INSERT INTO privacy.retention_runs
+                                       (data_class, action, rows_affected, executor, detail)
+                                     VALUES ($1, $2, $3, 'platform.partition_maintenance',
+                                             '{\"per_parent_actions\": true}'::jsonb)",
+                                )
+                                .bind(class)
+                                .bind(action)
+                                .bind(count)
+                                .execute(&pool)
+                                .await?;
+                            }
+                        }
                         Ok(())
                     })
                 }
@@ -2377,6 +2495,42 @@ async fn main() -> ExitCode {
                                 removed_identifiers = report.removed_identifiers,
                                 unpropagated_removals = report.unpropagated_removals,
                                 "advertising audience sync sweep pass"
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        Arc::new(FnJob::new(
+            "platform.archival_sweep",
+            Duration::from_secs(config.scheduler.archival_sweep_interval_secs),
+            {
+                let pool = pool.clone();
+                let storage = archival_storage.clone();
+                let enabled = config.features.archival;
+                let ids = ids.clone();
+                move || {
+                    let pool = pool.clone();
+                    let storage = storage.clone();
+                    let ids = ids.clone();
+                    Box::pin(async move {
+                        if !enabled {
+                            return Ok(());
+                        }
+                        let Some(storage) = storage else {
+                            return Ok(());
+                        };
+                        let mover = sanvi_archival::sweep::mover_for(&pool, ids, storage);
+                        let report = sanvi_archival::sweep::archive_aged_classes(&pool, &mover)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        for class in &report.classes {
+                            tracing::info!(
+                                data_class = %class.data_class,
+                                rows_archived = class.rows_archived,
+                                archives_created = class.archives_created,
+                                "archival sweep pass complete"
                             );
                         }
                         Ok(())
@@ -3297,6 +3451,7 @@ mod config_tests {
         assert_eq!(notifications_disabled_reason(&config), None);
 
         config.features = FeaturesConfig {
+            archival: false,
             notifications: false,
             advertising: false,
         };

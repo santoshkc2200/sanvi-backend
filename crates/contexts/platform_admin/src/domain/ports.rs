@@ -258,3 +258,60 @@ pub trait ApplicationFeeAdmin: Send + Sync {
         reason: Option<String>,
     ) -> Result<(), PlatformAdminError>;
 }
+
+/// The operator-facing snapshot of one offboarding request (TASK-028,
+/// FR-1131). Mirrors the tenancy record without leaking the tenancy
+/// domain into this context; the composition adapter maps between them.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct OffboardingSnapshot {
+    /// Decimal Snowflake id (transport form).
+    #[schema(value_type = String)]
+    pub id: i64,
+    #[schema(value_type = String)]
+    pub tenant_id: i64,
+    pub idempotency_key: String,
+    /// pending | exporting | exported | purging | purged | failed.
+    pub status: String,
+    /// Present once the export verified: the artifact path and
+    /// whole-archive checksum the purge step required.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export: Option<OffboardingExportEvidence>,
+    /// The purge report: removed per context, lawfully retained with
+    /// reason and retention end date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purge_report: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct OffboardingExportEvidence {
+    pub path: String,
+    pub checksum: String,
+}
+
+/// The offboarding record's operator surface (TASK-028, FR-1131). The
+/// composition root wires this over the tenancy context's use cases:
+/// the record is tenant-lifecycle data, the operator surface is the
+/// platform control plane. POST records the request (the executor is
+/// the CLI `offboard` command — the purge needs a typed confirmation
+/// no HTTP call can supply); GET reads the status, artifact evidence
+/// and purge report.
+#[async_trait]
+pub trait OffboardingAdmin: Send + Sync {
+    async fn request(
+        &self,
+        tenant_id: TenantId,
+        idempotency_key: String,
+        requested_by: Option<UserId>,
+    ) -> Result<OffboardingSnapshot, crate::domain::error::PlatformAdminError>;
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Option<OffboardingSnapshot>, crate::domain::error::PlatformAdminError>;
+}

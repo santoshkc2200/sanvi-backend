@@ -268,3 +268,177 @@ async fn audit_rows_are_rls_isolated_between_tenants() {
     assert_eq!(entries.len(), 2);
     platform.commit().await.unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// TASK-028 (FR-1129): the archived-range read path.
+// ---------------------------------------------------------------------------
+
+/// A read whose window overlaps an active archive of `audit.entries`
+/// answers `ArchivedRange` — never a silent partial. After the restore,
+/// the same query answers normally. This is the read-path half of the
+/// `archival-roundtrip` gate, exercised through the exact composition
+/// the api builds when `platform.archival` is on.
+#[tokio::test]
+async fn ranged_reads_refuse_archived_windows_and_recover_after_restore() {
+    let (app, migrator, db) = prepare().await;
+
+    let tenant = TenantId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+    let tx_manager = sanvi_persistence::TxManager::new(app.clone(), sanvi_testsupport::test_ids());
+    let writer = SqlxAuditWriter::new(sanvi_testsupport::test_ids());
+
+    let start = chrono::Utc::now() - chrono::Duration::days(40);
+    let end = start + chrono::Duration::days(5);
+
+    // audit.entries is partitioned (TASK-028): every month the seeds and
+    // the outside-row land in needs its child. Backfill semantics —
+    // exactly those months, no horizon.
+    {
+        let mut conn = app.acquire().await.unwrap();
+        let mut month = start.date_naive();
+        let last = (end + chrono::Duration::days(2)).date_naive();
+        while month <= last {
+            sqlx::query("SELECT platform.ensure_monthly_partitions($1::date)")
+                .bind(month)
+                .execute(&mut *conn)
+                .await
+                .expect("mint a seed month's partition");
+            // Aug 31 + 1 month is Sep 30, which would skip September:
+            // step on month *starts*.
+            month = sqlx::query_scalar::<_, chrono::NaiveDate>(
+                "SELECT date_trunc('month', $1::date + interval '1 month')::date",
+            )
+            .bind(month)
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        }
+    }
+
+    // Two entries inside the window for the tenant, one outside.
+    {
+        let mut scope: PlatformScope<'_> = tx_manager
+            .begin_unscoped("archival_test_seed", "test")
+            .await
+            .unwrap();
+        let mut inside = data("tenant.archival-probe", Some(tenant));
+        inside.occurred_at = start + chrono::Duration::hours(1);
+        writer.append(&mut scope, &inside).await.unwrap();
+        let mut inside2 = data("tenant.archival-probe", Some(tenant));
+        inside2.occurred_at = end - chrono::Duration::hours(1);
+        writer.append(&mut scope, &inside2).await.unwrap();
+        let mut outside = data("tenant.archival-probe-outside", Some(tenant));
+        outside.occurred_at = end + chrono::Duration::days(1);
+        writer.append(&mut scope, &outside).await.unwrap();
+        scope.commit().await.unwrap();
+    }
+
+    // The composition the api builds with `platform.archival` on.
+    let reader = SqlxAuditReader::new();
+    let list = sanvi_audit::application::ListAuditLog::new(
+        tx_manager.clone(),
+        std::sync::Arc::new(reader),
+    )
+    .with_archive_check(std::sync::Arc::new(
+        sanvi_audit::adapters::SqlxArchivedRangeCheck::new(),
+    ));
+
+    let filters = |since, until| sanvi_audit::domain::AuditFilters {
+        tenant_id: Some(tenant),
+        actor_id: None,
+        action: None,
+        since,
+        until,
+    };
+
+    // Before any archive exists the read answers normally.
+    let page = list
+        .execute(filters(None, None), None, Some(50))
+        .await
+        .unwrap();
+    assert_eq!(page.entries.len(), 3, "nothing archived yet");
+
+    // Archive the tenant's window through the mover (migrator role: the
+    // delete lifts the append-only guard, an owner operation).
+    use sanvi_archival::mover::{ArchiveMover, ArchiveTarget};
+    use sanvi_archival::storage::{ArchiveCipher, LocalEncryptedVolume, SealedStorage};
+
+    struct PlainCipher;
+    impl ArchiveCipher for PlainCipher {
+        fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, sanvi_archival::ArchivalError> {
+            Ok(plaintext.to_vec())
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, sanvi_archival::ArchivalError> {
+            Ok(sealed.to_vec())
+        }
+    }
+
+    let volume = std::env::temp_dir().join(format!("sanvi-audit-archival-{}", std::process::id()));
+    std::fs::create_dir_all(&volume).unwrap();
+    let mover_ids = std::sync::Arc::new(sanvi_kernel::SnowflakeGenerator::new(
+        sanvi_kernel::NodeId::new(31).unwrap(),
+    ));
+    let mover = ArchiveMover::new(
+        sanvi_persistence::TxManager::new(migrator.clone(), mover_ids.clone()),
+        mover_ids,
+        std::sync::Arc::new(SealedStorage::new(
+            std::sync::Arc::new(LocalEncryptedVolume::new(&volume)),
+            std::sync::Arc::new(PlainCipher),
+        )),
+    );
+    let outcome = mover
+        .archive(&ArchiveTarget {
+            schema_name: "audit".to_string(),
+            table_name: "entries".to_string(),
+            key_column: "occurred_at".to_string(),
+            tenant_id: Some(tenant.as_i64()),
+            range_start: start,
+            range_end: end,
+        })
+        .await
+        .expect("archive the window");
+    assert_eq!(outcome.row_count, 2);
+
+    // The refused read: any window overlapping the archive — including a
+    // boundless one — is an ArchivedRange error naming the window.
+    let refused = list.execute(filters(None, None), None, Some(50)).await;
+    assert!(
+        matches!(&refused, Err(AuditError::ArchivedRange(None, None))),
+        "a boundless tenant read must refuse, got {refused:?}"
+    );
+    let refused = list
+        .execute(filters(Some(start), Some(end)), None, Some(50))
+        .await;
+    assert!(
+        matches!(&refused, Err(AuditError::ArchivedRange(Some(_), Some(_)))),
+        "the exact window must refuse, got {refused:?}"
+    );
+
+    // The neighbour scope (another tenant) reads normally: their window
+    // was never archived.
+    let other = list
+        .execute(
+            sanvi_audit::domain::AuditFilters {
+                tenant_id: Some(TenantId::from_snowflake(
+                    sanvi_testsupport::test_ids().next_id().unwrap(),
+                )),
+                actor_id: None,
+                action: None,
+                since: Some(start),
+                until: Some(end),
+            },
+            None,
+            Some(50),
+        )
+        .await
+        .unwrap();
+    assert!(other.entries.is_empty());
+
+    // Restore, and the same reads answer normally again.
+    mover.restore(outcome.archive_id).await.expect("restore");
+    let page = list
+        .execute(filters(Some(start), Some(end)), None, Some(50))
+        .await
+        .unwrap();
+    assert_eq!(page.entries.len(), 2, "the restored window reads again");
+    let _ = db;
+}

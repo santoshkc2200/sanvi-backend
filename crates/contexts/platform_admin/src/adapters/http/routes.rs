@@ -8,9 +8,10 @@ use actix_web::web;
 use super::catalog::ROUTES;
 use super::handlers::{
     approve_request, create_impersonation, disable_application_fee, get_application_fee,
-    get_tenant_admin_view, grant_entitlement_override, list_entitlement_overrides,
-    list_impersonations, list_pending_approvals, reject_request, revoke_entitlement_override,
-    revoke_impersonation, search_tenant_admin_views, set_application_fee,
+    get_offboarding, get_tenant_admin_view, grant_entitlement_override, list_entitlement_overrides,
+    list_impersonations, list_pending_approvals, reject_request, request_offboarding,
+    revoke_entitlement_override, revoke_impersonation, search_tenant_admin_views,
+    set_application_fee,
 };
 
 /// One `web::resource` per path, with every catalog method merged onto it.
@@ -46,6 +47,12 @@ pub fn platform_admin_routes(cfg: &mut web::ServiceConfig) {
                 }
                 ("GET", "/api/v1/platform/admin/tenants/{id}") => {
                     resource.route(web::get().to(get_tenant_admin_view))
+                }
+                ("POST", "/api/v1/platform/tenants/{id}/offboarding") => {
+                    resource.route(web::post().to(request_offboarding))
+                }
+                ("GET", "/api/v1/platform/tenants/{id}/offboarding") => {
+                    resource.route(web::get().to(get_offboarding))
                 }
                 ("POST", "/api/v1/platform/impersonations") => {
                     resource.route(web::post().to(create_impersonation))

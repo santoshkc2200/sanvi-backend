@@ -9,4 +9,6 @@ pub mod ports;
 pub use chain::{verify_chain, verify_segment};
 pub use entry::{ActorType, AuditEntry, AuditEntryData, GENESIS_HASH};
 pub use error::AuditError;
-pub use ports::{AuditCursor, AuditFilters, AuditReader, AuditWriter};
+pub use ports::{
+    ArchivedRangeCheck, ArchivedRangeWindow, AuditCursor, AuditFilters, AuditReader, AuditWriter,
+};

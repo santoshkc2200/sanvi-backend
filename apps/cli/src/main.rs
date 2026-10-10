@@ -9,6 +9,7 @@
 //!   fails when the committed per-context specs in `api/` have drifted.
 
 mod access;
+mod archive;
 mod billing;
 mod config;
 mod control;
@@ -16,8 +17,10 @@ mod dlq;
 mod healthcheck;
 mod i18n;
 mod migrate;
+mod offboard;
 mod openapi;
 mod payments;
+mod retention_report;
 mod rotate_credentials;
 mod seed_scale;
 mod tenant;
@@ -166,6 +169,85 @@ enum Command {
         /// Print the plan's row counts and checksum without writing.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+    },
+    /// TASK-028 (FR-1129): move a range of a table to encrypted cold
+    /// storage (migrator role; see docs/runbooks/archival.md).
+    Archive {
+        /// Target table, `schema.table` (e.g. audit.entries).
+        #[arg(long)]
+        table: String,
+        /// Tenant slug, decimal id, or `platform` for platform-scope rows.
+        #[arg(long, default_value = "platform")]
+        tenant: String,
+        /// Inclusive range start (RFC 3339).
+        #[arg(long)]
+        from: String,
+        /// Exclusive range end (RFC 3339).
+        #[arg(long)]
+        until: String,
+        /// Print the plan (row counts) and write nothing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Database user override (defaults to config; archival needs the
+        /// migrator role).
+        #[arg(long)]
+        user: Option<String>,
+        /// Database password override.
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// TASK-028 (FR-1129): restore an archived range and prove the rows
+    /// (count, ordering, checksum) are identical.
+    ArchiveRestore {
+        /// The archive id to restore.
+        #[arg(long)]
+        id: i64,
+        /// Print the archive's registry row and write nothing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Database user override (migrator role).
+        #[arg(long)]
+        user: Option<String>,
+        /// Database password override.
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// TASK-028 (FR-1131): tenant offboarding — export-then-purge.
+    /// Start with `--dry-run` (the plan); the purge needs a verified
+    /// export and `--confirm "offboard <slug>"`.
+    Offboard {
+        /// The tenant slug being offboarded.
+        #[arg(long)]
+        tenant: String,
+        /// The offboarding record's idempotency key.
+        #[arg(long)]
+        key: String,
+        /// plan | export | purge | scan (omitted + --dry-run = plan).
+        #[arg(long)]
+        stage: Option<String>,
+        /// Typed confirmation naming the tenant; required for purge.
+        #[arg(long)]
+        confirm: Option<String>,
+        /// Print the plan and write nothing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// A neighbour tenant that must be byte-identical afterwards.
+        #[arg(long)]
+        neighbour: Option<String>,
+        /// Database user override (migrator role).
+        #[arg(long)]
+        user: Option<String>,
+        /// Database password override.
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// TASK-028 (FR-1130): the retention report — every class's rule,
+    /// last run, rows affected and oldest surviving row, generated from
+    /// live data. Fails loudly on a stalled class.
+    RetentionReport {
+        /// Also write the JSON report here (evidence-pack input).
+        #[arg(long)]
+        write: Option<String>,
     },
     /// Probe an HTTP endpoint without a shell or `curl` (container HEALTHCHECK).
     Healthcheck {
@@ -879,6 +961,93 @@ async fn main() -> ExitCode {
                 }
             }
         }
+        Command::Archive {
+            table,
+            tenant,
+            from,
+            until,
+            dry_run,
+            user,
+            password,
+        } => match archive::run_archive(
+            &cli.env,
+            archive::ArchiveArgs {
+                table,
+                tenant,
+                from,
+                until,
+                dry_run,
+                user,
+                password,
+            },
+        )
+        .await
+        {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("archive failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::ArchiveRestore {
+            id,
+            dry_run,
+            user,
+            password,
+        } => match archive::run_archive_restore(
+            &cli.env,
+            archive::ArchiveRestoreArgs {
+                id,
+                dry_run,
+                user,
+                password,
+            },
+        )
+        .await
+        {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("archive-restore failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Offboard {
+            tenant,
+            key,
+            stage,
+            confirm,
+            dry_run,
+            neighbour,
+            user,
+            password,
+        } => match offboard::run(
+            &cli.env,
+            offboard::OffboardArgs {
+                tenant,
+                key,
+                stage,
+                confirm,
+                dry_run,
+                neighbour,
+                user,
+                password,
+            },
+        )
+        .await
+        {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("offboard failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::RetentionReport { write } => match retention_report::run(&cli.env, write).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("retention-report failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Healthcheck {
             host,
             port,

@@ -388,16 +388,36 @@ async fn webhook_events_are_platform_scoped_not_tenant_readable() {
         );
     }
 
+    // TASK-028: the no-RLS set is the webhook history (now a partitioned
+    // parent plus its monthly children, all platform-scoped) and the
+    // webhook_event_dedup claim sidecar. Everything else in the schema
+    // stays tenant-isolated.
     let no_rls: Vec<(String,)> = sqlx::query_as(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'payments' AND rowsecurity = false",
     )
     .fetch_all(&admin)
     .await
     .unwrap();
+    let mut expected: Vec<String> = no_rls
+        .iter()
+        .map(|(t,)| t.clone())
+        .filter(|t| {
+            t == "webhook_events"
+                || t == "webhook_event_dedup"
+                || (t.starts_with("webhook_events_")
+                    && t["webhook_events_".len()..]
+                        .chars()
+                        .all(|c| c.is_ascii_digit()))
+        })
+        .collect();
+    expected.sort();
+    let mut actual: Vec<String> = no_rls.iter().map(|(t,)| t.clone()).collect();
+    actual.sort();
     assert_eq!(
-        no_rls,
-        vec![("webhook_events".to_string(),)],
-        "webhook_events is platform-scoped: no RLS, joined to tenants only through external_account_id"
+        actual, expected,
+        "payments' no-RLS set is exactly the webhook history parent, its monthly \
+         children and the dedup sidecar — platform-scoped, joined to tenants \
+         only through external_account_id"
     );
 }
 

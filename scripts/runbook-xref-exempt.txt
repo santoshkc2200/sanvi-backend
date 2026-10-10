@@ -22,3 +22,6 @@ dependency-matrix.md  the dependency-behaviour contract and injection-test manif
 rolling-restart.md  scheduled drill, not an alert response
 dr-restore.md  scheduled drill, not an alert response
 dr-single-tenant-restore.md  scheduled drill, not an alert response
+archival.md  archival/restore operator procedure (the archived-range read refusal is a contract state, not an alert)
+offboarding.md  operator procedure (export-then-purge with its own drill); no alert answers from here
+degraded-mode.md  mode-selection procedure (which subsystems shed first), not an alert response

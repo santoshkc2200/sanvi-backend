@@ -7,15 +7,18 @@
 
 pub mod error;
 pub mod events;
+pub mod offboarding;
 pub mod ports;
 pub mod tenant;
 pub mod values;
 
 pub use error::TenancyError;
 pub use events::{TenantEvent, TenantEventName};
+pub use offboarding::{OffboardingRequest, OffboardingStatus, VerifiedExport};
 pub use ports::{
-    Clock, EventPublisher, IdGenerator, SlugReservationPort, TenantRepository,
-    TenantResolutionCache, TenantSearch, TenantSearchCursor, TenantSettingsRepository,
+    Clock, EventPublisher, IdGenerator, OffboardingRepository, SlugReservationPort,
+    TenantRepository, TenantResolutionCache, TenantSearch, TenantSearchCursor,
+    TenantSettingsRepository,
 };
 pub use tenant::{Tenant, TenantId, TenantStatus, TenantTag, TenantTimestamps};
 pub use values::{DataRegion, Locale, SuspensionReason, TenantName, TenantSlug};

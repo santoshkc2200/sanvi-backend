@@ -473,6 +473,9 @@ fn body_for(method: &str, pattern: &str) -> Option<Value> {
         "/api/v1/platform/tenants/{id}/application-fee" => {
             Some(json!({"enabled": true, "minimum_minor": 0}))
         }
+        "/api/v1/platform/tenants/{id}/offboarding" => {
+            Some(json!({"idempotency_key": "idor-sweep"}))
+        }
         "/api/v1/platform/tenants/{id}/entitlements" => {
             Some(json!({"feature_key": "payments.stripe_connect", "enabled": true}))
         }
@@ -1184,7 +1187,12 @@ async fn build_sweep_app(
             notification_gateway: None,
         },
     );
-    let audit = build_audit_state(pool.clone(), ids.clone(), &config.audit);
+    let audit = build_audit_state(
+        pool.clone(),
+        ids.clone(),
+        &config.audit,
+        config.features.archival,
+    );
     let access = build_access_state(
         pool.clone(),
         ids.clone(),

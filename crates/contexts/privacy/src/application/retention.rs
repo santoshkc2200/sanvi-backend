@@ -144,6 +144,33 @@ impl RetentionSweep {
                 self.signals.delete(&mut scope, signal.id).await?;
                 deleted.preference_signals += 1;
             }
+
+            // TASK-028 (FR-1130): the run ledger. One row per class the
+            // sweep executed, in the same transaction — the retention
+            // report and the staleness alert read these, never a promise.
+            sqlx::query(
+                "INSERT INTO privacy.retention_runs
+                   (data_class, action, rows_affected, executor)
+                 VALUES ('consent_record', $1, $2, 'privacy.retention_sweep')",
+            )
+            .bind(match consent_action {
+                RetentionAction::Delete => "delete",
+                RetentionAction::Anonymise | RetentionAction::Archive => "anonymise",
+            })
+            .bind((deleted.consents + deleted.anonymised) as i64)
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            sqlx::query(
+                "INSERT INTO privacy.retention_runs
+                   (data_class, action, rows_affected, executor)
+                 VALUES ('preference', 'delete', $1, 'privacy.retention_sweep')",
+            )
+            .bind(deleted.preference_signals as i64)
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+
             self.audit
                 .record(
                     &mut scope,

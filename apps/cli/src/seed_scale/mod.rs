@@ -341,6 +341,30 @@ async fn write_audit_chain(
         .await?;
     let db = platform.tx_mut().as_inner();
 
+    // TASK-028: audit.entries is monthly-partitioned — every calendar
+    // month the seeded history spans needs its child first. The chain's
+    // timestamps are `time_at(step)` minutes from the fixed base, so the
+    // span is [base month, month of the last entry's step] — an upper
+    // bound is fine (the registry's function is idempotent, months are
+    // cheap, and stepping is on month starts so no month is skipped).
+    {
+        let total_audit = plan.row_counts().audit_entries as i64;
+        let mut month_start = base_date().with_day(1).expect("day 1 exists");
+        let last_month_start = time_at(100 + total_audit)
+            .date_naive()
+            .with_day(1)
+            .expect("day 1 exists");
+        while month_start <= last_month_start {
+            sqlx::query("SELECT platform.ensure_monthly_partitions($1::date)")
+                .bind(month_start)
+                .execute(&mut **db)
+                .await?;
+            month_start = month_start
+                .checked_add_months(chrono::Months::new(1))
+                .expect("month steps stay in range");
+        }
+    }
+
     // Same lock and tail read as the audit writer: chained appends can
     // never fork, even against a concurrent writer.
     sqlx::query("SELECT pg_advisory_xact_lock($1)")

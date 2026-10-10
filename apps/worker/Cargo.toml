@@ -16,6 +16,7 @@ sanvi-access.workspace = true
 sanvi-advertising.workspace = true
 base64.workspace = true
 chrono.workspace = true
+sanvi-archival.workspace = true
 sanvi-audit.workspace = true
 sanvi-cache.workspace = true
 sanvi-billing.workspace = true

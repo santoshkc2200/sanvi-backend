@@ -53,7 +53,7 @@ pub struct TenantRestoreArgs {
 
 /// Schemas the enumeration covers. Deliberately enumerated rather than
 /// "everything with a tenant_id": a future schema lands here in review.
-const APP_SCHEMAS: &[&str] = &[
+pub(crate) const APP_SCHEMAS: &[&str] = &[
     "tenancy",
     "identity",
     "access",

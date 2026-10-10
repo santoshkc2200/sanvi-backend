@@ -399,12 +399,23 @@ impl WebhookEventRepository for SqlxWebhookEventRepository {
         scope: &mut PlatformScope<'_>,
         record: &WebhookEventRecord,
     ) -> Result<bool, PaymentsError> {
+        // TASK-028: the history table is monthly-partitioned, so its
+        // primary key carries the range key and can no longer arbitrate
+        // global event-id uniqueness. The compact `webhook_event_dedup`
+        // sidecar owns the claim (phase-10 conversion_event_dedup
+        // pattern): claim first, insert history only for the claimer, one
+        // statement inside the caller's transaction.
         let rows_affected = sqlx::query(
-            "INSERT INTO payments.webhook_events
+            "WITH claim AS (
+               INSERT INTO payments.webhook_event_dedup (stripe_event_id)
+               VALUES ($1)
+               ON CONFLICT (stripe_event_id) DO NOTHING
+               RETURNING stripe_event_id
+             )
+             INSERT INTO payments.webhook_events
                (stripe_event_id, account_id, type, api_version,
                  payload, received_at, attempts)
-              VALUES ($1, $2, $3, $4, $5, $6, 0)
-              ON CONFLICT (stripe_event_id) DO NOTHING",
+              SELECT stripe_event_id, $2, $3, $4, $5, $6, 0 FROM claim",
         )
         .bind(&record.stripe_event_id)
         .bind(&record.account_id)

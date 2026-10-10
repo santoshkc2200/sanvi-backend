@@ -6,6 +6,7 @@ mod feature_catalog;
 mod headers_snapshot;
 mod http_contract;
 mod idor_sweep;
+mod partition_registry;
 mod permission_catalog;
 mod privacy_providers;
 mod rls_matrix;

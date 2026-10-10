@@ -1,6 +1,6 @@
 # TASK-028: 11.9 Data lifecycle at scale, archival & tenant offboarding
 
-**Phase:** 11 · **Status:** todo · **Size:** M
+**Phase:** 11 · **Status:** done · **Size:** M
 **Requirement(s):** FR-1128, FR-1129, FR-1130, FR-1131
 **Depends on:** TASK-021, **phase 10 merged**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -144,16 +144,16 @@ and archives by name**. A non-empty result fails the job loudly rather than comp
 
 ## Definition of done
 
-- [ ] Every unbounded table is partitioned from one registry; disabling the job fires the alert.
-- [ ] Archival round-trips with identical rows, ordering, and checksums; the first run's duration and IO
+- [x] Every unbounded table is partitioned from one registry; disabling the job fires the alert.
+- [x] Archival round-trips with identical rows, ordering, and checksums; the first run's duration and IO
       impact are recorded.
-- [ ] A read over an archived range returns an archived-range response, never a silent partial.
-- [ ] Each retention class runs inside its window on scale data, and a stalled class alerts.
-- [ ] Autovacuum is tuned per table size; unused and duplicate indexes removed; sizes committed.
-- [ ] Offboarding export contains every context's data, asserted per context.
-- [ ] Purge removes it, the residual scan finds nothing, and a neighbour tenant is byte-identical.
-- [ ] Offboarding is idempotent.
-- [ ] The purge report separates removed from lawfully retained, and a tenant with completed payments
+- [x] A read over an archived range returns an archived-range response, never a silent partial.
+- [x] Each retention class runs inside its window on scale data, and a stalled class alerts.
+- [x] Autovacuum is tuned per table size; unused and duplicate indexes removed; sizes committed.
+- [x] Offboarding export contains every context's data, asserted per context.
+- [x] Purge removes it, the residual scan finds nothing, and a neighbour tenant is byte-identical.
+- [x] Offboarding is idempotent.
+- [x] The purge report separates removed from lawfully retained, and a tenant with completed payments
       cannot produce an empty retained list.
 
 ## Verification

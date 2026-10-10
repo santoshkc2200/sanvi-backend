@@ -25,6 +25,9 @@ pub fn validation_issue(err: &TenancyError) -> Option<(String, Vec<FieldIssue>)>
         | TenancyError::SlugTaken { .. }
         | TenancyError::TenantNotFound { .. }
         | TenancyError::IllegalTransition { .. }
+        | TenancyError::OffboardingTransition { .. }
+        | TenancyError::OffboardingExportMissing { .. }
+        | TenancyError::Conflict(_)
         | TenancyError::MissingTenantContext
         | TenancyError::InvalidStatus(_)
         | TenancyError::Storage(_)

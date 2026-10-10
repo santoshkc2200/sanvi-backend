@@ -2,6 +2,7 @@
 //! event publishing, GPC middleware, notifications/hashing and the privacy
 //! context's own provider.
 
+pub mod archival_cipher;
 pub mod crypto;
 pub mod events;
 pub mod gpc;

@@ -19,7 +19,7 @@ use crate::domain::PlatformAdminError;
 use super::validation;
 use crate::domain::approvals::ApprovalId;
 use crate::domain::impersonation::{ImpersonationGrantId, ImpersonationMode};
-use crate::domain::ports::{EntitlementAdmin, GrantOverrideOutcome};
+use crate::domain::ports::{EntitlementAdmin, GrantOverrideOutcome, OffboardingSnapshot};
 use crate::domain::views::{TenantAdminView, TenantViewCursor, TenantViewSearch};
 
 /// Application state visible to this context's handlers.
@@ -38,6 +38,8 @@ pub struct PlatformAdminState {
     /// Lives here, never in the tenant API — a tenant cannot set the
     /// platform's own fee.
     pub fees: Option<Arc<dyn crate::domain::ports::ApplicationFeeAdmin>>,
+    /// TASK-028 (FR-1131): the offboarding record's operator surface.
+    pub offboarding: Option<Arc<dyn crate::domain::ports::OffboardingAdmin>>,
 }
 
 /// The platform_admin context's domain-error → HTTP mapping (single place,
@@ -64,6 +66,17 @@ pub fn api_error(err: PlatformAdminError) -> ApiError {
         | PlatformAdminError::ApprovalNotFound { .. }
         | PlatformAdminError::TenantNotFound { .. } => ApiError::NotFound {
             resource: err.to_string(),
+        },
+        // TASK-028 (FR-1131): the offboarding refusals are conflicts with
+        // machine-readable reasons, so a console can tell "tenant not
+        // archived" from "purge before export" without parsing prose.
+        PlatformAdminError::OffboardingConflict(detail) => ApiError::ConflictReasoned {
+            detail,
+            reason: "offboarding-conflict".to_string(),
+        },
+        PlatformAdminError::OffboardingExportMissing { .. } => ApiError::ConflictReasoned {
+            detail: err.to_string(),
+            reason: "offboarding-export-missing".to_string(),
         },
         PlatformAdminError::GrantRevoked { .. } | PlatformAdminError::GrantExpired { .. } => {
             ApiError::Gone {
@@ -834,6 +847,99 @@ pub async fn set_application_fee(
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Created().json(fee_view(&config)))
+}
+
+/// The request body for starting an offboarding (TASK-028, FR-1131).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct RequestOffboardingBody {
+    /// Idempotency key: the same `(tenant, key)` returns the existing
+    /// request instead of forking the record.
+    pub idempotency_key: String,
+}
+
+/// `POST /api/v1/platform/tenants/{id}/offboarding` — record the
+/// export-then-purge request (TASK-028, FR-1131).
+///
+/// This creates the durable offboarding record; the export and the
+/// purge are executed by the operator through the CLI `offboard`
+/// command, which advances this record through a verified-export gate
+/// and a typed confirmation naming the tenant — the replacement for the
+/// two-person confirmation. Idempotent by `(tenant, idempotency_key)`:
+/// a replay answers the existing request.
+#[utoipa::path(
+    post,
+    path = "/api/v1/platform/tenants/{id}/offboarding",
+    tag = "platform_admin",
+    operation_id = "request_offboarding",
+    request_body(content = RequestOffboardingBody),
+    params(("id" = String, Path, description = "Tenant id")),
+    responses(
+        (status = 200, description = "The offboarding record (created now, or the existing one for a repeated key)", body = OffboardingSnapshot),
+        (status = 403, description = "Permission denied or fresh MFA missing", body = sanvi_http::ProblemDetail),
+        (status = 404, description = "Tenant not found", body = sanvi_http::ProblemDetail),
+        (status = 409, description = "Tenant is not suspended or archived (offboarding starts from the documented exit state)", body = sanvi_http::ProblemDetail)
+    )
+)]
+pub async fn request_offboarding(
+    state: web::Data<PlatformAdminState>,
+    subject: CurrentSubject,
+    path: web::Path<TenantId>,
+    body: web::Json<RequestOffboardingBody>,
+    _guard: RequiredPermission,
+    _fresh_mfa: FreshAal2Required,
+) -> Result<impl Responder, ApiError> {
+    let offboarding = state
+        .offboarding
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("offboarding administration is not wired"))?;
+    let key = body.idempotency_key.trim().to_string();
+    if key.is_empty() || key.len() > 200 {
+        let (detail, issues) = sanvi_http::FieldIssue::addressing(
+            "idempotency_key",
+            "must be 1..=200 non-space characters",
+        );
+        return Err(ApiError::Validation { detail, issues });
+    }
+    let snapshot = offboarding
+        .request(path.into_inner(), key, Some(subject.0.user_id))
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::Ok().json(snapshot))
+}
+
+/// `GET /api/v1/platform/tenants/{id}/offboarding` — the tenant's
+/// offboarding status: the record, the export evidence once verified,
+/// and the purge report once purged (TASK-028, FR-1131).
+#[utoipa::path(
+    get,
+    path = "/api/v1/platform/tenants/{id}/offboarding",
+    tag = "platform_admin",
+    operation_id = "get_offboarding",
+    params(("id" = String, Path, description = "Tenant id")),
+    responses(
+        (status = 200, description = "The tenant's latest offboarding record", body = OffboardingSnapshot),
+        (status = 403, description = "Permission denied", body = sanvi_http::ProblemDetail),
+        (status = 404, description = "Tenant not found or no offboarding recorded", body = sanvi_http::ProblemDetail)
+    )
+)]
+pub async fn get_offboarding(
+    state: web::Data<PlatformAdminState>,
+    path: web::Path<TenantId>,
+    _subject: CurrentSubject,
+    _guard: RequiredPermission,
+) -> Result<impl Responder, ApiError> {
+    let offboarding = state
+        .offboarding
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("offboarding administration is not wired"))?;
+    let snapshot = offboarding
+        .get(path.into_inner())
+        .await
+        .map_err(api_error)?
+        .ok_or_else(|| ApiError::NotFound {
+            resource: "offboarding".to_string(),
+        })?;
+    Ok(HttpResponse::Ok().json(snapshot))
 }
 
 /// `DELETE /api/v1/platform/tenants/{id}/application-fee` — disable (the

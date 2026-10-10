@@ -59,7 +59,7 @@ Rules:
 | advertising | tracking/settings.rs | 2 | 2 | yes | covered
 | advertising | tracking/site_key.rs | 0 | 0 | yes | n/a
 | advertising | tracking/upload.rs | 1 | 3 | yes | covered
-| audit | list_audit.rs | 1 | 1 | no | covered
+| audit | list_audit.rs | 1 | 1 | yes | covered
 | audit | verify_chain.rs | 1 | 1 | no | covered
 | billing | checkout.rs | 1 | 1 | yes | covered
 | billing | dunning.rs | 1 | 1 | yes | covered
@@ -135,6 +135,7 @@ Rules:
 | tenancy | check_slug_availability.rs | 1 | 1 | no | covered
 | tenancy | get_tenant.rs | 1 | 1 | no | covered
 | tenancy | list_tenants.rs | 1 | 1 | no | covered
+| tenancy | offboarding.rs | 3 | 4 | yes | covered
 | tenancy | provision_tenant.rs | 1 | 1 | yes | covered
 | tenancy | purge_sweep.rs | 1 | 1 | no | covered
 | tenancy | resolve_tenant.rs | 3 | 3 | yes | covered

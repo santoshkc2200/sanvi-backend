@@ -73,6 +73,11 @@ struct PlanRule {
     schema: &'static str,
     table: &'static str,
     index: &'static str,
+    /// Partitioned tables (TASK-028): the plan walks per-child indexes
+    /// named `<table>_YYYYMM<suffix>`; accept those in addition to the
+    /// parent index name. The pinned contract is the access path shape,
+    /// not which month's child served it.
+    child_index: Option<(&'static str, &'static str)>,
 }
 
 enum Bind {
@@ -104,6 +109,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "billing",
             table: "invoices",
             index: "invoices_tenant_idx",
+            child_index: None,
         },
         PlanRule {
             name: "billing invoices keyset (page 2)",
@@ -114,6 +120,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "billing",
             table: "invoices",
             index: "invoices_tenant_idx",
+            child_index: None,
         },
         PlanRule {
             name: "privacy DSR tenant keyset",
@@ -130,6 +137,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "privacy",
             table: "data_subject_requests",
             index: "dsr_tenant_idx",
+            child_index: None,
         },
         PlanRule {
             name: "identity invitations keyset",
@@ -140,6 +148,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "identity",
             table: "invitations",
             index: "invitations_tenant_idx",
+            child_index: None,
         },
         PlanRule {
             name: "audit tenant seq keyset",
@@ -163,6 +172,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "audit",
             table: "entries",
             index: "audit_entries_tenant_seq_idx",
+            child_index: Some(("entries_", "_tenant_id_seq_idx")),
         },
         PlanRule {
             name: "domains custom_domains keyset",
@@ -173,6 +183,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "domains",
             table: "custom_domains",
             index: "custom_domains_tenant_idx",
+            child_index: None,
         },
         PlanRule {
             name: "domains orders keyset",
@@ -183,6 +194,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "domains",
             table: "orders",
             index: "orders_tenant_idx",
+            child_index: None,
         },
         PlanRule {
             name: "payments disputes keyset",
@@ -193,6 +205,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "payments",
             table: "disputes",
             index: "disputes_tenant_idx",
+            child_index: None,
         },
         // -- keyset pages whose index predates 11.2d: guard the good shape ---
         PlanRule {
@@ -204,6 +217,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "payments",
             table: "payments",
             index: "payments_tenant_created_id_idx",
+            child_index: None,
         },
         PlanRule {
             name: "advertising campaigns keyset",
@@ -214,6 +228,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "advertising",
             table: "campaigns",
             index: "campaigns_tenant_id_id_key",
+            child_index: None,
         },
         PlanRule {
             name: "identity members keyset",
@@ -226,6 +241,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "identity",
             table: "memberships",
             index: "memberships_pkey",
+            child_index: None,
         },
         // -- the resolution and slug lookups in front of every request -------
         PlanRule {
@@ -237,6 +253,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "domains",
             table: "live_hostnames",
             index: "live_hostnames_pkey",
+            child_index: None,
         },
         PlanRule {
             name: "public slug availability",
@@ -245,6 +262,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "tenancy",
             table: "tenants",
             index: "tenants_slug_unique",
+            child_index: None,
         },
         PlanRule {
             name: "platform tenant browse keyset",
@@ -267,6 +285,7 @@ fn rules() -> Vec<PlanRule> {
             schema: "tenancy",
             table: "tenants",
             index: "tenants_created_idx",
+            child_index: None,
         },
     ]
 }
@@ -639,7 +658,26 @@ fn plan_violations(plan: &Value, rule: &PlanRule) -> Vec<String> {
         return violations;
     }
 
-    if !nodes.iter().any(|n| n.index.as_deref() == Some(rule.index)) {
+    let index_matches = |name: &str| {
+        if name == rule.index {
+            return true;
+        }
+        match rule.child_index {
+            Some((prefix, suffix)) => {
+                name.starts_with(prefix)
+                    && name.ends_with(suffix)
+                    && name.len() == prefix.len() + 6 + suffix.len()
+                    && name[prefix.len()..prefix.len() + 6]
+                        .bytes()
+                        .all(|b| b.is_ascii_digit())
+            }
+            None => false,
+        }
+    };
+    if !nodes
+        .iter()
+        .any(|n| n.index.as_deref().is_some_and(index_matches))
+    {
         let found = nodes
             .iter()
             .map(|n| n.describe())
@@ -808,6 +846,7 @@ mod tests {
             schema: "billing",
             table: "invoices",
             index: "invoices_tenant_idx",
+            child_index: None,
         }
     }
 

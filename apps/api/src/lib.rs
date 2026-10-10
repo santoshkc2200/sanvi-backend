@@ -1110,16 +1110,25 @@ pub struct AuditWiring {
     pub verify: Arc<VerifyAuditChain>,
 }
 
-/// Build the audit context's application state.
+/// Build the audit context's application state. `archival_enabled` is
+/// the `platform.archival` feature flag (TASK-028): when on, ranged
+/// reads consult `platform.archives` and refuse archived windows.
 pub fn build_audit_state(
     pool: sanvi_persistence::PgPool,
     ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &AuditConfig,
+    archival_enabled: bool,
 ) -> AuditWiring {
     let tx_manager = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
     let writer: Arc<dyn AuditWriter> = Arc::new(SqlxAuditWriter::new(ids.clone()));
     let reader: Arc<dyn AuditReader> = Arc::new(SqlxAuditReader::new());
-    let list = Arc::new(ListAuditLog::new(tx_manager.clone(), reader.clone()));
+    let mut list = ListAuditLog::new(tx_manager.clone(), reader.clone());
+    if archival_enabled {
+        list = list.with_archive_check(Arc::new(
+            sanvi_audit::adapters::SqlxArchivedRangeCheck::new(),
+        ));
+    }
+    let list = Arc::new(list);
     let verify = Arc::new(VerifyAuditChain::new(
         tx_manager,
         reader.clone(),
@@ -1307,6 +1316,99 @@ pub struct PlatformAdminDependencies {
     pub privacy_lock: Arc<dyn PrivacyLock>,
 }
 
+/// The `OffboardingAdmin` port over the tenancy context's use cases
+/// (TASK-028, FR-1131): the record is tenant-lifecycle data, the
+/// operator surface is the platform control plane.
+struct TenancyOffboardingAdmin {
+    request: Arc<sanvi_tenancy::application::RequestOffboarding>,
+    get: Arc<sanvi_tenancy::application::GetOffboarding>,
+}
+
+fn map_tenancy_offboarding_err(
+    err: sanvi_tenancy::domain::TenancyError,
+) -> sanvi_platform_admin::domain::PlatformAdminError {
+    match err {
+        sanvi_tenancy::domain::TenancyError::TenantNotFound { id } => {
+            sanvi_platform_admin::domain::PlatformAdminError::TenantNotFound {
+                id: parse_tenant_id(&id),
+            }
+        }
+        sanvi_tenancy::domain::TenancyError::OffboardingExportMissing { request_id } => {
+            sanvi_platform_admin::domain::PlatformAdminError::OffboardingExportMissing(request_id)
+        }
+        other => {
+            sanvi_platform_admin::domain::PlatformAdminError::OffboardingConflict(other.to_string())
+        }
+    }
+}
+
+fn parse_tenant_id(raw: &str) -> sanvi_kernel::TenantId {
+    // The raw string came from a TenantId in the first place; the parse
+    // only re-crosses the transport boundary. 1 is the placeholder a
+    // malformed value can never be in practice.
+    raw.parse().unwrap_or_else(|_| {
+        sanvi_kernel::TenantId::from_snowflake(
+            sanvi_kernel::SnowflakeId::try_from(1).expect("1 is a valid snowflake"),
+        )
+    })
+}
+
+#[async_trait::async_trait]
+impl sanvi_platform_admin::domain::OffboardingAdmin for TenancyOffboardingAdmin {
+    async fn request(
+        &self,
+        tenant_id: sanvi_kernel::TenantId,
+        idempotency_key: String,
+        requested_by: Option<sanvi_kernel::UserId>,
+    ) -> Result<
+        sanvi_platform_admin::domain::OffboardingSnapshot,
+        sanvi_platform_admin::domain::PlatformAdminError,
+    > {
+        let request = self
+            .request
+            .execute(tenant_id, idempotency_key, requested_by)
+            .await
+            .map_err(map_tenancy_offboarding_err)?;
+        Ok(to_offboarding_snapshot(request))
+    }
+
+    async fn get(
+        &self,
+        tenant_id: sanvi_kernel::TenantId,
+    ) -> Result<
+        Option<sanvi_platform_admin::domain::OffboardingSnapshot>,
+        sanvi_platform_admin::domain::PlatformAdminError,
+    > {
+        let found = self
+            .get
+            .execute(tenant_id)
+            .await
+            .map_err(map_tenancy_offboarding_err)?;
+        Ok(found.map(to_offboarding_snapshot))
+    }
+}
+
+fn to_offboarding_snapshot(
+    request: sanvi_tenancy::domain::OffboardingRequest,
+) -> sanvi_platform_admin::domain::OffboardingSnapshot {
+    use sanvi_platform_admin::domain::{OffboardingExportEvidence, OffboardingSnapshot};
+    OffboardingSnapshot {
+        id: request.id,
+        tenant_id: request.tenant_id.as_i64(),
+        idempotency_key: request.idempotency_key,
+        status: request.status.as_str().to_string(),
+        export: request.export.map(|export| OffboardingExportEvidence {
+            path: export.path,
+            checksum: export.checksum,
+        }),
+        purge_report: request.purge_report,
+        error: request.error,
+        created_at: request.created_at,
+        updated_at: request.updated_at,
+        completed_at: request.completed_at,
+    }
+}
+
 /// Build the platform_admin context's application state. `entitlement_admin`
 /// is the composition root's adapter over the access context's use cases;
 /// the returned `approval_gate` is the same adapter the access context's
@@ -1324,6 +1426,7 @@ pub fn build_platform_admin_state(
         Arc::new(SqlxPendingApprovalRepository::new());
     let clock: Arc<dyn PlatformAdminClockTrait> = Arc::new(PlatformAdminClock);
     let events: Arc<dyn PlatformAdminEventsTrait> = Arc::new(PlatformAdminEvents::new(ids.clone()));
+    let raw_ids = ids.clone();
     let ids: Arc<dyn PlatformAdminIdsTrait> = Arc::new(PlatformAdminIds::new(ids));
 
     let views: Arc<dyn TenantAdminViewRepository> = Arc::new(SqlxTenantAdminViewRepository::new(
@@ -1379,6 +1482,25 @@ pub fn build_platform_admin_state(
     ));
     let impersonation = Arc::new(sanvi_http::ImpersonationMiddleware { verifier });
 
+    // TASK-028 (FR-1131): the offboarding surface over the tenancy use
+    // cases — same repositories and adapters the tenancy context uses.
+    let tenancy_clock: Arc<dyn sanvi_tenancy::domain::Clock> = Arc::new(TenancyClock);
+    let offboarding_repo: Arc<dyn sanvi_tenancy::domain::OffboardingRepository> =
+        Arc::new(sanvi_tenancy::adapters::repo::SqlxOffboardingRepository::new());
+    let offboarding = Arc::new(TenancyOffboardingAdmin {
+        request: Arc::new(sanvi_tenancy::application::RequestOffboarding::new(
+            tx_manager.clone(),
+            Arc::new(SqlxTenantRepository::new()),
+            offboarding_repo.clone(),
+            tenancy_clock,
+            Arc::new(TenancyIdGenerator::new(raw_ids.clone())),
+        )),
+        get: Arc::new(sanvi_tenancy::application::GetOffboarding::new(
+            tx_manager.clone(),
+            offboarding_repo,
+        )),
+    });
+
     let state = sanvi_platform_admin::adapters::http::PlatformAdminState {
         search_tenants: Arc::new(SearchTenantAdminViews::new(
             tx_manager.clone(),
@@ -1395,6 +1517,7 @@ pub fn build_platform_admin_state(
         )),
         approve: Arc::new(ApproveRequest::new(decide.clone())),
         reject: Arc::new(RejectRequest::new(decide)),
+        offboarding: Some(offboarding),
         fees: Some(Arc::new(
             sanvi_platform_admin::adapters::SqlxFeeRepository::new(
                 tx_manager.clone(),

@@ -3415,6 +3415,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sanvi-archival"
+version = "0.10.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "chrono",
+ "sanvi-kernel",
+ "sanvi-persistence",
+ "sanvi-testsupport",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "sanvi-audit"
 version = "0.10.0"
 dependencies = [
@@ -3424,6 +3443,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "sanvi-archival",
  "sanvi-http",
  "sanvi-kernel",
  "sanvi-persistence",
@@ -3496,18 +3516,22 @@ dependencies = [
 name = "sanvi-cli"
 version = "0.10.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "figment",
  "hex",
  "hmac 0.12.1",
+ "pbkdf2",
  "rand 0.8.7",
  "redis",
  "sanvi-access",
  "sanvi-advertising",
  "sanvi-api",
+ "sanvi-archival",
  "sanvi-audit",
  "sanvi-billing",
  "sanvi-domains",
@@ -3863,6 +3887,8 @@ dependencies = [
  "pbkdf2",
  "prometheus",
  "rand 0.8.7",
+ "sanvi-archival",
+ "sanvi-cache",
  "sanvi-http",
  "sanvi-kernel",
  "sanvi-messaging",
@@ -4033,6 +4059,7 @@ dependencies = [
  "prometheus",
  "sanvi-access",
  "sanvi-advertising",
+ "sanvi-archival",
  "sanvi-audit",
  "sanvi-billing",
  "sanvi-cache",

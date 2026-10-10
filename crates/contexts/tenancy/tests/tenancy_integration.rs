@@ -244,12 +244,19 @@ async fn every_tenant_scoped_table_enforces_rls_isolation() {
     // inside transactions that also update `domains.custom_domains` — the
     // RLS-enforced source of truth (see docs/runbooks/domains.md §1 for the
     // rebuild statement).
+    // Second exemption: `platform.archives` (TASK-028) — the cold-storage
+    // registry's `tenant_id` is a *scope label* (whose rows an archive
+    // holds), never row ownership; it is written and read exclusively by
+    // platform-scope maintenance (the mover, the archival sweep,
+    // offboarding). Same decision as the api-wide rls_matrix's frozen
+    // exemption.
     let tables: Vec<(String, String)> = sqlx::query_as(
         "SELECT table_schema, table_name
          FROM information_schema.columns
          WHERE column_name = 'tenant_id'
            AND table_schema NOT IN ('pg_catalog', 'information_schema')
            AND NOT (table_schema = 'domains' AND table_name = 'live_hostnames')
+           AND NOT (table_schema = 'platform' AND table_name = 'archives')
          ORDER BY table_schema, table_name",
     )
     .fetch_all(&pool)

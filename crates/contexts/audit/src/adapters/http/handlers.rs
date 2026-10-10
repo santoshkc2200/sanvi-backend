@@ -34,6 +34,16 @@ pub fn api_error(err: AuditError) -> ApiError {
         AuditError::ChainMismatch { .. } => ApiError::Internal {
             detail: "audit chain integrity failure".to_string(),
         },
+        // TASK-028 (FR-1129): 409 with a machine-readable reason — the
+        // client can present "this window is in cold storage, restore it
+        // first" instead of a page of partial history.
+        AuditError::ArchivedRange(since, until) => ApiError::ConflictReasoned {
+            detail: format!(
+                "the requested window {since:?}..{until:?} overlaps archived storage; \
+                 restore it via docs/runbooks/archival.md first"
+            ),
+            reason: "archived-range".to_string(),
+        },
         AuditError::Storage(detail) => {
             tracing::error!(error = %detail, "audit storage failure");
             ApiError::from_storage_detail(&detail)
@@ -101,6 +111,7 @@ impl From<AuditPage> for AuditPageView {
         (status = 200, description = "One page of audit entries, newest first", body = AuditPageView),
         (status = 400, description = "Invalid filter value", body = sanvi_http::ProblemDetail),
         (status = 403, description = "Missing platform.audit.read", body = sanvi_http::ProblemDetail),
+        (status = 409, description = "The requested window overlaps archived storage (reason: archived-range); restore it first", body = sanvi_http::ProblemDetail),
         (status = 504, description = "Statement timeout — the request exceeded its budget", body = sanvi_http::ProblemDetail)
     )
 )]

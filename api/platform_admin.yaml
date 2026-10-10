@@ -225,6 +225,73 @@ components:
       - read_only
       - read_write
       type: string
+    OffboardingExportEvidence:
+      properties:
+        checksum:
+          type: string
+        path:
+          type: string
+      required:
+      - path
+      - checksum
+      type: object
+    OffboardingSnapshot:
+      description: |-
+        The operator-facing snapshot of one offboarding request (TASK-028,
+        FR-1131). Mirrors the tenancy record without leaking the tenancy
+        domain into this context; the composition adapter maps between them.
+      properties:
+        completed_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        created_at:
+          format: date-time
+          type: string
+        error:
+          type:
+          - string
+          - 'null'
+        export:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/OffboardingExportEvidence'
+            description: |-
+              Present once the export verified: the artifact path and
+              whole-archive checksum the purge step required.
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        idempotency_key:
+          type: string
+        purge_report:
+          description: |-
+            The purge report: removed per context, lawfully retained with
+            reason and retention end date.
+        status:
+          description: pending | exporting | exported | purging | purged | failed.
+          type: string
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - id
+      - tenant_id
+      - idempotency_key
+      - status
+      - created_at
+      - updated_at
+      type: object
     OverrideView:
       description: One stored override row (operator console).
       properties:
@@ -331,6 +398,17 @@ components:
         - detail
         type: object
       description: RFC 9457 problem detail. This is the only error body the API produces.
+    RequestOffboardingBody:
+      description: The request body for starting an offboarding (TASK-028, FR-1131).
+      properties:
+        idempotency_key:
+          description: |-
+            Idempotency key: the same `(tenant, key)` returns the existing
+            request instead of forking the record.
+          type: string
+      required:
+      - idempotency_key
+      type: object
     SetApplicationFeeRequest:
       properties:
         basis_points:
@@ -1044,5 +1122,100 @@ paths:
       summary: |-
         `DELETE /api/v1/platform/tenants/{id}/entitlements/{feature}` — revoke
         an override (fresh MFA required).
+      tags:
+      - platform_admin
+  /api/v1/platform/tenants/{id}/offboarding:
+    get:
+      operationId: get_offboarding
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingSnapshot'
+          description: The tenant's latest offboarding record
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found or no offboarding recorded
+      summary: |-
+        `GET /api/v1/platform/tenants/{id}/offboarding` — the tenant's
+        offboarding status: the record, the export evidence once verified,
+        and the purge report once purged (TASK-028, FR-1131).
+      tags:
+      - platform_admin
+    post:
+      description: |-
+        This creates the durable offboarding record; the export and the
+        purge are executed by the operator through the CLI `offboard`
+        command, which advances this record through a verified-export gate
+        and a typed confirmation naming the tenant — the replacement for the
+        two-person confirmation. Idempotent by `(tenant, idempotency_key)`:
+        a replay answers the existing request.
+      operationId: request_offboarding
+      parameters:
+      - description: Tenant id
+        in: path
+        name: id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestOffboardingBody'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OffboardingSnapshot'
+          description: The offboarding record (created now, or the existing one for a repeated key)
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Permission denied or fresh MFA missing
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant not found
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Tenant is not suspended or archived (offboarding starts from the documented exit state)
+      summary: |-
+        `POST /api/v1/platform/tenants/{id}/offboarding` — record the
+        export-then-purge request (TASK-028, FR-1131).
       tags:
       - platform_admin

@@ -79,6 +79,12 @@ pub struct FeaturesConfig {
     /// Phase-07 gate: mounts the theming context's routes and state.
     #[serde(default = "default_true")]
     pub theming: bool,
+    /// TASK-028 (FR-1129) gate `platform.archival`: wires the
+    /// archived-range refusal into ranged reads. Off by default — reads
+    /// behave exactly as before until archival is deployed; there are no
+    /// archives to be partial about.
+    #[serde(default)]
+    pub archival: bool,
     /// Phase-08 gate: mounts the domains context's routes and state, and
     /// installs the custom-domain hook into the tenancy resolver.
     #[serde(default = "default_true")]

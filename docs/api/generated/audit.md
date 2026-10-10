@@ -10,7 +10,7 @@ Operation: `list_audit`
 
 List the platform audit trail (operator console).
 
-Responses: 200, 400, 403, 504
+Responses: 200, 400, 403, 409, 504
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |

@@ -301,7 +301,12 @@ fn payments_app(
 > {
     let config = sanvi_api::AppConfig::default();
     let ids = sanvi_testsupport::test_ids();
-    let audit = sanvi_api::build_audit_state(pool.clone(), ids.clone(), &config.audit);
+    let audit = sanvi_api::build_audit_state(
+        pool.clone(),
+        ids.clone(),
+        &config.audit,
+        config.features.archival,
+    );
     let metrics = sanvi_telemetry::MetricsRegistry::prometheus_only();
     let state = sanvi_api::build_payments_state(
         pool,

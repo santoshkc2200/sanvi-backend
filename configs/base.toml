@@ -472,6 +472,17 @@ payments = true
 # flag until future slices introduce background token/conversion work.
 advertising = false
 notifications = true
+# TASK-028 (FR-1129) `platform.archival`: when on, ranged reads over
+# archived windows answer 409 archived-range instead of a silent partial,
+# and the worker's archival sweep runs. Off by default until the archival
+# runbook is rehearsed in staging.
+archival = false
+
+# TASK-028 (FR-1129): the local encrypted volume for archival cold
+# objects (the parked production adapter swaps in object storage behind
+# the same port).
+[archival]
+volume = "./var/archival"
 
 [outbox]
 poll_interval_ms = 1000
@@ -511,12 +522,17 @@ payments_connection_sync_interval_secs = 3600
 payments_metrics_interval_secs = 60
 # 09.6: re-check tax registrations for tenants with automatic tax on.
 payments_tax_check_interval_secs = 86400
-# Phase 10: pre-create the next calendar month's event and metrics partitions.
-advertising_partition_maintenance_interval_secs = 86400
+# Phase 10 → TASK-028 (FR-1128): pre-create the next calendar month's
+# partitions for every registry parent (advertising, audit, outbox,
+# webhook histories) from platform.partitioned_tables.
+partition_maintenance_interval_secs = 86400
 # 10.3: nightly cross-tenant campaign reconciliation sweep (observes only).
 advertising_reconciliation_interval_secs = 86400
 # 10.6: conversion upload worker sweep.
 advertising_conversion_upload_interval_secs = 60
+# TASK-028 (FR-1130): the archival sweep (archive-action retention
+# classes aging out to cold storage).
+archival_sweep_interval_secs = 86400
 # 10.6: conversion retraction worker sweep.
 advertising_conversion_retraction_interval_secs = 60
 # 10.6: audience sync worker sweep.

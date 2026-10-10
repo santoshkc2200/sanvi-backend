@@ -8,6 +8,7 @@
 pub mod check_slug_availability;
 pub mod get_tenant;
 pub mod list_tenants;
+pub mod offboarding;
 pub mod provision_tenant;
 pub mod purge_sweep;
 pub mod resolve_tenant;
@@ -17,6 +18,9 @@ pub mod tenant_settings;
 pub use check_slug_availability::{CheckSlugAvailability, SlugAvailability};
 pub use get_tenant::{GetTenant, TenantView};
 pub use list_tenants::{ListTenants, TenantListView};
+pub use offboarding::{
+    AdvanceOffboarding, GetOffboarding, OffboardingView, RequestOffboarding, SystemClock,
+};
 pub use provision_tenant::{ProvisionTenant, ProvisionTenantCommand};
 pub use purge_sweep::PurgeSweep;
 pub use resolve_tenant::ResolveTenant;
