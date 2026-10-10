@@ -1,0 +1,180 @@
+{
+  "notice_version": "2026-08-19",
+  "backup_retention_days": 30,
+  "jurisdictions": {
+    "eu": {
+      "regime": "gdpr",
+      "consent_model": "opt_in",
+      "response_days": 30,
+      "appeal_window_days": null,
+      "honours_universal_opt_out": true
+    },
+    "jp": {
+      "regime": "appi",
+      "consent_model": "opt_in",
+      "response_days": 14,
+      "appeal_window_days": null,
+      "honours_universal_opt_out": true
+    },
+    "uk": {
+      "regime": "uk_gdpr",
+      "consent_model": "opt_in",
+      "response_days": 30,
+      "appeal_window_days": null,
+      "honours_universal_opt_out": true
+    },
+    "us-ca": {
+      "regime": "us_state",
+      "consent_model": "notice_and_opt_out",
+      "response_days": 45,
+      "appeal_window_days": null,
+      "honours_universal_opt_out": true
+    },
+    "us-co": {
+      "regime": "us_state",
+      "consent_model": "notice_and_opt_out",
+      "response_days": 45,
+      "appeal_window_days": 45,
+      "honours_universal_opt_out": true
+    },
+    "us-ct": {
+      "regime": "us_state",
+      "consent_model": "notice_and_opt_out",
+      "response_days": 45,
+      "appeal_window_days": 45,
+      "honours_universal_opt_out": true
+    },
+    "us-tx": {
+      "regime": "us_state",
+      "consent_model": "notice_and_opt_out",
+      "response_days": 45,
+      "appeal_window_days": 30,
+      "honours_universal_opt_out": true
+    },
+    "us-ut": {
+      "regime": "us_state",
+      "consent_model": "notice_and_opt_out",
+      "response_days": 45,
+      "appeal_window_days": null,
+      "honours_universal_opt_out": true
+    },
+    "us-va": {
+      "regime": "us_state",
+      "consent_model": "notice_and_opt_out",
+      "response_days": 45,
+      "appeal_window_days": 30,
+      "honours_universal_opt_out": true
+    }
+  },
+  "retention": [
+    {
+      "category": "Account",
+      "period_days": 730,
+      "action": "delete"
+    },
+    {
+      "category": "Account",
+      "period_days": 2555,
+      "action": "delete"
+    },
+    {
+      "category": "Account",
+      "period_days": 2555,
+      "action": "delete"
+    },
+    {
+      "category": "Advertising",
+      "period_days": 730,
+      "action": "anonymise"
+    },
+    {
+      "category": "Advertising",
+      "period_days": 1095,
+      "action": "delete"
+    },
+    {
+      "category": "Compliance",
+      "period_days": 365,
+      "action": "delete"
+    },
+    {
+      "category": "Compliance",
+      "period_days": 3650,
+      "action": "anonymise"
+    },
+    {
+      "category": "Compliance",
+      "period_days": 3650,
+      "action": "anonymise"
+    },
+    {
+      "category": "Compliance",
+      "period_days": 3650,
+      "action": "anonymise"
+    },
+    {
+      "category": "Contact",
+      "period_days": 730,
+      "action": "delete"
+    },
+    {
+      "category": "Contact",
+      "period_days": 2555,
+      "action": "delete"
+    },
+    {
+      "category": "Financial",
+      "period_days": 2555,
+      "action": "delete"
+    },
+    {
+      "category": "Financial",
+      "period_days": 3650,
+      "action": "archive"
+    },
+    {
+      "category": "Financial",
+      "period_days": 3650,
+      "action": "archive"
+    },
+    {
+      "category": "Media",
+      "period_days": 1095,
+      "action": "delete"
+    },
+    {
+      "category": "Security",
+      "period_days": 3650,
+      "action": "anonymise"
+    },
+    {
+      "category": "advertising_budget_alert",
+      "period_days": 1095,
+      "action": "delete"
+    },
+    {
+      "category": "advertising_budget_cap",
+      "period_days": 1095,
+      "action": "delete"
+    },
+    {
+      "category": "advertising_campaign_change",
+      "period_days": 1095,
+      "action": "delete"
+    }
+  ],
+  "subprocessors": {
+    "Google Ads": {
+      "purpose": "Advertising and conversions measurement",
+      "location": "United States",
+      "role": "service_provider",
+      "transfer_mechanism": "dpf"
+    },
+    "Meta": {
+      "purpose": "Advertising and conversions measurement",
+      "location": "United States",
+      "role": "third_party",
+      "transfer_mechanism": "dpf"
+    }
+  }
+}

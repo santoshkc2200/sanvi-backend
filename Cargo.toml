@@ -29,6 +29,7 @@ members = [
     "tests/resilience",
     "tests/system",
     "tests/recovery",
+    "tests/compliance",
     "apps/worker",
     "apps/cli",
 ]

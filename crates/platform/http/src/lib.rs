@@ -43,8 +43,8 @@ pub mod tracing;
 
 pub use abuse::{AbuseCounter, AbuseSurface, QuotaVerdict};
 pub use authn::{
-    AuthnMiddleware, CurrentSubject, FreshAal2Policy, FreshAal2Required, OptionalSubject,
-    SessionChannel, SessionToken, SessionVerifier, Subject,
+    AuthnMiddleware, CurrentSubject, FreshAal2Policy, FreshAal2Required, GpcDevice,
+    OptionalSubject, SessionChannel, SessionToken, SessionVerifier, Subject,
 };
 pub use authz::{
     Decision, PermissionGate, PermissionMap, RequiredPermission, ResourceRef, ResourceSpec,

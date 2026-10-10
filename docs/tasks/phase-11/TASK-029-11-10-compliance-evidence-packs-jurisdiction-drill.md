@@ -1,6 +1,6 @@
 # TASK-029: 11.10 Compliance evidence generation & propagation proof
 
-**Phase:** 11 · **Status:** todo · **Size:** M
+**Phase:** 11 · **Status:** done · **Size:** M
 **Requirement(s):** FR-1132, FR-1133, FR-1134, FR-1135, NFR-1112
 **Depends on:** TASK-028, **phase 10 merged**
 **Created:** 2026-08-21 · **Rewritten:** 2026-09-01
@@ -134,15 +134,15 @@ waits on counsel (parked); the diff does not.
 
 ## Definition of done
 
-- [ ] `just test-provider-completeness` fails on a context registered in neither path, proven in the PR.
-- [ ] An evidence pack generates for every jurisdiction, stamped with build and period.
-- [ ] Two runs on the same configuration and period are byte-identical; a configuration change is
+- [x] `just test-provider-completeness` fails on a context registered in neither path, proven in the PR.
+- [x] An evidence pack generates for every jurisdiction, stamped with build and period.
+- [x] Two runs on the same configuration and period are byte-identical; a configuration change is
       reflected without code changes.
-- [ ] Every DSR path completes inside its jurisdiction's statutory deadline, with timings committed.
-- [ ] GPC on a tenant custom domain suppresses tracking on the first request, with the snapshot recorded.
-- [ ] A seeded subject is verifiably gone from every erasure destination; retained classes are justified.
-- [ ] The breach calculator is correct on the multi-state / EU-subject / encrypted-at-rest fixture.
-- [ ] `just notice-diff` is generated and deterministic.
+- [x] Every DSR path completes inside its jurisdiction's statutory deadline, with timings committed.
+- [x] GPC on a tenant custom domain suppresses tracking on the first request, with the snapshot recorded.
+- [x] A seeded subject is verifiably gone from every erasure destination; retained classes are justified.
+- [x] The breach calculator is correct on the multi-state / EU-subject / encrypted-at-rest fixture.
+- [x] `just notice-diff` is generated and deterministic.
 
 ## Verification
 

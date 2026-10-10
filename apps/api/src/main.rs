@@ -27,12 +27,7 @@ use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
 use sanvi_kernel::{RawIdGenerator, SnowflakeGenerator};
 use sanvi_messaging::connect_redis;
 use sanvi_persistence::build_pool;
-use sanvi_privacy::adapters::PrivacyContextProvider;
-use sanvi_privacy::adapters::repos::{
-    SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository, SqlxSignalRepository,
-    SqlxSubjectRepository,
-};
-use sanvi_privacy::domain::ProviderRegistry;
+use sanvi_privacy::adapters::repos::SqlxDsrRepository;
 use sanvi_system::domain::BuildInfo;
 
 /// Load configuration: `configs/base.toml` → `configs/{env}.toml` (selected
@@ -344,106 +339,23 @@ async fn main() -> ExitCode {
 
     // Phase 05: every context crate registers a PersonalDataProvider; the
     // registry the DSR saga fans out over and the CI test proves complete.
+    // Built by the shared `privacy_provider_registry` so the API, the CLI
+    // drills and the compliance test crate cannot drift apart.
     let privacy = if config.features.privacy {
-        let privacy_providers: ProviderRegistry = vec![
-            Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
-            Arc::new(
-                sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
-                    privacy_tx.clone(),
-                    Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
-                ),
-            ),
-            Arc::new(
-                sanvi_identity::adapters::privacy_provider::IdentityPrivacyProvider::new(
-                    privacy_tx.clone(),
-                    Arc::new(sanvi_identity::adapters::repo::SqlxUserRepository::new()),
-                    Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),
-                    Arc::new(sanvi_identity::adapters::repo::SqlxLinkedAccountRepository::new()),
-                    Arc::new(sanvi_identity::adapters::repo::SqlxInvitationRepository::new()),
-                    Arc::new(sanvi_identity::adapters::repo::SqlxLinkIntentRepository::new()),
-                    Arc::new(
-                        sanvi_identity::adapters::HttpKratosClient::new(
-                            config.ory.kratos_public_url.clone(),
-                            Some(config.ory.kratos_admin_url.clone()),
-                            config.identity.session_cookie_name.clone(),
-                        )
-                        .expect("kratos client construction is infallible"),
-                    ),
-                    Arc::new(sanvi_identity::adapters::SystemClock),
-                ),
-            ),
-            Arc::new(
-                sanvi_access::adapters::privacy_provider::AccessPrivacyProvider::new(
-                    privacy_tx.clone(),
-                    Arc::new(sanvi_access::adapters::SqlxEntitlementRepository::new()),
-                    Arc::new(
-                        sanvi_access::adapters::HttpKetoClient::new(
-                            config.ory.keto_read_url.clone(),
-                            config.ory.keto_write_url.clone(),
-                        )
-                        .expect("keto client construction is infallible"),
-                    ),
-                ),
-            ),
-            Arc::new(sanvi_audit::adapters::AuditPrivacyProvider::new(
-                privacy_tx.clone(),
-                Arc::new(sanvi_audit::adapters::SqlxAuditReader::new()),
-                audit.writer.clone(),
-            )),
-            Arc::new(
-                sanvi_platform_admin::adapters::privacy_provider::PlatformAdminPrivacyProvider::new(
-                    privacy_tx.clone(),
-                    Arc::new(
-                        sanvi_platform_admin::adapters::SqlxImpersonationGrantRepository::new(),
-                    ),
-                    Arc::new(sanvi_platform_admin::adapters::SqlxPendingApprovalRepository::new()),
-                    privacy_lock.clone(),
-                ),
-            ),
-            Arc::new(
-                sanvi_billing::adapters::privacy_provider::BillingPrivacyProvider::new(
-                    privacy_tx.clone(),
-                    Arc::new(sanvi_billing::adapters::SqlxSubscriptionRepository::new()),
-                    Arc::new(sanvi_billing::adapters::SqlxCheckoutStateRepository::new()),
-                    Arc::new(sanvi_billing::adapters::SqlxInvoiceRepository::new()),
-                    Arc::new(sanvi_billing::adapters::SqlxWebhookEventRepository::new()),
-                    Arc::new(sanvi_billing::adapters::HttpStripeClient::new(
-                        config.billing.stripe_api_base.clone(),
-                        config.billing.stripe_api_key.expose_secret().clone(),
-                        config.billing.stripe_api_version.clone(),
-                        None,
-                    )),
-                ),
-            ),
-            Arc::new(PrivacyContextProvider::new(
-                privacy_tx.clone(),
-                Arc::new(SqlxSubjectRepository::new()),
-                Arc::new(SqlxConsentRepository::new()),
-                Arc::new(SqlxSignalRepository::new()),
-                Arc::new(SqlxDirectiveRepository::new()),
-            )),
-            Arc::new(
-                sanvi_localization::adapters::LocalizationPrivacyProvider::new(privacy_tx.clone()),
-            ),
-            Arc::new(
-                sanvi_theming::adapters::privacy_provider::ThemingPrivacyProvider::new(
-                    privacy_tx.clone(),
-                ),
-            ),
-            Arc::new(
-                sanvi_domains::adapters::privacy_provider::DomainsPrivacyProvider::new(
-                    privacy_tx.clone(),
-                ),
-            ),
-            Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
-                privacy_tx.clone(),
-            )),
-            Arc::new(
-                sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
-            ),
-            Arc::new(sanvi_media::adapters::MediaPrivacyProvider::new()),
-            Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
-        ];
+        let privacy_providers =
+            sanvi_api::privacy_provider_registry(&sanvi_api::PrivacyProviderDeps {
+                tx: privacy_tx.clone(),
+                kratos_public_url: config.ory.kratos_public_url.clone(),
+                kratos_admin_url: config.ory.kratos_admin_url.clone(),
+                keto_read_url: config.ory.keto_read_url.clone(),
+                keto_write_url: config.ory.keto_write_url.clone(),
+                session_cookie_name: config.identity.session_cookie_name.clone(),
+                stripe_api_base: config.billing.stripe_api_base.clone(),
+                stripe_api_key: config.billing.stripe_api_key.clone(),
+                stripe_api_version: config.billing.stripe_api_version.clone(),
+                audit_writer: audit.writer.clone(),
+                privacy_lock: privacy_lock.clone(),
+            });
         Some(build_privacy_state(
             pool.clone(),
             ids.clone(),

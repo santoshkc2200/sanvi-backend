@@ -5,6 +5,7 @@
 //! `main.rs` is a thin binary: read config → init telemetry → connect
 //! infrastructure → inject adapters into use cases → serve.
 
+pub mod compliance;
 pub mod config;
 pub mod openapi;
 
@@ -197,9 +198,10 @@ use sanvi_privacy::{
     adapters::{
         DisabledEnvelopeCrypto, GpcSignalMiddleware,
         LoggingNotifications as PrivacyLoggingNotifications, LoggingSubProcessorNotifier,
-        OutboxEventPublisher as PrivacyEvents, RuleBasedObligationCalculator, Sha256Hasher,
-        SqlxAppealRepository, SqlxAuthorizedAgentRepository, SqlxBreachRepository,
-        SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository, SqlxEnvelopeCrypto,
+        OutboxEventPublisher as PrivacyEvents, PrivacyContextProvider,
+        RuleBasedObligationCalculator, Sha256Hasher, SqlxAppealRepository,
+        SqlxAuthorizedAgentRepository, SqlxBreachRepository, SqlxConsentRepository,
+        SqlxDirectiveRepository, SqlxDsrRepository, SqlxEnvelopeCrypto,
         SqlxExportArtifactRepository, SqlxJurisdictionRepository, SqlxLegalHoldRepository,
         SqlxParticipantRepository, SqlxProcessingActivityRepository, SqlxRequestMetricsRepository,
         SqlxRetentionRuleRepository, SqlxRiskAssessmentRepository, SqlxSignalRepository,
@@ -1718,6 +1720,119 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
         })?;
         Ok(locked)
     }
+}
+
+/// Everything the shared provider-registry builder needs from the
+/// environment. The CLI and the compliance tests pass local or unconfigured
+/// values for the external systems: a provider only calls Kratos/Keto/
+/// Stripe when the erased subject actually has rows in its context, so a
+/// drill subject with data only in the privacy ledger never touches them.
+pub struct PrivacyProviderDeps {
+    pub tx: sanvi_persistence::TxManager,
+    pub kratos_public_url: String,
+    pub kratos_admin_url: String,
+    pub keto_read_url: String,
+    pub keto_write_url: String,
+    pub session_cookie_name: String,
+    pub stripe_api_base: String,
+    pub stripe_api_key: sanvi_telemetry::Redacted<String>,
+    pub stripe_api_version: String,
+    pub audit_writer: Arc<dyn AuditWriter>,
+    pub privacy_lock: Arc<dyn sanvi_platform_admin::domain::PrivacyLock>,
+}
+
+/// The phase-05 provider registry, built once here so the API binary, the
+/// CLI's compliance drills and the compliance test crate cannot drift: a
+/// context that quietly never joined fails `build_privacy_state`'s
+/// registry assert at the same call site for every consumer.
+pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry {
+    let tx = &deps.tx;
+    vec![
+        Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
+        Arc::new(
+            sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
+                tx.clone(),
+                Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),
+            ),
+        ),
+        Arc::new(
+            sanvi_identity::adapters::privacy_provider::IdentityPrivacyProvider::new(
+                tx.clone(),
+                Arc::new(sanvi_identity::adapters::repo::SqlxUserRepository::new()),
+                Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),
+                Arc::new(sanvi_identity::adapters::repo::SqlxLinkedAccountRepository::new()),
+                Arc::new(sanvi_identity::adapters::repo::SqlxInvitationRepository::new()),
+                Arc::new(sanvi_identity::adapters::repo::SqlxLinkIntentRepository::new()),
+                Arc::new(
+                    HttpKratosClient::new(
+                        deps.kratos_public_url.clone(),
+                        Some(deps.kratos_admin_url.clone()),
+                        deps.session_cookie_name.clone(),
+                    )
+                    .expect("kratos client construction is infallible"),
+                ),
+                Arc::new(sanvi_identity::adapters::SystemClock),
+            ),
+        ),
+        Arc::new(
+            sanvi_access::adapters::privacy_provider::AccessPrivacyProvider::new(
+                tx.clone(),
+                Arc::new(SqlxEntitlementRepository::new()),
+                Arc::new(
+                    HttpKetoClient::new(deps.keto_read_url.clone(), deps.keto_write_url.clone())
+                        .expect("keto client construction is infallible"),
+                ),
+            ),
+        ),
+        Arc::new(sanvi_audit::adapters::AuditPrivacyProvider::new(
+            tx.clone(),
+            Arc::new(SqlxAuditReader::new()),
+            deps.audit_writer.clone(),
+        )),
+        Arc::new(
+            sanvi_platform_admin::adapters::privacy_provider::PlatformAdminPrivacyProvider::new(
+                tx.clone(),
+                Arc::new(sanvi_platform_admin::adapters::SqlxImpersonationGrantRepository::new()),
+                Arc::new(sanvi_platform_admin::adapters::SqlxPendingApprovalRepository::new()),
+                deps.privacy_lock.clone(),
+            ),
+        ),
+        Arc::new(
+            sanvi_billing::adapters::privacy_provider::BillingPrivacyProvider::new(
+                tx.clone(),
+                Arc::new(SqlxSubscriptionRepository::new()),
+                Arc::new(SqlxCheckoutStateRepository::new()),
+                Arc::new(SqlxInvoiceRepository::new()),
+                Arc::new(SqlxWebhookEventRepository::new()),
+                Arc::new(HttpStripeClient::new(
+                    deps.stripe_api_base.clone(),
+                    deps.stripe_api_key.expose_secret().clone(),
+                    deps.stripe_api_version.clone(),
+                    None,
+                )),
+            ),
+        ),
+        Arc::new(PrivacyContextProvider::new(
+            tx.clone(),
+            Arc::new(SqlxSubjectRepository::new()),
+            Arc::new(SqlxConsentRepository::new()),
+            Arc::new(SqlxSignalRepository::new()),
+            Arc::new(SqlxDirectiveRepository::new()),
+        )),
+        Arc::new(sanvi_localization::adapters::LocalizationPrivacyProvider::new(tx.clone())),
+        Arc::new(
+            sanvi_theming::adapters::privacy_provider::ThemingPrivacyProvider::new(tx.clone()),
+        ),
+        Arc::new(
+            sanvi_domains::adapters::privacy_provider::DomainsPrivacyProvider::new(tx.clone()),
+        ),
+        Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
+            tx.clone(),
+        )),
+        Arc::new(sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(tx.clone())),
+        Arc::new(sanvi_media::adapters::MediaPrivacyProvider::new()),
+        Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
+    ]
 }
 
 /// Build the privacy context's application state. `providers` is the
@@ -3906,6 +4021,7 @@ pub fn build_app(
 
     // Phase-04 gate: with the flag off, the billing state is not wired and
     // no billing route is mounted.
+    let advertising_mounted = advertising.is_some();
     let app = match billing {
         Some(billing_state) => app
             .app_data(web::Data::new(billing_state))
@@ -3934,24 +4050,46 @@ pub fn build_app(
     let app = match advertising {
         Some(state) => app
             .app_data(web::Data::new(state))
-            .configure(advertising_routes::tracking_public_routes)
             .configure(advertising_routes::advertising_platform_routes),
         None => app,
     };
 
     // Phase-05 gate: privacy routes (subject-scoped scope wrapped with the
-    // GPC middleware, public disclosures, platform control plane).
+    // GPC middleware, public disclosures, platform control plane). The
+    // storefront track beacon is wrapped with the same middleware when the
+    // privacy context is wired: `Sec-GPC` arrives on the tenant's own
+    // domain, on the very first request — the storefront code path phase
+    // 05's original scope never saw (TASK-029 11.10 proves it by drill).
+    // With advertising off there is no beacon to wrap; with privacy off the
+    // beacon mounts unwrapped, as before.
     let app = match privacy {
-        Some(wiring) => app
-            .app_data(web::Data::new(wiring.state))
-            .configure(sanvi_privacy::routes::public_routes)
-            .configure(sanvi_privacy::routes::privacy_platform_routes)
-            .service(
-                web::scope("/api/v1/privacy")
-                    .wrap(wiring.gpc)
-                    .configure(sanvi_privacy::routes::privacy_routes),
-            ),
-        None => app,
+        Some(wiring) => {
+            let gpc = wiring.gpc.clone();
+            let app = app
+                .app_data(web::Data::new(wiring.state))
+                .configure(sanvi_privacy::routes::public_routes)
+                .configure(sanvi_privacy::routes::privacy_platform_routes)
+                .service(
+                    web::scope("/api/v1/privacy")
+                        .wrap(wiring.gpc)
+                        .configure(sanvi_privacy::routes::privacy_routes),
+                );
+            if advertising_mounted {
+                app.service(
+                    web::scope("")
+                        .wrap(gpc)
+                        .configure(advertising_routes::tracking_public_routes),
+                )
+            } else {
+                app
+            }
+        }
+        None => match advertising_mounted {
+            // The advertising state was registered above; the beacon mounts
+            // unwrapped because no GPC middleware exists without privacy.
+            true => app.configure(advertising_routes::tracking_public_routes),
+            false => app,
+        },
     };
 
     // Phase-06 gate: localization routes plus the problem-body translator

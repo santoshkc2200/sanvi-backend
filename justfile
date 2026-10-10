@@ -349,6 +349,48 @@ partition-check:
     eval "$(./scripts/test-db.sh up)"
     cargo nextest run -p sanvi-api --test integration partition_registry
 
+# TASK-029 (11.10): the provider-completeness gate — a context registered
+# in neither DSR path fails at boot (the composition-root assert, proven
+# here by feeding the shared builder an incomplete registry), the registry
+# names cover exactly the workspace's context crates, and a real access +
+# erasure request fan out over the real registry and complete.
+test-provider-completeness:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p compliance-tests --test provider_completeness
+
+# TASK-029 (11.10): the DSR statutory-clock drill — access, erasure, US
+# opt-out and appeal for every jurisdiction in the live configuration,
+# each timed against its own statutory deadline. Runs the same drill the
+# `dsr_paths` test runs; the committed timings land in
+# docs/compliance/evidence/dsr-timings/.
+dsr-check *args:
+    cargo run -p sanvi-cli -- dsr-check {{args}}
+
+# TASK-029 (11.10): the per-jurisdiction evidence packs, generated from
+# live configuration and stamped with build + period. Two runs on the same
+# configuration and period are byte-identical.
+evidence-pack *args:
+    cargo run -p sanvi-cli -- evidence-pack {{args}}
+
+# TASK-029 (11.10): the generated notice against the approved baseline —
+# the diff is produced by the generator, exit 1 on drift, 2 when no
+# baseline is stored yet (counsel's approval is parked; the diff is not).
+notice-diff *args:
+    cargo run -p sanvi-cli -- notice-diff {{args}}
+
+# TASK-029 (11.10): the whole compliance drill suite — completeness, the
+# statutory-clock paths (including the GPC-on-custom-domain drill in the
+# api integration target), erasure propagation and the breach fixture.
+test-compliance:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(./scripts/test-db.sh up)"
+    cargo nextest run -p compliance-tests
+    cargo nextest run -p sanvi-api --test integration gpc_storefront
+
+
 # TASK-021 (FR-1108/FR-1110): the perf test target — the bounded-collections
 # contract gate (11.2b) and the EXPLAIN plan gate for the profiled read
 # models (11.2d); statement-count guards (11.2e) join it as their slice

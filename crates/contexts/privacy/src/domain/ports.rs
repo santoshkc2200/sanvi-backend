@@ -891,6 +891,71 @@ pub trait SubProcessorNotifier: Send + Sync {
     ) -> Result<(), PrivacyError>;
 }
 
+/// One destination an erasure must reach beyond the provider registry:
+/// the archives, the backup window, the caches, the search indexes, the
+/// ad-platform suppression lists. Adapters live with the facility they
+/// drive (the composition root adapts foreign contexts onto this port);
+/// [`crate::application::erasure_propagation::PropagateErasure`] fans out
+/// over the registered destinations and every outcome is ledgered.
+#[async_trait]
+pub trait ErasureDestination: Send + Sync {
+    /// Stable ledger name (`archives`, `caches`, `backup_window`, …).
+    fn name(&self) -> &'static str;
+
+    /// What reaching this destination means, in one sentence — the ledger
+    /// records it verbatim so the evidence pack needs no second source.
+    fn description(&self) -> String;
+
+    async fn propagate_erasure(
+        &self,
+        subject: &SubjectRef,
+        tenant_id: Option<TenantId>,
+    ) -> Result<EraseDestinationOutcome, PrivacyError>;
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EraseDestinationOutcome {
+    /// Rows/entries purged at this destination (0 when documented-only).
+    pub purged: u64,
+    /// What this destination lawfully retains: each item with its basis
+    /// and, where the retention is time-boxed, the date it ends.
+    pub retained: Vec<DestinationRetainedItem>,
+}
+
+impl EraseDestinationOutcome {
+    pub fn purged(purged: u64) -> Self {
+        Self {
+            purged,
+            retained: Vec::new(),
+        }
+    }
+
+    pub fn retained(retained: Vec<DestinationRetainedItem>) -> Self {
+        Self {
+            purged: 0,
+            retained,
+        }
+    }
+
+    pub fn status(&self) -> &'static str {
+        if self.retained.is_empty() {
+            "purged"
+        } else {
+            "retained"
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DestinationRetainedItem {
+    /// What is retained (class/rows and where they live).
+    pub detail: String,
+    /// Why (the lawful basis, in plain words).
+    pub reason: String,
+    /// When the retention ends, for time-boxed retention.
+    pub retains_until: Option<DateTime<Utc>>,
+}
+
 /// Computes per-jurisdiction breach notification obligations.
 pub trait BreachObligationCalculator: Send + Sync {
     fn compute(

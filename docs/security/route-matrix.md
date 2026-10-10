@@ -262,9 +262,10 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
+| apps/api/src/compliance.rs | `047d28409909cf5a4200fd6c2e6395d021cbc21c3f73c447c7bc3728da133830` |
 | apps/api/src/config.rs | `bc520742a7f19b3955ca7dc5d28dcf30e67d3fd26d169a649d37c6a6a5fb80f5` |
-| apps/api/src/lib.rs | `3f53608cae9a2807b808debd0bc68a27b4045d2650caa5a1528b4865bb5f5c29` |
-| apps/api/src/main.rs | `cef10eb08f0b82a18d66c1b8a4b5f5fe0dc092c93c373d66770045cb2ee9603f` |
+| apps/api/src/lib.rs | `6e4793e729dfa1059f3561902a32fdec62ff904bdaf88971c764947381b4173a` |
+| apps/api/src/main.rs | `ad493bd84ecb83df88602e63835b74ead92aefe3630b34977b6362a8a911cd5b` |
 | apps/api/src/openapi.rs | `0f254b54668cec53913d9cf6bcebaf30f8ab0e5c7588aa711dfaa0f2b0c27eef` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
@@ -275,7 +276,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/advertising/src/adapters/http/mod.rs | `ffede5d48c9c71cb0210209c6561d8e9caa69e7b3d079948bb4882eb1709e8d0` |
 | crates/contexts/advertising/src/adapters/http/routes.rs | `3452d1f14ce42e698112c0889872484aa72b7b30905a204dc3a9eb4d5379d225` |
 | crates/contexts/advertising/src/adapters/http/state.rs | `8e781113d56bd279c104c7dea631be2b89699739e08aead20f632480ec318c22` |
-| crates/contexts/advertising/src/adapters/http/tracking_handlers.rs | `7d9bff9bc3a6154ea4d903d2d06c115db1ed1ab15cca8c0620390119868ebe50` |
+| crates/contexts/advertising/src/adapters/http/tracking_handlers.rs | `90849d1d29a90890ed80f619de4a5c068ae7223c57edb5f95b3ce9c77685d5c5` |
 | crates/contexts/advertising/src/adapters/http/validation.rs | `24c1daf2daebea77db631fb2b2492623f367ec38c95604adb2ea39f70bc02b28` |
 | crates/contexts/audit/src/adapters/http/catalog.rs | `f76f01c97fe5e578e2a4e63911ca9c21a1d24e8db9cf88d74ad99bc1187349e4` |
 | crates/contexts/audit/src/adapters/http/handlers.rs | `891efde99f0bca0f874540b59ad10948e8765db5e8daf17a498d46ac73cecbf1` |
@@ -338,7 +339,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/theming/src/adapters/http/validation.rs | `ddaff393fd59b01ee9c27a4b54cf658d667faa912d3d9641897c12fc426bcc2c` |
 | crates/platform/http/src/abuse.rs | `fe3b7ff287754bdd2326b13f3a8d96abdd726d15a3578c2271394c40298c7ff3` |
 | crates/platform/http/src/api_limits.rs | `62825bda89fbf886a372b0886061bd98294b042dda75b7a7f5f75716fe9b5722` |
-| crates/platform/http/src/authn.rs | `5986cd946d5e42e793685dee62ecf3333378221ff7b4df468adf65f74a05f310` |
+| crates/platform/http/src/authn.rs | `38a33456c29a408472135eaac06072dde1243b0f8cd7f78491c35f31c3ff68c4` |
 | crates/platform/http/src/authz.rs | `4e06a30a073ea8f42f86d3de45739629bd0fef23620bef4c19668d7f4b0ebcbc` |
 | crates/platform/http/src/cache_headers.rs | `0cb999a373e5bcfe2a581f2f07f2e5f50c73c156f8676b29a2e09be6b3d7ab82` |
 | crates/platform/http/src/compression.rs | `a0c0872e1b6a595271c13a49bf933a0b8157b7ba42d8efd2545ebb7a2f607e46` |
@@ -350,7 +351,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/platform/http/src/external_quotas.rs | `949659a2a5793561b341350338605480d31797b3717e6e53906913fe04a50ae0` |
 | crates/platform/http/src/features.rs | `fc8d560cac864dff057446f468a3514f443ba5f46344d5885becec32e93c9109` |
 | crates/platform/http/src/impersonation.rs | `54e109462b3223b13a98242c208e3fd010673f6bbc5a8848111aa4b41accdb7e` |
-| crates/platform/http/src/lib.rs | `4a80e6742af6bc3e330fb2bb6e54c697e3352260717c6554923e3d1e1c325aca` |
+| crates/platform/http/src/lib.rs | `4e4c3f72859276aec7d48ff8df7da61efb620e00eb299a41012ab1f11c0bf346` |
 | crates/platform/http/src/load_shed.rs | `8afa52b0585e06eef873a6329afc03218e8cc85dedb227050157b909e8ccd77c` |
 | crates/platform/http/src/locale.rs | `a1d1658851376c3d1944209351f29582f335dde199c71b1a3474f2ffc7818628` |
 | crates/platform/http/src/metrics.rs | `21834d557e2491e57b774012a4885cb77ee8060a61405edb16189bb497a6d9f7` |

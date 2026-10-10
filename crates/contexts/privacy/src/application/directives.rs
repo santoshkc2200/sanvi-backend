@@ -256,10 +256,22 @@ impl PersistedDirectiveResolver {
         let mut signals: Vec<DirectiveInput> = Vec::new();
         match subject.kind {
             crate::domain::SubjectKind::Device => {
-                let device_ref = subject
-                    .canonical_key()
-                    .strip_prefix("device:")
-                    .unwrap_or("");
+                // Signals are keyed by the bare device ref, but the subject
+                // key comes in two shapes: the middleware's global
+                // `device:{ref}` and the tenant-scoped
+                // `device:{tenant_id}:{ref}` a storefront subject carries
+                // (device refs are minted per site, so they are unique only
+                // within that tenant). The tenant segment must be stripped
+                // here or a tenant-device's recorded signal is silently
+                // never consulted — the storefront GPC path (TASK-029
+                // 11.10) drills exactly this case.
+                let device_ref = match subject.canonical_key().strip_prefix("device:") {
+                    Some(rest) => match rest.split_once(':') {
+                        Some((_tenant_id, device_ref)) => device_ref,
+                        None => rest,
+                    },
+                    None => "",
+                };
                 if let Some(signal) = self
                     .signals
                     .latest_for_device(&mut scope, device_ref)

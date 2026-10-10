@@ -1,0 +1,472 @@
+{
+  "run_at": "2026-10-10T23:00:32.585499Z",
+  "environment": "local",
+  "build_sha": "uncommitted",
+  "jurisdictions": 9,
+  "drills": [
+    {
+      "jurisdiction": "eu",
+      "drill": "access",
+      "measured_ms": 296,
+      "deadline_ms": 2592000000,
+      "deadline_source": "eu response window (30 days, extendable 30)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:29.409115+00:00",
+        "due_at": "2026-11-09T23:00:29.368539+00:00",
+        "participants": 15,
+        "request_id": "102540789648732160"
+      }
+    },
+    {
+      "jurisdiction": "eu",
+      "drill": "erasure",
+      "measured_ms": 36,
+      "deadline_ms": 2592000000,
+      "deadline_source": "eu response window (30 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:29.691423+00:00",
+        "due_at": "2026-11-09T23:00:29.665199+00:00",
+        "participants": 15,
+        "request_id": "102540790894440448"
+      }
+    },
+    {
+      "jurisdiction": "eu",
+      "drill": "opt_out",
+      "measured_ms": 6,
+      "deadline_ms": 0,
+      "deadline_source": "eu: opt-out effective immediately (no statutory window)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "eu",
+      "drill": "appeal",
+      "measured_ms": 0,
+      "deadline_ms": 0,
+      "deadline_source": "eu provides no appeal right — drill not applicable",
+      "within_deadline": true,
+      "detail": {
+        "not_applicable": true
+      }
+    },
+    {
+      "jurisdiction": "jp",
+      "drill": "access",
+      "measured_ms": 233,
+      "deadline_ms": 1209600000,
+      "deadline_source": "jp response window (14 days, extendable 0)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:29.726690+00:00",
+        "due_at": "2026-10-24T23:00:29.709637+00:00",
+        "participants": 15,
+        "request_id": "102540791078989825"
+      }
+    },
+    {
+      "jurisdiction": "jp",
+      "drill": "erasure",
+      "measured_ms": 24,
+      "deadline_ms": 1209600000,
+      "deadline_source": "jp response window (14 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:29.963749+00:00",
+        "due_at": "2026-10-24T23:00:29.946133+00:00",
+        "participants": 15,
+        "request_id": "102540792073039872"
+      }
+    },
+    {
+      "jurisdiction": "jp",
+      "drill": "opt_out",
+      "measured_ms": 4,
+      "deadline_ms": 0,
+      "deadline_source": "jp: opt-out effective immediately (no statutory window)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "jp",
+      "drill": "appeal",
+      "measured_ms": 0,
+      "deadline_ms": 0,
+      "deadline_source": "jp provides no appeal right — drill not applicable",
+      "within_deadline": true,
+      "detail": {
+        "not_applicable": true
+      }
+    },
+    {
+      "jurisdiction": "uk",
+      "drill": "access",
+      "measured_ms": 228,
+      "deadline_ms": 2592000000,
+      "deadline_source": "uk response window (30 days, extendable 30)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:29.988798+00:00",
+        "due_at": "2026-11-09T23:00:29.975769+00:00",
+        "participants": 15,
+        "request_id": "102540792194674690"
+      }
+    },
+    {
+      "jurisdiction": "uk",
+      "drill": "erasure",
+      "measured_ms": 27,
+      "deadline_ms": 2592000000,
+      "deadline_source": "uk response window (30 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:30.226812+00:00",
+        "due_at": "2026-11-09T23:00:30.206983+00:00",
+        "participants": 15,
+        "request_id": "102540793163558913"
+      }
+    },
+    {
+      "jurisdiction": "uk",
+      "drill": "opt_out",
+      "measured_ms": 3,
+      "deadline_ms": 0,
+      "deadline_source": "uk: opt-out effective immediately (no statutory window)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "uk",
+      "drill": "appeal",
+      "measured_ms": 0,
+      "deadline_ms": 0,
+      "deadline_source": "uk provides no appeal right — drill not applicable",
+      "within_deadline": true,
+      "detail": {
+        "not_applicable": true
+      }
+    },
+    {
+      "jurisdiction": "us-ca",
+      "drill": "access",
+      "measured_ms": 232,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-ca response window (45 days, extendable 45)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:30.252488+00:00",
+        "due_at": "2026-11-24T23:00:30.238752+00:00",
+        "participants": 15,
+        "request_id": "102540793297776642"
+      }
+    },
+    {
+      "jurisdiction": "us-ca",
+      "drill": "erasure",
+      "measured_ms": 21,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-ca response window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:30.489047+00:00",
+        "due_at": "2026-11-24T23:00:30.474184+00:00",
+        "participants": 15,
+        "request_id": "102540794287632384"
+      }
+    },
+    {
+      "jurisdiction": "us-ca",
+      "drill": "opt_out",
+      "measured_ms": 4,
+      "deadline_ms": 1296000000,
+      "deadline_source": "us-ca opt-out effectiveness (15 business days)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "us-ca",
+      "drill": "appeal",
+      "measured_ms": 0,
+      "deadline_ms": 0,
+      "deadline_source": "us-ca provides no appeal right — drill not applicable",
+      "within_deadline": true,
+      "detail": {
+        "not_applicable": true
+      }
+    },
+    {
+      "jurisdiction": "us-co",
+      "drill": "access",
+      "measured_ms": 231,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-co response window (45 days, extendable 45)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:30.515156+00:00",
+        "due_at": "2026-11-24T23:00:30.501270+00:00",
+        "participants": 15,
+        "request_id": "102540794400878592"
+      }
+    },
+    {
+      "jurisdiction": "us-co",
+      "drill": "erasure",
+      "measured_ms": 27,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-co response window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:30.755356+00:00",
+        "due_at": "2026-11-24T23:00:30.735440+00:00",
+        "participants": 15,
+        "request_id": "102540795382345728"
+      }
+    },
+    {
+      "jurisdiction": "us-co",
+      "drill": "opt_out",
+      "measured_ms": 4,
+      "deadline_ms": 1296000000,
+      "deadline_source": "us-co opt-out effectiveness (15 business days)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "us-co",
+      "drill": "appeal",
+      "measured_ms": 10,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-co appeal decision window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "appeal_id": "102540795541729281",
+        "outcome": "upheld"
+      }
+    },
+    {
+      "jurisdiction": "us-ct",
+      "drill": "access",
+      "measured_ms": 468,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-ct response window (45 days, extendable 45)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:31.027552+00:00",
+        "due_at": "2026-11-24T23:00:30.779470+00:00",
+        "participants": 15,
+        "request_id": "102540795566895105"
+      }
+    },
+    {
+      "jurisdiction": "us-ct",
+      "drill": "erasure",
+      "measured_ms": 25,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-ct response window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:31.269332+00:00",
+        "due_at": "2026-11-24T23:00:31.251405+00:00",
+        "participants": 15,
+        "request_id": "102540797546606592"
+      }
+    },
+    {
+      "jurisdiction": "us-ct",
+      "drill": "opt_out",
+      "measured_ms": 4,
+      "deadline_ms": 1296000000,
+      "deadline_source": "us-ct opt-out effectiveness (15 business days)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "us-ct",
+      "drill": "appeal",
+      "measured_ms": 9,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-ct appeal decision window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "appeal_id": "102540797697601536",
+        "outcome": "upheld"
+      }
+    },
+    {
+      "jurisdiction": "us-tx",
+      "drill": "access",
+      "measured_ms": 465,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-tx response window (45 days, extendable 45)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:31.536199+00:00",
+        "due_at": "2026-11-24T23:00:31.292598+00:00",
+        "participants": 15,
+        "request_id": "102540797718573057"
+      }
+    },
+    {
+      "jurisdiction": "us-tx",
+      "drill": "erasure",
+      "measured_ms": 25,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-tx response window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:31.779402+00:00",
+        "due_at": "2026-11-24T23:00:31.761951+00:00",
+        "participants": 15,
+        "request_id": "102540799685701633"
+      }
+    },
+    {
+      "jurisdiction": "us-tx",
+      "drill": "opt_out",
+      "measured_ms": 5,
+      "deadline_ms": 1296000000,
+      "deadline_source": "us-tx opt-out effectiveness (15 business days)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "us-tx",
+      "drill": "appeal",
+      "measured_ms": 8,
+      "deadline_ms": 5184000000,
+      "deadline_source": "us-tx appeal decision window (60 days)",
+      "within_deadline": true,
+      "detail": {
+        "appeal_id": "102540799836696576",
+        "outcome": "upheld"
+      }
+    },
+    {
+      "jurisdiction": "us-ut",
+      "drill": "access",
+      "measured_ms": 477,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-ut response window (45 days, extendable 45)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:32.057169+00:00",
+        "due_at": "2026-11-24T23:00:31.801898+00:00",
+        "participants": 15,
+        "request_id": "102540799853473794"
+      }
+    },
+    {
+      "jurisdiction": "us-ut",
+      "drill": "erasure",
+      "measured_ms": 23,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-ut response window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:32.298669+00:00",
+        "due_at": "2026-11-24T23:00:32.281966+00:00",
+        "participants": 15,
+        "request_id": "102540801866739713"
+      }
+    },
+    {
+      "jurisdiction": "us-ut",
+      "drill": "opt_out",
+      "measured_ms": 5,
+      "deadline_ms": 1296000000,
+      "deadline_source": "us-ut opt-out effectiveness (15 business days)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "us-ut",
+      "drill": "appeal",
+      "measured_ms": 0,
+      "deadline_ms": 0,
+      "deadline_source": "us-ut provides no appeal right — drill not applicable",
+      "within_deadline": true,
+      "detail": {
+        "not_applicable": true
+      }
+    },
+    {
+      "jurisdiction": "us-va",
+      "drill": "access",
+      "measured_ms": 232,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-va response window (45 days, extendable 45)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:32.327789+00:00",
+        "due_at": "2026-11-24T23:00:32.312524+00:00",
+        "participants": 15,
+        "request_id": "102540801996763137"
+      }
+    },
+    {
+      "jurisdiction": "us-va",
+      "drill": "erasure",
+      "measured_ms": 25,
+      "deadline_ms": 3888000000,
+      "deadline_source": "us-va response window (45 days)",
+      "within_deadline": true,
+      "detail": {
+        "completed_at": "2026-10-10T23:00:32.565949+00:00",
+        "due_at": "2026-11-24T23:00:32.547769+00:00",
+        "participants": 15,
+        "request_id": "102540802982424577"
+      }
+    },
+    {
+      "jurisdiction": "us-va",
+      "drill": "opt_out",
+      "measured_ms": 4,
+      "deadline_ms": 1296000000,
+      "deadline_source": "us-va opt-out effectiveness (15 business days)",
+      "within_deadline": true,
+      "detail": {
+        "directives_denied": 9,
+        "jurisdiction": "eu"
+      }
+    },
+    {
+      "jurisdiction": "us-va",
+      "drill": "appeal",
+      "measured_ms": 9,
+      "deadline_ms": 5184000000,
+      "deadline_source": "us-va appeal decision window (60 days)",
+      "within_deadline": true,
+      "detail": {
+        "appeal_id": "102540803129225217",
+        "outcome": "upheld"
+      }
+    }
+  ],
+  "breaches": []
+}

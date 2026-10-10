@@ -41,6 +41,16 @@ pub struct Subject {
     pub authenticated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// The device identity the GPC middleware used on this request, inserted
+/// into the request extensions before the handler runs. This is the
+/// platform-canonical consent key for storefront signals: a handler that
+/// resolves directives for a storefront subject keys the device on this
+/// value, so a `Sec-GPC` signal the middleware just recorded suppresses
+/// processing on the *very first* request — the request where no device
+/// cookie yet exists for the handler to read back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpcDevice(pub String);
+
 /// The transport channel over which a session token arrived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionChannel {

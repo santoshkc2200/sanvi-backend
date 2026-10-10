@@ -154,9 +154,22 @@ impl GpcSignalMiddleware {
                         "identifier": subject.map(|s| s.user_id.to_string()),
                     }),
                 };
-                let result = self.signals.append(&mut scope, &signal).await;
-                let _ = scope.commit().await;
-                result.is_ok()
+                // "Recorded" means durable: the signal only counts once its
+                // transaction has committed — a successful insert inside a
+                // transaction that fails to commit is not a record.
+                match self.signals.append(&mut scope, &signal).await {
+                    Ok(()) => match scope.commit().await {
+                        Ok(()) => true,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "failed to commit GPC signal");
+                            false
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to record GPC signal");
+                        false
+                    }
+                }
             }
             Err(err) => {
                 tracing::warn!(error = %err, "failed to record GPC signal");
@@ -261,6 +274,15 @@ where
                 // Bind the exact pre-authentication device signal once the
                 // same browser authenticates.
                 inner.bind_device(device, subject).await;
+            }
+
+            // Hand the device identity to the handler: a storefront route
+            // (the track beacon) keys its consent resolution on it, so a
+            // signal recorded on this very request suppresses processing
+            // before any cookie round-trip could exist.
+            if let Some(device) = &device_ref {
+                req.extensions_mut()
+                    .insert(sanvi_http::GpcDevice(device.clone()));
             }
 
             let mut res = service.call(req).await?;

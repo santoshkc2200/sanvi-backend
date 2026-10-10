@@ -122,6 +122,7 @@ Rules:
 | platform_admin | tenant_views.rs | 2 | 2 | yes | covered
 | privacy | appeals.rs | 3 | 3 | no | covered
 | privacy | directives.rs | 6 | 6 | yes | covered
+| privacy | erasure_propagation.rs | 1 | 1 | yes | covered
 | privacy | exports.rs | 2 | 2 | no | covered
 | privacy | governance.rs | 16 | 16 | no | covered
 | privacy | metrics.rs | 2 | 2 | no | covered

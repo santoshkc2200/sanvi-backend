@@ -31,14 +31,15 @@ pub use jurisdiction::{
 };
 pub use ports::{
     AppealRepository, AuditWriter, AuthorizedAgentRepository, BreachObligationCalculator,
-    BreachRepository, CONTEXT_NAMES, Clock, ConsentRepository, DirectiveRepository,
-    DirectiveResolver, DsrRepository, EnvelopeCrypto, EventPublisher, ExportArtifactRepository,
-    ExportPackager, Hasher, IdGenerator, JurisdictionRepository, LegalHoldRepository,
-    Notifications, ParticipantRepository, ParticipantRow, ParticipantStatus, PersonalDataProvider,
-    ProcessingActivityRepository, ProviderRegistry, RequestMetricRow, RequestMetricsRepository,
-    RetentionRuleRepository, RiskAssessmentRepository, SignalRepository, SubProcessorNotifier,
-    SubProcessorRepository, SubjectKeyRepository, SubjectKeyRow, SubjectRepository,
-    VerificationRepository, YearlyMetricRow, provider,
+    BreachRepository, CONTEXT_NAMES, Clock, ConsentRepository, DestinationRetainedItem,
+    DirectiveRepository, DirectiveResolver, DsrRepository, EnvelopeCrypto, EraseDestinationOutcome,
+    ErasureDestination, EventPublisher, ExportArtifactRepository, ExportPackager, Hasher,
+    IdGenerator, JurisdictionRepository, LegalHoldRepository, Notifications, ParticipantRepository,
+    ParticipantRow, ParticipantStatus, PersonalDataProvider, ProcessingActivityRepository,
+    ProviderRegistry, RequestMetricRow, RequestMetricsRepository, RetentionRuleRepository,
+    RiskAssessmentRepository, SignalRepository, SubProcessorNotifier, SubProcessorRepository,
+    SubjectKeyRepository, SubjectKeyRow, SubjectRepository, VerificationRepository,
+    YearlyMetricRow, provider,
 };
 pub use types::{
     ConsentMethod, ConsentModel, Correction, DataBundle, DataClass, DataEntry, DirectiveSnapshot,

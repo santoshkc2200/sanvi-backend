@@ -14,9 +14,12 @@ mod billing;
 mod config;
 mod control;
 mod dlq;
+mod dsr_check;
+mod evidence_pack;
 mod healthcheck;
 mod i18n;
 mod migrate;
+mod notice_diff;
 mod offboard;
 mod openapi;
 mod payments;
@@ -248,6 +251,39 @@ enum Command {
         /// Also write the JSON report here (evidence-pack input).
         #[arg(long)]
         write: Option<String>,
+    },
+    /// TASK-029 (FR-1132/FR-1133): generate the per-jurisdiction evidence
+    /// packs from live configuration, stamped with build and period. Two
+    /// runs on the same configuration and period are byte-identical.
+    EvidencePack {
+        /// `all` or one jurisdiction code from the live configuration.
+        #[arg(long, default_value = "all")]
+        jurisdiction: String,
+        /// `last-quarter` or explicit `YYYY-QN`.
+        #[arg(long, default_value = "last-quarter")]
+        period: String,
+        /// Output root (default `docs/compliance/evidence`).
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// TASK-029 (FR-1132): run the DSR drills for every jurisdiction in
+    /// the live configuration and time each against its statutory clock.
+    /// Fails when a path cannot complete or lands outside its deadline.
+    DsrCheck {
+        /// `all` or one jurisdiction code from the live configuration.
+        #[arg(long, default_value = "all")]
+        jurisdiction: String,
+    },
+    /// TASK-029 (FR-1133): diff the generated notice against the approved
+    /// baseline (exit 1 on drift, 2 when no baseline exists).
+    NoticeDiff {
+        /// Baseline path (default `docs/compliance/evidence/notice/approved.json`).
+        #[arg(long)]
+        approved: Option<String>,
+        /// Record the current render as the approved baseline (a human
+        /// decision expressed as a command — never a hand edit).
+        #[arg(long, default_value_t = false)]
+        write_approved: bool,
     },
     /// Probe an HTTP endpoint without a shell or `curl` (container HEALTHCHECK).
     Healthcheck {
@@ -1045,6 +1081,34 @@ async fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("retention-report failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::EvidencePack {
+            jurisdiction,
+            period,
+            out,
+        } => match evidence_pack::run(&cli.env, jurisdiction, period, out).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("evidence-pack failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::DsrCheck { jurisdiction } => match dsr_check::run(&cli.env, jurisdiction).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("dsr-check failed: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::NoticeDiff {
+            approved,
+            write_approved,
+        } => match notice_diff::run(&cli.env, approved, write_approved).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("notice-diff failed: {err:#}");
                 ExitCode::FAILURE
             }
         },

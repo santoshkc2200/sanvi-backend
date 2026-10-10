@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use actix_web::{HttpRequest, HttpResponse, Responder, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, web};
 use chrono::Utc;
 use sanvi_http::{ApiError, CurrentTenant, ProblemDetail, RequiredPermission};
 use sanvi_kernel::TenantId;
@@ -199,6 +199,7 @@ fn build_command(
     body: &TrackConversionRequest,
     click_ids: ClickIds,
     (platforms, platforms_incomplete): (Vec<PlatformKey>, bool),
+    gpc_device: Option<String>,
 ) -> TrackConversionCommand {
     // An email identifies a `Contact` (`email:{lowercased}`) — the key the
     // privacy ledger actually writes. `end_user` keys a merchant-supplied
@@ -207,7 +208,15 @@ fn build_command(
     // and be suppressed. A device ref is only unique within the tenant
     // whose site emitted it, so it is scoped to that tenant rather than
     // shared platform-wide.
-    let subject = match (body.email.as_deref(), body.device_id.as_deref()) {
+    //
+    // When the GPC middleware observed this request it hands the handler
+    // the platform-canonical device key ([`sanvi_http::GpcDevice`]) — the
+    // key a `Sec-GPC` signal is recorded under. Consent resolution keys on
+    // it in preference to the merchant's own `device_id`, so the signal
+    // suppresses the event on the very first request (no cookie round-trip
+    // exists yet for the merchant id and the canonical id to agree).
+    let device_ref = gpc_device.or_else(|| body.device_id.clone());
+    let subject = match (body.email.as_deref(), device_ref.as_deref()) {
         (Some(email), _) => SubjectRef::contact(email),
         (None, Some(device_id)) => SubjectRef::tenant_device(tenant_id, device_id),
         (None, None) => SubjectRef::tenant_device(tenant_id, "anonymous"),
@@ -341,7 +350,11 @@ pub async fn public_track_conversion(
     }
     let platforms = resolve_platforms(&settings, &body.event_name);
     let click_ids = extract_server_click_ids(&req, &body.click_ids);
-    let command = build_command(tenant_id, &body, click_ids, platforms);
+    let gpc_device = req
+        .extensions()
+        .get::<sanvi_http::GpcDevice>()
+        .map(|device| device.0.clone());
+    let command = build_command(tenant_id, &body, click_ids, platforms, gpc_device);
 
     // Errors here are swallowed by design (see the module doc): the
     // response never reveals whether capture succeeded, and the storage
@@ -502,6 +515,7 @@ pub async fn put_tracking_settings(
 pub async fn test_tracking_event(
     tenant: CurrentTenant,
     _permission: RequiredPermission,
+    req: HttpRequest,
     body: web::Json<TrackConversionRequest>,
     state: web::Data<AdvertisingState>,
 ) -> Result<HttpResponse, ApiError> {
@@ -511,7 +525,17 @@ pub async fn test_tracking_event(
         .await
         .map_err(api_error)?;
     let platforms = resolve_platforms(&settings, &body.event_name);
-    let command = build_command(tenant.0.tenant_id, &body, body.click_ids.clone(), platforms);
+    let gpc_device = req
+        .extensions()
+        .get::<sanvi_http::GpcDevice>()
+        .map(|device| device.0.clone());
+    let command = build_command(
+        tenant.0.tenant_id,
+        &body,
+        body.click_ids.clone(),
+        platforms,
+        gpc_device,
+    );
 
     let captured = state.capture.dry_run(command).await.map_err(api_error)?;
 

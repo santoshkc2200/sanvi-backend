@@ -847,6 +847,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "compliance-tests"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "sanvi-api",
+ "sanvi-audit",
+ "sanvi-cache",
+ "sanvi-kernel",
+ "sanvi-persistence",
+ "sanvi-privacy",
+ "sanvi-testsupport",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

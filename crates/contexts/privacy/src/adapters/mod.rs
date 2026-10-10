@@ -4,6 +4,7 @@
 
 pub mod archival_cipher;
 pub mod crypto;
+pub mod erasure_destinations;
 pub mod events;
 pub mod gpc;
 pub mod http;
@@ -14,6 +15,9 @@ pub mod providers;
 pub mod repos;
 
 pub use crypto::{DisabledEnvelopeCrypto, SqlxEnvelopeCrypto};
+pub use erasure_destinations::{
+    ArchivesDestination, BackupWindowDestination, CacheDestination, SearchIndexDestination,
+};
 pub use events::OutboxEventPublisher;
 pub use gpc::GpcSignalMiddleware;
 pub use misc::{

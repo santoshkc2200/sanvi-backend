@@ -72,6 +72,7 @@ use sanvi_billing::{
     },
 };
 use sanvi_domains::{DomainsConfig, adapters::events::domains_event_handler};
+use sanvi_kernel::TenantId as PrivacyTenantId;
 use sanvi_kernel::notifications::{Audience, IntentArg};
 use sanvi_kernel::{IdsConfig, RawIdGenerator, SnowflakeGenerator, TenantId};
 use sanvi_localization::{
@@ -110,8 +111,9 @@ use sanvi_persistence::{DatabaseConfig, build_pool};
 use sanvi_privacy::{
     PrivacyConfig,
     adapters::{
-        DisabledEnvelopeCrypto, LoggingSubProcessorNotifier, OutboxEventPublisher as PrivacyEvents,
-        PrivacyContextProvider, Sha256Hasher, SqlxAppealRepository, SqlxAuthorizedAgentRepository,
+        ArchivesDestination, BackupWindowDestination, CacheDestination, DisabledEnvelopeCrypto,
+        LoggingSubProcessorNotifier, OutboxEventPublisher as PrivacyEvents, PrivacyContextProvider,
+        SearchIndexDestination, Sha256Hasher, SqlxAppealRepository, SqlxAuthorizedAgentRepository,
         SqlxBreachRepository, SqlxConsentRepository, SqlxDirectiveRepository, SqlxDsrRepository,
         SqlxEnvelopeCrypto, SqlxExportArtifactRepository, SqlxJurisdictionRepository,
         SqlxLegalHoldRepository, SqlxParticipantRepository, SqlxRequestMetricsRepository,
@@ -122,15 +124,17 @@ use sanvi_privacy::{
     },
     application::{
         CleanupExpiredExports, GenerateAnnualMetrics, PersistedDirectiveResolver, ProcessDsrBatch,
-        PropagateOptOuts, RetentionSweep,
+        PropagateErasure, PropagateOptOuts, RetentionSweep,
     },
     domain::{
         AppealRepository, AuthorizedAgentRepository, BreachRepository, ConsentRepository,
-        DirectiveRepository, DirectiveResolver, DsrRepository, EnvelopeCrypto,
-        ExportArtifactRepository, Hasher, JurisdictionRepository, LegalHoldRepository,
-        Notifications as PrivacyNotificationsTrait, ParticipantRepository, ProviderRegistry,
-        RequestMetricsRepository, RetentionRuleRepository, SignalRepository, SubProcessorNotifier,
-        SubProcessorRepository, SubjectKeyRepository, SubjectRepository, VerificationRepository,
+        DestinationRetainedItem, DirectiveRepository, DirectiveResolver, DsrRepository,
+        EnvelopeCrypto, EraseDestinationOutcome, ErasureDestination, ExportArtifactRepository,
+        Hasher, JurisdictionRepository, LegalHoldRepository,
+        Notifications as PrivacyNotificationsTrait, ParticipantRepository, PrivacyError,
+        ProviderRegistry, RequestMetricsRepository, RetentionRuleRepository, SignalRepository,
+        SubProcessorNotifier, SubProcessorRepository, SubjectKeyRepository, SubjectRef,
+        SubjectRepository, VerificationRepository,
     },
 };
 use sanvi_telemetry::TelemetryConfig;
@@ -874,6 +878,58 @@ fn load_config() -> anyhow::Result<WorkerConfig> {
     config.validate()?;
     config.ids.resolve(&config.telemetry.environment, 2)?;
     Ok(config)
+}
+
+/// TASK-029 (FR-1134): the ad-platform suppression-list destination. After
+/// an erasure the subject's directives are superseded, so the phase-10
+/// retraction sweep finds every already-uploaded conversion event and
+/// retracts it at the platform; what a platform cannot retract is
+/// documented in the ledger with its own reason rather than silently
+/// counted as done. Lives in the composition root because the privacy
+/// context never imports the advertising context.
+struct AdSuppressionDestination {
+    sweep: Arc<RetractWithdrawnConversions>,
+}
+
+#[async_trait::async_trait]
+impl ErasureDestination for AdSuppressionDestination {
+    fn name(&self) -> &'static str {
+        "ad_suppression"
+    }
+
+    fn description(&self) -> String {
+        "ad-platform suppression lists: uploaded conversion events are retracted at the platform; capture denies any new upload once the directives are superseded".to_string()
+    }
+
+    async fn propagate_erasure(
+        &self,
+        _subject: &SubjectRef,
+        _tenant_id: Option<PrivacyTenantId>,
+    ) -> Result<EraseDestinationOutcome, PrivacyError> {
+        let report = self
+            .sweep
+            .execute(200)
+            .await
+            .map_err(|err| PrivacyError::Upstream(err.to_string()))?;
+        let retained = if report.unpropagated > 0 {
+            vec![DestinationRetainedItem {
+                detail: format!(
+                    "{} uploaded event(s) their platform cannot retract (capability unsupported by the platform, not by us)",
+                    report.unpropagated
+                ),
+                reason:
+                    "documented with the platform's own refusal reason in the event's upload states"
+                        .to_string(),
+                retains_until: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        Ok(EraseDestinationOutcome {
+            purged: report.retracted,
+            retained,
+        })
+    }
 }
 
 #[tokio::main]
@@ -1692,6 +1748,21 @@ async fn main() -> ExitCode {
         ),
         std::sync::Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
     ];
+    // TASK-029: the worker drives the erasure saga, so its registry copy
+    // is held to the same completeness bar as the API's: a context that
+    // quietly never joined fails at boot, not in an audit.
+    {
+        let registered: std::collections::BTreeSet<&str> =
+            privacy_providers.iter().map(|p| p.context_name()).collect();
+        let expected: std::collections::BTreeSet<&str> = sanvi_privacy::domain::CONTEXT_NAMES
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(
+            registered, expected,
+            "worker privacy provider registry must contain every context exactly once"
+        );
+    }
 
     let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(
         privacy_tx.clone(),
@@ -1756,7 +1827,6 @@ async fn main() -> ExitCode {
         privacy_challenges,
         privacy_agents,
         privacy_breaches,
-        privacy_rules,
         privacy_metrics,
     );
 
@@ -1889,6 +1959,34 @@ async fn main() -> ExitCode {
         privacy_directive_resolver.clone(),
         advertising_conversion_sinks,
         advertising_metrics.clone(),
+    ));
+
+    // TASK-029 (FR-1134): after the saga erases a subject, propagation
+    // reaches the destinations outside the provider registry and ledgers
+    // each outcome. The job runs inside the dsr_advance pass (below), so a
+    // completed erasure is never the last word until every destination is
+    // purged or documented.
+    let erasure_destinations: Vec<Arc<dyn ErasureDestination>> = vec![
+        Arc::new(ArchivesDestination::new(
+            privacy_tx.clone(),
+            privacy_rules.clone(),
+            privacy_clock.clone(),
+        )),
+        Arc::new(BackupWindowDestination {
+            backup_retention_days: config.privacy.backup_retention_days,
+            clock: privacy_clock.clone(),
+        }),
+        Arc::new(CacheDestination {
+            ssr: ssr_cache.clone(),
+        }),
+        Arc::new(SearchIndexDestination),
+        Arc::new(AdSuppressionDestination {
+            sweep: advertising_conversion_retraction_sweep.clone(),
+        }),
+    ];
+    let erasure_propagation = Arc::new(PropagateErasure::new(
+        privacy_tx.clone(),
+        erasure_destinations,
     ));
 
     let (advertising_audience_sinks, audience_sink_mode) =
@@ -3094,7 +3192,36 @@ async fn main() -> ExitCode {
                             tracing::info!(
                                 propagated = report.propagated,
                                 failed = report.failed,
-                                "opt-out propagation pass",
+                                "privacy opt-out propagation pass",
+                            );
+                        }
+                        Ok(())
+                    })
+                }
+            },
+        )),
+        // TASK-029 (FR-1134): ledger every completed erasure against the
+        // destinations outside the provider registry. A `failed` row keeps
+        // its destination visible instead of letting silence look like
+        // success.
+        Arc::new(FnJob::new(
+            "privacy.erasure_propagation",
+            Duration::from_secs(config.scheduler.dsr_advance_interval_secs),
+            {
+                let propagate = erasure_propagation.clone();
+                move || {
+                    let propagate = propagate.clone();
+                    Box::pin(async move {
+                        let report = propagate
+                            .execute(100)
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err))?;
+                        if report.requests_propagated > 0 || report.failed > 0 {
+                            tracing::info!(
+                                requests = report.requests_propagated,
+                                destinations = report.destinations_recorded,
+                                failed = report.failed,
+                                "privacy erasure propagation pass",
                             );
                         }
                         Ok(())

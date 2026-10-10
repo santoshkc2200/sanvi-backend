@@ -3,6 +3,7 @@
 
 pub mod appeals;
 pub mod directives;
+pub mod erasure_propagation;
 pub mod exports;
 pub mod governance;
 pub mod metrics;
@@ -21,6 +22,7 @@ pub use directives::{
     RecordLimitSensitive, RecordOptOut, RecordOptOutCommand, RecordOptOutOutput,
     ResolveJurisdiction,
 };
+pub use erasure_propagation::{PropagateErasure, PropagateErasureReport, PropagationRecord};
 pub use exports::{
     CleanupExpiredExports, DownloadExport, DownloadExportCommand, ExportDownloadView,
 };
