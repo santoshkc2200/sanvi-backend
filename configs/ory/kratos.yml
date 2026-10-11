@@ -44,6 +44,7 @@ serve:
         - Content-Type
         - Accept
         - X-Request-Id
+        - Traceparent
         - Accept-Language
         - Authorization
         - Idempotency-Key
