@@ -147,7 +147,14 @@ pub async fn run(report: &Path) -> Result<()> {
         "-c",
         "password_encryption=scram-sha-256",
     ])?;
-    let port = wait_port(&pg, &["pg_isready", "-U", "postgres"], "5432/tcp").await?;
+    // The image's temporary initialization server accepts Unix sockets
+    // before the final server listens on TCP. Probe the transport we use.
+    let port = wait_port(
+        &pg,
+        &["pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
+        "5432/tcp",
+    )
+    .await?;
     let admin = PgPool::connect_with(pg_options(port, "postgres", &new))
         .await
         .map_err(|_| anyhow::anyhow!("drill admin connection failed"))?;

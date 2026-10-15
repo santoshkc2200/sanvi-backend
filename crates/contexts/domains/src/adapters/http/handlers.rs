@@ -68,7 +68,8 @@ pub fn api_error(err: DomainsError) -> ApiError {
             retry_after_secs: next.signed_duration_since(Utc::now()).num_seconds().max(0) as u64,
         },
         DomainsError::VerificationUnavailable(detail) => ApiError::ServiceUnavailable { detail },
-        DomainsError::NotEntitled { feature } => ApiError::Forbidden {
+        DomainsError::NotEntitled { feature } => ApiError::ForbiddenReasoned {
+            reason: "domain_entitlement_required".to_string(),
             detail: format!("this requires the {feature} entitlement"),
         },
         DomainsError::Registrar(detail) | DomainsError::DnsProvider(detail) => {
@@ -143,7 +144,7 @@ async fn commit_scope(scope: ScopedTx<'_>) -> Result<(), ApiError> {
     responses(
         (status = 201, description = "The claim and its verification challenge", body = crate::application::CustomDomainView),
         (status = 400, description = "Invalid hostname", body = ProblemDetail),
-        (status = 403, description = "Entitlement missing", body = ProblemDetail),
+        (status = 403, description = "Permission denied, or entitlement missing (reason: domain_entitlement_required)", body = ProblemDetail),
         (status = 409, description = "Hostname already claimed", body = ProblemDetail)
     )
 )]
@@ -394,7 +395,7 @@ pub struct SearchQuery {
     params(("q" = String, Query, description = "Bare term (`acme`) or hostname (`acme.com`)")),
     responses(
         (status = 200, description = "Availability and normalized pricing", body = crate::application::DomainSearchView),
-        (status = 403, description = "Entitlement missing", body = ProblemDetail)
+        (status = 403, description = "Permission denied, or entitlement missing (reason: domain_entitlement_required)", body = ProblemDetail)
     )
 )]
 pub async fn search_domains(
@@ -421,7 +422,7 @@ pub async fn search_domains(
     responses(
         (status = 201, description = "The order (the saga may still be in flight; see status)", body = OrderView),
         (status = 400, description = "Invalid hostname or unsupported TLD", body = ProblemDetail),
-        (status = 403, description = "Entitlement missing", body = ProblemDetail)
+        (status = 403, description = "Permission denied, or entitlement missing (reason: domain_entitlement_required)", body = ProblemDetail)
     )
 )]
 pub async fn place_domain_order(
@@ -781,5 +782,25 @@ fn sanitize_locale(raw: &str) -> Result<String, ApiError> {
         Err(ApiError::BadRequest {
             detail: format!("invalid locale {raw:?}"),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entitlement_failure_has_a_machine_readable_reason() {
+        for feature in ["domains.custom", "domains.purchase"] {
+            let problem = api_error(DomainsError::NotEntitled {
+                feature: feature.into(),
+            })
+            .problem();
+            assert_eq!(problem.status, 403);
+            assert_eq!(
+                problem.reason.as_deref(),
+                Some("domain_entitlement_required")
+            );
+        }
     }
 }

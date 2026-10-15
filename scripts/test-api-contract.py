@@ -133,6 +133,36 @@ class ContractTests(unittest.TestCase):
         schema(new)['properties']['note'] = {'type': 'string'}
         self.assertEqual(contract.breaking(old, new), [])
 
+    def test_required_additive_response_fields_preserve_request_contracts(self):
+        old = document()
+        operation = old['paths']['/api/v1/things']['get']
+        schema = operation['responses']['200']['content']['application/json']['schema']
+        old['components'] = {'schemas': {'Thing': copy.deepcopy(schema)}}
+        operation['responses']['200']['content']['application/json']['schema'] = {'$ref': '#/components/schemas/Thing'}
+        new = copy.deepcopy(old)
+        added = new['components']['schemas']['Thing']
+        added['properties']['new_guarantee'] = {'type': 'string'}
+        added.setdefault('required', []).append('new_guarantee')
+        self.assertEqual(contract.breaking(old, new), [])
+        for doc in (old, new):
+            doc['paths']['/api/v1/things']['post'] = {
+                'requestBody': {'content': {'application/json': {'schema': {'$ref': '#/components/schemas/Thing'}}}},
+                'responses': {'204': {'description': 'Created'}},
+            }
+        self.assertTrue(contract.breaking(old, new))
+        for doc in (old, new):
+            doc['components']['requestBodies'] = {'Input': doc['paths']['/api/v1/things']['post']['requestBody']}
+            doc['paths']['/api/v1/things']['post']['requestBody'] = {'$ref': '#/components/requestBodies/Input'}
+        self.assertTrue(contract.breaking(old, new))
+
+    def test_existing_optional_response_field_cannot_become_required(self):
+        old = document()
+        schema = old['paths']['/api/v1/things']['get']['responses']['200']['content']['application/json']['schema']
+        schema['properties']['note'] = {'type': 'string'}
+        new = copy.deepcopy(old)
+        new['paths']['/api/v1/things']['get']['responses']['200']['content']['application/json']['schema']['required'].append('note')
+        self.assertTrue(contract.breaking(old, new))
+
     def test_parameters_status_content_security(self):
         for mutation in [lambda o: o['responses'].pop('200'), lambda o: o['responses']['200'].update(content={}),
                          lambda o: o.update(parameters=[{'name': 'filter', 'in': 'query', 'required': True}]),

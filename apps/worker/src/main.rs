@@ -1640,7 +1640,7 @@ async fn main() -> ExitCode {
     let privacy_notifier: std::sync::Arc<dyn SubProcessorNotifier> =
         std::sync::Arc::new(LoggingSubProcessorNotifier);
 
-    // The provider registry: the same eight contexts the CI test enforces.
+    // The provider registry includes every context the startup check enforces.
     // The worker rebuilds it (providers are stateless ZSTs + repos).
     let privacy_providers: ProviderRegistry = vec![
         std::sync::Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
@@ -1746,6 +1746,7 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(
             sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
         ),
+        std::sync::Arc::new(sanvi_media::adapters::MediaPrivacyProvider::new()),
         std::sync::Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
     ];
     // TASK-029: the worker drives the erasure saga, so its registry copy

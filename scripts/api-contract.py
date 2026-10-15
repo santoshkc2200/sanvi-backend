@@ -122,8 +122,45 @@ def lint(doc):
     return errors
 
 def breaking(old, new):
-    """Conservative semantic diff; optional additions pass, restrictions do not."""
+    """Conservative diff: additive response guarantees pass; input restrictions do not."""
     errors = []
+
+    def referenced_schemas(doc, value, seen=None, expanded=None):
+        seen = set() if seen is None else seen
+        expanded = set() if expanded is None else expanded
+        if isinstance(value, dict):
+            ref = value.get('$ref', '')
+            if ref.startswith('#/components/') and ref not in expanded:
+                expanded.add(ref)
+                if ref.startswith('#/components/schemas/'):
+                    seen.add(ref.rsplit('/', 1)[-1])
+                target = doc
+                for part in ref[2:].split('/'):
+                    target = target.get(part.replace('~1', '/').replace('~0', '~'), {})
+                referenced_schemas(doc, target, seen, expanded)
+            for child in value.values():
+                referenced_schemas(doc, child, seen, expanded)
+        elif isinstance(value, list):
+            for child in value:
+                referenced_schemas(doc, child, seen, expanded)
+        return seen
+
+    outputs, inputs = set(), set()
+    for doc in (old, new):
+        for item in doc.get('paths', {}).values():
+            inputs.update(referenced_schemas(doc, item.get('parameters', [])))
+            for method in METHODS:
+                operation = item.get(method, {})
+                outputs.update(referenced_schemas(doc, operation.get('responses', {})))
+                inputs.update(referenced_schemas(doc, operation.get('requestBody', {})))
+                inputs.update(referenced_schemas(doc, operation.get('parameters', [])))
+
+    def response_schema(path):
+        parts = path.split('/')
+        return (parts[0] == 'paths' and re.search(r'/(?:get|post|put|patch|delete|head|options)/responses/', path) or
+                len(parts) >= 3 and parts[:2] == ['components', 'schemas'] and
+                parts[2] in outputs - inputs)
+
     def compare(left, right, path, active_refs=frozenset()):
         if isinstance(left, dict) and isinstance(right, dict):
             if '$ref' in left or '$ref' in right:
@@ -140,6 +177,13 @@ def breaking(old, new):
                     except (KeyError, ValueError, TypeError):
                         errors.append(f'{path}: reference removed/unresolved')
                         return
+            # New response fields may be guaranteed by the server without
+            # imposing requirements on old clients. Existing fields and all
+            # request/shared schemas keep the strict frozen requiredness rule.
+            if response_schema(path) and isinstance(right.get('required'), list):
+                added = set(right.get('properties', {})) - set(left.get('properties', {}))
+                right = dict(right)
+                right['required'] = [name for name in right['required'] if name not in added]
             named_map = path.rsplit('/', 1)[-1] in {'properties', 'schemas', 'headers', 'responses', 'securitySchemes', 'parameters', 'paths'}
             for key in left:
                 if not named_map and (key in IGNORED or key.startswith('x-')):

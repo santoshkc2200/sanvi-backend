@@ -220,6 +220,9 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
         key: "tenant_owner",
         name: "Tenant Owner",
         permissions: &[
+            "tenant.domains.read",
+            "tenant.domains.manage",
+            "tenant.domains.purchase",
             "identity.member.read",
             "identity.member.grant",
             "identity.member.remove",
@@ -370,6 +373,23 @@ mod tests {
                 .permissions
                 .contains(&"payments.refund")
         );
+    }
+
+    #[test]
+    fn owner_can_manage_and_purchase_domains_without_granting_members_access() {
+        let owner = seed_by_key("tenant_owner").unwrap().permissions;
+        let member = seed_by_key("tenant_member").unwrap().permissions;
+        for permission in [
+            "tenant.domains.read",
+            "tenant.domains.manage",
+            "tenant.domains.purchase",
+        ] {
+            assert!(owner.contains(&permission), "owner needs {permission}");
+            assert!(
+                !member.contains(&permission),
+                "member must not have {permission}"
+            );
+        }
     }
 
     #[test]

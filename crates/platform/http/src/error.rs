@@ -117,6 +117,10 @@ pub enum ApiError {
     #[error("{detail}")]
     Forbidden { detail: String },
 
+    /// A forbidden response with a stable reason that survives localization.
+    #[error("{detail}")]
+    ForbiddenReasoned { detail: String, reason: String },
+
     #[error("resource not found: {resource}")]
     NotFound { resource: String },
 
@@ -169,7 +173,7 @@ impl ApiError {
         match self {
             Self::BadRequest { .. } | Self::Validation { .. } => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Forbidden { .. } => StatusCode::FORBIDDEN,
+            Self::Forbidden { .. } | Self::ForbiddenReasoned { .. } => StatusCode::FORBIDDEN,
             Self::QuotaExceeded { .. } => StatusCode::FORBIDDEN,
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::Conflict { .. } | Self::ConflictReasoned { .. } => StatusCode::CONFLICT,
@@ -190,7 +194,7 @@ impl ApiError {
         match self {
             Self::BadRequest { .. } | Self::Validation { .. } => "bad-request",
             Self::Unauthorized => "unauthorized",
-            Self::Forbidden { .. } => "forbidden",
+            Self::Forbidden { .. } | Self::ForbiddenReasoned { .. } => "forbidden",
             Self::QuotaExceeded { .. } => "platform/quota-exceeded",
             Self::NotFound { .. } => "not-found",
             Self::Conflict { .. } | Self::ConflictReasoned { .. } => "conflict",
@@ -209,7 +213,7 @@ impl ApiError {
         match self {
             Self::BadRequest { .. } | Self::Validation { .. } => "Bad Request",
             Self::Unauthorized => "Unauthorized",
-            Self::Forbidden { .. } => "Forbidden",
+            Self::Forbidden { .. } | Self::ForbiddenReasoned { .. } => "Forbidden",
             Self::QuotaExceeded { .. } => "Quota Exceeded",
             Self::NotFound { .. } => "Not Found",
             Self::Conflict { .. } | Self::ConflictReasoned { .. } => "Conflict",
@@ -237,7 +241,9 @@ impl ApiError {
                 _ => None,
             },
             reason: match self {
-                Self::ConflictReasoned { reason, .. } => Some(reason.clone()),
+                Self::ConflictReasoned { reason, .. } | Self::ForbiddenReasoned { reason, .. } => {
+                    Some(reason.clone())
+                }
                 _ => None,
             },
             extensions: match self {
@@ -610,6 +616,29 @@ mod tests {
         assert_eq!(json["upgrade_path"], "/api/v1/tenant/billing/checkout");
     }
     use super::*;
+
+    #[test]
+    fn forbidden_reason_survives_problem_serialization() {
+        let problem = ApiError::ForbiddenReasoned {
+            detail: "plan required".into(),
+            reason: "domain_entitlement_required".into(),
+        }
+        .problem();
+        assert_eq!(problem.status, 403);
+        assert!(problem.r#type.ends_with("/forbidden"));
+        assert_eq!(
+            problem.reason.as_deref(),
+            Some("domain_entitlement_required")
+        );
+        assert!(
+            ApiError::Forbidden {
+                detail: "permission denied".into()
+            }
+            .problem()
+            .reason
+            .is_none()
+        );
+    }
 
     #[test]
     fn status_mapping_is_consistent() {

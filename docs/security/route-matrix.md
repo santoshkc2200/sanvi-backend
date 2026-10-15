@@ -288,7 +288,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/billing/src/adapters/http/mod.rs | `e113225f16241e4106d577523d79c188ba1be6566cb03e74cf9bcca32dc42e11` |
 | crates/contexts/billing/src/adapters/http/routes.rs | `2079c9d01db138285102ed334b4051f62614f003998c877c16768dbb35d27afa` |
 | crates/contexts/billing/src/adapters/http/validation.rs | `bda3f191fa1b6767d603fdaf1c9f2e7e93057be6a83be6391e72f46073a751b6` |
-| crates/contexts/domains/src/adapters/http/handlers.rs | `22778c39f475ac5265fabe94be351bed04b3a36c85721cbdf25e143e2300fcbb` |
+| crates/contexts/domains/src/adapters/http/handlers.rs | `637db0ba0a596c923734c0d0fa6e78779c2ee0b3562aea13c7e618c649efa053` |
 | crates/contexts/domains/src/adapters/http/mod.rs | `594e7160aba72d2eadc5da5b55a295fde2736f4fee982938d14479b1ec3b529b` |
 | crates/contexts/domains/src/adapters/http/routes.rs | `a5a84a557fac8f0bcf40e8c3cf4afe20a99443c2564f7b6e93ed37b0900c013f` |
 | crates/contexts/domains/src/adapters/http/state.rs | `fcbfb2c4707fe637956075784540272e48ef12a48c15833a3e36a9d9a3bcfed2` |
@@ -346,7 +346,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/platform/http/src/config.rs | `4ffe90870e37fb76e2e8c13e8738040a4cb1e03607589b6b5c292970e2a12b15` |
 | crates/platform/http/src/degraded.rs | `a15d6cbba1457c3762ae2e32d52794518a856d172975cbae87539e682026290b` |
 | crates/platform/http/src/deprecation.rs | `fa7534ad511123f814afe9f85b142932106b387d4c1ba7cc374c5982a0eea6b4` |
-| crates/platform/http/src/error.rs | `c58a70d2408a2f2669ef9d612945e2ff715b8e385b3f3861cd04bd35d036fe39` |
+| crates/platform/http/src/error.rs | `4cf7891a00fa012e2d7edeb0f4eb57b3e05d592b55e1520d3c5b7d86763d3905` |
 | crates/platform/http/src/etag.rs | `e695e600bf9f5c7227524f459dece6b3ba52b87e0388f76e17af9bfbba32e162` |
 | crates/platform/http/src/external_quotas.rs | `949659a2a5793561b341350338605480d31797b3717e6e53906913fe04a50ae0` |
 | crates/platform/http/src/features.rs | `fc8d560cac864dff057446f468a3514f443ba5f46344d5885becec32e93c9109` |

@@ -637,7 +637,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Entitlement missing
+          description: 'Permission denied, or entitlement missing (reason: domain_entitlement_required)'
         '409':
           content:
             application/problem+json:
@@ -723,7 +723,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Entitlement missing
+          description: 'Permission denied, or entitlement missing (reason: domain_entitlement_required)'
       summary: '`POST /api/v1/tenant/domains/orders`.'
       tags:
       - domains
@@ -785,7 +785,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: Entitlement missing
+          description: 'Permission denied, or entitlement missing (reason: domain_entitlement_required)'
       summary: '`GET /api/v1/tenant/domains/search`.'
       tags:
       - domains
