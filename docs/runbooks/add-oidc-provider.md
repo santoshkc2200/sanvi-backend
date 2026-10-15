@@ -45,9 +45,20 @@ verification (Microsoft does; a random OIDC provider may not).
 ## 2. Trust (or don't) the provider's email verification
 
 `configs/base.toml` → `[identity].trusted_email_verified_providers`. Only
-providers on this list can **auto-link** their account to an existing
-verified account. Everything else still works — users can link after a
-proof-of-ownership challenge (`POST /api/v1/auth/link/challenge`).
+providers on this list can be recorded as `auto_verified` by the local
+webhook projection after Kratos has linked their credentials. This list
+does not make Kratos merge identities during sign-in.
+
+The deployed self-hosted Kratos v26.2.0 links matching-email accounts
+during sign-in after the user proves ownership with an existing credential.
+The UI does not offer manual "Link Google" or "Link Microsoft" actions in
+settings. Existing connections can still be removed when Kratos allows it.
+Subsequent sign-ins use the linked provider directly.
+
+Do not enable `account_linking_mode: automatic` expecting silent linkage
+on this deployment: the pinned version only honors it in Ory Network.
+See the [pinned provider configuration](https://github.com/ory/kratos/blob/v26.2.0/selfservice/strategy/oidc/provider_config.go)
+and [Ory account-linking documentation](https://www.ory.com/docs/kratos/social-signin/link-multiple-provider-account).
 
 ## 3. Provide the secrets
 
@@ -78,9 +89,12 @@ secret manager).
    UI now includes a node for the new provider.
 2. Register with the provider; the identity lands in Kratos and the local
    projection appears in `identity.users` (the registration webhook).
-3. Sign in with an existing account that has the same verified email and a
-   provider on the trust list → `identity.linked_accounts` gains a row with
-   `linked_via = auto_verified`.
+3. Sign out and sign in with a different provider using the same email.
+   Complete Kratos's existing-credential challenge in the login flow. For
+   a verified email and a provider on the trust list,
+   `identity.linked_accounts` gains a row with `linked_via = auto_verified`.
+   Sign out again and confirm the new provider signs in directly, with the
+   same Kratos identity and local user ID.
 4. Sign in with a provider **not** on the trust list → no link row is
    created and `identity.account_link_rejected` appears in the outbox.
 
