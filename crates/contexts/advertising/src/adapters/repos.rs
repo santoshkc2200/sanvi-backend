@@ -638,6 +638,35 @@ impl AdvertisingConnectionRepository for SqlxAdvertisingConnectionRepository {
         connection: &AdvertisingConnection,
     ) -> Result<AdvertisingConnection, AdvertisingError> {
         let pending_id = connection.id();
+        // First-time account selection changes the pending row's external
+        // account key. Serialize selections of the same account so that a
+        // concurrent reconnect consistently merges into one canonical row.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!(
+                "advertising:connect:{}:{}:{}",
+                connection.tenant_id(),
+                connection.platform().as_str(),
+                connection.external_account_id()
+            ))
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        sqlx::query(
+            "UPDATE advertising.connections SET external_account_id = $3
+             WHERE tenant_id = $1 AND id = $2
+               AND NOT EXISTS (
+                 SELECT 1 FROM advertising.connections
+                 WHERE tenant_id = $1 AND platform = $4
+                   AND external_account_id = $3 AND id <> $2
+               )",
+        )
+        .bind(connection.tenant_id().as_i64())
+        .bind(pending_id.as_i64())
+        .bind(connection.external_account_id())
+        .bind(connection.platform().as_str())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
         let stored = self.upsert(scope, connection).await?;
         if stored.id() == pending_id {
             return Ok(stored);

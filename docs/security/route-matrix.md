@@ -272,7 +272,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/access/src/adapters/http/mod.rs | `b9718a471597d11f5cb3af76a91715c20de69b6126a9073e23d5463c201bd007` |
 | crates/contexts/access/src/adapters/http/routes.rs | `80ed3de5efb15df047a8f16782cee9773db4d8be3f35da5bdff9e783aa19505c` |
 | crates/contexts/access/src/adapters/http/validation.rs | `2f1d49c29d3667ab7066afbad3767c838ea358187a3a012f8024bf577ca7d0a8` |
-| crates/contexts/advertising/src/adapters/http/handlers.rs | `d7e6ce5b7a1d373d55f0e938b7000de9e0933333f0f20f90822e63ef0952165b` |
+| crates/contexts/advertising/src/adapters/http/handlers.rs | `cd54f596bb2fdcf97615e61af5a31293306d18911f13a66fadc8bdb46e26f374` |
 | crates/contexts/advertising/src/adapters/http/mod.rs | `ffede5d48c9c71cb0210209c6561d8e9caa69e7b3d079948bb4882eb1709e8d0` |
 | crates/contexts/advertising/src/adapters/http/routes.rs | `3452d1f14ce42e698112c0889872484aa72b7b30905a204dc3a9eb4d5379d225` |
 | crates/contexts/advertising/src/adapters/http/state.rs | `8e781113d56bd279c104c7dea631be2b89699739e08aead20f632480ec318c22` |

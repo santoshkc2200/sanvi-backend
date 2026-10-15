@@ -190,6 +190,11 @@ pub async fn list_ad_platforms(
 ) -> Result<HttpResponse, ApiError> {
     // Read config so the state is intentional, without exposing any value.
     let _api_version = &state.config.google_ads_api_version;
+    let connections = state
+        .list_connections
+        .execute(tenant.0.tenant_id)
+        .await
+        .map_err(api_error)?;
     let mut platforms = Vec::new();
     for (descriptor, requested_scopes) in state.catalog.execute_with_scopes() {
         let available = feature_gate
@@ -201,7 +206,18 @@ pub async fn list_ad_platforms(
             entitlement_key: descriptor.entitlement_key,
             available,
             upgrade_required: !available,
-            connection_state: ConnectionState::NotConnected,
+            connection_state: if connections.iter().any(|(connection, _)| {
+                connection.platform() == &descriptor.key
+                    && matches!(
+                        connection.status(),
+                        crate::domain::ConnectionStatus::Active
+                            | crate::domain::ConnectionStatus::Expired
+                    )
+            }) {
+                ConnectionState::Connected
+            } else {
+                ConnectionState::NotConnected
+            },
             capability_matrix: descriptor.capability_matrix,
             requested_scopes,
         });

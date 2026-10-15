@@ -233,6 +233,7 @@ fn build_cors(config: &CorsConfig) -> actix_cors::Cors {
             header::HeaderName::from_static("x-tenant-id"),
             header::HeaderName::from_static("idempotency-key"),
             header::ACCEPT_LANGUAGE,
+            header::IF_MATCH,
             // Sent by @sanvi/api-client on *every* request (TASK-020 trace
             // context) — a preflight requesting a header missing here fails,
             // so omitting these breaks all cross-origin browser calls.
@@ -330,6 +331,28 @@ mod cors_tests {
             .await,
             200
         );
+    }
+
+    #[actix_web::test]
+    async fn optimistic_lock_headers_pass_preflight() {
+        for path in [
+            "/api/v1/tenant/ads/campaigns/123",
+            "/api/v1/tenant/ads/campaigns/123/budget-cap",
+        ] {
+            assert_eq!(
+                preflight(
+                    path,
+                    "https://console.example.com",
+                    "content-type,if-match,idempotency-key"
+                )
+                .await,
+                200
+            );
+            assert_ne!(
+                preflight(path, "https://untrusted.example", "content-type,if-match").await,
+                200
+            );
+        }
     }
 
     #[actix_web::test]

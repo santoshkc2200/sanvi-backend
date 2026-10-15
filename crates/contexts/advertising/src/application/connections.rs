@@ -15,7 +15,7 @@ use crate::{
     domain::{
         AdvertisingConnection, AdvertisingConnectionRepository, AdvertisingError,
         AuthorizationExchange, AuthorizationRequest, ConnectionHandle, ConnectionHealth,
-        OAuthStateManager, PlatformKey, TokenVault,
+        OAuthStateManager, PlatformKey, SecretRef, TokenVault,
     },
 };
 
@@ -151,20 +151,11 @@ impl HandleCallback {
             .begin_for(tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let token_ref = self
-            .tokens
-            .store_refresh_token(
-                &mut scope,
-                tenant_id,
-                connection_id,
-                &exchanged.refresh_token,
-            )
-            .await?;
         let pending = AdvertisingConnection::new_pending(
             connection_id,
             tenant_id,
             platform,
-            token_ref,
+            SecretRef::new(connection_id.to_string()),
             exchanged.granted_scopes,
             exchanged.expires_at,
             exchanged.accounts,
@@ -172,6 +163,17 @@ impl HandleCallback {
             Utc::now(),
         )?;
         let stored = self.connections.upsert(&mut scope, &pending).await?;
+        // The token references its connection through an immediate FK. Both
+        // writes stay in this transaction, so encryption failure rolls back
+        // the pending connection as well.
+        self.tokens
+            .store_refresh_token(
+                &mut scope,
+                tenant_id,
+                connection_id,
+                &exchanged.refresh_token,
+            )
+            .await?;
         scope
             .commit()
             .await

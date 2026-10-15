@@ -5061,3 +5061,105 @@ async fn retention_enforcement_anonymises_conversions_and_drops_aged_metrics() {
         "the other class still drops on its own cutoff"
     );
 }
+
+/// OAuth must insert the parent before its encrypted token. Exercise actual
+/// SQL repositories, so mocks cannot hide the immediate foreign key.
+#[tokio::test]
+async fn oauth_callbacks_store_connection_before_token_for_both_platforms() {
+    use sanvi_advertising::{
+        adapters::{SqlxConnectionTokenRepository, SqlxTenantEnvelopeCrypto},
+        application::HandleCallback,
+        domain::{ConnectionStatus, TokenVault},
+    };
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "oauth-callback-fk").await;
+    let manager = TxManager::new(pool, sanvi_testsupport::test_ids());
+    let connections = Arc::new(SqlxAdvertisingConnectionRepository::new());
+    let platforms = Arc::new(FakeAdPlatform::registered_catalog());
+    let oauth = OAuthStateManager::with_store(
+        "x".repeat(32),
+        Arc::new(SqlxOAuthStateStore::new(manager.clone())),
+    );
+    let vault = Arc::new(TokenVault::new(
+        Arc::new(SqlxTenantEnvelopeCrypto::new(
+            [42; 32],
+            "test-kek".to_string(),
+        )),
+        Arc::new(SqlxConnectionTokenRepository::new()),
+    ));
+    let callback = HandleCallback::new(
+        manager.clone(),
+        connections.clone(),
+        platforms,
+        oauth.clone(),
+        vault.clone(),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    );
+    for descriptor in FakeAdPlatform::fixtures().into_iter().take(2) {
+        let platform = descriptor.key;
+        let state = oauth
+            .issue(
+                tenant_id,
+                platform.clone(),
+                Utc::now(),
+                Duration::minutes(10),
+            )
+            .await
+            .unwrap();
+        let pending = callback
+            .execute(
+                tenant_id,
+                platform.clone(),
+                &state,
+                format!("test-code-{}", platform.as_str()),
+                "https://console.example.com/callback".to_string(),
+                Some(test_actor()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), ConnectionStatus::Pending);
+        let mut scope = manager.begin_for(tenant_id.as_i64()).await.unwrap();
+        let stored = connections
+            .find_by_id(&mut scope, tenant_id, pending.id())
+            .await
+            .unwrap()
+            .unwrap();
+        let token = vault
+            .resolve_refresh_token(&mut scope, tenant_id, pending.id())
+            .await
+            .unwrap();
+        assert_eq!(stored.id(), pending.id());
+        assert_eq!(
+            token,
+            format!("fake-refresh-token-for-test-code-{}", platform.as_str())
+        );
+        scope.commit().await.unwrap();
+        let selected_account = pending.pending_accounts().unwrap()[0].external_id.clone();
+        let active = CreateConnection::new(manager.clone(), connections.clone())
+            .execute(
+                tenant_id,
+                pending.id(),
+                &selected_account,
+                "JPY".to_string(),
+                "Asia/Tokyo".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(active.id(), pending.id());
+        assert_eq!(active.status(), ConnectionStatus::Active);
+        assert!(
+            callback
+                .execute(
+                    tenant_id,
+                    platform,
+                    &state,
+                    "replay".to_string(),
+                    "https://console.example.com/callback".to_string(),
+                    Some(test_actor()),
+                )
+                .await
+                .is_err()
+        );
+    }
+}

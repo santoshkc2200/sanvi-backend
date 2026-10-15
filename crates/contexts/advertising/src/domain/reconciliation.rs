@@ -33,6 +33,13 @@ impl CampaignReconciliationState {
     pub fn reconcile(&mut self, remote: Campaign) -> ReconciliationResult {
         let remote_changes = changed_fields(&self.last_known_remote, &remote);
         if remote_changes.is_empty() {
+            // A successful reapply can match the existing snapshot exactly.
+            // Recompute the marker even when no remote fields changed.
+            let conflicts = changed_fields(&self.intent, &remote);
+            self.intent.drift = DriftState {
+                drifted: !conflicts.is_empty(),
+                changed_fields: conflicts,
+            };
             return ReconciliationResult::Unchanged;
         }
 
@@ -131,6 +138,29 @@ mod tests {
                 changed_fields: Vec::new(),
             },
         }
+    }
+
+    #[test]
+    fn unchanged_remote_recomputes_stale_drift_after_reapply() {
+        let original = test_campaign();
+        let mut state = CampaignReconciliationState::new(original.clone());
+        state.intent.drift = DriftState {
+            drifted: true,
+            changed_fields: vec!["budget".to_string()],
+        };
+        assert_eq!(state.reconcile(original), ReconciliationResult::Unchanged);
+        assert!(!state.intent.drift.drifted);
+        assert!(state.intent.drift.changed_fields.is_empty());
+    }
+
+    #[test]
+    fn unchanged_remote_preserves_a_real_conflict() {
+        let mut state = CampaignReconciliationState::new(test_campaign());
+        state.intent.budget.amount.amount_minor = 500;
+        let remote = state.last_known_remote.clone();
+        assert_eq!(state.reconcile(remote), ReconciliationResult::Unchanged);
+        assert_eq!(state.intent.drift.changed_fields, vec!["budget"]);
+        assert!(state.intent.drift.drifted);
     }
 
     #[test]
