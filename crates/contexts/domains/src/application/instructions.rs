@@ -40,7 +40,7 @@ pub fn routing_records(
             .collect()
     } else {
         vec![DnsRecord::new(
-            hostname.first_label(),
+            zone_relative_name(hostname),
             DnsRecordType::Cname,
             edge_hostname,
             300,
@@ -49,9 +49,14 @@ pub fn routing_records(
 }
 
 /// The verification TXT record.
-pub fn challenge_record(token: &str) -> DnsRecord {
+pub fn challenge_record(hostname: &Hostname, token: &str) -> DnsRecord {
+    let name = if hostname.is_apex() {
+        "_sanvi-challenge".to_string()
+    } else {
+        format!("_sanvi-challenge.{}", zone_relative_name(hostname))
+    };
     DnsRecord::new(
-        "_sanvi-challenge".to_string(),
+        name,
         DnsRecordType::Txt,
         format!(
             "{}{}",
@@ -60,6 +65,14 @@ pub fn challenge_record(token: &str) -> DnsRecord {
         ),
         300,
     )
+}
+
+fn zone_relative_name(hostname: &Hostname) -> &str {
+    hostname
+        .as_str()
+        .strip_suffix(hostname.registrable())
+        .unwrap_or_default()
+        .trim_end_matches('.')
 }
 
 pub struct GetDomainInstructions {
@@ -108,7 +121,7 @@ impl GetDomainInstructions {
         match domain.kind {
             DomainKind::Connected => {
                 if let Some(challenge) = &domain.challenge {
-                    records.push(challenge_record(&challenge.token));
+                    records.push(challenge_record(&domain.hostname, &challenge.token));
                 }
                 records.extend(routing_records(
                     &domain.hostname,
@@ -180,5 +193,33 @@ impl GetDomainInstructions {
                 .collect(),
             guide,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subdomain_challenge_is_relative_to_registrable_zone() {
+        let host = Hostname::parse("shop.eu.example.co.uk").unwrap();
+        assert_eq!(
+            challenge_record(&host, "token").name,
+            "_sanvi-challenge.shop.eu"
+        );
+        assert_eq!(
+            routing_records(&host, "edge.sanvi.app", &[])[0].name,
+            "shop.eu"
+        );
+    }
+
+    #[test]
+    fn apex_challenge_and_routing_keep_zone_names() {
+        let host = Hostname::parse("example.com").unwrap();
+        assert_eq!(challenge_record(&host, "token").name, "_sanvi-challenge");
+        assert_eq!(
+            routing_records(&host, "edge.sanvi.app", &["8.8.8.8".to_string()])[0].name,
+            "@"
+        );
     }
 }

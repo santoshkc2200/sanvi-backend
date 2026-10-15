@@ -138,6 +138,11 @@ impl RunRenewalSweep {
 
             match self.ca.renew(&cert, &domain).await {
                 Ok(renewed) => {
+                    // The edge renews on its own schedule. Observing the same
+                    // certificate is not a renewal and must not reset warnings.
+                    if renewed.not_after <= cert.not_after {
+                        continue;
+                    }
                     let mut scope = self
                         .tx
                         .begin_unscoped("domains.renewal_sweep.renewed", "domains-worker")

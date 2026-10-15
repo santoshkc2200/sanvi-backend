@@ -1,0 +1,47 @@
+{
+	email {$ACME_EMAIL}
+	acme_ca {$ACME_DIRECTORY:https://acme-v02.api.letsencrypt.org/directory}
+	on_demand_tls {
+		ask http://127.0.0.1:9080/ask
+	}
+	servers {
+		strict_sni_host on
+	}
+}
+
+# Caddy's ask protocol sends ?domain= and cannot attach our internal header.
+# This loopback-only bridge translates it; the secret never enters the URL.
+http://:9080 {
+	bind 127.0.0.1
+	route /ask {
+		rewrite * /internal/tls/authorize?host={query.domain}
+		reverse_proxy {$API_UPSTREAM:api_proxy:8080} {
+			header_up x-sanvi-internal {$SANVI_DOMAIN_INTERNAL_SECRET}
+			header_up -Cookie
+			header_up -Authorization
+		}
+	}
+	respond 404
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	route {
+		# Gate requests too: cached certificates must not keep removed or
+		# suspended tenants accessible. API failure denies access.
+		forward_auth {$API_UPSTREAM:api_proxy:8080} {
+			uri /internal/tls/authorize?host={host}
+			header_up x-sanvi-internal {$SANVI_DOMAIN_INTERNAL_SECRET}
+			header_up -Cookie
+			header_up -Authorization
+		}
+		@internal path /internal /internal/*
+		respond @internal 404
+		reverse_proxy {$STOREFRONT_UPSTREAM} {
+			header_up Host {host}
+			header_up -x-sanvi-internal
+		}
+	}
+}

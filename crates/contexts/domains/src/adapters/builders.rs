@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use sanvi_kernel::{CapabilityMode, RawIdGenerator};
 
+use crate::adapters::edge_ca::EdgeCertificateAuthority;
 use crate::adapters::stubs::{
     DisabledCertificateAuthority, DisabledPurchaseCharger, DisabledRegistrar,
 };
@@ -44,20 +45,21 @@ pub fn build_certificate_authority(
     let mode =
         CapabilityMode::parse(&config.ca_mode).map_err(DomainsError::CertificateAuthority)?;
     match mode {
-        CapabilityMode::Disabled => {
-            Ok((Arc::new(DisabledCertificateAuthority), CapabilityMode::Disabled))
-        }
-        CapabilityMode::Sandbox => {
-            Ok((
-                Arc::new(SandboxCertificateAuthority::new(config.cert_lifetime_days, ids)),
-                CapabilityMode::Sandbox,
-            ))
-        }
-        CapabilityMode::Live => {
-            Err(DomainsError::CertificateAuthority(
-                "live certificate authority adapter is not implemented; configure 'disabled' or 'sandbox'".to_string(),
-            ))
-        }
+        CapabilityMode::Disabled => Ok((
+            Arc::new(DisabledCertificateAuthority),
+            CapabilityMode::Disabled,
+        )),
+        CapabilityMode::Sandbox => Ok((
+            Arc::new(SandboxCertificateAuthority::new(
+                config.cert_lifetime_days,
+                ids,
+            )),
+            CapabilityMode::Sandbox,
+        )),
+        CapabilityMode::Live => Ok((
+            Arc::new(EdgeCertificateAuthority::new(config, ids)?),
+            CapabilityMode::Live,
+        )),
     }
 }
 
@@ -116,7 +118,9 @@ mod tests {
         assert_eq!(mode, CapabilityMode::Disabled);
 
         config.ca_mode = "live".to_string();
-        assert!(build_certificate_authority(&config, ids).is_err());
+        config.anycast_ips = vec!["8.8.8.8".to_string()];
+        let (_, mode) = build_certificate_authority(&config, ids).unwrap();
+        assert_eq!(mode, CapabilityMode::Live);
     }
 
     #[test]

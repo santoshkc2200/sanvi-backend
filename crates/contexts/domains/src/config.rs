@@ -1,8 +1,8 @@
 //! The domains context's configuration.
 //!
 //! Reference deployment: the registrar, DNS provider and certificate
-//! authority run in sandbox mode (deterministic, no external accounts);
-//! production adapters implement the same ports. Everything that could
+//! authority default to sandbox mode (deterministic, no external accounts).
+//! Live TLS observes certificates managed by the edge. Everything that could
 //! fail closed does: an empty `internal_secret` denies every TLS
 //! authorization request.
 
@@ -116,6 +116,9 @@ pub struct DomainsConfig {
     /// Sandbox CA certificate validity.
     #[serde(default = "default_cert_lifetime")]
     pub cert_lifetime_days: u32,
+    /// Maximum wait for an edge TLS handshake and HTTP response (including ACME issuance).
+    #[serde(default = "default_cert_request_timeout")]
+    pub cert_request_timeout_secs: u64,
     /// Renewal starts this many days before `not_after`.
     #[serde(default = "default_renewal_before")]
     pub cert_renewal_before_days: u32,
@@ -193,6 +196,10 @@ fn default_cert_lifetime() -> u32 {
     90
 }
 
+fn default_cert_request_timeout() -> u64 {
+    60
+}
+
 fn default_renewal_before() -> u32 {
     30
 }
@@ -249,6 +256,7 @@ impl Default for DomainsConfig {
             verification_backoff_base_secs: default_backoff_base(),
             verification_backoff_max_secs: default_backoff_max(),
             cert_lifetime_days: default_cert_lifetime(),
+            cert_request_timeout_secs: default_cert_request_timeout(),
             cert_renewal_before_days: default_renewal_before(),
             cert_expiry_warning_days: default_expiry_warnings(),
             host_cache_ttl_secs: default_host_cache_ttl(),
@@ -315,10 +323,16 @@ impl DomainsConfig {
         if self.order_renewal_max_attempts == 0 {
             anyhow::bail!("domains.order_renewal_max_attempts must be >= 1");
         }
-        if self.registrar.mode != "sandbox" {
+        if !matches!(self.registrar.mode.as_str(), "disabled" | "sandbox") {
             anyhow::bail!(
-                "domains.registrar.mode must be \"sandbox\" (production adapters are not built yet)"
+                "domains.registrar.mode must be \"disabled\" or \"sandbox\" (live registration is not built yet)"
             );
+        }
+        if self.cert_request_timeout_secs == 0 {
+            anyhow::bail!("domains.cert_request_timeout_secs must be >= 1");
+        }
+        if self.ca_mode == "live" && self.internal_secret.is_empty() {
+            anyhow::bail!("domains.internal_secret must be configured for live TLS");
         }
         if self.registrar.tlds.is_empty() {
             anyhow::bail!("domains.registrar.tlds must not be empty");
@@ -372,6 +386,31 @@ mod tests {
         let config = DomainsConfig {
             anycast_ips: vec!["not-an-ip".to_string()],
             ..DomainsConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn connected_domains_can_disable_registration() {
+        let mut config = DomainsConfig::default();
+        config.registrar.mode = "disabled".to_string();
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_unbounded_certificate_request() {
+        let config = DomainsConfig {
+            cert_request_timeout_secs: 0,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn live_tls_requires_authorization_secret() {
+        let config = DomainsConfig {
+            ca_mode: "live".to_string(),
+            ..Default::default()
         };
         assert!(config.validate().is_err());
     }

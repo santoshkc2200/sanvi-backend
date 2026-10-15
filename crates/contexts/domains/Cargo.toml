@@ -37,9 +37,12 @@ tokio.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
+x509-parser.workspace = true
 
 [dev-dependencies]
 actix-http.workspace = true
 futures-util.workspace = true
 proptest.workspace = true
 sanvi-testsupport.workspace = true
+rcgen.workspace = true
+tokio-rustls.workspace = true

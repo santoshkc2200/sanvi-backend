@@ -56,7 +56,7 @@ impl HttpProbeAdapter {
 }
 
 /// The SSRF allow-list: only globally routable unicast.
-fn is_public(address: IpAddr) -> bool {
+pub(super) fn is_public(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(v4) => {
             !(v4.is_private()

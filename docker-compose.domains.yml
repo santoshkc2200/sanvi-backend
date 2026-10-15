@@ -1,0 +1,36 @@
+# Optional customer-domain edge overlay; see docs/runbooks/domains.md.
+# Merge with docker-compose.staging.yml. The storefront is deployed separately.
+services:
+  api:
+    environment: &domains_environment
+      SANVI__DOMAINS__CA_MODE: live
+      SANVI__DOMAINS__REGISTRAR__MODE: disabled
+      SANVI__DOMAINS__CHARGER_MODE: disabled
+      SANVI__DOMAINS__INTERNAL_SECRET: ${SANVI_DOMAIN_INTERNAL_SECRET:?Set the domain gate secret}
+      SANVI__DOMAINS__PLATFORM_DOMAIN: ${SANVI_PLATFORM_DOMAIN:?Set the platform domain}
+      SANVI__DOMAINS__EDGE_HOSTNAME: ${SANVI_EDGE_HOSTNAME:?Set the edge DNS hostname}
+      # Figment array syntax, for example ["<public IPv4>"] (not comma-separated).
+      SANVI__DOMAINS__ANYCAST_IPS: ${SANVI_EDGE_IPS:?Set the public edge IP array}
+  api_next:
+    environment: *domains_environment
+  worker:
+    environment: *domains_environment
+  domains_edge:
+    image: caddy:2.11.2-alpine
+    command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?Set the ACME contact email}
+      ACME_DIRECTORY: ${ACME_DIRECTORY:-https://acme-v02.api.letsencrypt.org/directory}
+      SANVI_DOMAIN_INTERNAL_SECRET: ${SANVI_DOMAIN_INTERNAL_SECRET:?Set the domain gate secret}
+      STOREFRONT_UPSTREAM: ${STOREFRONT_UPSTREAM:?Set the reachable storefront host and port}
+      API_UPSTREAM: api_proxy:8080
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deployment/Caddyfile.domains:/etc/caddy/Caddyfile:ro
+      - domains_edge_data:/data
+      - domains_edge_config:/config
+    restart: unless-stopped
+    stop_grace_period: 45s
+volumes:
+  domains_edge_data:
+  domains_edge_config:

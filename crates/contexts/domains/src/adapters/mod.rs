@@ -7,6 +7,7 @@ pub mod ca;
 pub mod cache;
 pub mod dns_checker;
 pub mod dns_provider;
+pub mod edge_ca;
 pub mod events;
 pub mod http;
 pub mod metrics;

@@ -17,6 +17,84 @@ Sources of truth:
 - The edge proxy (Caddy/Traefik) is the TLS terminator; the app only vouches for
   hostnames. Private keys never enter the application database.
 
+## Production customer domains
+
+Customer-owned domains serve the **storefront**. The tenant admin console stays
+on the platform admin origin. Registration/purchase is a separate capability;
+the live customer-domain overlay disables the sandbox registrar and charger.
+
+`ca_mode = "live"` uses the edge's on-demand ACME issuance. The worker connects
+to the configured `anycast_ips` with the customer's hostname as SNI, verifies
+the public certificate chain and hostname, and records the actual issuer,
+serial and validity. It never follows redirects or uses environment proxies.
+An issuance failure leaves the domain retryable, rather than marking it live
+with synthetic certificate facts. Every configured edge IP must be public;
+the documentation IPs in the default config deliberately fail live startup.
+
+The supplied `deployment/Caddyfile.domains` contains:
+
+- A catch-all HTTPS storefront with on-demand ACME and persistent key storage.
+- A loopback-only bridge translating Caddy's `?domain=` ask protocol into the
+  authenticated `/internal/tls/authorize?host=` endpoint. Secrets travel in
+  headers, never query strings. Neither the bridge nor the Caddy admin API is
+  published by Docker.
+- An authorization check before **every HTTP request**, so cached certificates
+  cannot keep removed or suspended tenants serving. Gate/backend failure denies
+  access. `/internal` paths are never forwarded publicly.
+- Host preservation and strict SNI/Host matching for tenant resolution.
+
+Deployment procedure (on the deployment host, after the existing API blue/green
+proxy and separately deployed storefront are healthy):
+
+1. Supply through the host secret manager/environment:
+   `SANVI_DOMAIN_INTERNAL_SECRET` (random shared secret), `ACME_EMAIL`,
+   `SANVI_PLATFORM_DOMAIN`, `SANVI_EDGE_HOSTNAME`, `SANVI_EDGE_IPS` (Figment array
+   syntax, e.g. `["<public IPv4>"]`), and `STOREFRONT_UPSTREAM` (reachable
+   storefront hostname and port). The overlay passes identical domain settings
+   to API, next API slot and worker. Keep existing database/Redis/privacy and
+   other deployment secrets configured as usual.
+2. Point the edge DNS hostname at these same public IPs. Make TCP 80/443 and
+   optionally UDP 443 reachable at Caddy; HTTP-01/TLS-ALPN-01 must reach this
+   edge. Configure the storefront's existing API, media and identity origins
+   and permit customer origins where those separate services require them.
+   Run its Node adapter with `PROTOCOL_HEADER=x-forwarded-proto` and
+   `HOST_HEADER=x-forwarded-host`, reachable only through the trusted edge;
+   leave `ORIGIN` unset so it can serve different customer origins.
+3. Validate before applying:
+   `docker compose -f docker-compose.staging.yml -f docker-compose.domains.yml config --quiet`.
+   Start the edge and apply API/worker configuration with the normal deployment
+   procedure using both files. For a first install:
+   `docker compose -f docker-compose.staging.yml -f docker-compose.domains.yml up -d`.
+   Do not expose either API slot directly to the internet.
+4. Grant the tenant `domains.custom` and an appropriate domain quota. In the
+   admin Domains screen, connect the customer hostname, publish the generated
+   TXT and routing records, then request verification. DNS record names are
+   relative to the registrable zone: for `shop.example.com`, TXT name is
+   `_sanvi-challenge.shop`, CNAME name is `shop`.
+5. Check `verifying`, `verified`/`issuing_cert`, then `live`; inspect the real
+   HTTPS certificate and storefront for that hostname. Unknown/unverified
+   hostnames must be denied. Remove a test domain and confirm HTTP access is
+   denied even when Caddy still has its certificate cached.
+
+Caddy renews certificates independently. The worker observes them near expiry;
+an unchanged certificate does not emit a renewal event or clear expiry warnings.
+Tune `cert_request_timeout_secs` (default 60) for initial ACME handshakes.
+Do not delete the `domains_edge_data` volume on rollout or rollback. Multiple
+edges must share supported certificate storage or be deployed with an explicit
+per-edge issuance/renewal strategy; the overlay describes one edge instance.
+
+Removal is **service withdrawal**, not CA-level revocation: the projection and
+request gate stop service immediately, while Caddy owns certificate retirement.
+For key compromise, revoke using the CA/edge's incident procedure. Rollback:
+remove the edge overlay from deployment, restore the previous routing and domain
+configuration, and retain the edge data volume. No schema migration is needed.
+
+Local proof: `scripts/test.sh --quiet -p sanvi-domains` exercises certificate
+observation and DNS instructions. `python3 scripts/test-domains-edge.py` runs the
+actual Caddy routes in a disposable container with a local CA and gate fixture;
+it proves ask translation, trusted HTTPS, Host preservation, SNI isolation,
+secret stripping and denial for unknown/removed domains without public ACME.
+
 ## 1. Live-hostname projection repair
 
 The projection is updated in the same transaction as every state change; drift is only

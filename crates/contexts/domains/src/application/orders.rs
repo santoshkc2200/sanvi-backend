@@ -461,7 +461,7 @@ impl PlaceDomainOrder {
             }
         };
 
-        let mut records = vec![challenge_record(&token)];
+        let mut records = vec![challenge_record(hostname, &token)];
         records.extend(routing_records(
             hostname,
             &self.edge_hostname,
