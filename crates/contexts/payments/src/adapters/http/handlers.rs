@@ -181,19 +181,9 @@ fn idempotency_key(req: &HttpRequest) -> Result<Uuid, actix_web::Error> {
     })
 }
 
-/// The caller's IP for the audit trail (best effort — a proxy that sends
+/// The caller's address under the shared trusted-proxy policy.
 fn client_ip(req: &HttpRequest) -> Option<IpAddr> {
-    let connection = req.connection_info();
-    let raw = connection.realip_remote_addr()?;
-    if let Ok(ip) = raw.parse() {
-        return Some(ip);
-    }
-    // `ip:port` (and `[::1]:port`) shapes.
-    let (addr, _) = raw.rsplit_once(':')?;
-    addr.trim_start_matches('[')
-        .trim_end_matches(']')
-        .parse()
-        .ok()
+    sanvi_http::client_ip(req)
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,13 +1025,13 @@ pub async fn get_tenant_checkout_config(
         (status = 200, description = "Idempotent replay: the same checkout the Idempotency-Key already owns", body = CheckoutView),
         (status = 400, description = "Malformed request, non-positive amount, or a redirect URL off the verified-domain allow-list (payments/domain-not-allowed)", body = ProblemDetail),
         (status = 403, description = "Missing payments.checkout permission or the payments.stripe_connect entitlement", body = ProblemDetail),
-        (status = 409, description = "The connected account cannot accept payments (payments/connection-not-active)", body = ProblemDetail),
+        (status = 409, description = "The connected account cannot accept payments, or the Idempotency-Key owns a different request or a legacy checkout without a fingerprint", body = ProblemDetail),
         (status = 429, description = "Rate limit exceeded per tenant, client or customer reference (payments/rate-limited)", body = ProblemDetail),
         (status = 502, description = "Provider unavailable (payments/provider-unavailable)", body = ProblemDetail),
         (status = 503, description = "The payments.checkout flag is off (payments/provider-unavailable)", body = ProblemDetail)
     ),
     params(
-        ("Idempotency-Key" = uuid::Uuid, Header, description = "Required. The same key returns the same checkout — one double-clicked buy button, one session")
+        ("Idempotency-Key" = uuid::Uuid, Header, description = "Required. Replay must match the original order, amount, currency, customer context, locale and redirects; changed inputs return 409")
     )
 )]
 pub async fn create_tenant_checkout(

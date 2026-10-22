@@ -963,7 +963,7 @@ paths:
     post:
       operationId: create_tenant_checkout
       parameters:
-      - description: Required. The same key returns the same checkout — one double-clicked buy button, one session
+      - description: Required. Replay must match the original order, amount, currency, customer context, locale and redirects; changed inputs return 409
         in: header
         name: Idempotency-Key
         required: true
@@ -1006,7 +1006,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
-          description: The connected account cannot accept payments (payments/connection-not-active)
+          description: The connected account cannot accept payments, or the Idempotency-Key owns a different request or a legacy checkout without a fingerprint
         '429':
           content:
             application/problem+json:

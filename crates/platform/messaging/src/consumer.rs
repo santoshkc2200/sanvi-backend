@@ -297,7 +297,26 @@ impl StreamConsumer {
         }
 
         let mut last_recovery = tokio::time::Instant::now();
+        let mut next_outbox_recovery = tokio::time::Instant::now();
+        let recovery_since = (start_id == "$").then(chrono::Utc::now);
         loop {
+            if *shutdown.borrow() {
+                break;
+            }
+            if tokio::time::Instant::now() >= next_outbox_recovery {
+                let recovered = self
+                    .recover_outbox(stream, group, &handler, recovery_since)
+                    .await;
+                next_outbox_recovery = tokio::time::Instant::now()
+                    + match recovered {
+                        Ok(count) if count == crate::recovery::RECOVERY_BATCH => POLL_INTERVAL,
+                        Ok(_) => self.recovery_interval,
+                        Err(err) => {
+                            error!(error = %err, stream, group, "PostgreSQL event recovery failed");
+                            self.recovery_interval
+                        }
+                    };
+            }
             // Poll for a batch, but abandon immediately on shutdown.
             let batch = tokio::select! {
                 changed = shutdown.changed() => {
@@ -310,6 +329,11 @@ impl StreamConsumer {
                     Ok(batch) => batch,
                     Err(err) => {
                         error!(error = %err, stream, group, "stream read failed");
+                        // A Redis restart or eviction may remove the group.
+                        // Re-create it and let PostgreSQL fill any missing tail.
+                        if let Err(err) = self.streams.ensure_consumer_group_at(stream, group, "0").await {
+                            error!(error = %err, "failed to recreate consumer group");
+                        }
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         continue;
                     }
@@ -345,6 +369,25 @@ impl StreamConsumer {
             }
         }
         info!(stream, group, "stream consumer stopped");
+    }
+
+    async fn recover_outbox(
+        &self,
+        stream: &str,
+        group: &str,
+        handler: &ConsumerHandlerKind,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<usize> {
+        let events = crate::recovery::pending(&self.pool, stream, group, since).await?;
+        let count = events.len();
+        for envelope in events {
+            let payload = serde_json::to_string(&envelope)?;
+            // Valid Redis ID outside the timestamp range of ordinary XADD IDs.
+            let entry = format!("0-{}", envelope.id.as_i64());
+            self.process_one(stream, group, &entry, &payload, handler)
+                .await;
+        }
+        Ok(count)
     }
 
     async fn read(
@@ -445,12 +488,25 @@ impl StreamConsumer {
             Err(err) => {
                 error!(error = %err, entry_id, stream, group, "unparseable event payload");
                 let dlq = format!("{stream}.dlq");
+                if let Err(park_err) = crate::recovery::park(
+                    &self.pool,
+                    stream,
+                    group,
+                    entry_id,
+                    None,
+                    event_json,
+                    &err.to_string(),
+                )
+                .await
+                {
+                    error!(error = %park_err, "failed to park malformed event; refusing to ack");
+                    return;
+                }
                 if let Err(dlq_err) = self
                     .streams
-                    .append(
+                    .append_durable(
                         &dlq,
                         &[("raw_event", event_json), ("error", &err.to_string())],
-                        10_000,
                     )
                     .await
                 {
@@ -472,6 +528,22 @@ impl StreamConsumer {
             }
         };
 
+        let parked = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM platform.consumer_dead_letters WHERE consumer = $1 AND event_id = $2)",
+        ).bind(group).bind(envelope.id.as_i64()).fetch_one(&self.pool).await;
+        match parked {
+            Ok(true) => {
+                if let Err(err) = self.ack(stream, group, entry_id).await {
+                    error!(error = %err, "failed to ack durably parked event");
+                }
+                return;
+            }
+            Err(err) => {
+                error!(error = %err, "failed to inspect consumer recovery state; refusing to ack");
+                return;
+            }
+            Ok(false) => {}
+        }
         match handler_kind {
             ConsumerHandlerKind::Transactional(handler) => {
                 self.process_transactional(stream, group, entry_id, &envelope, handler)
@@ -672,12 +744,25 @@ impl StreamConsumer {
         );
         let payload = serde_json::to_string(envelope).unwrap_or_default();
         let dlq = format!("{stream}.dlq");
+        if let Err(park_err) = crate::recovery::park(
+            &self.pool,
+            stream,
+            group,
+            entry_id,
+            Some(envelope.id.as_i64()),
+            &payload,
+            &err.to_string(),
+        )
+        .await
+        {
+            error!(error = %park_err, "failed to durably park event; refusing to ack");
+            return;
+        }
         if let Err(dlq_err) = self
             .streams
-            .append(
+            .append_durable(
                 &dlq,
                 &[("event", payload.as_str()), ("error", &err.to_string())],
-                10_000,
             )
             .await
         {

@@ -42,7 +42,7 @@ impl RootSpanBuilder for SanviRootSpanBuilder {
             http.method = %request.method(),
             http.target = %request.path(),
             http.host = %request.connection_info().host(),
-            http.client_ip = %request.connection_info().realip_remote_addr().unwrap_or_default(),
+            http.client_ip = %crate::client_ip(request.request()).map(|address| address.to_string()).unwrap_or_default(),
             sanvi.context = context_from_path(request.path()),
         );
         // Join an inbound W3C trace when the caller sent one (TASK-020):

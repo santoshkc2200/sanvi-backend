@@ -437,6 +437,17 @@ enum PaymentsAction {
 
 #[derive(Subcommand)]
 enum DlqAction {
+    /// List durable consumer failures (independent of the Redis DLQ).
+    ConsumerList {
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
+    },
+    /// Retry a valid parked consumer event after correcting its cause.
+    ConsumerReplay {
+        #[arg(long)]
+        consumer: String,
+        event_id: i64,
+    },
     /// The platform outbox dead-letter head, newest first.
     List {
         /// Maximum rows to show.
@@ -875,6 +886,10 @@ async fn main() -> ExitCode {
         }
         Command::Dlq { action } => {
             let result = match action {
+                DlqAction::ConsumerList { limit } => dlq::consumer_list(&cli.env, limit).await,
+                DlqAction::ConsumerReplay { consumer, event_id } => {
+                    dlq::consumer_replay(&cli.env, &consumer, event_id, ids.clone()).await
+                }
                 DlqAction::List { limit } => dlq::list(&cli.env, limit).await,
                 DlqAction::Replay { event_id } => {
                     dlq::replay(&cli.env, event_id, ids.clone()).await

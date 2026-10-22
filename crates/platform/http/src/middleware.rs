@@ -131,6 +131,7 @@ where
         .map(|rate_config| Arc::new(observe(RateLimiter::new(rate_config, redis.clone()))));
 
     app
+        .app_data(crate::TrustedProxies::parse(&config.trusted_proxy_cidrs).expect("trusted proxy CIDRs validated at boot"))
         .wrap(crate::error::ErrorHandlersLayer)
         // Per-app cache headers for responses reaching the inner stack.
         // Degraded headers are stamped outside the protective layers below.
@@ -738,10 +739,8 @@ where
                 return svc.call(req).await;
             }
 
-            let ip = req
-                .connection_info()
-                .realip_remote_addr()
-                .map(str::to_string)
+            let ip = crate::client_ip(req.request())
+                .map(|address| address.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
             let request_id = req.extensions().get::<RequestId>().copied();
 

@@ -71,7 +71,12 @@ impl LocalFileStore {
             .open(path)
             .await
         {
-            Ok(mut file) => file.write_all(bytes).await.map_err(store_err),
+            Ok(mut file) => {
+                file.write_all(bytes).await.map_err(store_err)?;
+                // Tokio can finish write_all after buffering the write.
+                // Complete its filesystem operation before publishing success.
+                file.flush().await.map_err(store_err)
+            }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 let existing = tokio::fs::read(path).await.map_err(store_err)?;
                 if existing == bytes {
@@ -217,5 +222,73 @@ mod tests {
                 .is_err()
         );
         let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[test]
+    fn completed_artifact_put_is_visible_to_an_immediate_filesystem_reader() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let root = temp_root();
+            let store = LocalFileStore::new(root.clone());
+            let bytes = vec![0x5a; 16 * 1024];
+            let mut exercised = false;
+            for index in 0..128 {
+                let key = format!("completed-{index}.zip");
+                let path = root.join("artifacts").join(&key);
+                let mut put =
+                    Box::pin(<LocalFileStore as ArtifactStore>::put(&store, &key, &bytes));
+                // Stop polling as soon as create_new has made the pathname
+                // visible, before the async open resumes to submit its write.
+                let completed = loop {
+                    if path.exists() {
+                        break false;
+                    }
+                    if let std::task::Poll::Ready(result) = futures_util::poll!(put.as_mut()) {
+                        result.unwrap();
+                        break true;
+                    }
+                    tokio::task::yield_now().await;
+                };
+                if completed {
+                    continue;
+                }
+                let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+                let (release_tx, release_rx) = std::sync::mpsc::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                });
+                started_rx.await.unwrap();
+                // The only blocking worker is occupied. A write can be
+                // accepted into Tokio's buffer, but cannot have completed.
+                let premature = match futures_util::poll!(put.as_mut()) {
+                    std::task::Poll::Ready(result) => {
+                        result.unwrap();
+                        true
+                    }
+                    std::task::Poll::Pending => false,
+                };
+                release_tx.send(()).unwrap();
+                blocker.await.unwrap();
+                assert!(
+                    !premature,
+                    "put returned while its filesystem write was still queued"
+                );
+                put.await.unwrap();
+                let actual = std::fs::read(path).unwrap();
+                assert_eq!(actual, bytes);
+                exercised = true;
+                break;
+            }
+            assert!(
+                exercised,
+                "failed to intercept the independent filesystem operation"
+            );
+            let _ = tokio::fs::remove_dir_all(&root).await;
+        });
     }
 }

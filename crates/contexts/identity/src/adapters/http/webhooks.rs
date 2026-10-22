@@ -83,9 +83,8 @@ fn client_allowed(allowed: &[String], client_ip: &str) -> bool {
 }
 
 fn client_ip(req: &HttpRequest) -> String {
-    req.connection_info()
-        .realip_remote_addr()
-        .map(str::to_string)
+    sanvi_http::client_ip(req)
+        .map(|ip| ip.to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 

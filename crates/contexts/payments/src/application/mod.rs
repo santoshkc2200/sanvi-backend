@@ -39,7 +39,7 @@ pub use fees::{ConfiguredApplicationFeePolicy, TenantFeeDisclosure, disclose_fee
 pub use lifecycle::{DEADLINE_REMINDER_WINDOW_DAYS, apply_account_snapshot, target_steps};
 pub use list_payments::{GetPaymentDetail, ListPayments, ListPaymentsCommand, PaymentDetail};
 pub use list_payouts::{ListPayouts, PayoutView as PayoutItemView, PayoutsView};
-pub use refund::{IssueRefund, RefundCommand};
+pub use refund::{DrainRefundAudits, IssueRefund, RefundCommand};
 pub use registry::{ProviderRegistry, RuntimeEnvironment};
 pub use sync_connection::{SyncConnections, SyncReport};
 pub use tax_settings::{

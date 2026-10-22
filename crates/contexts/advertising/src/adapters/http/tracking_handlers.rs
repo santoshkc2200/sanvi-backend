@@ -277,13 +277,8 @@ pub async fn public_track_conversion(
         return accepted();
     };
 
-    // `peer_addr` is the load balancer in every deployed environment, so
-    // budgeting on it would collapse the whole platform into one per-IP
-    // bucket while enforcing nothing against an actual abuser.
-    let client_ip = req
-        .connection_info()
-        .realip_remote_addr()
-        .map(|ip| ip.to_string());
+    // Only explicitly trusted ingress peers may supply the original client IP.
+    let client_ip = sanvi_http::client_ip(&req).map(|ip| ip.to_string());
     let Some(ip) = client_ip else {
         return accepted();
     };

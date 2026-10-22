@@ -75,3 +75,5 @@ pub use tenancy::{
     CurrentTenant, Resolution, ResolutionSource, TenantContext, TenantMiddleware, TenantResolver,
     TenantRuntimeStatus,
 };
+mod client_ip;
+pub use client_ip::{TrustedProxies, client_ip};

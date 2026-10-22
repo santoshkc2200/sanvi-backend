@@ -15,6 +15,9 @@ pub struct PlatformApiConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ServerConfig {
+    /// Immediate reverse proxy peers allowed to supply a sanitized client IP.
+    #[serde(default)]
+    pub trusted_proxy_cidrs: Vec<String>,
     pub host: String,
     pub port: u16,
     /// 0 = one worker per CPU core.
@@ -68,6 +71,7 @@ fn default_keep_alive_secs() -> u64 {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            trusted_proxy_cidrs: Vec::new(),
             host: "0.0.0.0".to_string(),
             port: 8080,
             workers: 0,
@@ -94,6 +98,9 @@ impl ServerConfig {
     /// Fail fast with *all* configuration problems at once.
     pub fn validate(&self) -> anyhow::Result<()> {
         let mut problems: Vec<String> = Vec::new();
+        if let Err(err) = crate::TrustedProxies::parse(&self.trusted_proxy_cidrs) {
+            problems.push(format!("invalid server.trusted_proxy_cidrs: {err}"));
+        }
         if self.host.trim().is_empty() {
             problems.push("server.host must not be empty".to_string());
         }

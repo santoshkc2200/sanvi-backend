@@ -48,7 +48,7 @@ pub struct OutboxRecord {
 }
 
 #[derive(Debug, FromRow)]
-struct OutboxRow {
+pub(crate) struct OutboxRow {
     id: i64,
     aggregate: String,
     aggregate_id: i64,
@@ -260,7 +260,7 @@ impl OutboxDispatcher {
             let started = std::time::Instant::now();
             let outcome = self
                 .streams
-                .append(&stream, &[("event", payload.as_str())], 10_000)
+                .append_durable(&stream, &[("event", payload.as_str())])
                 .await;
             if let Some(metrics) = &self.metrics {
                 metrics

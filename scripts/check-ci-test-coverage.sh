@@ -100,6 +100,9 @@ parse_nextest_invocations() {
     NEXT_EXCLUDED=""
     local -a explicit excluded
     while IFS= read -r line; do
+        # Git's Windows checkout may use CRLF. Strip before appending the
+        # derived list, or the last --exclude token contains a literal CR.
+        line="${line%$'\r'}"
         if [[ "$line" == *'integration_packages.outputs.args'* ]]; then
             line="$line $(docker_dependent_args)" || return 2
         fi
@@ -191,6 +194,12 @@ if [[ "${1:-check}" == "--self-test" ]]; then
     trap 'rm -rf "$tmp"' EXIT
     members_tsv="$(workspace_members)"
     docker_names="$(docker_dependent_names)"
+
+    awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' "$workflow" >"$tmp/crlf.yml"
+    if ! coverage_report "$tmp/crlf.yml" "$members_tsv" >/dev/null 2>&1; then
+        echo "self-test failed: CRLF workflow changed package coverage" >&2
+        exit 1
+    fi
 
     if ! coverage_report "$workflow" "$members_tsv" >/dev/null 2>&1; then
         echo "self-test failed: the real workflow was reported as not covering the workspace" >&2

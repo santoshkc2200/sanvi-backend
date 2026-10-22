@@ -53,6 +53,13 @@ impl Migrator {
 
     /// List applied migrations in order.
     pub async fn applied(&self, pool: &PgPool) -> Result<Vec<(i64, String)>> {
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .context("failed to inspect migration history")?;
+        if !exists {
+            return Ok(Vec::new());
+        }
         let rows: Vec<(i64, String)> =
             sqlx::query_as("SELECT version, description FROM _sqlx_migrations ORDER BY version")
                 .fetch_all(pool)

@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 use crate::domain::ports::{Authorizer, Decision, DecisionCache, ResourceRef};
 use crate::domain::{AccessError, Permission};
 
-use super::check_permission::decision_cache_key;
+use super::check_permission::{authority_cache_key, decision_cache_key};
 
 /// The production grace window: the decision cache TTL. A cached read is
 /// never older than this, so the window bounds exactly how stale a
@@ -125,6 +125,18 @@ impl DegradedAuthorizer {
         // Reads: the cached decision within the grace window, deny after.
         if since.elapsed() <= self.grace {
             let key = decision_cache_key(user_id, permission.as_str(), resource);
+            let key = if matches!(resource, ResourceRef::Tenant(_)) {
+                let Some(revision) = self
+                    .inner
+                    .cache_revision(user_id, permission, resource)
+                    .await?
+                else {
+                    return Ok(Decision::Denied);
+                };
+                authority_cache_key(&key, &revision)
+            } else {
+                key
+            };
             if let Some(decision) = self.cache.get(&key).await {
                 return Ok(decision);
             }
@@ -227,6 +239,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Authorizer for FailingAuthorizer {
+        async fn cache_revision(
+            &self,
+            _: UserId,
+            _: &Permission,
+            _: &ResourceRef,
+        ) -> Result<Option<String>, AccessError> {
+            Ok(Some("unchanged-fixture".into()))
+        }
         async fn check(
             &self,
             _user_id: UserId,
@@ -293,7 +313,10 @@ mod tests {
 
     #[tokio::test]
     async fn writes_deny_and_reads_stay_cached_within_the_grace_window() {
-        let key = decision_cache_key(subject(), permission().as_str(), &resource());
+        let key = authority_cache_key(
+            &decision_cache_key(subject(), permission().as_str(), &resource()),
+            "unchanged-fixture",
+        );
         let (authorizer, degradation) =
             degraded(AccessError::BackendUnreachable("down".to_string())).await;
         authorizer.cache.put(&key, Decision::Allowed, 30).await;
@@ -322,7 +345,10 @@ mod tests {
     }
     #[tokio::test]
     async fn after_the_grace_window_cached_reads_deny_too() {
-        let key = decision_cache_key(subject(), permission().as_str(), &resource());
+        let key = authority_cache_key(
+            &decision_cache_key(subject(), permission().as_str(), &resource()),
+            "unchanged-fixture",
+        );
         let (authorizer, _) = degraded(AccessError::BackendUnreachable("down".to_string())).await;
         authorizer.cache.put(&key, Decision::Allowed, 30).await;
         // The first failure starts the outage clock; the cached read

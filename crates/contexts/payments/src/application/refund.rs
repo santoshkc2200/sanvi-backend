@@ -260,6 +260,7 @@ impl IssueRefund {
             }
         };
 
+        let connection = self.resolve_connection(command.tenant_id, &payment).await?;
         let refund_id = self.ids.next_refund_id()?;
         let now = Utc::now();
         let mut refund = RefundRecord::against(
@@ -283,6 +284,16 @@ impl IssueRefund {
                 .map_err(|err| PaymentsError::Storage(err.to_string()))?;
             match self.refunds.insert(&mut scope, &refund).await {
                 Ok(()) => {
+                    let payload = serde_json::to_value(audit_request(
+                        &command,
+                        &payment,
+                        &refund,
+                        &connection,
+                    ))
+                    .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+                    self.refunds
+                        .prepare_audit(&mut scope, command.tenant_id, refund.id, payload)
+                        .await?;
                     scope
                         .commit()
                         .await
@@ -331,7 +342,6 @@ impl IssueRefund {
             return Ok((winner, true));
         }
 
-        let connection = self.resolve_connection(command.tenant_id, &payment).await?;
         let finalized = self
             .drive_and_finalize(&command, &payment, &connection, refund)
             .await?;
@@ -411,6 +421,35 @@ impl IssueRefund {
             ))
         })?;
 
+        // A pre-migration Pending/Failed row can be re-driven after rollout.
+        // Retain its stored original actor, never the caller who retries it;
+        // notes/IP absent from that old record cannot be reconstructed.
+        // prepare_audit is insert-once, so current snapshots remain untouched.
+        let mut original = command.clone();
+        original.actor = refund.created_by.ok_or_else(|| {
+            PaymentsError::Storage(
+                "refund request has no original actor; manual reconciliation required".into(),
+            )
+        })?;
+        original.note = None;
+        original.ip = None;
+        let mut payload =
+            serde_json::to_value(audit_request(&original, payment, &refund, connection))
+                .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+        payload["after"]["recovered_legacy_request"] = serde_json::json!(true);
+        let mut scope = self
+            .tx_manager
+            .begin_for(command.tenant_id.as_i64())
+            .await
+            .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+        self.refunds
+            .prepare_audit(&mut scope, command.tenant_id, refund.id, payload)
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+
         let provider_refund = match adapter
             .refund(&ProviderRefundCommand {
                 external_account_id: connection.external_account_id.clone(),
@@ -431,9 +470,19 @@ impl IssueRefund {
         refund.status = provider_refund.status;
         let finalized = self.finalize(command, payment, connection, refund).await?;
 
-        // Audit: actor, amount, currency, reason, plus the note when present.
-        self.audit_refund(command, payment, &finalized, connection)
-            .await;
+        // Delivery can fail independently: the committed snapshot and ready
+        // marker remain available to the worker. No attribution is reconstructed
+        // from a retrying caller.
+        if let Err(error) = DrainRefundAudits::new(
+            self.tx_manager.clone(),
+            self.refunds.clone(),
+            self.audit.clone(),
+        )
+        .execute(100)
+        .await
+        {
+            tracing::error!(%error, "refund audit queued for worker retry");
+        }
         Ok(finalized)
     }
 
@@ -468,6 +517,9 @@ impl IssueRefund {
         };
         if let Some(mut winner) = winner {
             self.refunds
+                .adopt_audit(&mut scope, command.tenant_id, refund.id, winner.id)
+                .await?;
+            self.refunds
                 .delete_by_id(&mut scope, command.tenant_id, refund.id)
                 .await?;
             // The webhook-created row owns the provider refund, but the
@@ -491,6 +543,9 @@ impl IssueRefund {
         let transitioned = self
             .refunds
             .try_finalize(&mut scope, command.tenant_id, &refund)
+            .await?;
+        self.refunds
+            .ready_audit(&mut scope, command.tenant_id, refund.id)
             .await?;
         if transitioned && refund.status == RefundStatus::Succeeded {
             // The outbox has no dedupe — the row's pending/failed →
@@ -535,64 +590,87 @@ impl IssueRefund {
             tracing::error!(refund_id = %refund_id, error = %err, "failed to commit refund failure");
         }
     }
+}
 
-    async fn audit_refund(
-        &self,
-        command: &RefundCommand,
-        payment: &crate::domain::PaymentRecord,
-        refund: &RefundRecord,
-        connection: &crate::domain::ProviderConnection,
-    ) {
-        let Ok(mut scope) = self
+/// Delivers durable refund audit commands. The refund lock, chain append and
+/// delivery marker share one transaction, including across worker replicas.
+pub struct DrainRefundAudits {
+    tx_manager: TxManager,
+    refunds: Arc<dyn RefundRepository>,
+    audit: Arc<dyn AuditWriter>,
+}
+
+impl DrainRefundAudits {
+    pub fn new(
+        tx_manager: TxManager,
+        refunds: Arc<dyn RefundRepository>,
+        audit: Arc<dyn AuditWriter>,
+    ) -> Self {
+        Self {
+            tx_manager,
+            refunds,
+            audit,
+        }
+    }
+
+    pub async fn execute(&self, limit: u32) -> Result<usize, PaymentsError> {
+        let mut scope = self
             .tx_manager
-            .begin_unscoped("audit_payments_refund_issued", "payments")
+            .begin_unscoped("deliver_refund_audits", "payments-worker")
             .await
-        else {
-            tracing::error!(refund_id = %refund.id, "failed to open audit scope for refund");
-            return;
-        };
-        let detail = serde_json::json!({
+            .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+        let pending = self.refunds.pending_audits(&mut scope, limit).await?;
+        let count = pending.len();
+        for (refund_id, payload) in pending {
+            let entry: AuditEntryData = serde_json::from_value(payload)
+                .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+            self.audit
+                .append(&mut scope, &entry)
+                .await
+                .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+            self.refunds.mark_audited(&mut scope, refund_id).await?;
+        }
+        scope
+            .commit()
+            .await
+            .map_err(|error| PaymentsError::Storage(error.to_string()))?;
+        Ok(count)
+    }
+}
+
+fn audit_request(
+    command: &RefundCommand,
+    payment: &crate::domain::PaymentRecord,
+    refund: &RefundRecord,
+    connection: &crate::domain::ProviderConnection,
+) -> AuditEntryData {
+    AuditEntryData {
+        occurred_at: refund.created_at,
+        actor_type: ActorType::User,
+        actor_id: Some(command.actor),
+        tenant_id: Some(command.tenant_id),
+        action: "payments.refund_issued".to_string(),
+        resource_type: Some("payments.refund".to_string()),
+        resource_id: Some(refund.id.to_string()),
+        before: None,
+        after: Some(serde_json::json!({
             "payment_id": payment.id,
             "external_payment_id": payment.external_payment_id,
             "refund_id": refund.id,
-            "external_refund_id": refund.external_refund_id,
             "amount_minor": refund.amount.amount_minor,
             "currency": refund.amount.currency.as_str(),
             "reason": refund.reason,
             "note": command.note,
             "provider": connection.provider.as_str(),
             "external_account_id": connection.external_account_id,
-        });
-        if let Err(err) = self
-            .audit
-            .append(
-                &mut scope,
-                &AuditEntryData {
-                    occurred_at: Utc::now(),
-                    actor_type: ActorType::User,
-                    actor_id: Some(command.actor),
-                    tenant_id: Some(command.tenant_id),
-                    action: "payments.refund_issued".to_string(),
-                    resource_type: Some("payments.refund".to_string()),
-                    resource_id: Some(refund.id.to_string()),
-                    before: None,
-                    after: Some(detail),
-                    request_id: None,
-                    ip: command.ip,
-                    user_agent: None,
-                    on_behalf_of: None,
-                },
-            )
-            .await
-        {
-            tracing::error!(refund_id = %refund.id, error = %err, "failed to audit refund");
-        }
-        if let Err(err) = scope.commit().await {
-            tracing::error!(refund_id = %refund.id, error = %err, "failed to commit refund audit");
-        }
+            "idempotency_key": command.idempotency_key,
+        })),
+        request_id: None,
+        ip: command.ip,
+        user_agent: None,
+        on_behalf_of: None,
     }
 }
-
 /// Whether a retried request's payload describes the same refund as the
 /// row its Idempotency-Key owns: same payment, same reason, and — when the
 /// retry names an explicit amount — the exact amount. A `null` amount ("all

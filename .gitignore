@@ -11,6 +11,7 @@
 *.iml
 coverage/
 /.deploy/
+/secrets/
 __pycache__/
 lcov.info
 .cargo/advisory-db

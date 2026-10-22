@@ -14,6 +14,7 @@
 //!   complete, pools close.
 
 use std::process::ExitCode;
+mod management;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -792,6 +793,8 @@ impl WorkerPoolConfig {
 #[serde(rename_all = "snake_case")]
 pub struct WorkerConfig {
     #[serde(default)]
+    pub worker_management: management::ManagementConfig,
+    #[serde(default)]
     pub platform: sanvi_http::config::PlatformApiConfig,
     #[serde(default)]
     pub ids: IdsConfig,
@@ -838,6 +841,14 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.worker_management
+            .host
+            .parse::<std::net::IpAddr>()
+            .context("worker_management.host must be an IP address")?;
+        anyhow::ensure!(
+            self.worker_management.port > 0,
+            "worker_management.port must be nonzero"
+        );
         self.database.validate()?;
         self.redis.validate()?;
         self.telemetry.validate()?;
@@ -1115,34 +1126,13 @@ async fn main() -> ExitCode {
     };
     let access_roles: Arc<dyn RoleRepository> = Arc::new(SqlxRoleRepository::new());
     let access_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
-    let role_key_resolver = {
-        let roles = access_roles.clone();
-        let tx = access_tx.clone();
-        move |role_id: sanvi_access::domain::RoleId| {
-            let roles = roles.clone();
-            let tx = tx.clone();
-            Box::pin(async move {
-                let mut scope = match tx.begin_unscoped("access_role_key_lookup", "access").await {
-                    Ok(scope) => scope,
-                    Err(err) => {
-                        tracing::error!(error = %err, "role key lookup failed");
-                        return None;
-                    }
-                };
-                let key = match roles.find_by_id(&mut scope, role_id).await {
-                    Ok(Some(role)) => Some(role.key().to_string()),
-                    Ok(None) => None,
-                    Err(err) => {
-                        tracing::error!(error = %err, "role key lookup failed");
-                        None
-                    }
-                };
-                let _ = scope.commit().await;
-                key
-            })
-                as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
-        }
-    };
+    let access_projection: Arc<dyn sanvi_access::domain::AccessProjection> =
+        Arc::new(sanvi_access::adapters::SqlxAccessProjection::new(
+            access_tx.clone(),
+            access_roles.clone(),
+            Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),
+            access_store.clone(),
+        ));
     let access_consumer = StreamConsumer::new(pool.clone(), streams.clone());
     let access_consumer_metrics = Arc::new(ConsumerMetrics::new("access"));
     if let Err(err) = access_consumer_metrics.register(registry) {
@@ -1154,13 +1144,9 @@ async fn main() -> ExitCode {
     let decision_cache: Arc<dyn sanvi_access::domain::DecisionCache> = Arc::new(
         sanvi_access::adapters::RedisDecisionCache::new(redis.clone()),
     );
-    let version_store: Arc<dyn sanvi_access::adapters::sync::MembershipVersionStore> =
-        Arc::new(sanvi_access::adapters::sync::RedisMembershipVersionStore::new(redis.clone()));
-    let access_handler = sanvi_access::adapters::sync::access_sync_handler_with_version_store(
-        access_store.clone(),
+    let access_handler = sanvi_access::adapters::sync::access_sync_handler(
+        access_projection.clone(),
         Some(decision_cache.clone()),
-        version_store,
-        role_key_resolver,
     );
 
     // --- access events consumer: entitlement cache + role authoring sync ----
@@ -1212,7 +1198,7 @@ async fn main() -> ExitCode {
     let entitlement_handler = entitlement_sync_handler(
         Some(entitlement_cache.clone()),
         Some(decision_cache),
-        Some(access_store),
+        Some(access_projection),
     );
 
     // --- billing context: Stripe webhooks, dunning, reconciliation -----------
@@ -1849,7 +1835,8 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_access::adapters::SystemClock),
     ));
     let audit_reader = Arc::new(SqlxAuditReader::new());
-    let _audit_writer = SqlxAuditWriter::new(ids.clone());
+    let audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter> =
+        Arc::new(SqlxAuditWriter::new(ids.clone()));
     let verify_audit = Arc::new(VerifyAuditChain::new(
         tx_manager.clone(),
         audit_reader,
@@ -2167,6 +2154,24 @@ async fn main() -> ExitCode {
         };
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
+        Arc::new(FnJob::new(
+            "payments.refund_audits",
+            Duration::from_secs(5),
+            {
+                let drain = Arc::new(sanvi_payments::application::DrainRefundAudits::new(
+                    payments_tx.clone(),
+                    Arc::new(sanvi_payments::adapters::SqlxRefundRepository::new()),
+                    audit_writer.clone(),
+                ));
+                move || {
+                    let drain = drain.clone();
+                    Box::pin(async move {
+                        drain.execute(100).await?;
+                        Ok(())
+                    })
+                }
+            },
+        )),
         Arc::new(FnJob::new(
             "advertising.budget_guardrails",
             Duration::from_secs(config.scheduler.advertising_budget_guardrails_interval_secs),
@@ -3299,10 +3304,36 @@ async fn main() -> ExitCode {
     );
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let management_listener = match tokio::net::TcpListener::bind((
+        config.worker_management.host.as_str(),
+        config.worker_management.port,
+    ))
+    .await
+    {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::error!(%error, "failed to bind worker management listener");
+            return ExitCode::FAILURE;
+        }
+    };
+    let worker_health = management::WorkerHealth::starting();
+    let management_task = {
+        let metrics = metrics.clone();
+        let health = worker_health.clone();
+        let pool = pool.clone();
+        let redis = config.redis.clone();
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            management::run(management_listener, metrics, health, pool, redis, shutdown)
+                .await
+                .expect("worker management server failed");
+        })
+    };
+    let signal_shutdown = shutdown_tx.clone();
     tokio::spawn(async move {
         sanvi_http::shutdown_signal().await;
         tracing::info!("shutdown signal received; draining worker");
-        let _ = shutdown_tx.send(true);
+        let _ = signal_shutdown.send(true);
     });
 
     tracing::info!(
@@ -3518,7 +3549,7 @@ async fn main() -> ExitCode {
                         &consumer_name,
                         handler,
                         shutdown,
-                        "$",
+                        "0",
                     )
                     .await;
             }));
@@ -3526,27 +3557,29 @@ async fn main() -> ExitCode {
         tasks
     };
 
-    let notif_supervisor = tokio::spawn(async move {
-        for task in notif_tasks {
-            let _ = task.await;
-        }
-    });
-
-    let _ = tokio::join!(
-        dispatcher_task,
-        tenancy_task,
-        localization_task,
-        theming_task,
-        domains_task,
-        access_task,
-        entitlement_task,
-        billing_task,
-        scheduler_task,
-        notif_supervisor
-    );
+    let mut tasks = vec![
+        ("management", management_task),
+        ("outbox", dispatcher_task),
+        ("tenancy", tenancy_task),
+        ("localization", localization_task),
+        ("theming", theming_task),
+        ("domains", domains_task),
+        ("access", access_task),
+        ("entitlements", entitlement_task),
+        ("billing", billing_task),
+        ("scheduler", scheduler_task),
+    ];
+    tasks.extend(notif_tasks.into_iter().map(|task| ("notifications", task)));
+    let outcome = management::supervise(tasks, shutdown_tx, worker_health).await;
 
     telemetry_guard.shutdown();
-    ExitCode::SUCCESS
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(%error, "worker supervision failed");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 #[cfg(test)]

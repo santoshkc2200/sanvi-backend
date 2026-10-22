@@ -4,6 +4,10 @@
 `scripts/rolling-restart.sh`
 
 Every staging deploy and revert runs `bash scripts/deploy-staging.sh`.
+The supported image/schema boundary, first maintenance rollout, host secret
+files, and matched legacy recovery procedure are defined in
+[`deployment/README.md`](../../deployment/README.md). Read those preconditions
+before scheduling a drill; arbitrary historical images are not rollback targets.
 The stable `api_proxy` listener switches between `api` and `api_next`, each
 with a distinct Snowflake node ID. The controller starts and health-checks
 the inactive slot before reloading nginx, then waits for the old proxy
@@ -26,11 +30,11 @@ Docker Compose, and (for the drill) Python 3 and k6.
 ## Preconditions
 
 - On the staging host (`STAGING_HOST`), in `/opt/sanvi`, with `API_IMAGE`
-  and `WORKER_IMAGE` pinned to sha tags (the pipeline sets both; the
-  compose `:latest` fallback is never used for a drill).
+  and `WORKER_IMAGE` set to the same immutable `repository@sha256:<digest>`
+  reference. Both images must support the hardened image contract.
 - k6 installed; scale data loaded (`sanvi-cli seed-scale`), with themes published.
 - The two-slot stack already bootstrapped, with a healthy proxy. API and
-  worker images must be pinned tags or digests.
+  worker images must use the same digest and contain every applied migration.
 - `PERF_HOST_DOMAIN` matches the configured tenant domain (default
   `platform.sanvi.app` for the production overlay). `PERF_RATE` defaults
   to 5 iterations/s (10 requests/s), below the 20/s production IP bucket;
@@ -43,7 +47,7 @@ Docker Compose, and (for the drill) Python 3 and k6.
 ### 1. Roll forward
 
 ```bash
-API_IMAGE=<new> WORKER_IMAGE=<new> ./scripts/rolling-restart.sh \
+API_IMAGE=<repository@sha256:digest> WORKER_IMAGE=<same-reference> ./scripts/rolling-restart.sh \
     --tag sha-<commit> --base-url http://127.0.0.1:8080
 ```
 
@@ -58,9 +62,11 @@ failed candidate/configuration, drain guard, and artifact failure cases.
 
 ### 2. Revert
 
-Repeat step 1 with the previous image tag. The revert is the same
-procedure as the deploy — that symmetry is what makes reverting safe,
-not a separate runbook nobody has rehearsed.
+Repeat step 1 with a previous supported image digest whose migration history
+includes all currently applied versions. The controller validates this before
+changing serving state. A pre-hardening image or an image preceding an applied
+migration is rejected; use the matched backup/controller recovery procedure
+in the deployment guide rather than bypassing the guard or running down SQL.
 
 ### 3. Record
 

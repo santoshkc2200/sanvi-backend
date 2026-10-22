@@ -9,6 +9,39 @@ use std::sync::Arc;
 use sanvi_kernel::RawIdGenerator;
 use sanvi_persistence::TxManager;
 
+pub async fn consumer_list(environment: &str, limit: i64) -> anyhow::Result<()> {
+    let pool = connect(environment).await?;
+    for row in sanvi_messaging::list_consumer_dead_letters(&pool, limit).await? {
+        println!(
+            "consumer={} stream={} entry={} event={:?} dead_lettered_at={} failure={}",
+            row.consumer, row.stream, row.entry_id, row.event_id, row.dead_lettered_at, row.failure
+        );
+    }
+    Ok(())
+}
+
+pub async fn consumer_replay(
+    environment: &str,
+    consumer: &str,
+    event_id: i64,
+    ids: Arc<dyn RawIdGenerator>,
+) -> anyhow::Result<()> {
+    let pool = connect(environment).await?;
+    let tx = TxManager::new(pool, ids);
+    let mut scope = tx
+        .begin_unscoped(
+            &format!("replay_consumer_dlq:{consumer}:{event_id}"),
+            "platform-admin",
+        )
+        .await?;
+    if !sanvi_messaging::replay_consumer_dead_letter(&mut scope, consumer, event_id).await? {
+        anyhow::bail!("event {event_id} is not parked for {consumer}");
+    }
+    scope.commit().await?;
+    println!("requeued {event_id} for {consumer}");
+    Ok(())
+}
+
 /// Load configuration and connect (migrator role: the app role holds
 /// INSERT-only on the DLQ table, so triage and replay run privileged).
 async fn connect(environment: &str) -> anyhow::Result<sanvi_persistence::PgPool> {

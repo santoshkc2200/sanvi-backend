@@ -6,13 +6,18 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      image_tag:
+      image_digest:
         description: >-
-          Image tag to roll back to, e.g. sha-<40-char-sha> or a semver tag
-          from a previous successful `build` run. Find one with
-          `gh api /orgs/sanvi/packages/container/sanvi-backend-api/versions`
-          or in the registry UI.
+          Exact sha256:<64 hex> digest of a sanvi-hardened-v1 image or newer
+          with the current schema's applied migrations. Pre-hardening images
+          are unsupported; this operation never downgrades the database.
         required: true
+      deployment_mode:
+        description: Rolling deploy or an explicit downtime window for incompatible migrations
+        required: true
+        type: choice
+        options: [rolling, maintenance]
+        default: rolling
 
 permissions:
   contents: read
@@ -23,6 +28,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+concurrency:
+  group: staging-deployment
+  cancel-in-progress: false
+
 jobs:
   build:
     name: build & sign image
@@ -31,6 +40,8 @@ jobs:
     # automatically when it is; `rollback` is the only job that runs on
     # workflow_dispatch, so this excludes it from that trigger explicitly.
     if: github.event_name == 'push'
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
 
@@ -42,7 +53,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
 
       - name: set up QEMU + Buildx
         uses: docker/setup-qemu-action@v4
@@ -76,29 +87,11 @@ jobs:
           cosign sign --yes \
             "${REGISTRY}/${IMAGE_NAME}-api@${{ steps.build.outputs.digest }}"
 
-  migrate:
-    name: run migrations (pre-deploy)
+  deploy:
+    name: migrate and deploy staging (serialized, exact image)
     runs-on: ubuntu-latest
     needs: build
-    environment: staging
-    steps:
-      - uses: actions/checkout@v7
-      - run: |
-          docker run --rm \
-            -e SANVI__DATABASE__HOST="${{ secrets.STAGING_DB_HOST }}" \
-            -e SANVI__DATABASE__PORT="${{ secrets.STAGING_DB_PORT }}" \
-            -e SANVI__DATABASE__NAME="${{ secrets.STAGING_DB_NAME }}" \
-            -e SANVI__DATABASE__USER="${{ secrets.STAGING_DB_MIGRATOR_USER }}" \
-            -e SANVI__DATABASE__PASSWORD="${{ secrets.STAGING_DB_MIGRATOR_PASSWORD }}" \
-            -e SANVI__DATABASE__SSL_MODE=require \
-            -v "$PWD/migrations:/app/migrations:ro" \
-            "${REGISTRY}/${IMAGE_NAME}-api:sha-${{ github.sha }}" \
-            /usr/local/bin/sanvi-cli migrate up
-
-  deploy:
-    name: deploy staging (reversible)
-    runs-on: ubuntu-latest
-    needs: migrate
+    if: always() && (needs.build.result == 'success' || github.event_name == 'workflow_dispatch')
     environment: staging
     steps:
       - uses: actions/checkout@v7
@@ -108,25 +101,33 @@ jobs:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-          source: "docker-compose.staging.yml,deployment/nginx.conf,scripts/deploy-staging.sh"
+          source: "docker-compose.staging.yml,deployment/nginx.conf,scripts/deploy-staging.sh,scripts/check-deployment-migrations.py,scripts/write-trusted-edge.py"
           target: /opt/sanvi
       - name: deploy via SSH (health-gated traffic switch)
         uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_DIGEST: ${{ needs.build.outputs.digest || inputs.image_digest }}
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode || 'rolling' }}
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-          # ${{ }} expressions are rendered by Actions before this script is
-          # sent over SSH, so the image reference is fully resolved here —
-          # the remote shell never needs REGISTRY/IMAGE_NAME in its own env.
-          # This pins deploy to the exact image `migrate` just ran against;
-          # docker-compose.staging.yml's `${API_IMAGE:-...:latest}` fallback
-          # is only for a manual `docker compose up` outside this pipeline.
+          envs: DEPLOY_DIGEST,DEPLOYMENT_MODE
+          # Migrations, classification, and traffic switch share one host lock.
+          # Host-managed secrets never cross GitHub Actions or SSH arguments.
           script: |
-            set -e
+            set -eu
             cd /opt/sanvi
-            export API_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:sha-${{ github.sha }}"
-            export WORKER_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:sha-${{ github.sha }}"
+            [[ "$DEPLOY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
+            export API_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api@$DEPLOY_DIGEST"
+            export WORKER_IMAGE="$API_IMAGE"
+            export SANVI_RUNTIME_ENV_FILE=/opt/sanvi/secrets/runtime.env
+            export SANVI_MIGRATOR_ENV_FILE=/opt/sanvi/secrets/migrator.env
+            # Optional, non-secret, host-owned exact trusted TLS-proxy CIDR.
+            # Keep it outside the runtime secret file (never source secrets).
+            if [[ -f /opt/sanvi/secrets/trusted-edge-cidr ]]; then
+              export SANVI_TRUSTED_EDGE_CIDR="$(cat /opt/sanvi/secrets/trusted-edge-cidr)"
+            fi
             bash scripts/deploy-staging.sh
             docker compose -f docker-compose.staging.yml ps
 
@@ -143,36 +144,3 @@ jobs:
             echo "/$endpoint -> $status"
             [ "$status" = "200" ] || exit 1
           done
-
-  rollback:
-    name: rollback (manual)
-    runs-on: ubuntu-latest
-    environment: staging
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v7
-      - name: copy deployment controller and proxy configuration
-        uses: appleboy/scp-action@v1
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          source: "docker-compose.staging.yml,deployment/nginx.conf,scripts/deploy-staging.sh"
-          target: /opt/sanvi
-      - name: revert to the requested image
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          # Pins to the operator-supplied `image_tag` input, not whatever
-          # `:latest` currently resolves to — a "rollback" that redeploys
-          # the same floating tag isn't a rollback.
-          script: |
-            set -e
-            cd /opt/sanvi
-            export API_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ github.event.inputs.image_tag }}"
-            export WORKER_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ github.event.inputs.image_tag }}"
-            echo "rolling back to: $API_IMAGE"
-            bash scripts/deploy-staging.sh
-            docker compose -f docker-compose.staging.yml ps

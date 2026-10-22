@@ -17,6 +17,164 @@ async fn prepare_postgres() -> (sanvi_persistence::PgPool, TestDb) {
     (db.app_pool(), db)
 }
 
+#[tokio::test]
+async fn retained_postgres_event_recovers_when_redis_has_lost_the_stream() {
+    let (pool, _db) = prepare_postgres().await;
+    let streams = prepare_redis().await;
+    let stream = format!("{}.test", sanvi_testsupport::test_stream("redis-loss"));
+    sqlx::query("INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload, published_at) VALUES (765, 'test.aggregate', 766, 'test.recovery', '{}'::jsonb, now())")
+        .execute(&pool).await.unwrap();
+    let handled = Arc::new(AtomicUsize::new(0));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let consumer = StreamConsumer::new(pool, streams);
+    let count = handled.clone();
+    let task = tokio::spawn(async move {
+        consumer
+            .run_until_shutdown(
+                &stream,
+                "redis-loss",
+                "recovered",
+                Arc::new(move |_| {
+                    let count = count.clone();
+                    Box::pin(async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                }),
+                shutdown_rx,
+            )
+            .await;
+    });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while handled.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    let _ = shutdown_tx.send(true);
+    task.await.unwrap();
+    assert!(
+        result.is_ok(),
+        "published PostgreSQL events must survive Redis data loss"
+    );
+    assert_eq!(handled.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn consumer_failure_survives_redis_loss_and_replays_from_the_audited_ledger() {
+    use redis::AsyncCommands;
+    let (pool, db) = prepare_postgres().await;
+    let streams = prepare_redis().await;
+    let base = sanvi_messaging::StreamName(sanvi_testsupport::test_stream("durable-dlq"));
+    let stream = base.stream_for("test.aggregate");
+    sqlx::query("INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload, published_at) VALUES (987, 'test.aggregate', 988, 'test.park', '{}'::jsonb, now())")
+        .execute(&pool).await.unwrap();
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let stream_for_task = stream.clone();
+    let task = tokio::spawn(async move {
+        consumer
+            .run_until_shutdown(
+                &stream_for_task,
+                "durable-dlq",
+                "failed",
+                Arc::new(|_| Box::pin(async { anyhow::bail!("poison event") })),
+                rx,
+            )
+            .await;
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if !sanvi_messaging::list_consumer_dead_letters(&pool, 20)
+                .await
+                .unwrap()
+                .is_empty()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tx.send(true).unwrap();
+    task.await.unwrap();
+    let _: usize = streams
+        .connection_manager()
+        .del(&[stream.clone(), format!("{stream}.dlq")])
+        .await
+        .unwrap();
+    let rows = sanvi_messaging::list_consumer_dead_letters(&pool, 20)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].event_id, Some(987));
+
+    let manager =
+        sanvi_persistence::TxManager::new(db.admin_pool().await, sanvi_testsupport::test_ids());
+    // An interrupted replay preserves both parked data and publication state.
+    let mut scope = manager
+        .begin_unscoped("test_failed_replay", "operator")
+        .await
+        .unwrap();
+    assert!(
+        sanvi_messaging::replay_consumer_dead_letter(&mut scope, "durable-dlq", 987)
+            .await
+            .unwrap()
+    );
+    scope.rollback().await.unwrap();
+    assert_eq!(
+        sanvi_messaging::list_consumer_dead_letters(&pool, 20)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut scope = manager
+        .begin_unscoped("test_replay", "operator")
+        .await
+        .unwrap();
+    assert!(
+        sanvi_messaging::replay_consumer_dead_letter(&mut scope, "durable-dlq", 987)
+            .await
+            .unwrap()
+    );
+    scope.commit().await.unwrap();
+    let dispatcher =
+        sanvi_messaging::OutboxDispatcher::new(pool.clone(), streams.clone(), base, 10, 5);
+    assert_eq!(dispatcher.run_once().await.unwrap(), 1);
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let count = Arc::new(AtomicUsize::new(0));
+    let effect = count.clone();
+    let task = tokio::spawn(async move {
+        StreamConsumer::new(pool, streams)
+            .run_until_shutdown(
+                &stream,
+                "durable-dlq",
+                "repaired",
+                Arc::new(move |_| {
+                    let effect = effect.clone();
+                    Box::pin(async move {
+                        effect.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                }),
+                rx,
+            )
+            .await;
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while count.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tx.send(true).unwrap();
+    task.await.unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
 /// A `StreamsClient` on the shared Redis. Key spaces are kept apart by
 /// stream name (`sanvi_testsupport::test_stream`), not by server or database.
 async fn prepare_redis() -> StreamsClient {

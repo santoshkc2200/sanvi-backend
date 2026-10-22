@@ -2432,6 +2432,52 @@ fn checkout_body(reference: &str, amount_minor: i64, currency: &str) -> serde_js
 }
 
 #[tokio::test]
+async fn checkout_key_rejects_changed_order_amount_customer_or_redirects() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "checkout-payload").await;
+    let provider = FakeProvider::new();
+    activate_connection(&pool, tenant_id, &provider).await;
+    let app = checkout_app(checkout_fixture(&pool, provider, 1000, false), tenant_id).await;
+    let key = Uuid::now_v7();
+    let original = checkout_body("original-order", 2000, "JPY");
+    let first = actix_test::call_service(
+        &app,
+        actix_test::TestRequest::post()
+            .uri("/api/v1/tenant/checkout")
+            .insert_header(("Idempotency-Key", key.to_string()))
+            .set_json(&original)
+            .to_request(),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    for (field, value) in [
+        ("reference", serde_json::json!("other-order")),
+        ("amount_minor", serde_json::json!(3000)),
+        ("currency", serde_json::json!("USD")),
+        ("customer_ref", serde_json::json!({"customer": "c-2"})),
+        ("success_url", serde_json::json!("https://shop.test/other")),
+        (
+            "cancel_url",
+            serde_json::json!("https://shop.test/other-cart"),
+        ),
+    ] {
+        let mut changed = original.clone();
+        changed[field] = value;
+        let response = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::post()
+                .uri("/api/v1/tenant/checkout")
+                .insert_header(("Idempotency-Key", key.to_string()))
+                .set_json(changed)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT, "changed {field}");
+    }
+}
+
+#[tokio::test]
 async fn a_double_click_creates_one_checkout_and_a_replayed_key_returns_the_same_session() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
@@ -3431,6 +3477,456 @@ async fn a_retried_refund_key_issues_exactly_one_provider_refund_and_replays_the
         "the retried key must not move money twice at the provider"
     );
     assert_eq!(fixture.outbox_events("payments.refund_issued").await, 1);
+    // Attribution is persisted with the refund before money moves, and the
+    // final audit remains recoverable until the independent chain writer runs.
+    let audit_tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
+    let mut audit_scope = audit_tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let audit_state: (Option<serde_json::Value>, bool) = sqlx::query_as(
+        "SELECT audit_request, audit_ready FROM payments.refunds WHERE idempotency_key = $1",
+    )
+    .bind(key)
+    .fetch_one(&mut **audit_scope.tx_mut().as_inner())
+    .await
+    .unwrap();
+    audit_scope.rollback().await.unwrap();
+    let intent = audit_state.0.expect("durable refund audit request");
+    assert_eq!(intent["after"]["reason"], "duplicate order");
+    assert!(intent["actor_id"].is_string());
+    assert!(audit_state.1, "successful refund has a durable ready audit");
+}
+
+/// Simulate a crash after the chain INSERT but before the delivery marker.
+/// Both changes must roll back while the financial intent remains durable.
+struct AppendThenFailAudit;
+
+#[async_trait::async_trait]
+impl sanvi_audit::domain::AuditWriter for AppendThenFailAudit {
+    async fn append(
+        &self,
+        scope: &mut sanvi_persistence::PlatformScope<'_>,
+        data: &sanvi_audit::domain::AuditEntryData,
+    ) -> Result<i64, sanvi_audit::domain::AuditError> {
+        sanvi_audit::adapters::SqlxAuditWriter::new(sanvi_testsupport::test_ids())
+            .append(scope, data)
+            .await?;
+        Err(sanvi_audit::domain::AuditError::Storage(
+            "crash after audit insert".into(),
+        ))
+    }
+}
+
+fn refund_with_unavailable_audit(
+    state: &PaymentsState,
+) -> sanvi_payments::application::IssueRefund {
+    sanvi_payments::application::IssueRefund::new(
+        state.tx.clone(),
+        state.registry.clone(),
+        state.payments.clone(),
+        state.refunds.clone(),
+        state.connections.clone(),
+        state.checkouts.clone(),
+        Arc::new(OutboxEventPublisher::new(sanvi_testsupport::test_ids())),
+        Arc::new(AppendThenFailAudit),
+        Arc::new(SystemIdGenerator::new(sanvi_testsupport::test_ids())),
+    )
+}
+
+fn refund_command(
+    tenant_id: TenantId,
+    payment_id: PaymentId,
+) -> sanvi_payments::application::RefundCommand {
+    sanvi_payments::application::RefundCommand {
+        tenant_id,
+        payment_id,
+        amount: Some(Money::new(500, "JPY").unwrap()),
+        reason: "original authorized reason".into(),
+        note: Some("original private note".into()),
+        idempotency_key: Uuid::now_v7(),
+        actor: UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap()),
+        ip: Some("192.0.2.23".parse().unwrap()),
+    }
+}
+
+async fn drain_and_assert_original_refund_audit(
+    state: &PaymentsState,
+    command: &sanvi_payments::application::RefundCommand,
+) {
+    let drainer = sanvi_payments::application::DrainRefundAudits::new(
+        state.tx.clone(),
+        state.refunds.clone(),
+        Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(
+            sanvi_testsupport::test_ids(),
+        )),
+    );
+    assert_eq!(drainer.execute(100).await.unwrap(), 1);
+    assert_eq!(
+        drainer.execute(100).await.unwrap(),
+        0,
+        "delivery is idempotent"
+    );
+    let mut scope = state
+        .tx
+        .begin_unscoped("assert_refund_audit", "test")
+        .await
+        .unwrap();
+    let entries: Vec<(Option<i64>, Option<serde_json::Value>, Option<std::net::IpAddr>)> = sqlx::query_as(
+        "SELECT actor_id, after, ip FROM audit.entries WHERE tenant_id = $1 AND action = 'payments.refund_issued'",
+    ).bind(command.tenant_id.as_i64()).fetch_all(&mut **scope.tx_mut().as_inner()).await.unwrap();
+    scope.rollback().await.unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "no orphan audit survives a failed delivery transaction"
+    );
+    assert_eq!(entries[0].0, Some(command.actor.as_i64()));
+    assert_eq!(entries[0].2, command.ip);
+    let detail = entries[0].1.as_ref().unwrap();
+    assert_eq!(detail["reason"], "original authorized reason");
+    assert_eq!(detail["note"], "original private note");
+    assert_eq!(detail["status"], "succeeded");
+    assert!(
+        detail["external_refund_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("re_")
+    );
+}
+
+#[tokio::test]
+async fn refund_audit_delivery_failure_preserves_finalized_money_and_original_actor() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "refund-audit-delivery").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(
+        &pool,
+        &fixture,
+        tenant_id,
+        "audit-delivery",
+        "pi_audit_delivery",
+    )
+    .await;
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let command = refund_command(
+        tenant_id,
+        payment_row_id(&pool, tenant_id, "pi_audit_delivery").await,
+    );
+    let (refund, _) = refund_with_unavailable_audit(&state)
+        .execute(command.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        refund.status,
+        sanvi_payments::domain::RefundStatus::Succeeded
+    );
+    let mut replay = command.clone();
+    replay.actor = UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+    replay.note = Some("retrying caller must not replace attribution".into());
+    assert!(state.issue_refund.execute(replay).await.unwrap().1);
+    drain_and_assert_original_refund_audit(&state, &command).await;
+}
+
+#[tokio::test]
+async fn refund_legacy_pending_retry_keeps_original_actor_without_inventing_missing_context() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "refund-legacy-audit").await;
+    let fixture = webhook_fixture(&pool).await;
+    seed_paid_payment(
+        &pool,
+        &fixture,
+        tenant_id,
+        "legacy-audit",
+        "pi_legacy_audit",
+    )
+    .await;
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let command = refund_command(
+        tenant_id,
+        payment_row_id(&pool, tenant_id, "pi_legacy_audit").await,
+    );
+    fixture.provider.script(FakeScript {
+        fail_next_refund: Some("unavailable".into()),
+        ..Default::default()
+    });
+    let issuer = refund_with_unavailable_audit(&state);
+    assert!(issuer.execute(command.clone()).await.is_err());
+    let mut scope = state.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    sqlx::query("UPDATE payments.refunds SET audit_request = NULL WHERE idempotency_key = $1")
+        .bind(command.idempotency_key)
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .unwrap();
+    scope.commit().await.unwrap();
+    let mut retry = command.clone();
+    retry.actor = UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+    retry.note = Some("new caller's unrelated note".into());
+    issuer.execute(retry).await.unwrap();
+    let mut scope = state.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let snapshot: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT audit_request FROM payments.refunds WHERE idempotency_key = $1")
+            .bind(command.idempotency_key)
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    scope.rollback().await.unwrap();
+    let snapshot = snapshot.expect("legacy pending request is attributed before a provider retry");
+    assert_eq!(snapshot["actor_id"], serde_json::json!(command.actor));
+    assert_eq!(snapshot["after"]["note"], serde_json::Value::Null);
+    assert_eq!(snapshot["ip"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn refund_provider_success_recovers_through_webhook_metadata_after_a_crash() {
+    assert_refund_provider_success_recovery(true).await;
+}
+
+#[tokio::test]
+async fn refund_webhook_winner_adopts_original_audit_before_local_row_is_deleted() {
+    assert_refund_provider_success_recovery(false).await;
+}
+
+#[tokio::test]
+async fn refund_api_finalization_and_correlated_webhook_emit_one_success_event() {
+    assert_refund_event_transition_race(true).await;
+}
+
+#[tokio::test]
+async fn concurrent_refund_webhook_workers_emit_one_success_event_and_preserve_success() {
+    assert_refund_event_transition_race(false).await;
+}
+
+async fn assert_refund_event_transition_race(api_finalization: bool) {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "refund-finalize-race").await;
+    let fixture = webhook_fixture(&pool).await;
+    let account = seed_paid_payment(
+        &pool,
+        &fixture,
+        tenant_id,
+        "finalize-race",
+        "pi_finalize_race",
+    )
+    .await;
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let command = refund_command(
+        tenant_id,
+        payment_row_id(&pool, tenant_id, "pi_finalize_race").await,
+    );
+    fixture.provider.script(FakeScript {
+        fail_next_refund: Some("unavailable".into()),
+        ..Default::default()
+    });
+    assert!(
+        refund_with_unavailable_audit(&state)
+            .execute(command.clone())
+            .await
+            .is_err()
+    );
+    let mut read = state.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let mut refund = state
+        .refunds
+        .find_by_idempotency_key(&mut read, tenant_id, command.idempotency_key)
+        .await
+        .unwrap()
+        .unwrap();
+    read.rollback().await.unwrap();
+    let external = "re_finalize_race";
+    let webhook = serde_json::json!({
+        "id": "evt_finalize_race", "type": "refund.updated", "created": epoch(6), "account": account,
+        "data": {"object": {"id": external, "payment_intent": "pi_finalize_race",
+            "amount": 500, "currency": "jpy", "status": "succeeded",
+            "metadata": {"sanvi_refund_id": refund.id, "sanvi_idempotency_key": command.idempotency_key}}}
+    });
+    fixture.deliver(&webhook).await.unwrap();
+
+    // Hold either the API transition/outbox transaction or the local row while
+    // two webhook workers start. Observe database lock waits before release.
+    let mut finalizing = state.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    if api_finalization {
+        assert!(
+            state
+                .refunds
+                .find_by_external_id(&mut finalizing, tenant_id, external)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        refund.external_refund_id = Some(external.into());
+        refund.status = sanvi_payments::domain::RefundStatus::Succeeded;
+        assert!(
+            state
+                .refunds
+                .try_finalize(&mut finalizing, tenant_id, &refund)
+                .await
+                .unwrap()
+        );
+        OutboxEventPublisher::new(sanvi_testsupport::test_ids())
+            .publish_scoped(
+                &mut finalizing,
+                tenant_id,
+                &[sanvi_payments::domain::PaymentsEvent::RefundIssued {
+                    refund_id: refund.id,
+                    payment_id: command.payment_id,
+                    provider: "fake".into(),
+                    amount: sanvi_payments::domain::events::EventAmount::new(&refund.amount),
+                    reason: refund.reason.clone(),
+                }],
+            )
+            .await
+            .unwrap();
+    } else {
+        sqlx::query("SELECT id FROM payments.refunds WHERE id = $1 FOR UPDATE")
+            .bind(refund.id.as_i64())
+            .execute(&mut **finalizing.tx_mut().as_inner())
+            .await
+            .unwrap();
+    }
+    let workers = if api_finalization { 1 } else { 2 };
+    let mut racing_webhooks = Vec::new();
+    for _ in 0..workers {
+        let dispatcher = fixture.dispatcher.clone();
+        racing_webhooks.push(tokio::spawn(async move { dispatcher.dispatch(10).await }));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+                 AND pid <> pg_backend_pid() AND wait_event_type = 'Lock'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if blocked >= workers {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("webhook reached the API's transaction lock");
+    finalizing.commit().await.unwrap();
+    for task in racing_webhooks {
+        let report = task.await.unwrap().unwrap();
+        assert_eq!(report.failed, 0, "{report:?}");
+    }
+    assert_eq!(
+        fixture.outbox_events("payments.refund_issued").await,
+        1,
+        "one committed financial transition has one success event"
+    );
+    if !api_finalization {
+        let mut late = webhook.clone();
+        late["id"] = serde_json::json!("evt_late_pending_refund");
+        late["data"]["object"]["status"] = serde_json::json!("pending");
+        fixture.deliver(&late).await.unwrap();
+        assert_eq!(fixture.dispatcher.dispatch(10).await.unwrap().failed, 0);
+        let mut scope = state.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+        let stored = state
+            .refunds
+            .find_by_id(&mut scope, tenant_id, refund.id)
+            .await
+            .unwrap()
+            .unwrap();
+        scope.rollback().await.unwrap();
+        assert_eq!(
+            stored.status,
+            sanvi_payments::domain::RefundStatus::Succeeded,
+            "a stale pending webhook cannot undo terminal success"
+        );
+        late["id"] = serde_json::json!("evt_duplicate_success_refund");
+        late["data"]["object"]["status"] = serde_json::json!("succeeded");
+        fixture.deliver(&late).await.unwrap();
+        assert_eq!(fixture.dispatcher.dispatch(10).await.unwrap().failed, 0);
+        assert_eq!(fixture.outbox_events("payments.refund_issued").await, 1);
+    }
+}
+
+async fn assert_refund_provider_success_recovery(correlated_webhook: bool) {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let tenant_id = seed_tenant(&pool, "refund-audit-crash").await;
+    let fixture = webhook_fixture(&pool).await;
+    let account =
+        seed_paid_payment(&pool, &fixture, tenant_id, "audit-crash", "pi_audit_crash").await;
+    let state = checkout_fixture(&pool, fixture.provider.clone(), 1000, false);
+    let command = refund_command(
+        tenant_id,
+        payment_row_id(&pool, tenant_id, "pi_audit_crash").await,
+    );
+    fixture.provider.script(FakeScript {
+        fail_next_refund: Some("first attempt unavailable".into()),
+        ..Default::default()
+    });
+    let issuer = refund_with_unavailable_audit(&state);
+    assert!(issuer.execute(command.clone()).await.is_err());
+    let mut scope = state.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let pending = state
+        .refunds
+        .find_by_idempotency_key(&mut scope, tenant_id, command.idempotency_key)
+        .await
+        .unwrap()
+        .unwrap();
+    let snapshot: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT audit_request FROM payments.refunds WHERE id = $1")
+            .bind(pending.id.as_i64())
+            .fetch_one(&mut **scope.tx_mut().as_inner())
+            .await
+            .unwrap();
+    assert_eq!(
+        snapshot.unwrap()["actor_id"],
+        serde_json::json!(command.actor)
+    );
+    scope.rollback().await.unwrap();
+
+    // The provider succeeds; deliberately omit local finalization, as a killed
+    // API process would. Only the signed webhook/retry can recover this result.
+    let provider_result = fixture
+        .provider
+        .refund(&sanvi_payments::domain::ProviderRefundCommand {
+            external_account_id: account.clone(),
+            external_payment_id: "pi_audit_crash".into(),
+            refund: pending.clone(),
+            idempotency_key: command.idempotency_key,
+        })
+        .await
+        .unwrap();
+    let metadata = if correlated_webhook {
+        serde_json::json!({"sanvi_refund_id": pending.id, "sanvi_idempotency_key": command.idempotency_key})
+    } else {
+        serde_json::json!({})
+    };
+    let webhook = serde_json::json!({
+        "id": "evt_refund_audit_recover", "type": "refund.updated", "created": epoch(6), "account": account,
+        "data": {"object": {"id": provider_result.external_refund_id, "payment_intent": "pi_audit_crash",
+            "amount": 500, "currency": "jpy", "status": "succeeded", "metadata": metadata}}
+    });
+    fixture.deliver(&webhook).await.unwrap();
+    let dispatched = fixture.dispatcher.dispatch(10).await.unwrap();
+    assert_eq!(dispatched.processed, 1, "{dispatched:?}");
+    if !correlated_webhook {
+        // Legacy webhook without correlation created a different winner. The
+        // interrupted API retry must transfer the immutable audit before delete.
+        let mut replay = command.clone();
+        replay.actor = UserId::from_snowflake(sanvi_testsupport::test_ids().next_id().unwrap());
+        replay.note = Some("another caller".into());
+        issuer.execute(replay).await.unwrap();
+    }
+    drain_and_assert_original_refund_audit(&state, &command).await;
+    let mut scope = state.tx.begin_for(tenant_id.as_i64()).await.unwrap();
+    let owner = state
+        .refunds
+        .find_by_idempotency_key(&mut scope, tenant_id, command.idempotency_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        owner.status,
+        sanvi_payments::domain::RefundStatus::Succeeded
+    );
+    assert_eq!(owner.created_by, Some(command.actor));
+    scope.rollback().await.unwrap();
 }
 
 #[tokio::test]

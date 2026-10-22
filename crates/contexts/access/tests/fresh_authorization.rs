@@ -16,7 +16,7 @@ async fn production_cache_cannot_bypass_a_fresh_check_or_fabricate_keto_recovery
     pool.close().await;
     let check = Arc::new(CheckPermission::new(
         TxManager::new(
-            pool,
+            pool.clone(),
             Arc::new(SnowflakeGenerator::new(
                 sanvi_kernel::NodeId::new(1).unwrap(),
             )),
@@ -25,6 +25,15 @@ async fn production_cache_cannot_bypass_a_fresh_check_or_fabricate_keto_recovery
         Arc::new(
             HttpKetoClient::new("http://127.0.0.1:1".into(), "http://127.0.0.1:1".into()).unwrap(),
         ),
+        Arc::new(sanvi_access::adapters::SqlxTenantRoleSource::new(
+            TxManager::new(
+                pool,
+                Arc::new(SnowflakeGenerator::new(
+                    sanvi_kernel::NodeId::new(1).unwrap(),
+                )),
+            ),
+            Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository),
+        )),
     ));
     let cache: Arc<dyn DecisionCache> = Arc::new(InMemoryDecisionCache::new(32));
     let user = UserId::try_from(42_i64).unwrap();
@@ -34,10 +43,10 @@ async fn production_cache_cannot_bypass_a_fresh_check_or_fabricate_keto_recovery
         .put("42:identity.member.grant:tenant:101", Decision::Allowed, 30)
         .await;
     let cached = Arc::new(CachedAuthorizer::new(check, cache.clone(), 30));
-    assert_eq!(
-        cached.check(user, &permission, &resource).await.unwrap(),
-        Decision::Allowed
-    );
+    assert!(matches!(
+        cached.check(user, &permission, &resource).await,
+        Err(AccessError::Storage(_))
+    ));
     assert!(
         matches!(
             cached.check_fresh(user, &permission, &resource).await,

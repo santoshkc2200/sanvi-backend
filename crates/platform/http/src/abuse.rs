@@ -354,10 +354,8 @@ where
         let mut dimensions: Vec<(&'static str, String, crate::config::WindowQuota)> = Vec::new();
 
         if let Some(quota) = surface_config.per_ip {
-            let ip = req
-                .connection_info()
-                .realip_remote_addr()
-                .map(str::to_string)
+            let ip = crate::client_ip(req.request())
+                .map(|address| address.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
             dimensions.push(("ip", ip, quota));
         }

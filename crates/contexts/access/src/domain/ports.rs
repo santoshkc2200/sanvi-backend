@@ -43,6 +43,19 @@ pub trait Authorizer: Send + Sync {
             .await
             .map(|decision| (decision, true))
     }
+
+    /// Current authoritative grant revision for bounded tenant read grace.
+    /// None means this authorizer cannot prove cached tenant grants remain
+    /// current; outage fallback must deny them. Platform cache keys need no
+    /// tenant membership revision.
+    async fn cache_revision(
+        &self,
+        _user_id: UserId,
+        _permission: &Permission,
+        _resource: &ResourceRef,
+    ) -> Result<Option<String>, AccessError> {
+        Ok(None)
+    }
 }
 
 /// A concrete resource reference (mirrors the platform's shape; the gate
@@ -52,6 +65,34 @@ pub enum ResourceRef {
     Tenant(TenantId),
     User(UserId),
     Platform,
+}
+
+/// Current active tenant roles from the identity system of record. A missing
+/// or suspended membership has no roles, regardless of projection lag.
+#[async_trait]
+pub trait TenantRoleSource: Send + Sync {
+    async fn active_roles(
+        &self,
+        tenant_id: TenantId,
+        user_id: UserId,
+    ) -> Result<Vec<RoleId>, AccessError>;
+}
+
+/// Reconcile external authorization state from an authoritative snapshot.
+/// Implementations serialize each aggregate across workers and only record
+/// completed snapshots after external side effects succeed.
+#[async_trait]
+pub trait AccessProjection: Send + Sync {
+    async fn reconcile_membership(
+        &self,
+        tenant_id: TenantId,
+        user_id: UserId,
+    ) -> Result<(), AccessError>;
+    async fn reconcile_role(
+        &self,
+        role_id: RoleId,
+        previous_object: &str,
+    ) -> Result<(), AccessError>;
 }
 
 /// The role catalog's storage. Platform and system-template reads happen

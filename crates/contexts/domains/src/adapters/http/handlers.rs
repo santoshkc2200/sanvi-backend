@@ -617,10 +617,7 @@ fn internal_request_allowed(
     if state.config.internal_allowed_ips.is_empty() {
         return true;
     }
-    let peer = request
-        .connection_info()
-        .realip_remote_addr()
-        .and_then(|address| address.parse::<IpAddr>().ok());
+    let peer = sanvi_http::client_ip(request);
     let Some(peer) = peer else {
         return false;
     };

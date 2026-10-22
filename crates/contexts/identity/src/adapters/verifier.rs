@@ -74,8 +74,8 @@ impl KratosSessionVerifier {
             .await
             .map_err(|err| ApiError::internal(format!("storage failure: {err}")))?;
         let roles = match self.memberships.find(&mut scope, tenant_id, user_id).await {
-            Ok(Some(membership)) => membership.role_ids().to_vec(),
-            Ok(None) => Vec::new(),
+            Ok(Some(membership)) if membership.is_active() => membership.role_ids().to_vec(),
+            Ok(_) => Vec::new(),
             Err(err) => return Err(backend(err)),
         };
         scope

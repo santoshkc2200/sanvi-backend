@@ -152,11 +152,9 @@ impl ApiLimits {
             });
         }
         if public || verified.is_none() || verification {
-            // Forwarded headers are untrusted. Use the TCP peer rather than
-            // permitting arbitrary header values to manufacture fresh buckets.
-            let peer = req
-                .peer_addr()
-                .map(|address| address.ip().to_string())
+            // Only an explicitly trusted proxy may supply a sanitized address.
+            let peer = crate::client_ip(req.request())
+                .map(|address| address.to_string())
                 .unwrap_or_else(|| "unknown".into());
             let (surface, limit) = if tracking {
                 ("tracking", TRACKING_LIMIT)

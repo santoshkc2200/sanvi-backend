@@ -42,6 +42,8 @@ COPY --from=builder /app/target/release/sanvi-worker /usr/local/bin/sanvi-worker
 COPY --from=builder /app/target/release/sanvi-cli /usr/local/bin/sanvi-cli
 COPY migrations /app/migrations
 COPY configs /app/configs
+COPY deployment/migration-policy.json /app/deployment/migration-policy.json
+COPY deployment/image-contract /app/deployment/image-contract
 
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.source="https://github.com/sanvi/sanvi-backend" \

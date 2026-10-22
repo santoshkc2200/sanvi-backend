@@ -58,6 +58,14 @@ async fn assert_column_type(
 }
 
 #[tokio::test]
+async fn migration_status_is_empty_before_the_first_migration() {
+    let db = sanvi_testsupport::blank_db().await;
+    let pool = db.migrator_pool().await;
+    let migrator = Migrator::new(sanvi_testsupport::migrations_dir());
+    assert!(migrator.applied(&pool).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn migrations_run_and_revert_cleanly() {
     // A database with the two roles in place but nothing applied: this test
     // is the one that has to run the migrations itself, up and back down.

@@ -10,6 +10,52 @@ async fn prepare_postgres() -> (sanvi_persistence::PgPool, TestDb) {
 }
 
 #[tokio::test]
+async fn offline_consumer_does_not_lose_events_after_ten_thousand_publications() {
+    let (pool, _db) = prepare_postgres().await;
+    let streams = StreamsClient::new(
+        connect_redis(&RedisConfig {
+            url: sanvi_testsupport::redis_url().await,
+            ..RedisConfig::default()
+        })
+        .await
+        .unwrap(),
+    );
+    sqlx::query("INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload) SELECT n, 'test.aggregate', n, 'test.retention', '{}'::jsonb FROM generate_series(1, 10050) n")
+        .execute(&pool).await.unwrap();
+    let stream = StreamName(sanvi_testsupport::test_stream("offline-retention"));
+    let dispatcher = OutboxDispatcher::new(pool, streams.clone(), stream.clone(), 500, 100);
+    // A zero-publish batch can mean transient transport failures rather than
+    // an empty queue. Drive the same retry behavior as the production poller.
+    tokio::time::timeout(std::time::Duration::from_secs(90), async {
+        while dispatcher.pending_count().await.unwrap() > 0 {
+            dispatcher.run_once().await.unwrap();
+        }
+    })
+    .await
+    .expect("outbox did not drain");
+    let events = streams
+        .range(&stream.stream_for("test.aggregate"), "-", "+")
+        .await
+        .unwrap();
+    // Ambiguous Redis responses can append twice; delivery is at-least-once.
+    let ids: std::collections::BTreeSet<_> = events
+        .iter()
+        .map(|(_, fields)| {
+            let payload = fields.iter().find(|(key, _)| key == "event").unwrap();
+            serde_json::from_str::<sanvi_kernel::EventEnvelope>(&payload.1)
+                .unwrap()
+                .id
+                .as_i64()
+        })
+        .collect();
+    assert_eq!(
+        ids.len(),
+        10050,
+        "an offline consumer must retain every published event"
+    );
+}
+
+#[tokio::test]
 async fn dispatcher_relays_outbox_rows_to_the_stream() {
     let (pool, _db) = prepare_postgres().await;
 

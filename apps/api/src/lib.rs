@@ -932,6 +932,10 @@ pub fn build_access_state(
         tx_manager.clone(),
         roles.clone(),
         store.clone(),
+        Arc::new(sanvi_access::adapters::SqlxTenantRoleSource::new(
+            tx_manager.clone(),
+            memberships.clone(),
+        )),
     ));
     let cached_authorizer: Arc<dyn Authorizer> = Arc::new(CachedAuthorizer::new(
         check,
