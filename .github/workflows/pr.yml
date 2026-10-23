@@ -344,6 +344,10 @@ jobs:
       - run: ./scripts/rolling-restart.sh --dry-run
       - run: python3 scripts/test-restart-result.py
       - run: python3 scripts/test-deploy-staging.py
+      - run: python3 scripts/test-deployment-migrations.py
+      - run: python3 scripts/test-deployment-config.py
+      - run: python3 scripts/test-trusted-edge.py
+      - run: python3 scripts/test-proxy-ingress.py
 
   i18n:
     name: i18n catalog gate (100 % ja coverage)

@@ -24,6 +24,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use sanvi_kernel::TenantId;
@@ -188,6 +189,16 @@ impl CreateCheckout {
         https_hostname(&command.success_url)?;
         https_hostname(&command.cancel_url)?;
 
+        // A key owns the complete original request, including redirect and
+        // customer context. Check before current account/currency gates so a
+        // changed payload always conflicts, even after connection changes.
+        let existing = self
+            .find_by_key(command.tenant_id, command.idempotency_key)
+            .await?;
+        if let Some(existing) = &existing {
+            validate_replay(existing, &command)?;
+        }
+
         // ---- the connection gate (RLS-scoped) -------------------------
         let connection = self.active_connection(command.tenant_id).await?;
 
@@ -214,10 +225,7 @@ impl CreateCheckout {
             .await?;
 
         // ---- idempotent owner lookup ----------------------------------
-        if let Some(existing) = self
-            .find_by_key(command.tenant_id, command.idempotency_key)
-            .await?
-        {
+        if let Some(existing) = existing {
             // The key already owns a row: resume *it*, whatever state the
             // interrupted first attempt left behind.
             return self.resume(existing, &connection, &command).await;
@@ -237,6 +245,7 @@ impl CreateCheckout {
         checkout.customer_ref.clone_from(&command.customer_ref);
         checkout.locale.clone_from(&locale);
         checkout.idempotency_key = Some(command.idempotency_key);
+        checkout.request_fingerprint = Some(request_fingerprint(&command)?);
 
         match self.persist_new(&connection.provider, &checkout).await {
             Ok(()) => {}
@@ -278,10 +287,10 @@ impl CreateCheckout {
         connection: &ProviderConnection,
         command: &NewCheckoutCommand,
     ) -> Result<CheckoutOutcome, PaymentsError> {
+        validate_replay(&checkout, command)?;
         if checkout.external_session_id.is_none() && checkout.status.is_live() {
             // Crash window: the row owns the key but no session exists.
             // The retrying request supplies the redirect targets again.
-            checkout.customer_ref.clone_from(&command.customer_ref);
             let session = self
                 .open_session(connection, &mut checkout, command)
                 .await?;
@@ -557,6 +566,51 @@ impl CreateCheckout {
             ))
         })
     }
+}
+
+/// JSON objects are recursively ordered to keep semantically identical
+/// customer context stable even if serde_json enables preserve_order.
+fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let ordered: std::collections::BTreeMap<_, _> = object
+                .iter()
+                .map(|(key, value)| (key.clone(), canonical_json(value)))
+                .collect();
+            serde_json::to_value(ordered).expect("JSON values serialize")
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(canonical_json).collect())
+        }
+        _ => value.clone(),
+    }
+}
+
+fn request_fingerprint(command: &NewCheckoutCommand) -> Result<String, PaymentsError> {
+    let payload = canonical_json(&serde_json::json!({
+        "version": 1,
+        "reference": MerchantOrderRef::parse(&command.reference)?.as_str(),
+        "amount_minor": command.amount_minor,
+        "currency": Money::new(command.amount_minor, &command.currency)?.currency.as_str(),
+        "customer_ref": command.customer_ref,
+        "locale": validated_locale(command.locale.as_deref())?,
+        "success_url": command.success_url,
+        "cancel_url": command.cancel_url,
+    }));
+    let bytes =
+        serde_json::to_vec(&payload).map_err(|error| PaymentsError::Storage(error.to_string()))?;
+    Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+fn validate_replay(checkout: &Checkout, command: &NewCheckoutCommand) -> Result<(), PaymentsError> {
+    let fingerprint = request_fingerprint(command)?;
+    if checkout.request_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+        return Err(PaymentsError::IdempotencyConflict(
+            "Idempotency-Key has a different request or predates request fingerprints; retrieve the original checkout"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Extract and vet the hostname of a redirect target. HTTPS only, no

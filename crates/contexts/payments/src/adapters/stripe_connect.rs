@@ -894,6 +894,13 @@ impl PaymentProviderPort for StripeConnectProvider {
             form.push(("charge", command.external_payment_id.clone()));
         }
         form.push(("amount", command.refund.amount.amount_minor.to_string()));
+        // Signed refund webhooks can reconnect provider success to the durable
+        // authorization snapshot if this process dies before finalization.
+        form.push(("metadata[sanvi_refund_id]", command.refund.id.to_string()));
+        form.push((
+            "metadata[sanvi_idempotency_key]",
+            command.idempotency_key.to_string(),
+        ));
         // Map the tenant-supplied reason to Stripe's vocabulary where possible.
         let reason = command
             .refund

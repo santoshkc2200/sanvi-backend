@@ -36,10 +36,23 @@ done
 # cannot be lossless whatever the procedure says.
 readiness() {
     local config
-    config="$(docker compose -f "$COMPOSE" config 2>/dev/null)" || {
+    # A CI dry-run must not require or resolve actual deployment secrets.
+    # Live readiness still requires configured images/file paths, but avoids
+    # loading file contents into the rendered configuration.
+    local -a render=(docker compose -f "$COMPOSE" config --no-env-resolution)
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        config="$(API_IMAGE="sanvi-readiness@sha256:$(printf '%064d' 0)" \
+            WORKER_IMAGE="sanvi-readiness@sha256:$(printf '%064d' 0)" \
+            SANVI_RUNTIME_ENV_FILE=not-read-in-dry-run.env "${render[@]}" 2>/dev/null)" || {
+            echo "readiness: FAILED — cannot render $COMPOSE" >&2
+            return 1
+        }
+    else
+        config="$("${render[@]}" 2>/dev/null)" || {
         echo "readiness: FAILED — cannot render $COMPOSE" >&2
         return 1
-    }
+        }
+    fi
     local failures=0
     for service in api api_next worker; do
         # The service block: from its `  name:` line to the next
@@ -92,7 +105,7 @@ fi
 
 # --- live drill (staging host only) ---------------------------------------
 if [[ -z "${API_IMAGE:-}" || -z "${WORKER_IMAGE:-}" ]]; then
-    echo "refusing: API_IMAGE and WORKER_IMAGE must be pinned sha tags (never :latest)" >&2
+    echo "refusing: API_IMAGE and WORKER_IMAGE must be immutable image digests" >&2
     exit 2
 fi
 command -v k6 >/dev/null 2>&1 || { echo "refusing: k6 is required" >&2; exit 2; }

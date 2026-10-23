@@ -599,6 +599,7 @@ struct CheckoutRow {
     status: String,
     external_session_id: Option<String>,
     idempotency_key: Option<Uuid>,
+    request_fingerprint: Option<String>,
     locale: Option<String>,
     expires_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
@@ -622,6 +623,7 @@ impl TryFrom<CheckoutRow> for Checkout {
             status,
             external_session_id: row.external_session_id,
             idempotency_key: row.idempotency_key,
+            request_fingerprint: row.request_fingerprint,
             locale: row.locale,
             expires_at: row.expires_at,
             completed_at: row.completed_at,
@@ -668,8 +670,8 @@ impl CheckoutRepository for SqlxCheckoutRepository {
             "INSERT INTO payments.checkouts
                (id, tenant_id, connection_id, reference, customer_ref,
                 amount_minor, currency, status, external_session_id,
-                idempotency_key, locale, expires_at, completed_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+                idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(checkout.id.as_i64())
         .bind(checkout.tenant_id.as_i64())
@@ -685,6 +687,7 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         .bind(checkout.expires_at)
         .bind(checkout.completed_at)
         .bind(checkout.created_at)
+        .bind(&checkout.request_fingerprint)
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(map_checkout_err)?;
@@ -700,7 +703,7 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, CheckoutRow>(
             "SELECT id, tenant_id, connection_id, reference, customer_ref,
                     amount_minor, currency, status, external_session_id,
-                    idempotency_key, locale, expires_at, completed_at, created_at
+                    idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint
              FROM payments.checkouts
              WHERE tenant_id = $1 AND id = $2",
         )
@@ -726,7 +729,7 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         let rows = sqlx::query_as::<_, CheckoutRow>(
             "SELECT id, tenant_id, connection_id, reference, customer_ref,
                     amount_minor, currency, status, external_session_id,
-                    idempotency_key, locale, expires_at, completed_at, created_at
+                    idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint
              FROM payments.checkouts
              WHERE tenant_id = $1 AND id = ANY($2)",
         )
@@ -751,7 +754,7 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, CheckoutRow>(
             "SELECT id, tenant_id, connection_id, reference, customer_ref,
                     amount_minor, currency, status, external_session_id,
-                    idempotency_key, locale, expires_at, completed_at, created_at
+                    idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint
              FROM payments.checkouts
              WHERE tenant_id = $1 AND idempotency_key = $2",
         )
@@ -772,7 +775,7 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, CheckoutRow>(
             "SELECT id, tenant_id, connection_id, reference, customer_ref,
                     amount_minor, currency, status, external_session_id,
-                    idempotency_key, locale, expires_at, completed_at, created_at
+                    idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint
              FROM payments.checkouts
              WHERE tenant_id = $1 AND reference = $2
              ORDER BY created_at DESC, id DESC
@@ -795,7 +798,7 @@ impl CheckoutRepository for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, CheckoutRow>(
             "SELECT id, tenant_id, connection_id, reference, customer_ref,
                     amount_minor, currency, status, external_session_id,
-                    idempotency_key, locale, expires_at, completed_at, created_at
+                    idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint
              FROM payments.checkouts
              WHERE tenant_id = $1 AND reference = $2 AND status = 'complete'
              ORDER BY completed_at DESC NULLS LAST
@@ -934,7 +937,7 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, CheckoutRow>(
             "SELECT id, tenant_id, connection_id, reference, customer_ref,
                     amount_minor, currency, status, external_session_id,
-                    idempotency_key, locale, expires_at, completed_at, created_at
+                    idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint
              FROM payments.checkouts
              WHERE external_session_id = $1",
         )
@@ -954,7 +957,7 @@ impl CheckoutLifecycleStore for SqlxCheckoutRepository {
         let row = sqlx::query_as::<_, CheckoutRow>(
             "SELECT id, tenant_id, connection_id, reference, customer_ref,
                     amount_minor, currency, status, external_session_id,
-                    idempotency_key, locale, expires_at, completed_at, created_at
+                    idempotency_key, locale, expires_at, completed_at, created_at, request_fingerprint
              FROM payments.checkouts
              WHERE tenant_id = $1 AND id = $2",
         )
@@ -1443,10 +1446,160 @@ impl SqlxRefundRepository {
     pub const fn new() -> Self {
         Self
     }
+
+    async fn lock_external(
+        tx: &mut sanvi_persistence::Tx<'_>,
+        tenant_id: TenantId,
+        external_refund_id: &str,
+    ) -> Result<(), PaymentsError> {
+        // A row lock cannot protect a not-yet-persisted provider ID. API
+        // finalization and every webhook worker serialize before either
+        // external-ID lookup or correlation lookup, through their commit.
+        let key = format!("payments:refund:{tenant_id}:{external_refund_id}");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(key)
+            .execute(&mut **tx.as_inner())
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl RefundRepository for SqlxRefundRepository {
+    async fn prepare_audit(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        refund_id: RefundId,
+        payload: Value,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query("UPDATE payments.refunds SET audit_request = $3 WHERE tenant_id = $1 AND id = $2 AND audit_request IS NULL")
+            .bind(tenant_id.as_i64()).bind(refund_id.as_i64()).bind(payload)
+            .execute(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?;
+        Ok(())
+    }
+
+    async fn ready_audit(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        refund_id: RefundId,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query("UPDATE payments.refunds SET audit_ready = true WHERE tenant_id = $1 AND id = $2 AND audit_request IS NOT NULL")
+            .bind(tenant_id.as_i64()).bind(refund_id.as_i64())
+            .execute(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?;
+        Ok(())
+    }
+
+    async fn adopt_audit(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        original_id: RefundId,
+        winner_id: RefundId,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "UPDATE payments.refunds winner SET audit_request = original.audit_request,
+                     audit_ready = true, audited_at = original.audited_at,
+                     created_by = original.created_by, reason = original.reason
+                     FROM payments.refunds original
+                     WHERE original.tenant_id = $1 AND winner.tenant_id = $1
+                       AND original.id = $2 AND winner.id = $3
+                       AND winner.audit_request IS NULL",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(original_id.as_i64())
+        .bind(winner_id.as_i64())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn find_by_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+        refund_id: RefundId,
+    ) -> Result<Option<crate::domain::payment::RefundRecord>, PaymentsError> {
+        let row = sqlx::query_as::<_, RefundRow>(
+            "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
+                    reason, status, created_by, idempotency_key, created_at, updated_at
+             FROM payments.refunds WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(refund_id.as_i64())
+        .fetch_optional(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        row.map(TryFrom::try_from).transpose()
+    }
+
+    async fn adopt_audit_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+        original_id: RefundId,
+        winner_id: RefundId,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query(
+            "UPDATE payments.refunds winner SET audit_request = original.audit_request,
+                     audit_ready = true, audited_at = original.audited_at,
+                     created_by = original.created_by, reason = original.reason
+                     FROM payments.refunds original
+                     WHERE original.tenant_id = $1 AND winner.tenant_id = $1
+                       AND original.id = $2 AND winner.id = $3
+                       AND winner.audit_request IS NULL",
+        )
+        .bind(tenant_id.as_i64())
+        .bind(original_id.as_i64())
+        .bind(winner_id.as_i64())
+        .execute(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn pending_audits(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: u32,
+    ) -> Result<Vec<(RefundId, Value)>, PaymentsError> {
+        let rows: Vec<(i64, Value, Option<String>, String)> = sqlx::query_as(
+            "SELECT id, audit_request, external_refund_id, status FROM payments.refunds
+             WHERE audit_ready AND audited_at IS NULL AND audit_request IS NOT NULL
+             ORDER BY created_at, id LIMIT $1 FOR UPDATE SKIP LOCKED",
+        )
+        .bind(i64::from(limit))
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        rows.into_iter()
+            .map(|(id, mut payload, external, status)| {
+                let id = RefundId::try_from(id).map_err(storage_id)?;
+                payload["resource_id"] = serde_json::json!(id.to_string());
+                payload["after"]["refund_id"] = serde_json::json!(id);
+                payload["after"]["external_refund_id"] = serde_json::json!(external);
+                payload["after"]["status"] = serde_json::json!(status);
+                Ok((id, payload))
+            })
+            .collect()
+    }
+
+    async fn mark_audited(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        refund_id: RefundId,
+    ) -> Result<(), PaymentsError> {
+        sqlx::query("UPDATE payments.refunds SET audited_at = now() WHERE id = $1")
+            .bind(refund_id.as_i64())
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
+
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -1491,6 +1644,7 @@ impl RefundRepository for SqlxRefundRepository {
         tenant_id: TenantId,
         external_refund_id: &str,
     ) -> Result<Option<crate::domain::payment::RefundRecord>, PaymentsError> {
+        Self::lock_external(scope.tx_mut(), tenant_id, external_refund_id).await?;
         let row = sqlx::query_as::<_, RefundRow>(
             "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
                     reason, status, created_by, idempotency_key, created_at, updated_at
@@ -1625,6 +1779,7 @@ impl RefundRepository for SqlxRefundRepository {
         tenant_id: TenantId,
         external_refund_id: &str,
     ) -> Result<Option<crate::domain::payment::RefundRecord>, PaymentsError> {
+        Self::lock_external(scope.tx_mut(), tenant_id, external_refund_id).await?;
         let row = sqlx::query_as::<_, RefundRow>(
             "SELECT id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
                     reason, status, created_by, idempotency_key, created_at, updated_at
@@ -1695,15 +1850,19 @@ impl RefundRepository for SqlxRefundRepository {
         &self,
         scope: &mut PlatformScope<'_>,
         refund: &crate::domain::payment::RefundRecord,
-    ) -> Result<(), PaymentsError> {
-        sqlx::query(
+    ) -> Result<bool, PaymentsError> {
+        let result = sqlx::query(
             "INSERT INTO payments.refunds
                 (id, tenant_id, payment_id, external_refund_id, amount_minor, currency,
                  reason, status, created_by, idempotency_key, created_at, updated_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
-              ON CONFLICT (tenant_id, external_refund_id) WHERE external_refund_id IS NOT NULL
-              DO UPDATE SET status = EXCLUDED.status, amount_minor = EXCLUDED.amount_minor,
-                            currency = EXCLUDED.currency, updated_at = now()",
+              ON CONFLICT (id)
+              DO UPDATE SET external_refund_id = EXCLUDED.external_refund_id,
+                            status = EXCLUDED.status, amount_minor = EXCLUDED.amount_minor,
+                            currency = EXCLUDED.currency,
+                            audit_ready = payments.refunds.audit_request IS NOT NULL OR payments.refunds.audit_ready,
+                            updated_at = now()
+              WHERE payments.refunds.status <> 'succeeded'",
         )
         .bind(refund.id.as_i64())
         .bind(refund.tenant_id.as_i64())
@@ -1719,7 +1878,7 @@ impl RefundRepository for SqlxRefundRepository {
         .execute(&mut **scope.tx_mut().as_inner())
         .await
         .map_err(storage)?;
-        Ok(())
+        Ok(result.rows_affected() > 0 && refund.status == RefundStatus::Succeeded)
     }
 
     async fn claim_idempotency_key(

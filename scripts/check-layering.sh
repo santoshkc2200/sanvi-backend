@@ -81,6 +81,7 @@ is_accepted_context_ownership_exception() {
     case "$file" in
         # Identity membership reading for relation-tuple generation & role verification
         crates/contexts/access/src/adapters/membership_source.rs|\
+        crates/contexts/access/src/adapters/projection.rs|\
         crates/contexts/access/src/adapters/role_catalog.rs|\
         crates/contexts/access/src/application/rebuild_tuples.rs)
             [[ "$other_ctx" == "identity" ]] && return 0

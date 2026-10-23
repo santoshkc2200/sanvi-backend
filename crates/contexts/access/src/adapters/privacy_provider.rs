@@ -2,6 +2,7 @@
 //!
 //! Access holds two personal references: `access.entitlements.granted_by`
 //! (the operator who granted an override) and `granted_reason` free text.
+//! Membership projection checkpoints also reference users and tenant roles.
 //! Roles carry no creator; quota usage is aggregate tenant data. Erasure
 //! anonymises the granted-by references; Keto relation tuples for the user
 //! are removed through the permission store (the access context's own
@@ -77,11 +78,13 @@ impl PersonalDataProvider for AccessPrivacyProvider {
             .list_by_granted_by(&mut scope, user_id)
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        let checkpoints = sqlx::query!("SELECT tenant_id, role_objects FROM access.membership_projection_checkpoints WHERE user_id = $1 ORDER BY tenant_id", user_id.as_i64())
+            .fetch_all(&mut **scope.tx_mut().as_inner()).await.map_err(|err| PrivacyError::Storage(err.to_string()))?;
         scope
             .commit()
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
-        let entries = grants
+        let mut entries: Vec<DataEntry> = grants
             .into_iter()
             .map(|grant| DataEntry {
                 data_class: DataClass::Membership,
@@ -94,6 +97,12 @@ impl PersonalDataProvider for AccessPrivacyProvider {
                 }),
             })
             .collect();
+        entries.extend(checkpoints.into_iter().map(|checkpoint| DataEntry {
+            data_class: DataClass::Membership,
+            category: "Account".to_string(),
+            label: "authorization_projection".to_string(),
+            value: serde_json::json!({"tenant_id": checkpoint.tenant_id.to_string(), "role_objects": checkpoint.role_objects}),
+        }));
         Ok(DataBundle {
             context: "access".to_string(),
             entries,
@@ -118,6 +127,30 @@ impl PersonalDataProvider for AccessPrivacyProvider {
                 .anonymise_granted_by(&mut scope, user_id)
                 .await
                 .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            let checkpoints = sqlx::query!("SELECT tenant_id, role_objects FROM access.membership_projection_checkpoints WHERE user_id = $1 ORDER BY tenant_id", user_id.as_i64())
+                .fetch_all(&mut **scope.tx_mut().as_inner()).await.map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            for checkpoint in &checkpoints {
+                let mut tuples: Vec<crate::domain::Tuple> = checkpoint
+                    .role_objects
+                    .iter()
+                    .map(|object| crate::domain::Tuple::role_membership(object, user_id))
+                    .collect();
+                let tenant = sanvi_kernel::TenantId::try_from(checkpoint.tenant_id)
+                    .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+                tuples.push(crate::domain::Tuple::tenant_membership(tenant, user_id));
+                self.store
+                    .delete(&tuples)
+                    .await
+                    .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            }
+            erased += sqlx::query!(
+                "DELETE FROM access.membership_projection_checkpoints WHERE user_id = $1",
+                user_id.as_i64()
+            )
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?
+            .rows_affected() as usize;
             // Keto relation tuples referencing the user (tenant containment;
             // role memberships die with the membership rows the identity
             // provider removes, and the access sync consumer drops the

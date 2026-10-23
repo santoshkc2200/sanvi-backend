@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT role_objects FROM access.membership_projection_checkpoints WHERE tenant_id = $1 AND user_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role_objects",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "access.membership_projection_checkpoints",
+            "name": "role_objects"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1644ae70a8ca6c92b495b43d6690b463affc50ec5d07f9d15133c1390a95e383"
+}

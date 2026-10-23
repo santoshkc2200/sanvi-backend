@@ -2,19 +2,23 @@ name: sanvi
 
 services:
   api: &api
-    # The :latest fallback is only for an operator running `docker compose
-    # up` by hand; the CI pipeline (.github/workflows/main.yml) always sets
-    # API_IMAGE/WORKER_IMAGE explicitly to a specific sha-<commit> tag, both
-    # on deploy and on rollback, so a real deploy never floats on :latest.
-    image: ${API_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}
+    image: ${API_IMAGE:?set the immutable API image reference}
     init: true
+    # Host secret manager materializes an owner-only file. Never source it,
+    # render its values in CI logs, or commit it. Raw keeps $ and quotes literal.
+    env_file:
+      - path: ${SANVI_RUNTIME_ENV_FILE:?set the private runtime environment file}
+        format: raw
     environment: &api_environment
       SANVI_ENV: production
       SANVI__SERVER__HOST: 0.0.0.0
       SANVI__SERVER__PORT: 8080
+      # Trust only the ingress's fixed address, never arbitrary peers on this
+      # network. Keep this and api_proxy's address on the same interpolation.
+      SANVI__SERVER__TRUSTED_PROXY_CIDRS: '["${SANVI_PROXY_IP:-172.30.16.10}/32"]'
       # This replica's Snowflake node; set a unique override per replica.
       SANVI__IDS__NODE_ID: 201
-      # All remaining secrets come from the host's secret manager:
+      # Required values in SANVI_RUNTIME_ENV_FILE:
       # SANVI__DATABASE__HOST / PORT / NAME / USER / PASSWORD
       # SANVI__REDIS__URL
       # SANVI__TELEMETRY__OTLP__AUTH_TOKEN (OpenObserve ingestion credential;
@@ -27,7 +31,7 @@ services:
     healthcheck:
       # The runtime image is distroless (no shell, no curl); sanvi-cli
       # ships in the same image and speaks raw HTTP for exactly this.
-      test: ["CMD", "/usr/local/bin/sanvi-cli", "healthcheck"]
+      test: ["CMD", "/usr/local/bin/sanvi-cli", "healthcheck", "--path", "/readyz"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -41,6 +45,9 @@ services:
 
   api_proxy:
     image: nginx:1.28-alpine
+    networks:
+      default:
+        ipv4_address: ${SANVI_PROXY_IP:-172.30.16.10}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -56,19 +63,40 @@ services:
       retries: 6
 
   worker:
-    image: ${WORKER_IMAGE:-ghcr.io/sanvi/sanvi-backend-api:latest}
+    image: ${WORKER_IMAGE:?set the immutable worker image reference}
     init: true
     command: /usr/local/bin/sanvi-worker
+    env_file:
+      - path: ${SANVI_RUNTIME_ENV_FILE:?set the private runtime environment file}
+        format: raw
     environment:
       SANVI_ENV: production
+      SANVI__TELEMETRY__SERVICE_NAME: sanvi-worker
+      SANVI__WORKER_MANAGEMENT__HOST: 0.0.0.0
+      SANVI__WORKER_MANAGEMENT__PORT: 9091
       # This replica's Snowflake node; set a unique override per replica.
       SANVI__IDS__NODE_ID: 202
       # SANVI__DATABASE__* / SANVI__REDIS__URL / SANVI__TELEMETRY__OTLP__AUTH_TOKEN
       # from the host's secret manager
     restart: unless-stopped
+    # Private management listener; Prometheus may scrape worker:9091/metrics
+    # on this network. No host port is published.
+    expose: ["9091"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/sanvi-cli", "healthcheck", "--port", "9091", "--path", "/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     # TASK-023: the worker stops polling on SIGTERM and finishes its batch,
     # so the grace period covers the slowest sweep, not just signal
     # delivery. Unacked stream entries are reclaimed by XAUTOCLAIM and
     # redelivered (handlers are idempotent), so a worker restart loses no
     # work — it only replays a bounded tail.
     stop_grace_period: 90s
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${SANVI_BACKEND_SUBNET:-172.30.16.0/24}

@@ -604,11 +604,7 @@ pub async fn stripe_platform_webhook(
         .headers()
         .get("stripe-signature")
         .and_then(|v| v.to_str().ok());
-    let client_ip: Option<IpAddr> = req.peer_addr().map(|addr| addr.ip()).or_else(|| {
-        req.connection_info()
-            .realip_remote_addr()
-            .and_then(|raw| raw.parse().ok())
-    });
+    let client_ip: Option<IpAddr> = sanvi_http::client_ip(&req);
     match state.webhook.receive(&body, signature, client_ip).await {
         Ok(_) => Ok(HttpResponse::Ok().json(serde_json::json!({ "received": true }))),
         Err(BillingError::InvalidWebhookSignature(detail)) => {

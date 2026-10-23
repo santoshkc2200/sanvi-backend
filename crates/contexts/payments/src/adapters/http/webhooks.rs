@@ -40,11 +40,7 @@ async fn stripe_connect_webhook(
         .headers()
         .get("stripe-signature")
         .and_then(|value| value.to_str().ok());
-    let client_ip = req.peer_addr().map(|addr| addr.ip()).or_else(|| {
-        req.connection_info()
-            .realip_remote_addr()
-            .and_then(|raw| raw.parse().ok())
-    });
+    let client_ip = sanvi_http::client_ip(&req);
 
     match state
         .webhook_receiver

@@ -26,6 +26,16 @@ struct FailingAuthorizer {
 
 #[async_trait::async_trait]
 impl Authorizer for FailingAuthorizer {
+    async fn cache_revision(
+        &self,
+        _: UserId,
+        _: &Permission,
+        _: &ResourceRef,
+    ) -> Result<Option<String>, AccessError> {
+        // This fixture models an unchanged authoritative SQL membership even
+        // while the independent Keto transport is unavailable.
+        Ok(Some("unchanged-fixture".into()))
+    }
     async fn check(
         &self,
         _user_id: UserId,
@@ -65,7 +75,7 @@ async fn keto_down_denies_writes_and_serves_cached_reads_for_the_grace_window() 
     let degradation = Arc::new(sanvi_resilience::DegradationRegistry::default());
     let cache = primed_cache(
         &format!(
-            "{}:{}:tenant:{}",
+            "{}:{}:tenant:{}:authority:unchanged-fixture",
             subject(),
             read_permission().as_str(),
             1_000_001

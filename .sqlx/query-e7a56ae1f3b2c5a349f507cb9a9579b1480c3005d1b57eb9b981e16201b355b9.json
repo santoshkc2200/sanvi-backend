@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM access.membership_projection_checkpoints WHERE user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e7a56ae1f3b2c5a349f507cb9a9579b1480c3005d1b57eb9b981e16201b355b9"
+}

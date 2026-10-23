@@ -13,6 +13,7 @@ mod config;
 mod consumer;
 mod metrics;
 mod outbox;
+mod recovery;
 mod redis;
 mod scheduler;
 mod writer;
@@ -26,6 +27,7 @@ pub use outbox::{
     DeadLetterSummary, OutboxDispatcher, OutboxRecord, StreamName, list_dead_letters,
     replay_dead_letter,
 };
+pub use recovery::{ConsumerDeadLetter, list_consumer_dead_letters, replay_consumer_dead_letter};
 pub use redis::{StreamsClient, connect_redis};
 pub use scheduler::{FnJob, Job, Scheduler};
 pub use writer::OutboxWriter;

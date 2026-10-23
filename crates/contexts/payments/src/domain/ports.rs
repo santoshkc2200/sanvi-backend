@@ -905,6 +905,64 @@ pub trait DisputeRepository: Send + Sync {
 /// Tenant-scoped read/write of refunds.
 #[async_trait]
 pub trait RefundRepository: Send + Sync {
+    /// Immutable authorization snapshot, committed with Pending before any
+    /// provider call. Stored on the existing refund retention boundary.
+    async fn prepare_audit(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        refund_id: RefundId,
+        payload: serde_json::Value,
+    ) -> Result<(), PaymentsError>;
+
+    /// The provider accepted this request. State/outbox and this marker
+    /// commit together; the independent audit drainer can safely retry.
+    async fn ready_audit(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        refund_id: RefundId,
+    ) -> Result<(), PaymentsError>;
+
+    /// Move immutable attribution to a webhook-created winner before the
+    /// superseded Pending row is deleted.
+    async fn adopt_audit(
+        &self,
+        scope: &mut ScopedTx<'_>,
+        tenant_id: TenantId,
+        original_id: RefundId,
+        winner_id: RefundId,
+    ) -> Result<(), PaymentsError>;
+
+    async fn adopt_audit_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+        original_id: RefundId,
+        winner_id: RefundId,
+    ) -> Result<(), PaymentsError>;
+
+    async fn find_by_id_platform(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        tenant_id: TenantId,
+        refund_id: RefundId,
+    ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
+
+    /// Locked until caller commits; snapshots are enriched with the final
+    /// provider result, never with the retrying caller's identity.
+    async fn pending_audits(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        limit: u32,
+    ) -> Result<Vec<(RefundId, serde_json::Value)>, PaymentsError>;
+
+    async fn mark_audited(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        refund_id: RefundId,
+    ) -> Result<(), PaymentsError>;
+
     async fn find_by_id(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -919,6 +977,8 @@ pub trait RefundRepository: Send + Sync {
         key: Uuid,
     ) -> Result<Option<super::payment::RefundRecord>, PaymentsError>;
 
+    /// Serialize API/webhook finalization for this provider refund ID until
+    /// the caller commits, including when no row exists yet.
     async fn find_by_external_id_platform(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -962,6 +1022,7 @@ pub trait RefundRepository: Send + Sync {
     /// Tenant-scoped lookup by the provider's refund id — the finalize
     /// path checks it to merge with a webhook-created row when the
     /// webhook won the race (`refunds_external_idx`).
+    /// Holds the same provider-ID transaction lock as webhook lookups.
     async fn find_by_external_id(
         &self,
         scope: &mut ScopedTx<'_>,
@@ -1010,12 +1071,14 @@ pub trait RefundRepository: Send + Sync {
 
     /// Insert-or-update by `(tenant_id, external_refund_id)` for webhook
     /// reconciliation (Dashboard refunds). Platform scope, same idempotency
-    /// role as the checkout payment upsert.
+    /// role as the checkout payment upsert. Preserves terminal success and
+    /// returns true only when this write actually transitions to Succeeded;
+    /// callers publish RefundIssued only for that atomic transition.
     async fn upsert_platform(
         &self,
         scope: &mut PlatformScope<'_>,
         refund: &super::payment::RefundRecord,
-    ) -> Result<(), PaymentsError>;
+    ) -> Result<bool, PaymentsError>;
 }
 
 // ---------------------------------------------------------------------------

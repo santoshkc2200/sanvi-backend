@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT role_objects, permissions FROM access.role_projection_checkpoints WHERE role_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role_objects",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "access.role_projection_checkpoints",
+            "name": "role_objects"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "permissions",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "access.role_projection_checkpoints",
+            "name": "permissions"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "079224d822230a4beb16dcdf189563c32a45fb7713dc8e45a92629e40e6fb44c"
+}

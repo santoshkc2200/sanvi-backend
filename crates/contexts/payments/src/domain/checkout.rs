@@ -115,6 +115,9 @@ pub struct Checkout {
     /// The caller's `Idempotency-Key` — the double-clicked buy button's
     /// owner. Unique per tenant at the schema; replay returns this row.
     pub idempotency_key: Option<Uuid>,
+    /// Canonical create-request digest. Legacy rows have no recoverable
+    /// redirect snapshot and require a fresh key for another create request.
+    pub request_fingerprint: Option<String>,
     /// Presentation locale for the provider-hosted page (phase 06).
     pub locale: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
@@ -152,6 +155,7 @@ impl Checkout {
             status: CheckoutStatus::Pending,
             external_session_id: None,
             idempotency_key: None,
+            request_fingerprint: None,
             locale: None,
             expires_at: None,
             completed_at: None,

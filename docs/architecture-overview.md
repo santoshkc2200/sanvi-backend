@@ -68,6 +68,10 @@ The architecture gate enforces domain purity and dependency direction, with narr
 - **Asynchronous**: domain events written to the `outbox` table in the same transaction as the state
   change. A dispatcher in `apps/worker` publishes to Redis Streams; consumers are idempotent by
   `(consumer_group, event_id)`. This is the default for anything cross-context and non-critical-path.
+- **Recovery**: published outbox rows remain the PostgreSQL replay source. Required consumers
+  recover unprocessed/unparked events independently of Redis; publication never trims streams by
+  fixed length. Consumer failures are parked durably before acknowledgment. Retention and manual
+  archival must preserve recovery and deduplication history; see `runbooks/event-recovery.md`.
 - **Forbidden**: cross-schema SQL joins, shared tables, direct repository reuse across contexts.
 
 ### 3.1 Accepted Context Ownership Exceptions (Enforced by `scripts/check-layering.sh`)
@@ -81,6 +85,11 @@ Bounded contexts must not import another context's domain or repository types. T
   - `billing/src/application/plans.rs` and `sync.rs` import `sanvi_access::domain` to synchronize subscription plan entitlements with access feature keys.
   - `advertising` imports `sanvi_payments::domain::CheckoutRepository` for conversion attribution and `sanvi_privacy::domain` for tracking consent directives.
   - `access` imports `sanvi_identity::domain` for membership synchronization and relation tuple rebuilding.
+
+  The access projection adapter shares that identity boundary to load authoritative membership
+  snapshots. PostgreSQL transaction-scoped advisory locks serialize reconciliation per aggregate;
+  applied checkpoints commit only after idempotent Keto effects succeed. Tenant permission checks
+  also require current active membership and current role definitions, independently of worker lag.
 
 ## 4. Persistence
 
@@ -138,6 +147,9 @@ Contexts must only query their own database schema. Two narrow exceptions exist 
 - Every span carries `request_id`, `tenant_id`, `actor_id`, `route`, `context`.
 - RED metrics per endpoint, USE metrics for pools, plus domain metrics per phase.
 - Health endpoints: `/healthz` (liveness), `/readyz` (dependency checks), `/metrics` (Prometheus).
+- The worker serves the same endpoints on private port 9091, with native worker metrics exposed
+  for scraping. OTLP does not automatically export native Prometheus collectors. Unexpected task
+  termination fails the worker and drains siblings instead of leaving a partially running process.
 
 ## 9. Testing pyramid
 

@@ -200,10 +200,7 @@ pub async fn submit_dsr(
     body: web::Json<SubmitDsrCommand>,
     req: HttpRequest,
 ) -> Result<impl Responder, ApiError> {
-    let ip = req
-        .connection_info()
-        .realip_remote_addr()
-        .and_then(|ip| ip.parse().ok());
+    let ip = sanvi_http::client_ip(&req);
     let user = subject.0.as_ref().map(|subject| subject.user_id);
     let output = state
         .submit_dsr
@@ -792,10 +789,7 @@ pub async fn submit_tenant_dsr(
 ) -> Result<impl Responder, ApiError> {
     let user = require_subject(subject)?;
     let tenant_id = current_tenant(&req)?;
-    let ip = req
-        .connection_info()
-        .realip_remote_addr()
-        .and_then(|ip| ip.parse().ok());
+    let ip = sanvi_http::client_ip(&req);
     let output = state
         .submit_tenant_request
         .execute(user.user_id, tenant_id, ip, body.into_inner())

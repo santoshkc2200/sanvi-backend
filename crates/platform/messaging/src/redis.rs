@@ -35,6 +35,16 @@ impl StreamsClient {
         Self { conn }
     }
 
+    /// Append required work without deleting entries behind a lagging consumer.
+    /// Retention is an explicit operator operation after recovery checkpoints
+    /// have been checked, never a side effect of publishing new work.
+    pub async fn append_durable(&self, stream: &str, fields: &[(&str, &str)]) -> Result<String> {
+        let mut conn = self.conn.clone();
+        conn.xadd(stream, "*", fields)
+            .await
+            .with_context(|| format!("failed to append to durable stream {stream}"))
+    }
+
     /// Append a message to a stream, trimming to keep at most `max_len`
     /// entries (approximate trim).
     pub async fn append(

@@ -19,9 +19,10 @@ pub use features::{
 };
 pub use permissions::{PERMISSIONS, Permission, PermissionDef, PermissionScope, lookup};
 pub use ports::{
-    ApprovalGate, ApprovalOutcome, Authorizer, CachedEntitlements, Clock, Decision, DecisionCache,
-    EntitlementCache, EntitlementRepository, EventPublisher, FeatureGate, FeatureRepository,
-    IdGenerator, PermissionStore, QuotaUsageStore, ResourceRef, RoleRepository, Tuple,
+    AccessProjection, ApprovalGate, ApprovalOutcome, Authorizer, CachedEntitlements, Clock,
+    Decision, DecisionCache, EntitlementCache, EntitlementRepository, EventPublisher, FeatureGate,
+    FeatureRepository, IdGenerator, PermissionStore, QuotaUsageStore, ResourceRef, RoleRepository,
+    TenantRoleSource, Tuple,
 };
 pub use quota::period_start;
 pub use roles::{Role, RoleId, RoleScope, SYSTEM_ROLE_SEEDS, TenantId};

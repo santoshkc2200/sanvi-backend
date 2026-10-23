@@ -1,0 +1,2 @@
+DROP TABLE access.role_projection_checkpoints;
+DROP TABLE access.membership_projection_checkpoints;

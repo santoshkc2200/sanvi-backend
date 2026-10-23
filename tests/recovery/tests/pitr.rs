@@ -67,7 +67,14 @@ async fn sh(node: &testcontainers::ContainerAsync<Postgres>, script: &str) -> Sh
         .exec(ExecCommand::new(["sh", "-c", script]).with_env_vars(env))
         .await
         .expect("exec into the drill container");
-    // The inspect can race the exec finishing; poll briefly for the exit.
+    // These readers finish only when the command exits. Sampling the exit
+    // status before them can retain None when pg_ctl legitimately takes
+    // longer than the brief inspect retry window to start PostgreSQL.
+    let stdout =
+        String::from_utf8_lossy(&result.stdout_to_vec().await.expect("stdout")).into_owned();
+    let stderr =
+        String::from_utf8_lossy(&result.stderr_to_vec().await.expect("stderr")).into_owned();
+    // Docker's inspect status can still briefly lag the completed log stream.
     let mut code = result.exit_code().await.expect("exec exit code");
     for _ in 0..40 {
         if code.is_some() {
@@ -76,10 +83,6 @@ async fn sh(node: &testcontainers::ContainerAsync<Postgres>, script: &str) -> Sh
         tokio::time::sleep(Duration::from_millis(100)).await;
         code = result.exit_code().await.expect("exec exit code");
     }
-    let stdout =
-        String::from_utf8_lossy(&result.stdout_to_vec().await.expect("stdout")).into_owned();
-    let stderr =
-        String::from_utf8_lossy(&result.stderr_to_vec().await.expect("stderr")).into_owned();
     Sh {
         code,
         stdout,

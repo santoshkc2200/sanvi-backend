@@ -1283,7 +1283,7 @@ fn failure_of(object: &Value) -> Option<PaymentFailure> {
 // ---------------------------------------------------------------------------
 
 use crate::domain::dispute::{DisputeRecord, DisputeStatus};
-use crate::domain::payment::{RefundRecord, RefundStatus};
+use crate::domain::payment::{RefundId, RefundRecord, RefundStatus};
 
 /// Whether a provider object reports platform money on a tenant
 /// transaction: an application fee (the platform's cut of a direct
@@ -1445,7 +1445,41 @@ async fn handle_refund_event(
         let existing = refunds
             .find_by_external_id_platform(scope, tenant_id, &external_refund_id)
             .await?;
-        let id = match existing.as_ref() {
+        // Our metadata is only a correlation hint. Bind every financial field
+        // and the request key before adopting the original actor's snapshot.
+        let request_id = refund_obj
+            .pointer("/metadata/sanvi_refund_id")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse::<RefundId>().ok());
+        let request_key = refund_obj
+            .pointer("/metadata/sanvi_idempotency_key")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse::<uuid::Uuid>().ok());
+        let correlated = if let (Some(request_id), Some(request_key)) = (request_id, request_key) {
+            refunds
+                .find_by_id_platform(scope, tenant_id, request_id)
+                .await?
+                .filter(|request| {
+                    request.payment_id == payment.id
+                        && request.amount == money
+                        && request.idempotency_key == Some(request_key)
+                        && request
+                            .external_refund_id
+                            .as_ref()
+                            .is_none_or(|id| id == &external_refund_id)
+                })
+        } else {
+            None
+        };
+        if let (Some(winner), Some(original)) = (&existing, &correlated)
+            && winner.id != original.id
+        {
+            refunds
+                .adopt_audit_platform(scope, tenant_id, original.id, winner.id)
+                .await?;
+        }
+        let source = existing.as_ref().or(correlated.as_ref());
+        let id = match source {
             Some(r) => r.id,
             None => ids.next_refund_id()?,
         };
@@ -1455,27 +1489,23 @@ async fn handle_refund_event(
             payment_id: payment.id,
             external_refund_id: Some(external_refund_id.clone()),
             amount: money.clone(),
-            reason: reason.clone(),
+            reason: source.and_then(|row| row.reason.clone()).or(reason.clone()),
             status,
-            created_by: None,
+            created_by: source.and_then(|row| row.created_by),
             created_at: created,
-            idempotency_key: None,
+            idempotency_key: source.and_then(|row| row.idempotency_key),
         };
         // If we had an existing row, preserve its original created_at so
         // the timeline stays stable.
-        if let Some(existing) = &existing {
+        if let Some(existing) = source {
             refund_record.created_at = existing.created_at;
         }
-        refunds.upsert_platform(scope, &refund_record).await?;
+        let transitioned = refunds.upsert_platform(scope, &refund_record).await?;
         // Emit RefundIssued exactly when this row transitions into
         // Succeeded: a refund first seen pending (`refund.updated`) emits
         // when it lands, redelivery is a no-op. The outbox has no dedupe,
-        // so the observed transition is the once-guard — not the row's
-        // newness and not any outbox-side key.
-        let transitioned = status == RefundStatus::Succeeded
-            && existing
-                .as_ref()
-                .is_none_or(|r| r.status != RefundStatus::Succeeded);
+        // so the persistence write's actual transition is the once-guard,
+        // never an earlier lookup that can predate API finalization.
         if transitioned {
             committed_metrics.push(CommittedMetric::RefundIssued);
             events
