@@ -10,17 +10,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
-use hmac::{Hmac, Mac};
 use sanvi_kernel::TenantId;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use uuid::Uuid;
 
 use super::PlatformKey;
-
-type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthStateClaims {
@@ -157,38 +152,14 @@ impl OAuthStateManager {
     }
 
     fn sign(&self, claims: &OAuthStateClaims) -> String {
-        let payload = serde_json::to_vec(claims).expect("OAuth state claims serialize");
-        let encoded = URL_SAFE_NO_PAD.encode(payload);
-        let mut mac =
-            HmacSha256::new_from_slice(&self.signing_key).expect("HMAC accepts all key sizes");
-        mac.update(encoded.as_bytes());
-        let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-        format!("v1.{encoded}.{signature}")
+        sanvi_crypto::sign(&self.signing_key, claims)
     }
 
     fn verify(&self, state: &str) -> Result<OAuthStateClaims, OAuthStateError> {
-        let mut parts = state.split('.');
-        let (version, payload, signature) = (parts.next(), parts.next(), parts.next());
-        if version != Some("v1")
-            || payload.is_none()
-            || signature.is_none()
-            || parts.next().is_some()
-        {
-            return Err(OAuthStateError::Malformed);
-        }
-        let payload = payload.expect("checked above");
-        let signature = URL_SAFE_NO_PAD
-            .decode(signature.expect("checked above"))
-            .map_err(|_| OAuthStateError::Malformed)?;
-        let mut mac =
-            HmacSha256::new_from_slice(&self.signing_key).expect("HMAC accepts all key sizes");
-        mac.update(payload.as_bytes());
-        mac.verify_slice(&signature)
-            .map_err(|_| OAuthStateError::Forged)?;
-        let raw = URL_SAFE_NO_PAD
-            .decode(payload)
-            .map_err(|_| OAuthStateError::Malformed)?;
-        serde_json::from_slice(&raw).map_err(|_| OAuthStateError::Malformed)
+        sanvi_crypto::verify(&self.signing_key, state).map_err(|error| match error {
+            sanvi_crypto::SignedError::Malformed => OAuthStateError::Malformed,
+            sanvi_crypto::SignedError::Forged => OAuthStateError::Forged,
+        })
     }
 }
 

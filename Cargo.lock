@@ -3481,6 +3481,8 @@ version = "0.10.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "reqwest 0.12.28",
+ "sanvi-crypto",
  "sanvi-kernel",
  "sanvi-messaging",
  "sanvi-persistence",
@@ -3488,9 +3490,12 @@ dependencies = [
  "sanvi-testsupport",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3498,7 +3503,6 @@ name = "sanvi-advertising"
 version = "0.10.0"
 dependencies = [
  "actix-web",
- "aes-gcm",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -3507,8 +3511,8 @@ dependencies = [
  "hmac 0.12.1",
  "prometheus",
  "quick-xml",
- "rand 0.8.7",
  "reqwest 0.12.28",
+ "sanvi-crypto",
  "sanvi-http",
  "sanvi-kernel",
  "sanvi-messaging",
@@ -3724,6 +3728,20 @@ dependencies = [
  "utoipa",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "sanvi-crypto"
+version = "0.10.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "hmac 0.12.1",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

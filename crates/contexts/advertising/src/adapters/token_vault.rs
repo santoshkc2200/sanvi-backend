@@ -3,17 +3,10 @@
 //! DEK wrapped by a KEK held only in configuration — keyed by tenant instead
 //! of data subject.
 
-// aes-gcm 0.10 still sits on generic-array 0.14, which deprecated itself on
-// modern toolchains; the deprecation is ecosystem noise here too.
-#![allow(deprecated)]
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use aes_gcm::aead::{Aead, OsRng};
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use async_trait::async_trait;
-use rand::RngCore;
 use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
@@ -23,12 +16,6 @@ use crate::domain::{
     AdvertisingError, ConnectionTokenRepository, TenantEnvelopeCrypto, TenantKeyRepository,
     TenantKeyRow,
 };
-
-fn nonce_bytes() -> [u8; 12] {
-    let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
-    nonce
-}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SqlxTenantKeyRepository;
@@ -157,30 +144,13 @@ impl SqlxTenantEnvelopeCrypto {
     }
 
     fn wrap(&self, dek: &[u8; 32]) -> Result<Vec<u8>, AdvertisingError> {
-        let cipher = Aes256Gcm::new_from_slice(&self.kek)
-            .map_err(|_| AdvertisingError::EncryptionFailure("invalid KEK".to_string()))?;
-        let nonce = nonce_bytes();
-        let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), dek.as_slice())
-            .map_err(|_| AdvertisingError::EncryptionFailure("DEK wrap failed".to_string()))?;
-        let mut out = Vec::with_capacity(12 + ciphertext.len());
-        out.extend_from_slice(&nonce);
-        out.extend_from_slice(&ciphertext);
-        Ok(out)
+        sanvi_crypto::seal(&self.kek, dek)
+            .map_err(|_| AdvertisingError::EncryptionFailure("DEK wrap failed".to_string()))
     }
 
     fn unwrap(&self, wrapped: &[u8]) -> Result<[u8; 32], AdvertisingError> {
-        if wrapped.len() < 13 {
-            return Err(AdvertisingError::EncryptionFailure(
-                "wrapped DEK too short".to_string(),
-            ));
-        }
-        let cipher = Aes256Gcm::new_from_slice(&self.kek)
-            .map_err(|_| AdvertisingError::EncryptionFailure("invalid KEK".to_string()))?;
-        let plaintext = cipher
-            .decrypt(Nonce::from_slice(&wrapped[..12]), &wrapped[12..])
-            .map_err(|_| AdvertisingError::EncryptionFailure("DEK unwrap failed".to_string()))?;
-        plaintext
+        sanvi_crypto::open(&self.kek, wrapped)
+            .map_err(|_| AdvertisingError::EncryptionFailure("DEK unwrap failed".to_string()))?
             .try_into()
             .map_err(|_| AdvertisingError::EncryptionFailure("DEK must be 32 bytes".to_string()))
     }
@@ -195,8 +165,7 @@ impl SqlxTenantEnvelopeCrypto {
         {
             return Ok(*dek);
         }
-        let mut candidate = [0u8; 32];
-        OsRng.fill_bytes(&mut candidate);
+        let candidate = sanvi_crypto::generate_key();
         let candidate_wrapped = self.wrap(&candidate)?;
         let row = self
             .keys
@@ -228,16 +197,8 @@ impl TenantEnvelopeCrypto for SqlxTenantEnvelopeCrypto {
         plaintext: &[u8],
     ) -> Result<Vec<u8>, AdvertisingError> {
         let dek = self.fetch_dek(scope, tenant_id).await?;
-        let cipher = Aes256Gcm::new_from_slice(&dek)
-            .map_err(|_| AdvertisingError::EncryptionFailure("invalid DEK".to_string()))?;
-        let nonce = nonce_bytes();
-        let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), plaintext)
-            .map_err(|_| AdvertisingError::EncryptionFailure("encrypt failed".to_string()))?;
-        let mut out = Vec::with_capacity(12 + ciphertext.len());
-        out.extend_from_slice(&nonce);
-        out.extend_from_slice(&ciphertext);
-        Ok(out)
+        sanvi_crypto::seal(&dek, plaintext)
+            .map_err(|_| AdvertisingError::EncryptionFailure("encrypt failed".to_string()))
     }
 
     async fn decrypt_for_tenant(
@@ -252,10 +213,7 @@ impl TenantEnvelopeCrypto for SqlxTenantEnvelopeCrypto {
             ));
         }
         let dek = self.fetch_dek(scope, tenant_id).await?;
-        let cipher = Aes256Gcm::new_from_slice(&dek)
-            .map_err(|_| AdvertisingError::EncryptionFailure("invalid DEK".to_string()))?;
-        cipher
-            .decrypt(Nonce::from_slice(&ciphertext[..12]), &ciphertext[12..])
+        sanvi_crypto::open(&dek, ciphertext)
             .map_err(|_| AdvertisingError::EncryptionFailure("decrypt failed".to_string()))
     }
 }

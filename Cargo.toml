@@ -10,6 +10,7 @@ members = [
     "crates/platform/http",
     "crates/platform/resilience",
     "crates/platform/archival",
+    "crates/platform/crypto",
     "crates/contexts/system",
     "crates/contexts/tenancy",
     "crates/contexts/identity",
@@ -59,6 +60,7 @@ sanvi-cache = { path = "crates/platform/cache" }
 sanvi-http = { path = "crates/platform/http" }
 sanvi-resilience = { path = "crates/platform/resilience" }
 sanvi-archival = { path = "crates/platform/archival" }
+sanvi-crypto = { path = "crates/platform/crypto" }
 sanvi-system = { path = "crates/contexts/system" }
 sanvi-tenancy = { path = "crates/contexts/tenancy" }
 sanvi-identity = { path = "crates/contexts/identity" }
