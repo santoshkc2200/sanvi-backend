@@ -39,3 +39,8 @@ endpoint = "http://openobserve:5081"
 organization = "sanvi"
 stream = "production"
 # auth_token via SANVI__TELEMETRY__OTLP__AUTH_TOKEN (secret manager).
+
+# Production must not silently ship disabled privacy enforcement or draft notices.
+# Supply verified retention settings, the KEK, and real disclosures through deployment configuration.
+[privacy]
+enforce_release_checks = true

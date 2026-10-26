@@ -269,6 +269,55 @@ impl SqlxJurisdictionRepository {
 
 #[async_trait]
 impl JurisdictionRepository for SqlxJurisdictionRepository {
+    async fn resolve_evidence(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        evidence: &[(crate::domain::EvidenceKind, String)],
+    ) -> Result<(JurisdictionRef, Vec<crate::domain::JurisdictionEvidence>), PrivacyError> {
+        let mut chain = Vec::new();
+        for kind in crate::domain::RESOLUTION_ORDER {
+            for (_, input) in evidence.iter().filter(|(candidate, _)| *candidate == kind) {
+                let code: Option<String> = sqlx::query_scalar("SELECT jurisdiction_code FROM privacy.jurisdiction_mappings WHERE evidence_code = $1")
+                    .bind(input.trim().to_ascii_uppercase()).fetch_optional(&mut **scope.tx_mut().as_inner()).await.map_err(map_db)?;
+                if let Some(code) = code {
+                    let jurisdiction = JurisdictionRef::parse(&code)?;
+                    chain.push(crate::domain::JurisdictionEvidence {
+                        step: kind,
+                        input: input.clone(),
+                        outcome: jurisdiction.clone(),
+                    });
+                    return Ok((jurisdiction, chain));
+                }
+            }
+        }
+        let fallback = JurisdictionRef::parse("global")?;
+        chain.push(crate::domain::JurisdictionEvidence {
+            step: crate::domain::EvidenceKind::Fallback,
+            input: "unresolved; global operating baseline".to_string(),
+            outcome: fallback.clone(),
+        });
+        Ok((fallback, chain))
+    }
+    async fn set_mappings(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        code: &str,
+        inputs: &[String],
+    ) -> Result<(), PrivacyError> {
+        for input in inputs {
+            let input = input.trim().to_ascii_uppercase();
+            if input.is_empty()
+                || input.len() > 16
+                || !input.chars().all(|c| c.is_ascii_uppercase() || c == '-')
+            {
+                return Err(PrivacyError::InvalidCountryCode(input));
+            }
+            sqlx::query("INSERT INTO privacy.jurisdiction_mappings (evidence_code, jurisdiction_code) VALUES ($1, $2) ON CONFLICT (evidence_code) DO UPDATE SET jurisdiction_code = EXCLUDED.jurisdiction_code")
+                .bind(input).bind(code).execute(&mut **scope.tx_mut().as_inner()).await.map_err(map_db)?;
+        }
+        Ok(())
+    }
+
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -379,6 +428,15 @@ impl SqlxSubjectRepository {
 
 #[async_trait]
 impl SubjectRepository for SqlxSubjectRepository {
+    async fn processing_restricted(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        key: &str,
+    ) -> Result<bool, PrivacyError> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM privacy.data_subject_requests WHERE subject_ref->>'key' = $1 AND kind IN ('restriction', 'objection') AND verified_at IS NOT NULL AND status <> 'rejected' AND restriction_released_at IS NULL)")
+            .bind(key).fetch_one(&mut **scope.tx_mut().as_inner()).await.map_err(map_db)
+    }
+
     async fn find_by_key(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -479,6 +537,39 @@ impl SqlxDsrRepository {
 
 #[async_trait]
 impl DsrRepository for SqlxDsrRepository {
+    async fn record_fulfillment(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+        summary: &str,
+        evidence: &str,
+    ) -> Result<(), PrivacyError> {
+        sqlx::query("INSERT INTO privacy.manual_fulfillments (request_id, summary, evidence_reference) VALUES ($1, $2, $3)")
+            .bind(id.as_i64()).bind(summary).bind(evidence).execute(&mut **scope.tx_mut().as_inner()).await.map_err(map_db)?;
+        Ok(())
+    }
+    async fn fulfillment_summary(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+    ) -> Result<Option<String>, PrivacyError> {
+        sqlx::query_scalar("SELECT summary FROM privacy.manual_fulfillments WHERE request_id = $1")
+            .bind(id.as_i64())
+            .fetch_optional(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(map_db)
+    }
+
+    async fn release_restriction(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+    ) -> Result<(), PrivacyError> {
+        sqlx::query("UPDATE privacy.data_subject_requests SET restriction_released_at = now() WHERE id = $1 AND kind IN ('restriction', 'objection') AND restriction_released_at IS NULL")
+            .bind(id.as_i64()).execute(&mut **scope.tx_mut().as_inner()).await.map_err(map_db)?;
+        Ok(())
+    }
+
     async fn save(
         &self,
         scope: &mut PlatformScope<'_>,

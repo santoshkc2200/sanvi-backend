@@ -4,4 +4,4 @@ pub mod port;
 
 pub use dto::*;
 pub use error::MediaError;
-pub use port::MediaGatewayPort;
+pub use port::{MediaGatewayPort, MediaOwnerIndexPort};

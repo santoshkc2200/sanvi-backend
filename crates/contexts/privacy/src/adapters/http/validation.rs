@@ -67,6 +67,7 @@ pub fn validation_issue(err: &PrivacyError) -> Option<(String, Vec<FieldIssue>)>
         | PrivacyError::ArtifactPassphraseMismatch
         | PrivacyError::PackagingFailed(_)
         | PrivacyError::Conflict(_)
+        | PrivacyError::ProcessingPending(_)
         | PrivacyError::RateLimited(_)
         | PrivacyError::Upstream(_)
         | PrivacyError::IdGeneration(_)
@@ -237,6 +238,10 @@ pub fn error_samples() -> Vec<(&'static str, PrivacyError)> {
             PrivacyError::PackagingFailed("zip".to_string()),
         ),
         ("Conflict", PrivacyError::Conflict("race".to_string())),
+        (
+            "ProcessingPending",
+            PrivacyError::ProcessingPending("purging".to_string()),
+        ),
         (
             "RateLimited",
             PrivacyError::RateLimited("bucket".to_string()),

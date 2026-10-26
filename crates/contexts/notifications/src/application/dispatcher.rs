@@ -117,7 +117,7 @@ impl NotificationDispatcher {
         let tenant_id_owned = match &intent.audience {
             Audience::TenantRoles { tenant_id, .. } => Some(tenant_id.to_string()),
             Audience::Platform => None,
-            Audience::Email(_) => envelope
+            Audience::User(_) | Audience::Email(_) => envelope
                 .metadata
                 .get("tenant_id")
                 .and_then(|v| v.as_str())

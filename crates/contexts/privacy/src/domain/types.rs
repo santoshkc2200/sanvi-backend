@@ -195,6 +195,7 @@ impl fmt::Display for JurisdictionRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Regime {
+    Baseline,
     Gdpr,
     UkGdpr,
     Appi,
@@ -204,6 +205,7 @@ pub enum Regime {
 impl Regime {
     pub fn parse(raw: &str) -> Result<Self, PrivacyError> {
         match raw {
+            "baseline" => Ok(Self::Baseline),
             "gdpr" => Ok(Self::Gdpr),
             "uk_gdpr" => Ok(Self::UkGdpr),
             "appi" => Ok(Self::Appi),
@@ -214,6 +216,7 @@ impl Regime {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Baseline => "baseline",
             Self::Gdpr => "gdpr",
             Self::UkGdpr => "uk_gdpr",
             Self::Appi => "appi",
@@ -621,6 +624,7 @@ impl DataClass {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum DsrKind {
+    Other,
     Access,
     Export,
     Erasure,
@@ -637,6 +641,7 @@ pub enum DsrKind {
 impl DsrKind {
     pub fn parse(raw: &str) -> Result<Self, PrivacyError> {
         match raw {
+            "other" => Ok(Self::Other),
             "access" => Ok(Self::Access),
             "export" => Ok(Self::Export),
             "erasure" => Ok(Self::Erasure),
@@ -654,6 +659,7 @@ impl DsrKind {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Other => "other",
             Self::Access => "access",
             Self::Export => "export",
             Self::Erasure => "erasure",
@@ -676,7 +682,7 @@ impl DsrKind {
             Self::OptOutTargetedAdvertising => vec![ProcessingPurpose::TargetedAdvertising],
             Self::OptOutProfiling => vec![ProcessingPurpose::ProfilingSignificantEffects],
             Self::LimitSensitiveUse => vec![ProcessingPurpose::SensitivePiUse],
-            Self::Restriction => ProcessingPurpose::ALL
+            Self::Restriction | Self::Objection => ProcessingPurpose::ALL
                 .into_iter()
                 .filter(|p| p.consentable())
                 .collect(),

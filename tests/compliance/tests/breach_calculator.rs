@@ -1,22 +1,4 @@
-//! TASK-029 (11.10 Step 5): the breach obligation calculator against the
-//! deliberately awkward fixture — a multi-state US incident carrying one
-//! EU data subject, with the compromised data encrypted at rest. The
-//! encryption safe-harbour assessment and the differing notification
-//! clocks all have to be *evaluated*, not assumed:
-//!
-//! - EU joins the obligation set through its profile alone (one subject
-//!   suffices) and its 72-hour authority clock is suppressed by the safe
-//!   harbour — while the assessment itself stays on the record.
-//! - Colorado has no safe harbour: the same incident, same encryption,
-//!   unsuppressed 30-day consumer notice.
-//! - California and Texas (like Colorado) get no invented deadlines: the
-//!   seeded rule sets carry no hour/day clock for those audiences, so the
-//!   calculator emits nothing for them — silence is the rule set's, not
-//!   the calculator's choice.
-//! - The 250/500 authority thresholds decide real obligations when a
-//!   deadline exists (proven by mutating the profile, not the rules).
-//! - Tenant obligations ride on their own clock (2 business days) and are
-//!   never suppressed by encryption.
+//! Conservative breach review tasks: encryption alone cannot close an obligation.
 
 use sanvi_privacy::adapters::RuleBasedObligationCalculator;
 use sanvi_privacy::domain::{
@@ -41,6 +23,7 @@ fn fixture(encrypted_at_rest: bool, subjects: u64) -> BreachIncident {
         discovered_at: fixed_discovery(),
         contained_at: None,
         affected: AffectedSet {
+            subjects_by_jurisdiction: Default::default(),
             subjects,
             tenants: 2,
             jurisdictions: vec![
@@ -80,9 +63,7 @@ fn the_multi_state_fixture_produces_exactly_the_rule_set_obligations() {
     let calculator = RuleBasedObligationCalculator::new();
     let obligations = calculator.compute(&fixture(true, 300), &profiles(), fixed_discovery());
 
-    // eu: authority (72h, suppressed) + tenant. us-ca: tenant only.
-    // us-co: consumer (30d) + tenant. us-tx: tenant only.
-    assert_eq!(obligations.len(), 6, "obligations: {obligations:?}");
+    assert_eq!(obligations.len(), 10, "obligations: {obligations:?}");
 
     // The EU authority deadline is discovery + 72 hours — from discovery,
     // never from when the assessment ran.
@@ -93,9 +74,12 @@ fn the_multi_state_fixture_produces_exactly_the_rule_set_obligations() {
         fixed_discovery() + chrono::Duration::hours(72),
         "GDPR clock is 72 hours from discovery"
     );
-    assert!(
-        eu_authority.suppressed_by_encryption,
-        "encrypted at rest + EU safe harbour: suppressed, but the assessment stays recorded"
+    assert!(!eu_authority.suppressed_by_encryption);
+    assert_eq!(
+        find(&obligations, "eu", ObligationAudience::Consumer)
+            .unwrap()
+            .due_at,
+        fixed_discovery()
     );
 
     // Colorado: no safe harbour, so the 30-day consumer notice stands.
@@ -108,34 +92,31 @@ fn the_multi_state_fixture_produces_exactly_the_rule_set_obligations() {
     );
     assert!(
         !co_consumer.suppressed_by_encryption,
-        "the same encryption suppresses in the EU and NOT in Colorado — evaluated per profile"
+        "encryption at rest is not evidence that exposed data or keys were safe"
     );
 
-    // California and Texas: the seeded rule sets carry no authority or
-    // consumer deadlines; the calculator must not invent any.
+    // Qualitative consumer deadlines are immediate review tasks; thresholds
+    // still gate authority reporting using local counts when available.
+    assert!(find(&obligations, "us-ca", ObligationAudience::Authority).is_none());
+    assert_eq!(
+        find(&obligations, "us-tx", ObligationAudience::Authority)
+            .unwrap()
+            .due_at,
+        fixed_discovery()
+    );
     for code in ["us-ca", "us-tx"] {
-        assert!(
-            find(&obligations, code, ObligationAudience::Authority).is_none()
-                && find(&obligations, code, ObligationAudience::Consumer).is_none(),
-            "{code} has no fixed deadline in its rule set; got an obligation anyway"
+        assert_eq!(
+            find(&obligations, code, ObligationAudience::Consumer)
+                .unwrap()
+                .due_at,
+            fixed_discovery()
         );
     }
-
-    // Tenant obligations: one per jurisdiction, on the 2-business-day
-    // clock, never suppressed.
-    let friday = fixed_discovery();
     for code in ["eu", "us-ca", "us-co", "us-tx"] {
-        let tenant = find(&obligations, code, ObligationAudience::Tenant)
-            .expect("tenant obligation per affected jurisdiction");
-        // Wednesday + 2 business days = Friday.
-        assert_eq!(
-            tenant.due_at.date_naive().to_string(),
-            "2026-10-09",
-            "tenant clock skips to business days"
-        );
+        let tenant = find(&obligations, code, ObligationAudience::Tenant).unwrap();
+        assert_eq!(tenant.due_at, fixed_discovery());
         assert!(!tenant.suppressed_by_encryption);
     }
-    let _ = friday;
 }
 
 #[test]
@@ -197,4 +178,31 @@ fn every_seeded_profile_is_drillable_by_the_fixture_shape() {
         .filter(|o| o.audience == ObligationAudience::Tenant)
         .count();
     assert_eq!(tenant_rows, profiled, "one tenant row per affected profile");
+}
+
+#[test]
+fn local_counts_and_japan_staged_reports_are_preserved() {
+    let calculator = RuleBasedObligationCalculator::new();
+    let mut incident = fixture(true, 1_000);
+    incident
+        .affected
+        .subjects_by_jurisdiction
+        .insert("us-tx".to_string(), 10);
+    let obligations = calculator.compute(&incident, &profiles(), fixed_discovery());
+    assert!(find(&obligations, "us-tx", ObligationAudience::Authority).is_none());
+    incident.affected.jurisdictions = vec![JurisdictionRef::parse("jp").unwrap()];
+    let jp = seeded_profile(&incident.affected.jurisdictions[0]).unwrap();
+    let obligations = calculator.compute(&incident, &[jp], fixed_discovery());
+    assert_eq!(
+        find(&obligations, "jp", ObligationAudience::Authority)
+            .unwrap()
+            .due_at,
+        fixed_discovery()
+    );
+    assert_eq!(
+        find(&obligations, "jp", ObligationAudience::AuthorityFinal)
+            .unwrap()
+            .due_at,
+        fixed_discovery() + chrono::Duration::days(30)
+    );
 }

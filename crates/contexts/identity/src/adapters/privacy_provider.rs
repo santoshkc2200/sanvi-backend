@@ -300,6 +300,10 @@ impl PersonalDataProvider for IdentityPrivacyProvider {
         })
     }
 
+    fn rectifiable_fields(&self) -> &'static [&'static str] {
+        &["email"]
+    }
+
     async fn rectify(
         &self,
         subject: &SubjectRef,
@@ -338,6 +342,9 @@ impl PersonalDataProvider for IdentityPrivacyProvider {
             if correction.context == "identity" && correction.field == "email" {
                 let email = crate::domain::Email::parse(&correction.value)
                     .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+                if &email != user.primary_email() || !user.email_verified() {
+                    return Err(PrivacyError::Conflict("complete the verified identity email-change flow before rectifying this projection".to_string()));
+                }
                 // Email moves only as a verified change (Kratos owns the
                 // authoritative address; the projection follows).
                 corrected.apply_snapshot(Some(email), true, None);

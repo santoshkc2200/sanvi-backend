@@ -44,5 +44,6 @@
   "emails.budget_spend_anomaly.subject": "Spend anomaly detected for {tenant}",
   "emails.budget_spend_anomaly.body": "Unusual spend detected for {scope_name}: current spend is {spend} compared to historical average {average_spend} (>{sigma}σ variance). No automatic actions were taken.",
   "emails.budget_guardrails_rollback.subject": "Notice: advertising budget guardrails feature disabled for {tenant}",
-  "emails.budget_guardrails_rollback.body": "The advertising budget guardrails feature has been temporarily disabled for {tenant}. Existing caps and alert history are preserved, but automated monitoring and pausing are inactive."
+  "emails.budget_guardrails_rollback.body": "The advertising budget guardrails feature has been temporarily disabled for {tenant}. Existing caps and alert history are preserved, but automated monitoring and pausing are inactive.",
+  "emails.privacy_extended.body": "Your privacy request deadline has been extended to {deadline}. Reason: {reason}."
 }

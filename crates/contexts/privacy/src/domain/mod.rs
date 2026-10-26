@@ -26,8 +26,8 @@ pub use error::PrivacyError;
 pub use events::PrivacyEvent;
 pub use jurisdiction::{
     AuthorityContact, BreachRuleSet, JurisdictionProfile, MOST_PROTECTIVE_CODE, RESOLUTION_ORDER,
-    add_business_days, add_days, country_to_jurisdiction, most_protective, most_protective_profile,
-    resolve, seeded_profile, seeded_profiles,
+    add_business_days, add_days, country_to_jurisdiction, global_operating_profile,
+    most_protective, most_protective_profile, resolve, seeded_profile, seeded_profiles,
 };
 pub use ports::{
     AppealRepository, AuditWriter, AuthorizedAgentRepository, BreachObligationCalculator,

@@ -16,8 +16,7 @@ use crate::domain::{
     DirectiveRepository, DirectiveResolver, DirectiveSnapshot, DirectiveSource, DirectiveState,
     EventPublisher, EvidenceKind, IdGenerator, JurisdictionProfile, JurisdictionRepository,
     PrivacyError, PrivacyEvent, ProcessingPurpose, PurposeDirective, SignalRepository,
-    SignalSource, SubjectId, SubjectRef, SubjectRepository, jurisdiction_default, resolve,
-    resolve_snapshot,
+    SignalSource, SubjectId, SubjectRef, SubjectRepository, jurisdiction_default, resolve_snapshot,
 };
 
 /// Flip a set of purposes to `Denied` with the given source, ledgering the
@@ -123,7 +122,10 @@ impl ResolveJurisdiction {
             .ok_or(PrivacyError::SubjectNotFound(
                 subject_id.as_i64().to_string(),
             ))?;
-        let (jurisdiction, chain) = resolve(&evidence);
+        let (jurisdiction, chain) = self
+            .jurisdictions
+            .resolve_evidence(&mut scope, &evidence)
+            .await?;
         self.jurisdictions
             .find(&mut scope, jurisdiction.as_str())
             .await?
@@ -210,13 +212,13 @@ impl PersistedDirectiveResolver {
                 stored.is_minor,
                 Some(stored.id),
             ),
-            None => (crate::domain::most_protective(), false, None),
+            None => (crate::domain::global_operating_profile().code, false, None),
         };
         let profile = self
             .jurisdictions
             .find(&mut scope, jurisdiction.as_str())
             .await?
-            .unwrap_or_else(crate::domain::most_protective_profile);
+            .unwrap_or_else(crate::domain::global_operating_profile);
 
         // Explicit ledger inputs (latest per purpose).
         let explicit: Vec<DirectiveInput> = {
@@ -244,6 +246,8 @@ impl PersistedDirectiveResolver {
                         state,
                         source,
                         notice_version: Some(record.notice_version),
+                        recorded_at: Some(record.recorded_at),
+                        signal_override: record.signal_source == Some(SignalSource::Gpc),
                     });
                 }
             }
@@ -283,6 +287,8 @@ impl PersistedDirectiveResolver {
                             state: DirectiveState::Denied,
                             source: DirectiveSource::Signal,
                             notice_version: None,
+                            recorded_at: Some(signal.observed_at),
+                            signal_override: false,
                         });
                     }
                 }
@@ -300,6 +306,8 @@ impl PersistedDirectiveResolver {
                                 state: DirectiveState::Denied,
                                 source: DirectiveSource::Signal,
                                 notice_version: None,
+                                recorded_at: Some(signal.observed_at),
+                                signal_override: false,
                             });
                         }
                     }
@@ -307,9 +315,21 @@ impl PersistedDirectiveResolver {
             }
         }
 
+        let restricted = self
+            .subjects
+            .processing_restricted(&mut scope, subject.canonical_key())
+            .await?;
         let now = self.clock.now();
-        let snapshot_directives =
+        let mut snapshot_directives =
             resolve_snapshot(&profile, &explicit, &signals, is_minor, None, now, None);
+        if restricted {
+            for directive in &mut snapshot_directives {
+                if directive.purpose.consentable() {
+                    directive.state = DirectiveState::Denied;
+                    directive.source = DirectiveSource::OptOut;
+                }
+            }
+        }
 
         // Materialise.
         for directive in &snapshot_directives {
@@ -461,6 +481,7 @@ pub struct RecordConsentChange {
     subjects: Arc<dyn SubjectRepository>,
     jurisdictions: Arc<dyn JurisdictionRepository>,
     consents: Arc<dyn ConsentRepository>,
+    signals: Arc<dyn SignalRepository>,
     directives: Arc<dyn DirectiveRepository>,
     events: Arc<dyn EventPublisher>,
     ids: Arc<dyn IdGenerator>,
@@ -474,6 +495,7 @@ impl RecordConsentChange {
         subjects: Arc<dyn SubjectRepository>,
         jurisdictions: Arc<dyn JurisdictionRepository>,
         consents: Arc<dyn ConsentRepository>,
+        signals: Arc<dyn SignalRepository>,
         directives: Arc<dyn DirectiveRepository>,
         events: Arc<dyn EventPublisher>,
         ids: Arc<dyn IdGenerator>,
@@ -484,6 +506,7 @@ impl RecordConsentChange {
             subjects,
             jurisdictions,
             consents,
+            signals,
             directives,
             events,
             ids,
@@ -501,6 +524,11 @@ impl RecordConsentChange {
             return Err(PrivacyError::EssentialNotConsentable);
         }
         let method = ConsentMethod::parse(&command.method)?;
+        if method == ConsentMethod::GuardianConsent {
+            return Err(PrivacyError::Conflict(
+                "guardian consent requires a verified guardian workflow".to_string(),
+            ));
+        }
         let signal_source = command
             .signal_source
             .as_deref()
@@ -521,8 +549,18 @@ impl RecordConsentChange {
             .jurisdictions
             .find(&mut scope, stored.jurisdiction.as_str())
             .await?
-            .unwrap_or_else(crate::domain::most_protective_profile);
+            .unwrap_or_else(crate::domain::global_operating_profile);
 
+        if command.granted
+            && self
+                .subjects
+                .processing_restricted(&mut scope, subject.canonical_key())
+                .await?
+        {
+            return Err(PrivacyError::Conflict(
+                "processing is restricted; an operator must review its release first".to_string(),
+            ));
+        }
         let now = self.clock.now();
         let record = ConsentRecord {
             id: self.ids.next_consent_id()?,
@@ -555,12 +593,47 @@ impl RecordConsentChange {
                 ConsentMethod::OptOut | ConsentMethod::Withdrawal => DirectiveSource::OptOut,
             },
             notice_version: Some(command.notice_version.clone()),
+            recorded_at: Some(now),
+            signal_override: signal_source == Some(SignalSource::Gpc),
         };
+        let mut observed = self
+            .signals
+            .list_bound_for_subject(&mut scope, stored.id)
+            .await?;
+        if subject.kind == crate::domain::SubjectKind::Device {
+            let rest = subject
+                .canonical_key()
+                .strip_prefix("device:")
+                .unwrap_or("");
+            let device_ref = rest
+                .split_once(':')
+                .map(|(_, device)| device)
+                .unwrap_or(rest);
+            if let Some(signal) = self
+                .signals
+                .latest_for_device(&mut scope, device_ref)
+                .await?
+            {
+                observed.push(signal);
+            }
+        }
+        let signal = observed
+            .iter()
+            .filter(|signal| signal.purposes.contains(&command.purpose))
+            .max_by_key(|signal| signal.observed_at)
+            .map(|signal| DirectiveInput {
+                purpose: command.purpose,
+                state: DirectiveState::Denied,
+                source: DirectiveSource::Signal,
+                notice_version: None,
+                recorded_at: Some(signal.observed_at),
+                signal_override: false,
+            });
         let directive = crate::domain::resolve_purpose(
             &profile,
             command.purpose,
             Some(&explicit),
-            None,
+            signal.as_ref(),
             stored.is_minor,
             Some(&command.notice_version),
             now,
@@ -569,7 +642,7 @@ impl RecordConsentChange {
             .upsert(&mut scope, &directive, subject)
             .await?;
 
-        let event = if command.granted {
+        let event = if command.granted && directive.state == DirectiveState::Allowed {
             PrivacyEvent::ConsentGranted {
                 subject: subject.clone(),
                 purpose: command.purpose,
@@ -680,15 +753,15 @@ impl RecordOptOut {
                     .jurisdictions
                     .find(&mut scope, stored.jurisdiction.as_str())
                     .await?
-                    .unwrap_or_else(crate::domain::most_protective_profile);
+                    .unwrap_or_else(crate::domain::global_operating_profile);
                 (stored.jurisdiction.clone(), profile)
             }
             // Pre-authentication device opt-outs: no subject row yet — the
             // device signal is authoritative and the jurisdiction resolves
             // on binding.
             None => {
-                let jurisdiction = crate::domain::most_protective();
-                (jurisdiction, crate::domain::most_protective_profile())
+                let profile = crate::domain::global_operating_profile();
+                (profile.code.clone(), profile)
             }
         };
 

@@ -12,6 +12,14 @@ pub struct PrivacyConfig {
     /// encryption (export packaging and crypto-shredding refuse to run —
     /// fail closed).
     pub kek: Redacted<String>,
+    #[serde(default)]
+    pub disclosures: PrivacyDisclosures,
+    #[serde(default)]
+    pub enforce_release_checks: bool,
+    #[serde(default)]
+    pub erasure_ledger_dir: String,
+    #[serde(default)]
+    pub erasure_ledger_shared_and_durable: bool,
     /// KEK identifier recorded alongside wrapped DEKs (rotation adds a key,
     /// not a replacement).
     pub kek_id: String,
@@ -54,6 +62,10 @@ impl Default for PrivacyConfig {
     fn default() -> Self {
         Self {
             kek: Redacted::default(),
+            disclosures: PrivacyDisclosures::default(),
+            enforce_release_checks: false,
+            erasure_ledger_dir: String::new(),
+            erasure_ledger_shared_and_durable: false,
             kek_id: "kek-1".to_string(),
             verification_ttl_secs: 600,
             verification_max_attempts: 5,
@@ -65,7 +77,7 @@ impl Default for PrivacyConfig {
             internal_sla_days: 14,
             retention_dry_run: true,
             retention_sweep_batch_size: 500,
-            notice_version: "2026-08-19".to_string(),
+            notice_version: "2026-10-15".to_string(),
             device_cookie_name: "sanvi_gpc_device".to_string(),
             device_cookie_ttl_days: 30,
             subprocessor_notice_days: 30,
@@ -75,6 +87,21 @@ impl Default for PrivacyConfig {
 
 impl PrivacyConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.enforce_release_checks {
+            if self.kek.is_empty() || self.retention_dry_run {
+                anyhow::bail!(
+                    "privacy release requires a configured KEK and verified active retention"
+                );
+            }
+            if !std::path::Path::new(&self.erasure_ledger_dir).is_absolute()
+                || !self.erasure_ledger_shared_and_durable
+            {
+                anyhow::bail!(
+                    "privacy release requires an absolute shared durable erasure ledger outside the database backup boundary"
+                );
+            }
+            self.disclosures.validate_for_publication()?;
+        }
         if !self.kek.is_empty() {
             let decoded = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
@@ -177,11 +204,89 @@ mod tests {
     }
 
     #[test]
+    fn production_release_rejects_draft_disclosures_and_missing_shared_ledger() {
+        let mut config = PrivacyConfig {
+            enforce_release_checks: true,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+        config.kek = Redacted::new(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            [7_u8; 32],
+        ));
+        config.retention_dry_run = false;
+        assert!(config.validate().is_err());
+        config.erasure_ledger_dir = "/srv/erasure-ledger".to_string();
+        config.erasure_ledger_shared_and_durable = true;
+        assert!(config.validate().is_err());
+        config.disclosures = PrivacyDisclosures {
+            controller_name: "Test legal entity".to_string(),
+            business_address: "Test registered address".to_string(),
+            privacy_email: "privacy@test.invalid".to_string(),
+            hosting_countries: vec!["US".to_string()],
+            transfer_safeguards: "Test documented safeguards".to_string(),
+            reviewed_for_publication: true,
+            ..Default::default()
+        };
+        config.validate().unwrap();
+    }
+
+    #[test]
     fn rejects_bad_cookie_names() {
         let config = PrivacyConfig {
             device_cookie_name: "bad name!".to_string(),
             ..PrivacyConfig::default()
         };
         assert!(config.validate().is_err());
+    }
+}
+
+/// Organization details are deployment configuration; defaults are a clearly marked draft.
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(default)]
+pub struct PrivacyDisclosures {
+    pub controller_name: String,
+    pub business_address: String,
+    pub privacy_email: String,
+    pub hosting_countries: Vec<String>,
+    pub eu_representative: Option<String>,
+    pub uk_representative: Option<String>,
+    pub transfer_safeguards: String,
+    pub reviewed_for_publication: bool,
+    pub targeted_advertising: bool,
+    pub sale_or_share: bool,
+}
+impl Default for PrivacyDisclosures {
+    fn default() -> Self {
+        Self {
+            controller_name: "Sanvi (draft; legal entity not yet supplied)".to_string(),
+            business_address: String::new(),
+            privacy_email: String::new(),
+            hosting_countries: Vec::new(),
+            eu_representative: None,
+            uk_representative: None,
+            transfer_safeguards: String::new(),
+            reviewed_for_publication: false,
+            targeted_advertising: false,
+            sale_or_share: false,
+        }
+    }
+}
+impl PrivacyDisclosures {
+    pub fn validate_for_publication(&self) -> anyhow::Result<()> {
+        if !self.reviewed_for_publication
+            || self.controller_name.trim().is_empty()
+            || self.controller_name.contains("draft")
+            || self.business_address.trim().is_empty()
+            || !self.privacy_email.contains('@')
+            || self.privacy_email.ends_with("example.com")
+            || self.hosting_countries.is_empty()
+            || self.transfer_safeguards.trim().is_empty()
+        {
+            anyhow::bail!(
+                "privacy.disclosures requires reviewed real controller, address, contact, hosting countries and transfer safeguards"
+            );
+        }
+        Ok(())
     }
 }

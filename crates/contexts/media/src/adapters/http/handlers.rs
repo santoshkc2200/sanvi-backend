@@ -1,4 +1,4 @@
-use actix_web::{HttpRequest, HttpResponse, error::InternalError, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, error::InternalError, web};
 use sanvi_http::{ApiError, CurrentTenant, RequiredPermission};
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -109,16 +109,39 @@ pub async fn create_media_asset(
     body: web::Json<CreateAssetInput>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let key = idempotency_key(&request)?;
+    let mut input = body.into_inner();
+    if input.owner_id.is_none() {
+        input.owner_id = request
+            .extensions()
+            .get::<sanvi_http::Subject>()
+            .map(|subject| format!("user:{}", subject.user_id));
+        if input.owner_id.is_none() {
+            return Err(ApiError::BadRequest {
+                detail: "an owner_id or authenticated uploader is required".to_string(),
+            }
+            .into());
+        }
+    }
+    if input
+        .owner_id
+        .as_ref()
+        .is_some_and(|owner| owner.trim().is_empty() || owner.len() > 512)
+    {
+        return Err(ApiError::BadRequest {
+            detail: "owner_id must contain 1 to 512 bytes".to_string(),
+        }
+        .into());
+    }
     let runtime = request.app_data::<web::Data<sanvi_http::quota_middleware::QuotaRuntime>>();
     let reservation = if let Some(runtime) = runtime {
-        let payload = serde_json::to_vec(&*body)
+        let payload = serde_json::to_vec(&input)
             .map_err(|_| ApiError::internal("media payload serialization failed"))?;
         runtime
             .reserve_external_payload(
                 tenant.0.tenant_id,
                 sanvi_http::quotas::QuotaDimension::StorageBytes,
                 &key,
-                body.size_bytes,
+                input.size_bytes,
                 &payload,
             )
             .await?
@@ -127,7 +150,7 @@ pub async fn create_media_asset(
     };
     let result = state
         .create_asset_upload
-        .execute(tenant.0.tenant_id, key.clone(), body.into_inner())
+        .execute(tenant.0.tenant_id, key.clone(), input)
         .await;
     if let (Some(runtime), Some(ticket)) = (runtime, &reservation) {
         use sanvi_http::external_quotas::ExternalOutcome;
@@ -547,6 +570,7 @@ mod tests {
             "kind": "image",
             "content_type": "image/png",
             "filename": "a.png",
+            "owner_id": "user:1",
             "size_bytes": 10
         })
     }

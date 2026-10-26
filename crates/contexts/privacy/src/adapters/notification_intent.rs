@@ -4,8 +4,19 @@ use sanvi_kernel::EventEnvelope;
 use sanvi_kernel::notifications::{Audience, IntentArg, NotificationIntent};
 
 pub fn notification_intent(envelope: &EventEnvelope) -> Option<NotificationIntent> {
-    let email = extract_subject_email(envelope)?;
-    let audience = Audience::Email(email);
+    let audience = if let Some(email) = extract_subject_email(envelope) {
+        Audience::Email(email)
+    } else {
+        Audience::User(
+            envelope
+                .payload
+                .pointer("/subject/key")?
+                .as_str()?
+                .strip_prefix("user:")?
+                .parse()
+                .ok()?,
+        )
+    };
 
     match envelope.event_type.as_str() {
         "privacy.dsr_received" => {
@@ -25,6 +36,23 @@ pub fn notification_intent(envelope: &EventEnvelope) -> Option<NotificationInten
                 ],
             })
         }
+        "privacy.dsr_extended" => Some(NotificationIntent {
+            audience,
+            purpose: "dsr_extended",
+            subject_key: "emails.privacy_status.subject".to_string(),
+            body_key: "emails.privacy_extended.body".to_string(),
+            args: vec![
+                ("subject".to_string(), IntentArg::from("request")),
+                (
+                    "deadline".to_string(),
+                    IntentArg::from(envelope.payload.get("deadline")?.as_str()?),
+                ),
+                (
+                    "reason".to_string(),
+                    IntentArg::from(envelope.payload.get("reason")?.as_str()?),
+                ),
+            ],
+        }),
         "privacy.dsr_closed" => {
             let subject = envelope
                 .payload

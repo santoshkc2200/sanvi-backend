@@ -96,6 +96,16 @@ async fn main() -> ExitCode {
         }
     };
 
+    if let Err(err) = sanvi_privacy::adapters::erasure_ledger::require_replayed(
+        &sanvi_persistence::TxManager::new(pool.clone(), ids.clone()),
+        &config.privacy,
+    )
+    .await
+    {
+        eprintln!("privacy recovery gate failed: {err}");
+        return ExitCode::from(1);
+    }
+
     // TASK-021 step 0: pool gauges plus the 1 Hz acquire probe, so pool
     // saturation is measured (step 5 sizes the pools from these numbers).
     // TASK-023 step 6: the probe also feeds the shedder's live pressure
@@ -344,6 +354,7 @@ async fn main() -> ExitCode {
     let privacy = if config.features.privacy {
         let privacy_providers =
             sanvi_api::privacy_provider_registry(&sanvi_api::PrivacyProviderDeps {
+                media: config.media.clone(),
                 tx: privacy_tx.clone(),
                 kratos_public_url: config.ory.kratos_public_url.clone(),
                 kratos_admin_url: config.ory.kratos_admin_url.clone(),

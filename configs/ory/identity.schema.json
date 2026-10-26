@@ -33,17 +33,31 @@
           "type": "object",
           "title": "Name",
           "properties": {
-            "first": { "type": "string", "title": "First name" },
-            "last": { "type": "string", "title": "Last name" }
+            "first": {
+              "type": "string",
+              "title": "First name"
+            },
+            "last": {
+              "type": "string",
+              "title": "Last name"
+            }
           }
         },
         "locale": {
           "type": "string",
           "title": "Locale (BCP 47)",
           "pattern": "^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$"
+        },
+        "age_16_or_over": {
+          "type": "boolean",
+          "const": true,
+          "title": "I confirm I am at least 16 years old"
         }
       },
-      "required": ["email"],
+      "required": [
+        "email",
+        "age_16_or_over"
+      ],
       "additionalProperties": true
     }
   }

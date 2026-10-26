@@ -29,6 +29,8 @@ pub struct DirectiveInput {
     pub state: DirectiveState,
     pub source: DirectiveSource,
     pub notice_version: Option<String>,
+    pub recorded_at: Option<DateTime<Utc>>,
+    pub signal_override: bool,
 }
 
 /// Resolve one purpose. `explicit` is the latest explicit action for the
@@ -55,23 +57,10 @@ pub fn resolve_purpose(
         };
     }
 
-    // 1. Explicit subject action always wins (and a refusal survives
-    //    everything that comes after it).
-    if let Some(input) = explicit {
-        return PurposeDirective {
-            purpose,
-            state: input.state,
-            source: input.source,
-            jurisdiction: profile.code.clone(),
-            notice_version: input.notice_version.clone(),
-            effective_at: now,
-            superseded_at: None,
-        };
-    }
-
     // 2. Minors: sale/share, targeted advertising and sensitive use need a
     //    recorded guardian opt-in; without one they are denied outright.
     if is_minor
+        && !explicit.is_some_and(|input| input.source == DirectiveSource::Guardian)
         && matches!(
             purpose,
             ProcessingPurpose::SaleOrShare
@@ -97,6 +86,14 @@ pub fn resolve_purpose(
     if profile.honours_universal_opt_out
         && ProcessingPurpose::UNIVERSAL_OPT_OUT.contains(&purpose)
         && let Some(signal) = signal
+        && !explicit.is_some_and(|input| {
+            input.state == DirectiveState::Denied
+                || (input.signal_override
+                    && input
+                        .recorded_at
+                        .zip(signal.recorded_at)
+                        .is_some_and(|(grant, observed)| grant > observed))
+        })
     {
         return PurposeDirective {
             purpose,
@@ -104,6 +101,40 @@ pub fn resolve_purpose(
             source: DirectiveSource::Signal,
             jurisdiction: profile.code.clone(),
             notice_version: signal.notice_version.clone(),
+            effective_at: now,
+            superseded_at: None,
+        };
+    }
+
+    // Unreviewed markets must not gain high-risk processing through a generic consent button.
+    if profile.regime == super::types::Regime::Baseline
+        && matches!(
+            purpose,
+            ProcessingPurpose::SaleOrShare
+                | ProcessingPurpose::TargetedAdvertising
+                | ProcessingPurpose::ProfilingSignificantEffects
+                | ProcessingPurpose::SensitivePiUse
+        )
+    {
+        return PurposeDirective {
+            purpose,
+            state: DirectiveState::Denied,
+            source: DirectiveSource::Default,
+            jurisdiction: profile.code.clone(),
+            notice_version: notice_version.map(str::to_string),
+            effective_at: now,
+            superseded_at: None,
+        };
+    }
+
+    // An explicit grant cannot override a later signal or mandatory age protection.
+    if let Some(input) = explicit {
+        return PurposeDirective {
+            purpose,
+            state: input.state,
+            source: input.source,
+            jurisdiction: profile.code.clone(),
+            notice_version: input.notice_version.clone(),
             effective_at: now,
             superseded_at: None,
         };
@@ -181,9 +212,12 @@ pub fn resolve_snapshot(
         .map(|purpose| {
             let explicit_for_purpose = explicit
                 .iter()
-                .rev()
-                .find(|input| input.purpose == *purpose);
-            let signal_for_purpose = signals.iter().rev().find(|input| input.purpose == *purpose);
+                .filter(|input| input.purpose == *purpose)
+                .max_by_key(|input| input.recorded_at);
+            let signal_for_purpose = signals
+                .iter()
+                .filter(|input| input.purpose == *purpose)
+                .max_by_key(|input| input.recorded_at);
             resolve_purpose(
                 &profile_for_signals,
                 *purpose,
@@ -304,6 +338,8 @@ mod tests {
             state: DirectiveState::Denied,
             source: DirectiveSource::OptOut,
             notice_version: None,
+            recorded_at: None,
+            signal_override: false,
         };
         let directive = resolve_purpose(
             &ca,
@@ -326,6 +362,8 @@ mod tests {
             state: DirectiveState::Denied,
             source: DirectiveSource::Signal,
             notice_version: None,
+            recorded_at: None,
+            signal_override: false,
         };
         let directive = resolve_purpose(
             &ca,
@@ -351,12 +389,16 @@ mod tests {
             state: DirectiveState::Denied,
             source: DirectiveSource::Signal,
             notice_version: None,
+            recorded_at: Some(now()),
+            signal_override: false,
         };
         let consent = DirectiveInput {
             purpose: ProcessingPurpose::SaleOrShare,
             state: DirectiveState::Allowed,
             source: DirectiveSource::Consent,
             notice_version: None,
+            recorded_at: Some(now() + chrono::Duration::seconds(1)),
+            signal_override: true,
         };
         let directive = resolve_purpose(
             &ca,
@@ -394,6 +436,8 @@ mod tests {
             state: DirectiveState::Allowed,
             source: DirectiveSource::Guardian,
             notice_version: None,
+            recorded_at: None,
+            signal_override: false,
         };
         let directive = resolve_purpose(
             &ca,
@@ -417,6 +461,8 @@ mod tests {
             state: DirectiveState::Denied,
             source: DirectiveSource::OptOut,
             notice_version: Some("v1".to_string()),
+            recorded_at: None,
+            signal_override: false,
         };
         let directive = resolve_purpose(
             &profile,
@@ -443,5 +489,48 @@ mod tests {
         assert!(eu.risk_assessment_required);
         assert!(ca.risk_assessment_required);
         assert!(!eu.code.eq(&most_protective()) || eu.code == most_protective());
+    }
+}
+
+#[cfg(test)]
+mod precedence_regressions {
+    use super::*;
+    #[test]
+    fn later_signal_overrides_old_consent_and_minor_cannot_self_authorize() {
+        let profile =
+            super::super::jurisdiction::seeded_profile(&JurisdictionRef::from_static("us-ca"))
+                .unwrap();
+        let now = Utc::now();
+        let grant = DirectiveInput {
+            purpose: ProcessingPurpose::SaleOrShare,
+            state: DirectiveState::Allowed,
+            source: DirectiveSource::Consent,
+            notice_version: None,
+            recorded_at: Some(now),
+            signal_override: true,
+        };
+        let signal = DirectiveInput {
+            recorded_at: Some(now + chrono::Duration::seconds(1)),
+            state: DirectiveState::Denied,
+            source: DirectiveSource::Signal,
+            ..grant.clone()
+        };
+        assert_eq!(
+            resolve_purpose(
+                &profile,
+                grant.purpose,
+                Some(&grant),
+                Some(&signal),
+                false,
+                None,
+                now
+            )
+            .state,
+            DirectiveState::Denied
+        );
+        assert_eq!(
+            resolve_purpose(&profile, grant.purpose, Some(&grant), None, true, None, now).state,
+            DirectiveState::Denied
+        );
     }
 }

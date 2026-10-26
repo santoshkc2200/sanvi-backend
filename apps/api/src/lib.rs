@@ -1732,6 +1732,7 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
 /// Stripe when the erased subject actually has rows in its context, so a
 /// drill subject with data only in the privacy ledger never touches them.
 pub struct PrivacyProviderDeps {
+    pub media: sanvi_media::MediaConfig,
     pub tx: sanvi_persistence::TxManager,
     pub kratos_public_url: String,
     pub kratos_admin_url: String,
@@ -1834,7 +1835,10 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
             tx.clone(),
         )),
         Arc::new(sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(tx.clone())),
-        Arc::new(sanvi_media::adapters::MediaPrivacyProvider::new()),
+        Arc::new(sanvi_media::adapters::MediaPrivacyProvider::with_storage(
+            tx.clone(),
+            deps.media.clone(),
+        )),
         Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
     ]
 }
@@ -1922,12 +1926,10 @@ pub fn build_privacy_state(
         .expect("validated by PrivacyConfig")
         .try_into()
         .expect("validated length");
-        Arc::new(SqlxEnvelopeCrypto::new(
-            tx_manager.clone(),
-            keys.clone(),
-            kek,
-            config.kek_id.clone(),
-        ))
+        Arc::new(
+            SqlxEnvelopeCrypto::new(tx_manager.clone(), keys.clone(), kek, config.kek_id.clone())
+                .with_erasure_ledger(config.erasure_ledger_dir.clone()),
+        )
     } else {
         Arc::new(DisabledEnvelopeCrypto)
     };
@@ -1997,6 +1999,7 @@ pub fn build_privacy_state(
         jurisdictions.clone(),
         clock.clone(),
         audit.clone(),
+        events.clone(),
     ));
     let reject = Arc::new(PrivacyRejectRequest::new(
         tx_manager.clone(),
@@ -2010,6 +2013,7 @@ pub fn build_privacy_state(
         requests.clone(),
         providers.clone(),
         audit.clone(),
+        events.clone(),
     ));
     let appeal = Arc::new(AppealRequest::new(
         tx_manager.clone(),
@@ -2041,6 +2045,7 @@ pub fn build_privacy_state(
         subjects.clone(),
         jurisdictions.clone(),
         consents.clone(),
+        signals.clone(),
         directives.clone(),
         events.clone(),
         ids.clone(),
@@ -2148,17 +2153,21 @@ pub fn build_privacy_state(
         audit.clone(),
     ));
     let public_metrics = Arc::new(PublicMetrics::new(tx_manager.clone(), metrics.clone()));
-    let notices = Arc::new(NoticeService::new(
-        tx_manager.clone(),
-        rules.clone(),
-        processors.clone(),
-        jurisdictions.clone(),
-    ));
+    let notices = Arc::new(
+        NoticeService::new(
+            tx_manager.clone(),
+            rules.clone(),
+            processors.clone(),
+            jurisdictions.clone(),
+        )
+        .with_disclosures(config.disclosures.clone()),
+    );
 
     // Worker jobs (the worker builds its own copies from the same config).
     let process_dsr = Arc::new(ProcessDsrBatch::new(
         tx_manager.clone(),
         requests.clone(),
+        consents.clone(),
         participants.clone(),
         holds.clone(),
         artifacts.clone(),
@@ -3714,6 +3723,7 @@ pub async fn build_advertising_state(
 pub fn build_media_state(
     config: &sanvi_media::MediaConfig,
     degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
+    tx: sanvi_persistence::TxManager,
 ) -> sanvi_media::adapters::http::MediaState {
     let gateway: std::sync::Arc<dyn sanvi_media::domain::MediaGatewayPort> = std::sync::Arc::new(
         sanvi_media::adapters::hitox::HitoxMediaAdapter::new_with_degradation(
@@ -3722,9 +3732,11 @@ pub fn build_media_state(
         ),
     );
     sanvi_media::adapters::http::MediaState {
-        create_asset_upload: std::sync::Arc::new(sanvi_media::application::CreateAssetUpload::new(
-            gateway.clone(),
-        )),
+        create_asset_upload: std::sync::Arc::new(
+            sanvi_media::application::CreateAssetUpload::new(gateway.clone()).with_owner_index(
+                Arc::new(sanvi_media::adapters::SqlxMediaOwnerIndex::new(tx)),
+            ),
+        ),
         presign_asset_parts: std::sync::Arc::new(sanvi_media::application::PresignAssetParts::new(
             gateway.clone(),
         )),
@@ -3932,7 +3944,11 @@ pub fn build_app(
 
     // Media ships ungated (no feature flag): the state is a plain
     // HTTP-client wrapper over `config.media`, built infallibly here.
-    let media_state = build_media_state(&config.media, degradation.clone());
+    let media_state = build_media_state(
+        &config.media,
+        degradation.clone(),
+        access.tx_manager.clone(),
+    );
 
     // The billing context mounts its tenant routes inside the shared tenant
     // scope (a second scope on the same prefix would shadow the first).

@@ -44,5 +44,6 @@
   "emails.budget_spend_anomaly.subject": "{tenant} の急激な広告支出が検出されました",
   "emails.budget_spend_anomaly.body": "{scope_name} で異常な支出が検出されました: 現在の支出は {spend}（過去平均: {average_spend}、{sigma}σ以上の変動）です。自動操作は行われていません。",
   "emails.budget_guardrails_rollback.subject": "{tenant} の広告予算ガードレール機能停止のお知らせ",
-  "emails.budget_guardrails_rollback.body": "{tenant} の広告予算ガードレール機能が一時的に無効化されました。設定済みの上限とアラート履歴は保持されますが、自動監視および自動停止は停止しています。"
+  "emails.budget_guardrails_rollback.body": "{tenant} の広告予算ガードレール機能が一時的に無効化されました。設定済みの上限とアラート履歴は保持されますが、自動監視および自動停止は停止しています。",
+  "emails.privacy_extended.body": "プライバシーリクエストの回答期限は {deadline} に延長されました。理由: {reason}。"
 }

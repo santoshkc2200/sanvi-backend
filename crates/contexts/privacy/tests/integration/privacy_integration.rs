@@ -254,6 +254,7 @@ async fn wire() -> Wired {
     let process = ProcessDsrBatch::new(
         tx.clone(),
         requests.clone(),
+        consents.clone(),
         participants.clone(),
         holds.clone(),
         artifacts.clone(),
@@ -294,6 +295,7 @@ async fn wire() -> Wired {
         subjects.clone(),
         jurisdictions.clone(),
         consents.clone(),
+        signals.clone(),
         directives.clone(),
         events.clone(),
         ids.clone(),
@@ -592,6 +594,27 @@ async fn gpc_signal_denies_before_login_and_binds_after() {
     let user = fresh_user(&wired.raw_ids);
     let device = format!("device-{}", Uuid::now_v7());
 
+    wired
+        .submit
+        .execute(Some(user), None, None, us_submit(user, DsrKind::Access))
+        .await
+        .unwrap();
+    wired
+        .consent
+        .execute(
+            &SubjectRef::user(user),
+            RecordConsentChangeCommand {
+                purpose: ProcessingPurpose::SaleOrShare,
+                granted: true,
+                notice_version: "test".to_string(),
+                method: "consent".to_string(),
+                locale: None,
+                signal_source: Some("ui".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
     // Pre-authentication: the device signal denies immediately.
     let output = wired
         .opt_out
@@ -635,6 +658,27 @@ async fn gpc_signal_denies_before_login_and_binds_after() {
         .unwrap();
     assert!(bound >= 1, "the device signal must bind to the subject");
     scope.commit().await.unwrap();
+
+    let attempted = wired
+        .consent
+        .execute(
+            &SubjectRef::user(user),
+            RecordConsentChangeCommand {
+                purpose: ProcessingPurpose::SaleOrShare,
+                granted: true,
+                notice_version: "test".to_string(),
+                method: "consent".to_string(),
+                locale: None,
+                signal_source: Some("ui".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        attempted.state,
+        DirectiveState::Denied,
+        "the mutation response must honor GPC too"
+    );
 
     let snapshot = wired
         .resolver

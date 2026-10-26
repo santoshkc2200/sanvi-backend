@@ -19,15 +19,15 @@ use sanvi_http::{PermissionMap, RequiredPermission};
 
 use super::catalog::{ROUTES, Requirement, RouteDef};
 use super::handlers::{
-    appeal_request, apply_hold, decide_appeal, download_export, extend_dsr, get_consents,
-    get_directives, get_dsr_status, get_notice_at_collection, get_privacy_notice,
-    get_public_metrics, limit_sensitive_use, list_activities, list_appeals, list_assessments,
-    list_dsrs, list_holds, list_incidents, list_jurisdictions, list_obligations,
-    list_public_subprocessors, list_retention_rules, list_subprocessors, list_tenant_dsrs,
-    mark_obligation_notified, record_incident, record_opt_out, rectify_request, reject_dsr,
-    release_hold, remove_subprocessor, submit_dsr, submit_tenant_dsr, update_consents,
-    upsert_activity, upsert_assessment, upsert_jurisdiction, upsert_retention_rule,
-    upsert_subprocessor, verify_dsr,
+    appeal_request, apply_hold, decide_appeal, download_export, extend_dsr,
+    fulfill_privacy_request, get_consents, get_directives, get_dsr_status,
+    get_notice_at_collection, get_privacy_notice, get_public_metrics, limit_sensitive_use,
+    list_activities, list_appeals, list_assessments, list_dsrs, list_holds, list_incidents,
+    list_jurisdictions, list_obligations, list_public_subprocessors, list_retention_rules,
+    list_subprocessors, list_tenant_dsrs, mark_obligation_notified, record_incident,
+    record_opt_out, rectify_request, reject_dsr, release_hold, release_processing_restriction,
+    remove_subprocessor, submit_dsr, submit_tenant_dsr, update_consents, upsert_activity,
+    upsert_assessment, upsert_jurisdiction, upsert_retention_rule, upsert_subprocessor, verify_dsr,
 };
 use crate::adapters::GpcSignalMiddleware;
 
@@ -145,6 +145,12 @@ fn method_route(def: &RouteDef) -> actix_web::Route {
         ("GET", "/api/v1/privacy/directives") => web::get().to(get_directives),
         ("POST", "/api/v1/privacy/requests/{id}/appeal") => web::post().to(appeal_request),
         ("PATCH", "/api/v1/privacy/requests/{id}/rectify") => web::patch().to(rectify_request),
+        ("POST", "/api/v1/platform/privacy/requests/{id}/release") => {
+            web::post().to(release_processing_restriction)
+        }
+        ("POST", "/api/v1/platform/privacy/requests/{id}/fulfill") => {
+            web::post().to(fulfill_privacy_request)
+        }
         // Platform operator control plane.
         ("GET", "/api/v1/platform/privacy/requests") => web::get().to(list_dsrs),
         ("POST", "/api/v1/platform/privacy/requests/{id}/extend") => web::post().to(extend_dsr),

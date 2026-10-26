@@ -4,6 +4,7 @@ use crate::TenantId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Audience {
+    User(crate::UserId),
     Email(String),
     TenantRoles {
         tenant_id: TenantId,

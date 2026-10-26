@@ -45,6 +45,7 @@ pub struct SqlxEnvelopeCrypto {
     keys: Arc<dyn SubjectKeyRepository>,
     kek: [u8; 32],
     kek_id: String,
+    erasure_ledger_dir: String,
     /// In-memory cache of unwrapped DEKs (bounded; keyed by subject id).
     dek_cache: Mutex<HashMap<i64, Arc<[u8; 32]>>>,
     /// Subjects whose key was destroyed in this process: refuse to serve
@@ -65,9 +66,19 @@ impl SqlxEnvelopeCrypto {
             keys,
             kek,
             kek_id,
+            erasure_ledger_dir: String::new(),
             dek_cache: Mutex::new(HashMap::new()),
             shredded: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_erasure_ledger(mut self, directory: String) -> Self {
+        self.erasure_ledger_dir = directory;
+        self
+    }
+
+    fn ledger_revoked(&self, subject_id: SubjectId) -> Result<bool, PrivacyError> {
+        super::erasure_ledger::contains(&self.erasure_ledger_dir, subject_id)
     }
 
     /// The KEK id recorded with wrapped keys (rotate by adding a key; the id
@@ -108,15 +119,13 @@ impl SqlxEnvelopeCrypto {
     }
 
     async fn fetch_dek(&self, subject_id: SubjectId) -> Result<[u8; 32], PrivacyError> {
+        if self.ledger_revoked(subject_id)? {
+            return Err(PrivacyError::KeyShredded);
+        }
         if let Ok(shredded) = self.shredded.lock()
             && shredded.contains_key(&subject_id.as_i64())
         {
             return Err(PrivacyError::KeyShredded);
-        }
-        if let Ok(cache) = self.dek_cache.lock()
-            && let Some(dek) = cache.get(&subject_id.as_i64())
-        {
-            return Ok(**dek);
         }
         self.load_dek_from_store(subject_id).await
     }
@@ -125,6 +134,9 @@ impl SqlxEnvelopeCrypto {
 #[async_trait]
 impl EnvelopeCrypto for SqlxEnvelopeCrypto {
     async fn create_subject_key(&self, subject_id: SubjectId) -> Result<Vec<u8>, PrivacyError> {
+        if self.ledger_revoked(subject_id)? {
+            return Err(PrivacyError::KeyShredded);
+        }
         if let Ok(shredded) = self.shredded.lock()
             && shredded.contains_key(&subject_id.as_i64())
         {
@@ -257,6 +269,27 @@ impl EnvelopeCrypto for SqlxEnvelopeCrypto {
     }
 
     async fn destroy_subject_key(&self, subject_id: SubjectId) -> Result<(), PrivacyError> {
+        if !self.erasure_ledger_dir.is_empty() && !self.ledger_revoked(subject_id)? {
+            use crate::domain::SubjectRepository;
+            let mut scope = self
+                .tx_manager
+                .begin_unscoped("privacy_erasure_ledger", "privacy")
+                .await
+                .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            let subject = super::repos::SqlxSubjectRepository::new()
+                .find_by_id(&mut scope, subject_id)
+                .await?
+                .ok_or_else(|| PrivacyError::SubjectNotFound(subject_id.to_string()))?;
+            scope
+                .commit()
+                .await
+                .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            let reference = serde_json::to_vec(&subject.subject_ref)
+                .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+            let wrapped = self.wrap(&reference, &self.kek_id)?;
+            super::erasure_ledger::record(&self.erasure_ledger_dir, subject_id, wrapped)?;
+        }
+
         if let Ok(mut cache) = self.dek_cache.lock() {
             cache.remove(&subject_id.as_i64());
         }

@@ -200,8 +200,18 @@ impl DataSubjectRequest {
                 "this jurisdiction does not allow a deadline extension".to_string(),
             ));
         }
-        let base = self.due_at;
-        self.extended_to = Some(add_days(base.max(now), profile.extension_days));
+        if now >= self.due_at {
+            return Err(PrivacyError::Conflict(
+                "an overdue request cannot be extended".to_string(),
+            ));
+        }
+        self.extended_to = Some(match profile.regime {
+            super::types::Regime::Gdpr | super::types::Regime::UkGdpr => self
+                .due_at
+                .checked_add_months(chrono::Months::new(2))
+                .ok_or_else(|| PrivacyError::Conflict("deadline is out of range".to_string()))?,
+            _ => add_days(self.due_at, profile.extension_days),
+        });
         Ok(())
     }
 }
@@ -422,6 +432,8 @@ pub struct BreachIncident {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct AffectedSet {
+    #[serde(default)]
+    pub subjects_by_jurisdiction: std::collections::BTreeMap<String, u64>,
     pub subjects: u64,
     pub tenants: u64,
     pub jurisdictions: Vec<JurisdictionRef>,
@@ -442,6 +454,7 @@ pub struct NotificationObligation {
 #[serde(rename_all = "snake_case")]
 pub enum ObligationAudience {
     Authority,
+    AuthorityFinal,
     Consumer,
     Tenant,
 }
@@ -450,6 +463,7 @@ impl ObligationAudience {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Authority => "authority",
+            Self::AuthorityFinal => "authority_final",
             Self::Consumer => "consumer",
             Self::Tenant => "tenant",
         }
@@ -458,6 +472,7 @@ impl ObligationAudience {
     pub fn parse(raw: &str) -> Result<Self, PrivacyError> {
         match raw {
             "authority" => Ok(Self::Authority),
+            "authority_final" => Ok(Self::AuthorityFinal),
             "consumer" => Ok(Self::Consumer),
             "tenant" => Ok(Self::Tenant),
             other => Err(PrivacyError::InvalidObligationAudience(other.to_string())),

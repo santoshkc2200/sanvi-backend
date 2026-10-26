@@ -10,6 +10,14 @@ components:
           format: int64
           minimum: 0
           type: integer
+        subjects_by_jurisdiction:
+          additionalProperties:
+            format: int64
+            minimum: 0
+            type: integer
+          propertyNames:
+            type: string
+          type: object
         tenants:
           format: int64
           minimum: 0
@@ -490,6 +498,7 @@ components:
         A DSR kind. `KnowCategories` is the CCPA "right to know" (categories
         only, no contents).
       enum:
+      - other
       - access
       - export
       - erasure
@@ -546,6 +555,16 @@ components:
       - field
       - message
       type: object
+    FulfillRequestBody:
+      properties:
+        evidence_reference:
+          type: string
+        summary:
+          type: string
+      required:
+      - summary
+      - evidence_reference
+      type: object
     GetDirectivesOutput:
       properties:
         snapshot:
@@ -576,6 +595,10 @@ components:
           type: boolean
         extended_to:
           format: date-time
+          type:
+          - string
+          - 'null'
+        fulfillment_summary:
           type:
           - string
           - 'null'
@@ -806,6 +829,12 @@ components:
           type: boolean
         regime:
           type: string
+        response_calendar_months:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
         response_days:
           format: int32
           minimum: 0
@@ -844,20 +873,65 @@ components:
     ObligationAudience:
       enum:
       - authority
+      - authority_final
       - consumer
       - tenant
       type: string
+    PrivacyDisclosures:
+      description: Organization details are deployment configuration; defaults are a clearly marked draft.
+      properties:
+        business_address:
+          default: ''
+          type: string
+        controller_name:
+          default: Sanvi (draft; legal entity not yet supplied)
+          type: string
+        eu_representative:
+          default: null
+          type:
+          - string
+          - 'null'
+        hosting_countries:
+          default: []
+          items:
+            type: string
+          type: array
+        privacy_email:
+          default: ''
+          type: string
+        reviewed_for_publication:
+          default: false
+          type: boolean
+        sale_or_share:
+          default: false
+          type: boolean
+        targeted_advertising:
+          default: false
+          type: boolean
+        transfer_safeguards:
+          default: ''
+          type: string
+        uk_representative:
+          default: null
+          type:
+          - string
+          - 'null'
+      type: object
     PrivacyNoticeView:
       properties:
         backup_retention_days:
           format: int64
           type: integer
+        disclosures:
+          $ref: '#/components/schemas/PrivacyDisclosures'
         jurisdictions:
           items:
             $ref: '#/components/schemas/NoticeJurisdictionView'
           type: array
         notice_version:
           type: string
+        ready_for_publication:
+          type: boolean
         retention:
           items:
             $ref: '#/components/schemas/RetentionNoticeRow'
@@ -868,6 +942,8 @@ components:
           type: array
       required:
       - notice_version
+      - disclosures
+      - ready_for_publication
       - jurisdictions
       - retention
       - subprocessors
@@ -1097,6 +1173,14 @@ components:
           format: int64
           minimum: 0
           type: integer
+        subjects_by_jurisdiction:
+          additionalProperties:
+            format: int64
+            minimum: 0
+            type: integer
+          propertyNames:
+            type: string
+          type: object
         tenants:
           format: int64
           minimum: 0
@@ -1177,6 +1261,7 @@ components:
         The legal regime a jurisdiction belongs to; drives nothing by itself —
         every decision reads the profile's model fields instead.
       enum:
+      - baseline
       - gdpr
       - uk_gdpr
       - appi
@@ -1671,6 +1756,10 @@ components:
           type: string
         consent_model:
           type: string
+        evidence_codes:
+          items:
+            type: string
+          type: array
         extension_days:
           format: int32
           minimum: 0
@@ -2376,6 +2465,13 @@ paths:
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: 'null'
+              - $ref: '#/components/schemas/RejectRequestRequest'
       responses:
         '200':
           content:
@@ -2387,6 +2483,30 @@ paths:
       summary: |-
         `POST /api/v1/platform/privacy/requests/{id}/extend` — one deadline
         extension (jurisdiction rules apply).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/requests/{id}/fulfill:
+    post:
+      operationId: fulfill_privacy_request
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FulfillRequestBody'
+        required: true
+      responses:
+        '204':
+          description: Manual response recorded
       tags:
       - privacy
   /api/v1/platform/privacy/requests/{id}/reject:
@@ -2415,6 +2535,31 @@ paths:
       summary: |-
         `POST /api/v1/platform/privacy/requests/{id}/reject` — reject with
         reason (US subjects get the appeal route in the response).
+      tags:
+      - privacy
+  /api/v1/platform/privacy/requests/{id}/release:
+    post:
+      operationId: release_processing_restriction
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectRequestRequest'
+        required: true
+      responses:
+        '204':
+          description: Restriction released
+      summary: Release a restriction after verifying the subject's instruction or legal exception.
       tags:
       - privacy
   /api/v1/platform/privacy/retention-rules:

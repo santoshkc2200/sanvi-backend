@@ -474,6 +474,9 @@ Responses: 200, 400, 403, 504
         "example"
       ],
       "subjects": 1,
+      "subjects_by_jurisdiction": {
+        "example": 1
+      },
       "tenants": 1
     },
     "contained_at": "2026-10-09T00:00:00Z",
@@ -499,6 +502,9 @@ Responses: 200, 400, 403, 504
         "example"
       ],
       "subjects": 1,
+      "subjects_by_jurisdiction": {
+        "example": 1
+      },
       "tenants": 1
     },
     "contained_at": "2026-10-09T00:00:00Z",
@@ -542,6 +548,9 @@ Content-Type: application/json
   ],
   "notes": "example",
   "subjects": 1,
+  "subjects_by_jurisdiction": {
+    "example": 1
+  },
   "tenants": 1
 }
 ```
@@ -565,6 +574,9 @@ Content-Type: application/json
   ],
   "notes": "example",
   "subjects": 1,
+  "subjects_by_jurisdiction": {
+    "example": 1
+  },
   "tenants": 1
 }
 ```
@@ -727,7 +739,7 @@ Responses: 200
     "honours_universal_opt_out": true,
     "minor_opt_in_age": 1,
     "opt_out_effective_business_days": 1,
-    "regime": "gdpr",
+    "regime": "baseline",
     "response_days": 1,
     "risk_assessment_required": true,
     "sensitive_model": "opt_in",
@@ -763,7 +775,7 @@ Responses: 200
     "honours_universal_opt_out": true,
     "minor_opt_in_age": 1,
     "opt_out_effective_business_days": 1,
-    "regime": "gdpr",
+    "regime": "baseline",
     "response_days": 1,
     "risk_assessment_required": true,
     "sensitive_model": "opt_in",
@@ -806,6 +818,9 @@ Content-Type: application/json
   },
   "code": "example",
   "consent_model": "example",
+  "evidence_codes": [
+    "example"
+  ],
   "extension_days": 1,
   "honours_universal_opt_out": true,
   "minor_opt_in_age": 1,
@@ -843,6 +858,9 @@ Content-Type: application/json
   },
   "code": "example",
   "consent_model": "example",
+  "evidence_codes": [
+    "example"
+  ],
   "extension_days": 1,
   "honours_universal_opt_out": true,
   "minor_opt_in_age": 1,
@@ -878,7 +896,7 @@ Responses: 200, 400, 403, 504
     "completed_at": "2026-10-09T00:00:00Z",
     "due_at": "2026-10-09T00:00:00Z",
     "jurisdiction": "example",
-    "kind": "access",
+    "kind": "other",
     "received_at": "2026-10-09T00:00:00Z",
     "rejection_reason": "example",
     "request_id": "example",
@@ -898,7 +916,7 @@ Responses: 200, 400, 403, 504
     "completed_at": "2026-10-09T00:00:00Z",
     "due_at": "2026-10-09T00:00:00Z",
     "jurisdiction": "example",
-    "kind": "access",
+    "kind": "other",
     "received_at": "2026-10-09T00:00:00Z",
     "rejection_reason": "example",
     "request_id": "example",
@@ -923,6 +941,26 @@ Responses: 200
 | --- | --- | --- | --- |
 | `id` | path | yes | type="string", format="snowflake-id" |
 
+### Request journey (en-US / USD, cents)
+
+```http
+POST /api/v1/platform/privacy/requests/{id}/extend
+Accept-Language: en-US
+Content-Type: application/json
+
+null
+```
+
+### Request journey (ja-JP / JPY, zero-decimal yen)
+
+```http
+POST /api/v1/platform/privacy/requests/{id}/extend
+Accept-Language: ja-JP
+Content-Type: application/json
+
+null
+```
+
 ### Response 200 (en-US / USD, cents)
 
 ```json
@@ -933,6 +971,44 @@ Responses: 200
 
 ```json
 "2026-10-09T00:00:00Z"
+```
+
+## POST /api/v1/platform/privacy/requests/{id}/fulfill
+
+Operation: `fulfill_privacy_request`
+
+
+
+Responses: 204
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `id` | path | yes | type="string", format="snowflake-id" |
+
+### Request journey (en-US / USD, cents)
+
+```http
+POST /api/v1/platform/privacy/requests/{id}/fulfill
+Accept-Language: en-US
+Content-Type: application/json
+
+{
+  "evidence_reference": "example",
+  "summary": "example"
+}
+```
+
+### Request journey (ja-JP / JPY, zero-decimal yen)
+
+```http
+POST /api/v1/platform/privacy/requests/{id}/fulfill
+Accept-Language: ja-JP
+Content-Type: application/json
+
+{
+  "evidence_reference": "example",
+  "summary": "example"
+}
 ```
 
 ## POST /api/v1/platform/privacy/requests/{id}/reject
@@ -964,6 +1040,42 @@ Content-Type: application/json
 
 ```http
 POST /api/v1/platform/privacy/requests/{id}/reject
+Accept-Language: ja-JP
+Content-Type: application/json
+
+{
+  "reason": "example"
+}
+```
+
+## POST /api/v1/platform/privacy/requests/{id}/release
+
+Operation: `release_processing_restriction`
+
+Release a restriction after verifying the subject's instruction or legal exception.
+
+Responses: 204
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `id` | path | yes | type="string", format="snowflake-id" |
+
+### Request journey (en-US / USD, cents)
+
+```http
+POST /api/v1/platform/privacy/requests/{id}/release
+Accept-Language: en-US
+Content-Type: application/json
+
+{
+  "reason": "example"
+}
+```
+
+### Request journey (ja-JP / JPY, zero-decimal yen)
+
+```http
+POST /api/v1/platform/privacy/requests/{id}/release
 Accept-Language: ja-JP
 Content-Type: application/json
 
@@ -1537,7 +1649,7 @@ Content-Type: application/json
 
 {
   "agent": null,
-  "kind": "access",
+  "kind": "other",
   "note": "example",
   "requester": "subject",
   "subject": {
@@ -1564,7 +1676,7 @@ Content-Type: application/json
 
 {
   "agent": null,
-  "kind": "access",
+  "kind": "other",
   "note": "example",
   "requester": "subject",
   "subject": {
@@ -1638,8 +1750,9 @@ Responses: 200, 404
   "due_at": "2026-10-09T00:00:00Z",
   "export_available": true,
   "extended_to": "2026-10-09T00:00:00Z",
+  "fulfillment_summary": "example",
   "jurisdiction": "example",
-  "kind": "access",
+  "kind": "other",
   "received_at": "2026-10-09T00:00:00Z",
   "rejection_reason": "example",
   "request_id": "example",
@@ -1658,8 +1771,9 @@ Responses: 200, 404
   "due_at": "2026-10-09T00:00:00Z",
   "export_available": true,
   "extended_to": "2026-10-09T00:00:00Z",
+  "fulfillment_summary": "example",
   "jurisdiction": "example",
-  "kind": "access",
+  "kind": "other",
   "received_at": "2026-10-09T00:00:00Z",
   "rejection_reason": "example",
   "request_id": "example",
@@ -1943,6 +2057,20 @@ Responses: 200
 ```json
 {
   "backup_retention_days": 1,
+  "disclosures": {
+    "business_address": "example",
+    "controller_name": "example",
+    "eu_representative": "example",
+    "hosting_countries": [
+      "example"
+    ],
+    "privacy_email": "example",
+    "reviewed_for_publication": true,
+    "sale_or_share": true,
+    "targeted_advertising": true,
+    "transfer_safeguards": "example",
+    "uk_representative": "example"
+  },
   "jurisdictions": [
     {
       "appeal_window_days": 1,
@@ -1950,10 +2078,12 @@ Responses: 200
       "consent_model": "example",
       "honours_universal_opt_out": true,
       "regime": "example",
+      "response_calendar_months": 1,
       "response_days": 1
     }
   ],
   "notice_version": "example",
+  "ready_for_publication": true,
   "retention": [
     {
       "action": "example",
@@ -1978,6 +2108,20 @@ Responses: 200
 ```json
 {
   "backup_retention_days": 1,
+  "disclosures": {
+    "business_address": "example",
+    "controller_name": "example",
+    "eu_representative": "example",
+    "hosting_countries": [
+      "example"
+    ],
+    "privacy_email": "example",
+    "reviewed_for_publication": true,
+    "sale_or_share": true,
+    "targeted_advertising": true,
+    "transfer_safeguards": "example",
+    "uk_representative": "example"
+  },
   "jurisdictions": [
     {
       "appeal_window_days": 1,
@@ -1985,10 +2129,12 @@ Responses: 200
       "consent_model": "example",
       "honours_universal_opt_out": true,
       "regime": "example",
+      "response_calendar_months": 1,
       "response_days": 1
     }
   ],
   "notice_version": "example",
+  "ready_for_publication": true,
   "retention": [
     {
       "action": "example",
@@ -2150,7 +2296,7 @@ Responses: 200, 400, 403, 504
     "completed_at": "2026-10-09T00:00:00Z",
     "due_at": "2026-10-09T00:00:00Z",
     "jurisdiction": "example",
-    "kind": "access",
+    "kind": "other",
     "received_at": "2026-10-09T00:00:00Z",
     "rejection_reason": "example",
     "request_id": "example",
@@ -2170,7 +2316,7 @@ Responses: 200, 400, 403, 504
     "completed_at": "2026-10-09T00:00:00Z",
     "due_at": "2026-10-09T00:00:00Z",
     "jurisdiction": "example",
-    "kind": "access",
+    "kind": "other",
     "received_at": "2026-10-09T00:00:00Z",
     "rejection_reason": "example",
     "request_id": "example",
@@ -2200,7 +2346,7 @@ Content-Type: application/json
 
 {
   "agent": null,
-  "kind": "access",
+  "kind": "other",
   "note": "example",
   "requester": "subject",
   "subject": {
@@ -2227,7 +2373,7 @@ Content-Type: application/json
 
 {
   "agent": null,
-  "kind": "access",
+  "kind": "other",
   "note": "example",
   "requester": "subject",
   "subject": {

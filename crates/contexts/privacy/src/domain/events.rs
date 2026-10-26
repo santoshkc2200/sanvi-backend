@@ -49,6 +49,12 @@ pub enum PrivacyEvent {
         dsr_kind: String,
         jurisdiction: String,
     },
+    DsrExtended {
+        request_id: DsrId,
+        subject: SubjectRef,
+        deadline: chrono::DateTime<chrono::Utc>,
+        reason: String,
+    },
     /// A DSR reached a terminal state.
     DsrClosed {
         request_id: DsrId,
@@ -98,6 +104,7 @@ impl PrivacyEvent {
             Self::SensitiveUseLimited { .. } => "privacy.sensitive_use_limited",
             Self::DsrReceived { .. } => "privacy.dsr_received",
             Self::DsrClosed { .. } => "privacy.dsr_closed",
+            Self::DsrExtended { .. } => "privacy.dsr_extended",
             Self::SubjectErased { .. } => "privacy.subject_erased",
             Self::AppealDecided { .. } => "privacy.appeal_decided",
             Self::LegalHoldApplied { .. } => "privacy.legal_hold_applied",
@@ -115,6 +122,7 @@ impl PrivacyEvent {
             | Self::SensitiveUseLimited { subject, .. }
             | Self::DsrReceived { subject, .. }
             | Self::DsrClosed { subject, .. }
+            | Self::DsrExtended { subject, .. }
             | Self::JurisdictionResolved { subject, .. } => subject.tenant_id,
             Self::SubjectErased { tenant_id, .. } => *tenant_id,
             Self::AppealDecided { .. }
@@ -136,6 +144,7 @@ impl PrivacyEvent {
             }
             Self::DsrReceived { request_id, .. }
             | Self::DsrClosed { request_id, .. }
+            | Self::DsrExtended { request_id, .. }
             | Self::AppealDecided { request_id, .. } => request_id.as_snowflake(),
             Self::LegalHoldApplied { hold_id, .. } | Self::LegalHoldReleased { hold_id } => {
                 hold_id.as_snowflake()

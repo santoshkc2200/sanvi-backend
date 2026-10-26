@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 228 (220 OpenAPI operations).
+Routes: 230 (222 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -73,7 +73,9 @@ Routes: 228 (220 OpenAPI operations).
 | PUT | /api/v1/platform/privacy/jurisdictions | crates/contexts/privacy/src/adapters/http/handlers.rs::upsert_jurisdiction | platform.privacy.jurisdiction.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | GET | /api/v1/platform/privacy/requests | crates/contexts/privacy/src/adapters/http/handlers.rs::list_dsrs | platform.privacy.request.read | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | POST | /api/v1/platform/privacy/requests/{id}/extend | crates/contexts/privacy/src/adapters/http/handlers.rs::extend_dsr | platform.privacy.request.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
+| POST | /api/v1/platform/privacy/requests/{id}/fulfill | crates/contexts/privacy/src/adapters/http/handlers.rs::fulfill_privacy_request | platform.privacy.request.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | POST | /api/v1/platform/privacy/requests/{id}/reject | crates/contexts/privacy/src/adapters/http/handlers.rs::reject_dsr | platform.privacy.request.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
+| POST | /api/v1/platform/privacy/requests/{id}/release | crates/contexts/privacy/src/adapters/http/handlers.rs::release_processing_restriction | platform.privacy.request.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | GET | /api/v1/platform/privacy/retention-rules | crates/contexts/privacy/src/adapters/http/handlers.rs::list_retention_rules | platform.privacy.governance.read | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | PUT | /api/v1/platform/privacy/retention-rules | crates/contexts/privacy/src/adapters/http/handlers.rs::upsert_retention_rule | platform.privacy.governance.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | GET | /api/v1/platform/privacy/subprocessors | crates/contexts/privacy/src/adapters/http/handlers.rs::list_subprocessors | platform.privacy.governance.read | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
@@ -262,11 +264,11 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
-| apps/api/src/compliance.rs | `047d28409909cf5a4200fd6c2e6395d021cbc21c3f73c447c7bc3728da133830` |
+| apps/api/src/compliance.rs | `91330c67b309976f45324271f659948801640e92ef63c0be45a6b63f1b870b77` |
 | apps/api/src/config.rs | `bc520742a7f19b3955ca7dc5d28dcf30e67d3fd26d169a649d37c6a6a5fb80f5` |
-| apps/api/src/lib.rs | `718cf9eee79b2660a88a0cb68be6a090fdf1ff9ad57a846abe23cc693fb5be08` |
-| apps/api/src/main.rs | `ad493bd84ecb83df88602e63835b74ead92aefe3630b34977b6362a8a911cd5b` |
-| apps/api/src/openapi.rs | `0f254b54668cec53913d9cf6bcebaf30f8ab0e5c7588aa711dfaa0f2b0c27eef` |
+| apps/api/src/lib.rs | `6e54fbbed859ab0c2aaaeb340f0b3fd55b53b1819b7072202365471db5d8508c` |
+| apps/api/src/main.rs | `19c408109f18f2ddaa6da5d321cd28298447a221f97daf73fb77c68beac4f235` |
+| apps/api/src/openapi.rs | `26482b049c09028292d618d0f855b92b21df05f4f48364d061a01e22702dbde3` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
 | crates/contexts/access/src/adapters/http/mod.rs | `b9718a471597d11f5cb3af76a91715c20de69b6126a9073e23d5463c201bd007` |
@@ -304,7 +306,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/localization/src/adapters/http/routes.rs | `ad9f0b53bb2329edaf3d04a4c6c1e0967843ed48a9dd7fd03aa3321831a53ba4` |
 | crates/contexts/localization/src/adapters/http/state.rs | `9e1ec016fe348aa33bcd9490ad0f32cc16f3326b8e20e7c3a48768ea4aaa8820` |
 | crates/contexts/localization/src/adapters/http/validation.rs | `c1f8b4e149ae528b72e885c95f4dea95d001be1704fca980e234e5a4fba0bc05` |
-| crates/contexts/media/src/adapters/http/handlers.rs | `b75d8b3d038f56aeeb2008af037d6c5f446acb550de473b2cc274204d91a58ce` |
+| crates/contexts/media/src/adapters/http/handlers.rs | `3ff338b14e16d75e3c00ae007cec701288ec0d43f37891ae2d7efa550e357637` |
 | crates/contexts/media/src/adapters/http/mod.rs | `45464ed95cb32618b39db3d4205a5d78e3ffbe8c0562738175c4740ae9978c1d` |
 | crates/contexts/media/src/adapters/http/routes.rs | `615841e15acd10e2ee8cc4bc23726b2d4d323f6b1e953e49576e81de79381ba1` |
 | crates/contexts/media/src/adapters/http/state.rs | `27f2b560e83d72edeb9efa752c006cc10644054e7eea663be140c33e425b3e0d` |
@@ -320,11 +322,11 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/platform_admin/src/adapters/http/mod.rs | `4dbd8c2ce61074f2e805904774d4d57a7f76fb1167ab09ae8d9440213162a98d` |
 | crates/contexts/platform_admin/src/adapters/http/routes.rs | `8e5be779f7489fe13edf790c6f32a66b117bcfa08a25526bc72d1bb02acd8787` |
 | crates/contexts/platform_admin/src/adapters/http/validation.rs | `62b652f52bee73e651f699e0b84b5da8c326b2b48badb388163087c369665b35` |
-| crates/contexts/privacy/src/adapters/http/catalog.rs | `d74f6d02c7ae2a7f2587b3ade73416c52431c861291408d3d69336cc8a520ef4` |
-| crates/contexts/privacy/src/adapters/http/handlers.rs | `c6f4727a191ad050b29b7344beed075191374616c4d17eda9ade118481234bc3` |
+| crates/contexts/privacy/src/adapters/http/catalog.rs | `54ee8970c833119524b7cbad4e39b9e29eb290eb8a7a49ff3a4a462f227a2288` |
+| crates/contexts/privacy/src/adapters/http/handlers.rs | `eedea2c28919b0aade0197bd9c38b083d25869165cd78e1a88ee772d6fd18241` |
 | crates/contexts/privacy/src/adapters/http/mod.rs | `6fe9359c7e703a10bce690b16a93bc317e74bf812827592e6aa55e404724a641` |
-| crates/contexts/privacy/src/adapters/http/routes.rs | `0fbbe18c262ab0aadf7e2a27f2ba41415b9f028cf62b85f9ce88cb6e625152dc` |
-| crates/contexts/privacy/src/adapters/http/validation.rs | `fc98ce44b0383e0cb2cf695e2d93895466ff47a0c0ea9a72954f87d42b18020f` |
+| crates/contexts/privacy/src/adapters/http/routes.rs | `3d883aa6513bbb09591e421d0301bda9eb3728c09953dfa6a9d97bf37e7e5f1f` |
+| crates/contexts/privacy/src/adapters/http/validation.rs | `fb3aeb342e2e6c0ce70c94006132337f17a1a26b292f26d6c7e3c1fe0bbfd94a` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `e960b2e416f59193f64a5dcdf9838e5dd518dcd0b0e086829c2d925ecb5ec8f7` |
 | crates/contexts/system/src/adapters/http/mod.rs | `c7451cf2f661b8ab7dbd686218fb0d25b6875aa2cc3dce21970630c2e46016f0` |
 | crates/contexts/system/src/adapters/http/routes.rs | `fe6b66da6a7728ec4490dcb503ae1b4be92d3529003b49e21bec965af69e67da` |

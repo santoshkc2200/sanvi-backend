@@ -5,6 +5,7 @@
 pub mod archival_cipher;
 pub mod crypto;
 pub mod erasure_destinations;
+pub mod erasure_ledger;
 pub mod events;
 pub mod gpc;
 pub mod http;

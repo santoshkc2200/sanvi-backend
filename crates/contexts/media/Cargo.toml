@@ -14,6 +14,8 @@ async-trait.workspace = true
 reqwest.workspace = true
 sanvi-http.workspace = true
 sanvi-kernel.workspace = true
+sanvi-persistence.workspace = true
+sqlx.workspace = true
 sanvi-resilience.workspace = true
 sanvi-privacy.workspace = true
 serde.workspace = true
@@ -24,7 +26,5 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
-sanvi-persistence.workspace = true
 sanvi-testsupport.workspace = true
-sqlx.workspace = true
 tokio.workspace = true

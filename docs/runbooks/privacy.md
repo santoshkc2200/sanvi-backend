@@ -47,12 +47,10 @@ their end users (`POST /api/v1/tenant/privacy/requests`, processor role).
    jurisdictions, data classes, whether the data was encrypted at rest). The response lists
    the computed obligations per jurisdiction and audience — GDPR 72h to the SA, APPI report to
    the PPC, per-state consumer/AG thresholds and deadlines.
-2. Encryption-at-rest safe harbours suppress the obligations the rule table marks
-   encryption-exempt, but the assessment is still recorded (`suppressed_by_encryption`).
+2. The calculator creates conservative review tasks. Storage encryption alone never suppresses notices. Assess risk, availability, key compromise, recipient counts, and applicable exceptions; retain the decision and supporting evidence. Japan has separate initial and final authority tasks.
 3. Record each discharge as it happens: `POST /api/v1/platform/privacy/incidents/{id}/notify`
    with jurisdiction + audience + artifact. Obligations within 24h of due alarm.
-4. **Do not research deadlines by hand** — the calculator and the profile table are the single
-   source; a missing or wrong profile row is a configuration fix, not a research task.
+4. Verify the current local requirements and incident facts. A missing or incorrect profile requires review and correction; a generic baseline or an empty deadline is never evidence that notification is unnecessary.
 
 ## 4. Legal holds
 
@@ -71,8 +69,7 @@ Erasure destroys the per-subject DEK (`privacy.subject_keys`). To verify:
 SELECT * FROM privacy.subject_keys WHERE subject_id = '<subject id>';
 ```
 
-- After shredding, decrypt paths return the typed `KeyShredded` error; restored backups are
-  useless ciphertext.
+- Each decrypt checks shared revocation state. Backups may contain wrapped keys and plaintext records; restoring a database alone does not erase them. The API recovery gate must pass before traffic resumes. See `docs/compliance/minimum-release.md` for ledger initialization and replay.
 - The KEK itself (`SANVI__PRIVACY__KEK`) lives in the secret manager. Rotation = add a new key,
   flip `privacy.kek_id`, and re-wrap outstanding DEKs with the migration tooling — the old KEK
   must stay available until every DEK row references the new `kek_id`.
@@ -90,6 +87,14 @@ SELECT * FROM privacy.subject_keys WHERE subject_id = '<subject id>';
 ## 7. Jurisdiction changes
 
 A new US state law is **configuration**: `PUT /api/v1/platform/privacy/jurisdictions` with the
-new profile row (counsel-reviewed), plus a matrix-test expectation row — CI fails until the
+new profile row and `evidence_codes` mappings (reviewed), plus a matrix-test expectation row — CI fails until the
 new jurisdiction's defaults, deadlines and appeal rights are explicitly asserted. No code
 change, no release.
+
+## 8. Manual rights, complaints, corrections, and restriction release
+
+`other` requests remain open for a human response. This includes complaints, recipient-specific disclosures, and requests for human review. Record actual fulfillment through `POST /api/v1/platform/privacy/requests/{id}/fulfill` with a response summary and evidence reference. Only verified, open `other` or rectification requests qualify. The subject can read the summary through their authenticated/token-bound status page. Do not mark a response complete before supplying the information or completing the correction.
+
+A verified restriction or objection denies optional processing independently of later consent. Release only after verifying the subject's instruction or legal exception, and notify the subject before lifting a restriction. Record the reason through `POST /api/v1/platform/privacy/requests/{id}/release`. Essential storage, security, rights handling, and legally necessary processing still require their own applicable basis.
+
+Extensions require a justification, must be recorded before the original deadline, and queue a subject notification in the transactional outbox. Watch delivery failures and ensure the explanation reaches the subject within the original response period. EU/UK clocks use calendar months; the day count in a legacy profile is not the statutory month definition.

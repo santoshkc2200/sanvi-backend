@@ -116,7 +116,7 @@ async fn request(
     } else {
         test::TestRequest::post().uri("/api/v1/tenant/v1/assets")
             .insert_header(("Idempotency-Key", "upload-key"))
-            .set_json(serde_json::json!({"kind":"image","content_type":"image/png","filename":"a.png","size_bytes":100})).to_request()
+            .set_json(serde_json::json!({"kind":"image","content_type":"image/png","filename":"a.png","size_bytes":100,"owner_id":"user:1"})).to_request()
     };
     test::call_service(&app, request).await.status()
 }

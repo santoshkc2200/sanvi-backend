@@ -57,6 +57,11 @@ pub trait PersonalDataProvider: Send + Sync {
         mode: EraseMode,
     ) -> Result<EraseReport, PrivacyError>;
 
+    /// Fields this provider can actually correct through this workflow.
+    fn rectifiable_fields(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Apply rectification corrections owned by this context.
     async fn rectify(&self, subject: &SubjectRef, patch: &RectifyPatch)
     -> Result<(), PrivacyError>;
@@ -100,6 +105,24 @@ pub trait DirectiveResolver: Send + Sync {
 
 #[async_trait]
 pub trait JurisdictionRepository: Send + Sync {
+    async fn resolve_evidence(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        evidence: &[(super::types::EvidenceKind, String)],
+    ) -> Result<
+        (
+            super::types::JurisdictionRef,
+            Vec<super::types::JurisdictionEvidence>,
+        ),
+        PrivacyError,
+    >;
+    async fn set_mappings(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        code: &str,
+        inputs: &[String],
+    ) -> Result<(), PrivacyError>;
+
     async fn find(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -119,6 +142,13 @@ pub trait JurisdictionRepository: Send + Sync {
 
 #[async_trait]
 pub trait SubjectRepository: Send + Sync {
+    /// A verified restriction/objection survives consent changes until explicitly released.
+    async fn processing_restricted(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        key: &str,
+    ) -> Result<bool, PrivacyError>;
+
     async fn find_by_key(
         &self,
         scope: &mut PlatformScope<'_>,
@@ -144,6 +174,25 @@ pub trait SubjectRepository: Send + Sync {
 
 #[async_trait]
 pub trait DsrRepository: Send + Sync {
+    async fn record_fulfillment(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+        summary: &str,
+        evidence: &str,
+    ) -> Result<(), PrivacyError>;
+    async fn fulfillment_summary(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+    ) -> Result<Option<String>, PrivacyError>;
+
+    async fn release_restriction(
+        &self,
+        scope: &mut PlatformScope<'_>,
+        id: DsrId,
+    ) -> Result<(), PrivacyError>;
+
     async fn save(
         &self,
         scope: &mut PlatformScope<'_>,

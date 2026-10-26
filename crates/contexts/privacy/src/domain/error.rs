@@ -159,6 +159,9 @@ pub enum PrivacyError {
     #[error("state conflict: {0}")]
     Conflict(String),
 
+    #[error("processing pending: {0}")]
+    ProcessingPending(String),
+
     #[error("rate limited: {0}")]
     RateLimited(String),
 

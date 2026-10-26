@@ -9,11 +9,20 @@ use crate::domain::{
 
 pub struct CreateAssetUpload {
     gateway: Arc<dyn MediaGatewayPort>,
+    owner_index: Option<Arc<dyn crate::domain::MediaOwnerIndexPort>>,
 }
 
 impl CreateAssetUpload {
     pub fn new(gateway: Arc<dyn MediaGatewayPort>) -> Self {
-        Self { gateway }
+        Self {
+            gateway,
+            owner_index: None,
+        }
+    }
+
+    pub fn with_owner_index(mut self, index: Arc<dyn crate::domain::MediaOwnerIndexPort>) -> Self {
+        self.owner_index = Some(index);
+        self
     }
 
     pub async fn execute(
@@ -22,6 +31,10 @@ impl CreateAssetUpload {
         idempotency_key: String,
         input: CreateAssetInput,
     ) -> Result<AssetUploadView, MediaError> {
+        if let (Some(index), Some(owner)) = (&self.owner_index, &input.owner_id) {
+            // Persist ownership before the external side effect so retries find orphaned uploads.
+            index.remember(tenant_id, owner).await?;
+        }
         self.gateway
             .create_asset(tenant_id, &idempotency_key, input)
             .await

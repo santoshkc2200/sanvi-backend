@@ -8,7 +8,6 @@ use sanvi_kernel::RawIdGenerator;
 use sha2::Sha256;
 use std::sync::Arc;
 
-use crate::domain::jurisdiction::add_business_days;
 use crate::domain::{
     AffectedSet, AppealId, AuthorityContact, AuthorizedAgentId, BreachIncident, BreachIncidentId,
     BreachObligationCalculator, BreachRuleSet, Clock, ConsentId, ConsentRecord, DsrId,
@@ -212,8 +211,8 @@ impl SubProcessorNotifier for LoggingSubProcessorNotifier {
 
 /// The breach obligation calculator: one incident → one obligation per
 /// affected jurisdiction per audience, with deadlines from the profile's
-/// breach rules. Encryption-at-rest safe harbours suppress obligations the
-/// rule set marks encryption-exempt, while still recording the assessment.
+/// breach rules. Qualitative deadlines become immediate review tasks;
+/// encryption exemptions require an incident assessment, never a storage flag.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RuleBasedObligationCalculator;
 
@@ -237,12 +236,18 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
                 continue;
             };
             let rules = &profile.breach_rules;
-            let encryption_suppresses = incident.encrypted_at_rest && rules.encryption_safe_harbour;
+            let affected = incident
+                .affected
+                .subjects_by_jurisdiction
+                .get(jurisdiction.as_str())
+                .copied()
+                .unwrap_or(incident.affected.subjects);
+            // Storage encryption alone says nothing about key compromise or availability risk.
+            // These are review tasks; exemptions require a documented incident assessment.
+            let encryption_suppresses = false;
 
-            // Authority obligation: computed when the rule set has a
-            // deadline and the affected count reaches the threshold. Even
-            // when the encryption safe harbour suppresses notification the
-            // assessment is recorded (suppressed flag stays true).
+            // Authority review: a qualitative clock must not erase a task.
+            // Apply the local count when supplied, otherwise review conservatively.
             let authority_due = rules
                 .authority_due_hours
                 .map(|h| deadline_base + chrono::Duration::hours(i64::from(h)))
@@ -250,17 +255,22 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
                     rules
                         .authority_due_days
                         .map(|d| deadline_base + chrono::Duration::days(i64::from(d)))
-                });
+                })
+                .or_else(|| rules.authority_threshold.map(|_| deadline_base));
             if let Some(due_at) = authority_due {
                 let below_threshold = rules
                     .authority_threshold
-                    .map(|threshold| incident.affected.subjects < u64::from(threshold))
+                    .map(|threshold| affected < u64::from(threshold))
                     .unwrap_or(false);
                 if !below_threshold {
                     obligations.push(NotificationObligation {
                         jurisdiction: jurisdiction.clone(),
                         audience: ObligationAudience::Authority,
-                        due_at,
+                        due_at: if profile.regime == crate::domain::Regime::Appi {
+                            deadline_base
+                        } else {
+                            due_at
+                        },
                         notified_at: None,
                         suppressed_by_encryption: encryption_suppresses,
                         artifact: None,
@@ -269,10 +279,11 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
             }
 
             // Consumer obligation.
-            if let Some(days) = rules.consumer_due_days {
+            {
+                let days = rules.consumer_due_days.unwrap_or(0);
                 let below_threshold = rules
                     .consumer_threshold
-                    .map(|threshold| incident.affected.subjects < u64::from(threshold))
+                    .map(|threshold| affected < u64::from(threshold))
                     .unwrap_or(false);
                 if !below_threshold {
                     obligations.push(NotificationObligation {
@@ -286,13 +297,24 @@ impl BreachObligationCalculator for RuleBasedObligationCalculator {
                 }
             }
 
+            if profile.regime == crate::domain::Regime::Appi {
+                obligations.push(NotificationObligation {
+                    jurisdiction: jurisdiction.clone(),
+                    audience: ObligationAudience::AuthorityFinal,
+                    due_at: deadline_base + chrono::Duration::days(30),
+                    notified_at: None,
+                    suppressed_by_encryption: false,
+                    artifact: None,
+                });
+            }
+
             // Tenant obligation: processors inform their controllers
             // promptly (every regime).
             if incident.affected.tenants > 0 {
                 obligations.push(NotificationObligation {
                     jurisdiction: jurisdiction.clone(),
                     audience: ObligationAudience::Tenant,
-                    due_at: add_business_days(deadline_base, 2),
+                    due_at: deadline_base,
                     notified_at: None,
                     suppressed_by_encryption: false,
                     artifact: None,
@@ -315,6 +337,7 @@ pub fn affected_set(
     jurisdictions: Vec<crate::domain::JurisdictionRef>,
 ) -> AffectedSet {
     AffectedSet {
+        subjects_by_jurisdiction: Default::default(),
         subjects,
         tenants,
         jurisdictions,
@@ -353,6 +376,7 @@ mod tests {
             discovered_at: now,
             contained_at: None,
             affected: AffectedSet {
+                subjects_by_jurisdiction: Default::default(),
                 subjects: 1_000,
                 tenants: 3,
                 jurisdictions: vec![
@@ -393,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn encryption_safe_harbour_suppresses_but_records() {
+    fn storage_encryption_does_not_suppress_notification_review() {
         use crate::domain::{AffectedSet, DataClass, JurisdictionRef};
         let calculator = RuleBasedObligationCalculator::new();
         let now = chrono::Utc::now();
@@ -403,6 +427,7 @@ mod tests {
             discovered_at: now,
             contained_at: None,
             affected: AffectedSet {
+                subjects_by_jurisdiction: Default::default(),
                 subjects: 10,
                 tenants: 0,
                 jurisdictions: vec![JurisdictionRef::parse("us-co").unwrap()],
@@ -420,8 +445,7 @@ mod tests {
             "CO has no encryption safe harbour"
         );
 
-        // EU safe harbour: encrypted at rest suppresses the authority
-        // obligation but the assessment row still exists.
+        // Storage encryption alone cannot exempt the EU authority review.
         let eu = crate::domain::seeded_profile(&JurisdictionRef::parse("eu").unwrap()).unwrap();
         let mut eu_incident = incident.clone();
         eu_incident.affected.jurisdictions = vec![JurisdictionRef::parse("eu").unwrap()];
@@ -429,7 +453,7 @@ mod tests {
         assert!(
             obligations
                 .iter()
-                .any(|o| o.suppressed_by_encryption && o.audience == ObligationAudience::Authority)
+                .any(|o| !o.suppressed_by_encryption && o.audience == ObligationAudience::Authority)
         );
     }
 

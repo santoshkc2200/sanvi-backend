@@ -128,6 +128,8 @@ use utoipa::OpenApi;
         sanvi_privacy::adapters::http::handlers::list_dsrs,
         sanvi_privacy::adapters::http::handlers::reject_dsr,
         sanvi_privacy::adapters::http::handlers::extend_dsr,
+        sanvi_privacy::adapters::http::handlers::fulfill_privacy_request,
+        sanvi_privacy::adapters::http::handlers::release_processing_restriction,
         sanvi_privacy::adapters::http::handlers::list_appeals,
         sanvi_privacy::adapters::http::handlers::decide_appeal,
         sanvi_privacy::adapters::http::handlers::list_jurisdictions,

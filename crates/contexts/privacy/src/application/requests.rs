@@ -19,7 +19,7 @@ use crate::domain::{
     EvidenceKind, Hasher, IdGenerator, JurisdictionRepository, Notifications,
     ParticipantRepository, PrivacyError, PrivacyEvent, ProviderRegistry, RectifyPatch, Requester,
     SignalRepository, SubjectKind, SubjectRef, SubjectRepository, VerificationChallenge,
-    VerificationChallengeId, VerificationRepository, add_days, resolve,
+    VerificationChallengeId, VerificationRepository,
 };
 
 /// The subject a request targets, as supplied by the requester.
@@ -213,15 +213,18 @@ pub async fn ensure_subject(
         .find_by_key(scope, subject_ref.canonical_key())
         .await?
     {
-        if existing.is_minor == is_minor {
-            return Ok(existing);
-        }
         let mut subject = existing;
-        subject.is_minor = is_minor;
-        subjects.set_minor(scope, subject.id, is_minor).await?;
+        subject.is_minor |= is_minor;
+        if !evidence.is_empty() {
+            let (jurisdiction, chain) = jurisdictions.resolve_evidence(scope, evidence).await?;
+            subject.jurisdiction = jurisdiction;
+            subject.jurisdiction_evidence = chain;
+        }
+        subject.updated_at = now;
+        subjects.save(scope, &subject).await?;
         return Ok(subject);
     }
-    let (jurisdiction, chain) = resolve(evidence);
+    let (jurisdiction, chain) = jurisdictions.resolve_evidence(scope, evidence).await?;
     let _ = jurisdictions.find(scope, jurisdiction.as_str()).await?; // validity check
     let subject = DataSubject {
         id: ids.next_subject_id()?,
@@ -253,10 +256,11 @@ impl SubmitDsr {
             .iter()
             .map(|e| EvidenceKind::parse(e.kind.as_str()).map(|kind| (kind, e.value.clone())))
             .collect::<Result<_, _>>()?;
+        // Admission is 16+, but known 16–17-year-olds still need minor safeguards.
         let is_minor = command.subject.age_signal.as_ref().is_some_and(|age| {
             age.is_minor
                 || age.birth_year.is_some_and(|year| {
-                    year >= chrono::Datelike::year(&Utc::now().date_naive()) - 12
+                    year >= chrono::Datelike::year(&self.clock.now().date_naive()) - 18
                 })
         });
 
@@ -287,7 +291,7 @@ impl SubmitDsr {
             })?;
 
         let now = self.clock.now();
-        let due_at = add_days(now, profile.response_days);
+        let due_at = crate::domain::jurisdiction::response_due(now, &profile);
 
         let opt_out = command.kind.is_opt_out();
         // Verification is forbidden as a gate on opt-outs (CCPA); every
@@ -624,6 +628,7 @@ impl VerifyRequest {
 pub struct GetRequestStatusOutput {
     #[schema(value_type = String)]
     pub request_id: DsrId,
+    pub fulfillment_summary: Option<String>,
     pub kind: DsrKind,
     pub status: DsrStatus,
     pub received_at: DateTime<Utc>,
@@ -711,6 +716,7 @@ impl GetRequestStatus {
         }
 
         let appeal = self.appeals.find_by_request(&mut scope, id).await?;
+        let fulfillment_summary = self.requests.fulfillment_summary(&mut scope, id).await?;
         scope
             .commit()
             .await
@@ -718,6 +724,7 @@ impl GetRequestStatus {
 
         Ok(GetRequestStatusOutput {
             request_id,
+            fulfillment_summary,
             kind: request.kind,
             status: request.status,
             received_at: request.received_at,
@@ -841,11 +848,13 @@ fn request_operator_view(request: crate::domain::DataSubjectRequest) -> RequestO
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ExtendDeadlineCommand {
+    pub reason: String,
     #[schema(value_type = String)]
     pub request_id: DsrId,
 }
 
 pub struct ExtendDeadline {
+    events: Arc<dyn EventPublisher>,
     tx_manager: TxManager,
     requests: Arc<dyn DsrRepository>,
     jurisdictions: Arc<dyn JurisdictionRepository>,
@@ -860,8 +869,10 @@ impl ExtendDeadline {
         jurisdictions: Arc<dyn JurisdictionRepository>,
         clock: Arc<dyn Clock>,
         audit: Arc<dyn AuditWriter>,
+        events: Arc<dyn EventPublisher>,
     ) -> Self {
         Self {
+            events,
             tx_manager,
             requests,
             jurisdictions,
@@ -876,6 +887,11 @@ impl ExtendDeadline {
         actor: UserId,
         command: ExtendDeadlineCommand,
     ) -> Result<DateTime<Utc>, PrivacyError> {
+        if command.reason.trim().is_empty() {
+            return Err(PrivacyError::Conflict(
+                "an extension justification is required".to_string(),
+            ));
+        }
         let mut scope = self
             .tx_manager
             .begin_unscoped("privacy_dsr_extend", "privacy")
@@ -906,7 +922,18 @@ impl ExtendDeadline {
                 Some(actor),
                 "privacy.dsr.extend".to_string(),
                 id.as_i64().to_string(),
-                serde_json::json!({ "extended_to": request.extended_to }),
+                serde_json::json!({ "extended_to": request.extended_to, "reason": command.reason }),
+            )
+            .await?;
+        self.events
+            .publish(
+                &mut scope,
+                &[PrivacyEvent::DsrExtended {
+                    request_id: id,
+                    subject: request.subject_ref.clone(),
+                    deadline: request.effective_due(),
+                    reason: command.reason,
+                }],
             )
             .await?;
         scope
@@ -1004,6 +1031,7 @@ impl RejectRequest {
 }
 
 pub struct PatchRequest {
+    events: Arc<dyn EventPublisher>,
     tx_manager: TxManager,
     requests: Arc<dyn DsrRepository>,
     registry: ProviderRegistry,
@@ -1016,13 +1044,144 @@ impl PatchRequest {
         requests: Arc<dyn DsrRepository>,
         registry: ProviderRegistry,
         audit: Arc<dyn AuditWriter>,
+        events: Arc<dyn EventPublisher>,
     ) -> Self {
         Self {
+            events,
             tx_manager,
             requests,
             registry,
             audit,
         }
+    }
+
+    /// Close a manual request only after an operator records its actual response and evidence.
+    #[tracing::instrument(name = "privacy.fulfill_request", skip_all)]
+    pub async fn fulfill(
+        &self,
+        actor: UserId,
+        request_id: DsrId,
+        summary: &str,
+        evidence: &str,
+    ) -> Result<(), PrivacyError> {
+        if summary.trim().is_empty() || evidence.trim().is_empty() {
+            return Err(PrivacyError::Conflict(
+                "a response summary and evidence reference are required".to_string(),
+            ));
+        }
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("privacy_manual_fulfillment", "privacy")
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        let request = self
+            .requests
+            .find_by_id(&mut scope, request_id)
+            .await?
+            .ok_or_else(|| PrivacyError::RequestNotFound(request_id.to_string()))?;
+        if request.status.is_terminal()
+            || request.verified_at.is_none()
+            || !matches!(
+                request.kind,
+                DsrKind::Other | DsrKind::Rectification | DsrKind::Restriction | DsrKind::Objection
+            )
+            || (matches!(request.kind, DsrKind::Restriction | DsrKind::Objection)
+                && request.status != DsrStatus::OnHold)
+        {
+            return Err(PrivacyError::Conflict(
+                "an open verified manual request is required".to_string(),
+            ));
+        }
+        self.requests
+            .record_fulfillment(&mut scope, request_id, summary, evidence)
+            .await?;
+        self.requests
+            .set_status(
+                &mut scope,
+                request_id,
+                DsrStatus::Completed,
+                Some(Utc::now()),
+                None,
+            )
+            .await?;
+        self.events
+            .publish(
+                &mut scope,
+                &[PrivacyEvent::DsrClosed {
+                    request_id,
+                    subject: request.subject_ref.clone(),
+                    dsr_kind: request.kind.as_str().to_string(),
+                    status: "completed".to_string(),
+                    jurisdiction: request.jurisdiction.as_str().to_string(),
+                }],
+            )
+            .await?;
+        self.audit
+            .record(
+                &mut scope,
+                Some(actor),
+                "privacy.dsr.fulfill".to_string(),
+                request_id.to_string(),
+                serde_json::json!({"summary": summary, "evidence_reference": evidence}),
+            )
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        Ok(())
+    }
+
+    /// Release after the operator verifies the subject's request or an applicable exception.
+    #[tracing::instrument(name = "privacy.release_restriction", skip_all)]
+    pub async fn release_restriction(
+        &self,
+        actor: UserId,
+        request_id: DsrId,
+        reason: &str,
+    ) -> Result<(), PrivacyError> {
+        if reason.trim().is_empty() {
+            return Err(PrivacyError::Conflict(
+                "a release reason is required".to_string(),
+            ));
+        }
+        let mut scope = self
+            .tx_manager
+            .begin_unscoped("privacy_restriction_release", "privacy")
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        let request = self
+            .requests
+            .find_by_id(&mut scope, request_id)
+            .await?
+            .ok_or_else(|| PrivacyError::RequestNotFound(request_id.to_string()))?;
+        if !matches!(request.kind, DsrKind::Restriction | DsrKind::Objection) {
+            return Err(PrivacyError::Conflict(
+                "request is not a restriction or objection".to_string(),
+            ));
+        }
+        if request.verified_at.is_none() || request.status != DsrStatus::Completed {
+            return Err(PrivacyError::Conflict(
+                "only an applied verified restriction can be released".to_string(),
+            ));
+        }
+        self.requests
+            .release_restriction(&mut scope, request_id)
+            .await?;
+        self.audit
+            .record(
+                &mut scope,
+                Some(actor),
+                "privacy.restriction.release".to_string(),
+                request_id.to_string(),
+                serde_json::json!({"reason": reason}),
+            )
+            .await?;
+        scope
+            .commit()
+            .await
+            .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+        Ok(())
     }
 
     /// Apply rectification corrections to the owning providers. Only the
@@ -1053,9 +1212,44 @@ impl PatchRequest {
                 "request is not a rectification request".to_string(),
             ));
         }
-        for provider in &self.registry {
-            provider.rectify(&request.subject_ref, &patch).await?;
+        if request.status.is_terminal()
+            || request.verified_at.is_none()
+            || patch.corrections.is_empty()
+        {
+            return Err(PrivacyError::Conflict(
+                "an open verified request and non-empty corrections are required".to_string(),
+            ));
         }
+        for correction in &patch.corrections {
+            let provider = crate::domain::provider(&self.registry, &correction.context)
+                .ok_or_else(|| PrivacyError::Conflict("unknown correction context".to_string()))?;
+            if !provider
+                .rectifiable_fields()
+                .contains(&correction.field.as_str())
+            {
+                return Err(PrivacyError::Conflict(
+                    "this field requires correction through its owning service".to_string(),
+                ));
+            }
+        }
+        for provider in &self.registry {
+            if patch
+                .corrections
+                .iter()
+                .any(|correction| correction.context == provider.context_name())
+            {
+                provider.rectify(&request.subject_ref, &patch).await?;
+            }
+        }
+        self.requests
+            .set_status(
+                &mut scope,
+                request.id,
+                DsrStatus::Completed,
+                Some(Utc::now()),
+                None,
+            )
+            .await?;
         self.audit
             .record(
                 &mut scope,
@@ -1063,6 +1257,18 @@ impl PatchRequest {
                 "privacy.dsr.rectify".to_string(),
                 request_id.to_string(),
                 serde_json::to_value(&patch).unwrap_or_default(),
+            )
+            .await?;
+        self.events
+            .publish(
+                &mut scope,
+                &[PrivacyEvent::DsrClosed {
+                    request_id,
+                    subject: request.subject_ref.clone(),
+                    dsr_kind: request.kind.as_str().to_string(),
+                    status: "completed".to_string(),
+                    jurisdiction: request.jurisdiction.as_str().to_string(),
+                }],
             )
             .await?;
         scope

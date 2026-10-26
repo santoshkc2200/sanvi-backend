@@ -17,6 +17,8 @@ use crate::domain::{
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PrivacyNoticeView {
     pub notice_version: String,
+    pub disclosures: crate::config::PrivacyDisclosures,
+    pub ready_for_publication: bool,
     pub jurisdictions: Vec<NoticeJurisdictionView>,
     pub retention: Vec<RetentionNoticeRow>,
     pub subprocessors: Vec<SubProcessorNoticeRow>,
@@ -29,6 +31,7 @@ pub struct NoticeJurisdictionView {
     pub regime: String,
     pub consent_model: String,
     pub response_days: u16,
+    pub response_calendar_months: Option<u16>,
     pub appeal_window_days: Option<u16>,
     pub honours_universal_opt_out: bool,
 }
@@ -50,6 +53,7 @@ pub struct SubProcessorNoticeRow {
 }
 
 pub struct NoticeService {
+    disclosures: crate::config::PrivacyDisclosures,
     tx_manager: TxManager,
     rules: Arc<dyn RetentionRuleRepository>,
     processors: Arc<dyn SubProcessorRepository>,
@@ -64,11 +68,20 @@ impl NoticeService {
         jurisdictions: Arc<dyn JurisdictionRepository>,
     ) -> Self {
         Self {
+            disclosures: crate::config::PrivacyDisclosures::default(),
             tx_manager,
             rules,
             processors,
             jurisdictions,
         }
+    }
+
+    pub fn with_disclosures(mut self, disclosures: crate::config::PrivacyDisclosures) -> Self {
+        self.disclosures = disclosures;
+        self
+    }
+    pub fn disclosures(&self) -> &crate::config::PrivacyDisclosures {
+        &self.disclosures
     }
 
     pub async fn build(
@@ -91,6 +104,8 @@ impl NoticeService {
 
         Ok(PrivacyNoticeView {
             notice_version: notice_version.to_string(),
+            disclosures: self.disclosures.clone(),
+            ready_for_publication: self.disclosures.validate_for_publication().is_ok(),
             jurisdictions: profiles
                 .into_iter()
                 .map(|profile| NoticeJurisdictionView {
@@ -98,6 +113,11 @@ impl NoticeService {
                     regime: profile.regime.as_str().to_string(),
                     consent_model: profile.consent_model.as_str().to_string(),
                     response_days: profile.response_days,
+                    response_calendar_months: matches!(
+                        profile.regime,
+                        crate::domain::Regime::Gdpr | crate::domain::Regime::UkGdpr
+                    )
+                    .then_some(1),
                     appeal_window_days: profile.appeal_window_days,
                     honours_universal_opt_out: profile.honours_universal_opt_out,
                 })
@@ -149,7 +169,11 @@ pub struct NoticeAtCollectionView {
 }
 
 impl NoticeAtCollectionView {
-    pub fn build(notice_version: &str, rules: &[crate::domain::RetentionRule]) -> Self {
+    pub fn build(
+        notice_version: &str,
+        rules: &[crate::domain::RetentionRule],
+        disclosures: &crate::config::PrivacyDisclosures,
+    ) -> Self {
         let categories: Vec<String> = crate::domain::DATA_CLASSES
             .iter()
             .map(|def| def.category.to_string())
@@ -166,8 +190,8 @@ impl NoticeAtCollectionView {
                 .iter()
                 .map(|purpose| purpose.as_str().to_string())
                 .collect(),
-            sale_or_share: false,
-            targeted_advertising: false,
+            sale_or_share: disclosures.sale_or_share,
+            targeted_advertising: disclosures.targeted_advertising,
             sensitive_pi: sensitive,
             retention_summary: rules
                 .iter()

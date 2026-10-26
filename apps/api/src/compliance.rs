@@ -102,6 +102,7 @@ impl ComplianceHarness {
         let audit: Arc<dyn sanvi_audit::domain::AuditWriter> =
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(ids.clone()));
         let registry = privacy_provider_registry(&PrivacyProviderDeps {
+            media: sanvi_media::MediaConfig::default(),
             tx: tx.clone(),
             kratos_public_url: "http://127.0.0.1:4433".to_string(),
             kratos_admin_url: "http://127.0.0.1:4434".to_string(),
@@ -561,6 +562,7 @@ fn timing(
 /// The country code whose resolution lands on each seeded profile.
 pub fn representative_country(code: &str) -> &'static str {
     match code {
+        "global" => "US-OR",
         "eu" => "DE",
         "uk" => "GB",
         "jp" => "JP",

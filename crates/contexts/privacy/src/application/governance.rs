@@ -55,6 +55,8 @@ impl ListJurisdictions {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct UpsertJurisdictionCommand {
+    #[serde(default)]
+    pub evidence_codes: Vec<String>,
     pub code: String,
     pub regime: String,
     pub consent_model: String,
@@ -127,6 +129,9 @@ impl UpsertJurisdiction {
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
         self.jurisdictions
             .upsert(&mut scope, &profile, actor)
+            .await?;
+        self.jurisdictions
+            .set_mappings(&mut scope, profile.code.as_str(), &command.evidence_codes)
             .await?;
         self.audit
             .record(
@@ -454,6 +459,8 @@ impl RemoveSubProcessor {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct RecordBreachIncidentCommand {
+    #[serde(default)]
+    pub subjects_by_jurisdiction: std::collections::BTreeMap<String, u64>,
     pub discovered_at: DateTime<Utc>,
     pub contained_at: Option<DateTime<Utc>>,
     pub subjects: u64,
@@ -522,11 +529,22 @@ impl RecordBreachIncident {
             .iter()
             .map(|class| DataClass::parse(class))
             .collect::<Result<Vec<_>, _>>()?;
+        if command
+            .subjects_by_jurisdiction
+            .iter()
+            .any(|(code, count)| *count > command.subjects || !command.jurisdictions.contains(code))
+        {
+            return Err(PrivacyError::Conflict(
+                "affected counts must name affected jurisdictions and not exceed the total"
+                    .to_string(),
+            ));
+        }
         let incident = BreachIncident {
             id: self.ids.next_breach_incident_id()?,
             discovered_at: command.discovered_at,
             contained_at: command.contained_at,
             affected: AffectedSet {
+                subjects_by_jurisdiction: command.subjects_by_jurisdiction.clone(),
                 subjects: command.subjects,
                 tenants: command.tenants,
                 jurisdictions: jurisdictions.clone(),

@@ -128,7 +128,7 @@ Rules:
 | privacy | metrics.rs | 2 | 2 | no | covered
 | privacy | notices.rs | 0 | 0 | no | n/a
 | privacy | processing.rs | 2 | 2 | yes | covered
-| privacy | requests.rs | 8 | 8 | yes | covered
+| privacy | requests.rs | 8 | 10 | yes | covered
 | privacy | retention.rs | 3 | 3 | no | covered
 | system | check_liveness.rs | 1 | 1 | no | covered
 | system | check_readiness.rs | 1 | 1 | no | covered

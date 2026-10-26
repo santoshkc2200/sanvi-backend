@@ -29,6 +29,7 @@ use sanvi_privacy::application::NoticeService;
 /// deterministic shape (maps, sorted vectors, no timestamps).
 #[derive(Debug, Clone, Serialize)]
 pub struct CanonicalNotice {
+    pub disclosures: sanvi_privacy::config::PrivacyDisclosures,
     pub notice_version: String,
     pub backup_retention_days: i64,
     pub jurisdictions: BTreeMap<String, CanonicalJurisdiction>,
@@ -64,6 +65,7 @@ pub async fn render_canonical_notice(
     pool: &sqlx::PgPool,
     notice_version: &str,
     backup_retention_days: i64,
+    disclosures: &sanvi_privacy::config::PrivacyDisclosures,
 ) -> anyhow::Result<CanonicalNotice> {
     let tx = TxManager::new(
         pool.clone(),
@@ -76,7 +78,8 @@ pub async fn render_canonical_notice(
         std::sync::Arc::new(SqlxRetentionRuleRepository::new()),
         std::sync::Arc::new(SqlxSubProcessorRepository::new()),
         std::sync::Arc::new(SqlxJurisdictionRepository::new()),
-    );
+    )
+    .with_disclosures(disclosures.clone());
     let notice = service
         .build(notice_version, backup_retention_days)
         .await
@@ -125,6 +128,7 @@ pub async fn render_canonical_notice(
     }
 
     Ok(CanonicalNotice {
+        disclosures: notice.disclosures,
         notice_version: notice.notice_version,
         backup_retention_days: notice.backup_retention_days,
         jurisdictions,
@@ -210,6 +214,7 @@ pub async fn run(
         &pool,
         &cli_config.privacy.notice_version,
         cli_config.privacy.backup_retention_days,
+        &cli_config.privacy.disclosures,
     )
     .await?;
     let current_text = render_text(&current)?;

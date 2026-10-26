@@ -39,6 +39,7 @@ pub struct ProcessDsrReport {
 pub struct ProcessDsrBatch {
     tx_manager: TxManager,
     requests: Arc<dyn DsrRepository>,
+    consents: Arc<dyn crate::domain::ConsentRepository>,
     participants: Arc<dyn ParticipantRepository>,
     holds: Arc<dyn LegalHoldRepository>,
     artifacts: Arc<dyn ExportArtifactRepository>,
@@ -61,6 +62,7 @@ impl ProcessDsrBatch {
     pub fn new(
         tx_manager: TxManager,
         requests: Arc<dyn DsrRepository>,
+        consents: Arc<dyn crate::domain::ConsentRepository>,
         participants: Arc<dyn ParticipantRepository>,
         holds: Arc<dyn LegalHoldRepository>,
         artifacts: Arc<dyn ExportArtifactRepository>,
@@ -80,6 +82,7 @@ impl ProcessDsrBatch {
         Self {
             tx_manager,
             requests,
+            consents,
             participants,
             holds,
             artifacts,
@@ -160,6 +163,19 @@ impl ProcessDsrBatch {
             .begin_unscoped("privacy_dsr_advance_one", "privacy")
             .await
             .map_err(|err| PrivacyError::Storage(err.to_string()))?;
+
+        // Corrections require an actual patch; an empty worker pass cannot fulfill them.
+        if request.kind.rectifies() || request.kind == DsrKind::Other {
+            return Ok(None);
+        }
+
+        // Suppression is automatic; the remaining scope and lawful exceptions
+        // require an operator's documented decision before the request closes.
+        if matches!(request.kind, DsrKind::Restriction | DsrKind::Objection)
+            && request.status == DsrStatus::OnHold
+        {
+            return Ok(None);
+        }
 
         // Legal holds block erasure outright (the request parks on hold).
         if request.kind == DsrKind::Erasure {
@@ -284,6 +300,9 @@ impl ProcessDsrBatch {
                                 bundles.push(bundle);
                             }
                             ProviderOutcome::Erased(report) => {
+                                // A completed report can contain explicitly disclosed retention
+                                // exceptions. Missing capabilities and in-flight erasure must
+                                // return an error/Pending rather than a successful report.
                                 self.participants
                                     .set_status(
                                         &mut scope,
@@ -309,6 +328,18 @@ impl ProcessDsrBatch {
                                     .await?;
                             }
                         },
+                        Err(PrivacyError::ProcessingPending(detail)) => {
+                            self.participants
+                                .set_status(
+                                    &mut scope,
+                                    request.id,
+                                    name,
+                                    ParticipantStatus::Pending,
+                                    None,
+                                    Some(detail),
+                                )
+                                .await?;
+                        }
                         Err(err) => {
                             self.participants
                                 .record_attempt(&mut scope, request.id, name)
@@ -361,6 +392,10 @@ impl ProcessDsrBatch {
         } else if any_failed {
             AdvanceOutcome::PartiallyComplete
         } else {
+            scope
+                .commit()
+                .await
+                .map_err(|err| PrivacyError::Storage(err.to_string()))?;
             return Ok(None);
         };
 
@@ -400,7 +435,10 @@ impl ProcessDsrBatch {
         let now = self.clock.now();
 
         if request.kind.collects() {
-            self.crypto.create_subject_key(request.subject_id).await?;
+            match self.crypto.create_subject_key(request.subject_id).await {
+                Ok(_) | Err(PrivacyError::KeyShredded) => {}
+                Err(err) => return Err(err),
+            }
             let passphrase = self.generate_passphrase();
             let token = self.generate_passphrase();
             let archive = self.packager.package(&request.subject_ref, bundles)?;
@@ -465,10 +503,14 @@ impl ProcessDsrBatch {
         if request.kind.erases() {
             // Provision legacy subjects that pre-date envelope-key creation,
             // then destroy the durable row. A tombstone prevents recreation.
-            self.crypto.create_subject_key(request.subject_id).await?;
+            match self.crypto.create_subject_key(request.subject_id).await {
+                Ok(_) | Err(PrivacyError::KeyShredded) => {}
+                Err(err) => return Err(err),
+            }
             // Crypto-shred: destroy the per-subject DEK. After this, any
             // ciphertext under that key is unrecoverable (backups included).
             self.crypto.destroy_subject_key(request.subject_id).await?;
+            let now = self.clock.now();
 
             // Record the retention window the subject was told about.
             let retained: Vec<crate::domain::RetainedItem> = erase_reports
@@ -502,6 +544,52 @@ impl ProcessDsrBatch {
             let _ = self.backup_retention_days; // published in the notice
             return Ok(Some(FinishOutcome {
                 outcome: AdvanceOutcome::Completed { shred: true },
+                export_mail: None,
+            }));
+        }
+
+        if matches!(request.kind, DsrKind::Restriction | DsrKind::Objection) {
+            // Persist denials as well as the durable restriction, so downstream
+            // opt-out delivery and advertising retractions receive real work.
+            for purpose in request.kind.denied_purposes() {
+                self.consents
+                    .append(
+                        scope,
+                        &crate::domain::ConsentRecord {
+                            id: self.ids.next_consent_id()?,
+                            tenant_id: request.tenant_id,
+                            subject_id: Some(request.subject_id),
+                            subject_ref: request.subject_ref.clone(),
+                            purpose,
+                            granted: false,
+                            notice_version: String::new(),
+                            method: crate::domain::ConsentMethod::OptOut,
+                            evidence: serde_json::json!({"request_id": request.id.to_string()}),
+                            locale: None,
+                            jurisdiction: request.jurisdiction.clone(),
+                            signal_source: Some(crate::domain::SignalSource::Api),
+                            recorded_at: now,
+                            withdrawn_at: Some(now),
+                        },
+                    )
+                    .await?;
+            }
+            self.events
+                .publish(
+                    scope,
+                    &[PrivacyEvent::ProcessingOptedOut {
+                        subject: request.subject_ref.clone(),
+                        purposes: request.kind.denied_purposes(),
+                        source: "verified_rights_request".to_string(),
+                        jurisdiction: request.jurisdiction.as_str().to_string(),
+                    }],
+                )
+                .await?;
+            self.requests
+                .set_status(scope, request.id, DsrStatus::OnHold, None, None)
+                .await?;
+            return Ok(Some(FinishOutcome {
+                outcome: AdvanceOutcome::Escalated,
                 export_mail: None,
             }));
         }

@@ -659,7 +659,11 @@ pub async fn get_notice_at_collection(
         .execute()
         .await
         .map_err(api_error)?;
-    let view = crate::application::NoticeAtCollectionView::build(&state.notice_version, &rules);
+    let view = crate::application::NoticeAtCollectionView::build(
+        &state.notice_version,
+        &rules,
+        state.notices.disclosures(),
+    );
     Ok(HttpResponse::Ok().json(view))
 }
 
@@ -930,12 +934,14 @@ pub async fn reject_dsr(
     tag = "privacy",
     operation_id = "extend_dsr",
     params(("id" = String, Path, description = "The request id")),
+    request_body = Option<RejectRequestRequest>,
     responses((status = 200, description = "New deadline", body = chrono::DateTime<chrono::Utc>))
 )]
 pub async fn extend_dsr(
     state: web::Data<PrivacyState>,
     path: web::Path<String>,
     subject: OptionalSubject,
+    body: Option<web::Json<RejectRequestRequest>>,
     _guard: RequiredPermission,
 ) -> Result<impl Responder, ApiError> {
     let actor = require_actor(subject)?;
@@ -944,6 +950,7 @@ pub async fn extend_dsr(
         .execute(
             actor,
             ExtendDeadlineCommand {
+                reason: body.map(|body| body.reason.clone()).unwrap_or_default(),
                 request_id: dsr_id(&path)?,
             },
         )
@@ -1481,4 +1488,49 @@ pub async fn upsert_retention_rule(
         .await
         .map_err(api_error)?;
     Ok(HttpResponse::Ok().finish())
+}
+
+/// Release a restriction after verifying the subject's instruction or legal exception.
+#[utoipa::path(post, path = "/api/v1/platform/privacy/requests/{id}/release", tag = "privacy",
+    operation_id = "release_processing_restriction", params(("id" = String, Path)),
+    request_body = RejectRequestRequest, responses((status = 204, description = "Restriction released")))]
+pub async fn release_processing_restriction(
+    state: web::Data<PrivacyState>,
+    path: web::Path<String>,
+    subject: OptionalSubject,
+    body: web::Json<RejectRequestRequest>,
+    _guard: RequiredPermission,
+) -> Result<impl Responder, ApiError> {
+    state
+        .patch_request
+        .release_restriction(require_actor(subject)?, dsr_id(&path)?, &body.reason)
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::NoContent().finish())
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FulfillRequestBody {
+    pub summary: String,
+    pub evidence_reference: String,
+}
+#[utoipa::path(post, path = "/api/v1/platform/privacy/requests/{id}/fulfill", tag = "privacy", operation_id = "fulfill_privacy_request", params(("id" = String, Path)), request_body = FulfillRequestBody, responses((status = 204, description = "Manual response recorded")))]
+pub async fn fulfill_privacy_request(
+    state: web::Data<PrivacyState>,
+    path: web::Path<String>,
+    subject: OptionalSubject,
+    body: web::Json<FulfillRequestBody>,
+    _guard: RequiredPermission,
+) -> Result<impl Responder, ApiError> {
+    state
+        .patch_request
+        .fulfill(
+            require_actor(subject)?,
+            dsr_id(&path)?,
+            &body.summary,
+            &body.evidence_reference,
+        )
+        .await
+        .map_err(api_error)?;
+    Ok(HttpResponse::NoContent().finish())
 }

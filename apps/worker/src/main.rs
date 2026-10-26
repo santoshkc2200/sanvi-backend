@@ -149,6 +149,7 @@ use sanvi_theming::{
 use serde::{Deserialize, Serialize};
 
 struct WorkerRecipientDirectory {
+    users: Arc<dyn sanvi_identity::domain::UserRepository>,
     tx_manager: sanvi_persistence::TxManager,
     memberships: Arc<dyn sanvi_identity::domain::MembershipRepository>,
     roles: Arc<dyn sanvi_identity::domain::RoleCatalog>,
@@ -158,6 +159,36 @@ struct WorkerRecipientDirectory {
 impl RecipientDirectory for WorkerRecipientDirectory {
     async fn resolve(&self, audience: &Audience) -> Result<Vec<Recipient>, NotificationError> {
         match audience {
+            Audience::User(id) => {
+                let mut scope = self
+                    .tx_manager
+                    .begin_unscoped("notification_user", "notifications")
+                    .await
+                    .map_err(|err| NotificationError::Unavailable {
+                        detail: err.to_string(),
+                    })?;
+                let user = self
+                    .users
+                    .find_by_id(&mut scope, *id)
+                    .await
+                    .map_err(|err| NotificationError::Unavailable {
+                        detail: err.to_string(),
+                    })?;
+                scope
+                    .commit()
+                    .await
+                    .map_err(|err| NotificationError::Unavailable {
+                        detail: err.to_string(),
+                    })?;
+                Ok(user
+                    .into_iter()
+                    .filter(|user| user.email_verified())
+                    .map(|user| Recipient {
+                        key: id.to_string(),
+                        email: user.primary_email().as_str().to_string(),
+                    })
+                    .collect())
+            }
             Audience::Email(addr) => Ok(vec![Recipient {
                 key: String::new(),
                 email: addr.clone(),
@@ -788,6 +819,8 @@ impl WorkerPoolConfig {
 pub struct WorkerConfig {
     #[serde(default)]
     pub worker_management: management::ManagementConfig,
+    #[serde(default)]
+    pub media: sanvi_media::MediaConfig,
     #[serde(default)]
     pub platform: sanvi_http::config::PlatformApiConfig,
     #[serde(default)]
@@ -1516,6 +1549,20 @@ async fn main() -> ExitCode {
 
     // --- privacy context (phase 05): DSR saga + compliance jobs --------------
     let privacy_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
+    if let Err(err) = sanvi_privacy::adapters::erasure_ledger::queue_restore_replay(
+        &privacy_tx,
+        &config.privacy,
+        ids.clone(),
+        &sanvi_audit::adapters::PrivacyAuditWriterAdapter::new(Arc::new(SqlxAuditWriter::new(
+            ids.clone(),
+        ))),
+    )
+    .await
+    {
+        eprintln!("privacy recovery replay failed: {err}");
+        return ExitCode::from(1);
+    }
+
     let privacy_subjects: std::sync::Arc<dyn SubjectRepository> =
         std::sync::Arc::new(SqlxSubjectRepository::new());
     let privacy_jurisdictions: std::sync::Arc<dyn JurisdictionRepository> =
@@ -1605,12 +1652,15 @@ async fn main() -> ExitCode {
         .expect("validated by PrivacyConfig")
         .try_into()
         .expect("validated length");
-        std::sync::Arc::new(SqlxEnvelopeCrypto::new(
-            privacy_tx.clone(),
-            privacy_keys.clone(),
-            kek,
-            config.privacy.kek_id.clone(),
-        ))
+        std::sync::Arc::new(
+            SqlxEnvelopeCrypto::new(
+                privacy_tx.clone(),
+                privacy_keys.clone(),
+                kek,
+                config.privacy.kek_id.clone(),
+            )
+            .with_erasure_ledger(config.privacy.erasure_ledger_dir.clone()),
+        )
     } else {
         std::sync::Arc::new(DisabledEnvelopeCrypto)
     };
@@ -1723,7 +1773,10 @@ async fn main() -> ExitCode {
         std::sync::Arc::new(
             sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
         ),
-        std::sync::Arc::new(sanvi_media::adapters::MediaPrivacyProvider::new()),
+        std::sync::Arc::new(sanvi_media::adapters::MediaPrivacyProvider::with_storage(
+            privacy_tx.clone(),
+            config.media.clone(),
+        )),
         std::sync::Arc::new(sanvi_notifications::NotificationsPrivacyProvider::new()),
     ];
     // TASK-029: the worker drives the erasure saga, so its registry copy
@@ -1745,6 +1798,7 @@ async fn main() -> ExitCode {
     let dsr_process = std::sync::Arc::new(ProcessDsrBatch::new(
         privacy_tx.clone(),
         privacy_requests.clone(),
+        privacy_consents.clone(),
         privacy_participants.clone(),
         privacy_holds.clone(),
         privacy_artifacts.clone(),
@@ -3462,6 +3516,7 @@ async fn main() -> ExitCode {
                 .with_commercial_quota(quota_runtime.clone()),
         );
         let notif_directory = Arc::new(WorkerRecipientDirectory {
+            users: Arc::new(sanvi_identity::adapters::repo::SqlxUserRepository::new()),
             tx_manager: tx_manager.clone(),
             memberships: Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),
             roles: Arc::new(SqlxRoleCatalog::new(

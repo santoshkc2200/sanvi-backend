@@ -44,3 +44,9 @@ pub trait MediaGatewayPort: Send + Sync {
         asset_id: &str,
     ) -> Result<AssetDeliveryView, MediaError>;
 }
+
+/// Durable subject ownership used to locate uploaded personal media for rights requests.
+#[async_trait]
+pub trait MediaOwnerIndexPort: Send + Sync {
+    async fn remember(&self, tenant_id: TenantId, owner: &str) -> Result<(), MediaError>;
+}

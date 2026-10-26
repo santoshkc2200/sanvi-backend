@@ -2063,6 +2063,30 @@
   },
   {
    "method": "POST",
+   "path": "/api/v1/platform/privacy/requests/{id}/fulfill",
+   "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::fulfill_privacy_request",
+   "permission": "platform.privacy.request.write",
+   "tenant": "platform cross-tenant administration; no tenant resolver scope",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "crates/contexts/privacy/src/adapters/http/catalog.rs",
+    "crates/contexts/privacy/src/adapters/http/routes.rs"
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/platform/privacy/requests/{id}/release",
+   "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::release_processing_restriction",
+   "permission": "platform.privacy.request.write",
+   "tenant": "platform cross-tenant administration; no tenant resolver scope",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "crates/contexts/privacy/src/adapters/http/catalog.rs",
+    "crates/contexts/privacy/src/adapters/http/routes.rs"
+   ]
+  },
+  {
+   "method": "POST",
    "path": "/api/v1/platform/privacy/requests/{id}/reject",
    "handler": "crates/contexts/privacy/src/adapters/http/handlers.rs::reject_dsr",
    "permission": "platform.privacy.request.write",

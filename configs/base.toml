@@ -341,7 +341,7 @@ internal_sla_days = 14
 # Dry-run is mandatory in production until the first verified run.
 retention_dry_run = true
 retention_sweep_batch_size = 500
-notice_version = "2026-08-19"
+notice_version = "2026-10-15"
 device_cookie_name = "sanvi_gpc_device"
 device_cookie_ttl_days = 30
 subprocessor_notice_days = 30

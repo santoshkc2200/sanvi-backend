@@ -206,6 +206,10 @@ pub async fn run(
         return Ok(());
     }
 
+    sanvi_privacy::adapters::erasure_ledger::require_safe_live_restore(
+        &config.privacy.erasure_ledger_dir,
+    )?;
+
     // --- mark restoring: its own transaction, before the apply ------------
     // The middleware gates every non-active status with 423; `restoring`
     // carries `reason: "restoring"` so the shell gates for the whole apply.

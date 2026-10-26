@@ -87,6 +87,22 @@ pub const ROUTES: &[RouteDef] = &[
         path: "/api/v1/privacy/requests/{id}/rectify",
         requirement: Requirement::Authenticated,
     },
+    RouteDef {
+        method: Method::POST,
+        path: "/api/v1/platform/privacy/requests/{id}/release",
+        requirement: Requirement::Permission(
+            "platform.privacy.request.write",
+            ResourceSpec::Platform,
+        ),
+    },
+    RouteDef {
+        method: Method::POST,
+        path: "/api/v1/platform/privacy/requests/{id}/fulfill",
+        requirement: Requirement::Permission(
+            "platform.privacy.request.write",
+            ResourceSpec::Platform,
+        ),
+    },
     // --- public notices & disclosures ---------------------------------------
     RouteDef {
         method: Method::GET,

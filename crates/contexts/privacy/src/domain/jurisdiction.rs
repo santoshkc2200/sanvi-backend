@@ -69,6 +69,37 @@ pub fn most_protective() -> JurisdictionRef {
     JurisdictionRef::parse(MOST_PROTECTIVE_CODE).expect("hardcoded code parses")
 }
 
+/// Fail-closed policy for markets whose applicable rules have not been reviewed.
+/// This is an internal operating baseline, not a claim of worldwide coverage.
+pub fn global_operating_profile() -> JurisdictionProfile {
+    let mut profile = most_protective_profile();
+    profile.code = JurisdictionRef::from_static("global");
+    profile.regime = Regime::Baseline;
+    profile.ack_days = Some(1);
+    profile.response_days = 14;
+    profile.extension_days = 0;
+    profile.opt_out_effective_business_days = Some(1);
+    profile.appeal_window_days = Some(365);
+    profile.appeal_response_days = Some(14);
+    profile.minor_opt_in_age = Some(18);
+    profile.breach_rules = BreachRuleSet {
+        authority_due_hours: Some(0),
+        authority_threshold: Some(0),
+        consumer_due_days: Some(0),
+        consumer_threshold: Some(0),
+        ..Default::default()
+    };
+    profile.authority = AuthorityContact {
+        name: "Relevant local privacy authority; confirm jurisdiction during review".to_string(),
+        complaint_url:
+            "https://globalprivacyassembly.org/participation-in-the-assembly/members-online/"
+                .to_string(),
+    };
+    profile.source_note =
+        Some("Conservative operating baseline; local applicability review required".to_string());
+    profile
+}
+
 /// The seeded profiles (mirrors `migrations/20260819000000_privacy_compliance.sql`).
 /// Adding a profile here without extending the matrix test fails CI; the
 /// migration-drift test fails if this list and the seed diverge.
@@ -417,6 +448,16 @@ pub fn add_business_days(start: DateTime<Utc>, days: u16) -> DateTime<Utc> {
     result
 }
 
+/// EU/UK response clocks use calendar months, clamping month-end dates.
+pub fn response_due(start: DateTime<Utc>, profile: &JurisdictionProfile) -> DateTime<Utc> {
+    match profile.regime {
+        Regime::Gdpr | Regime::UkGdpr => start
+            .checked_add_months(chrono::Months::new(1))
+            .unwrap_or(start),
+        _ => add_days(start, profile.response_days),
+    }
+}
+
 /// Advance a timestamp by calendar days.
 pub fn add_days(start: DateTime<Utc>, days: u16) -> DateTime<Utc> {
     start + Duration::days(i64::from(days))
@@ -500,5 +541,22 @@ mod tests {
         // 5 business days from Friday = Friday next week.
         let next_friday = add_business_days(friday, 5);
         assert_eq!(next_friday.date_naive().to_string(), "2026-08-21");
+    }
+}
+
+#[cfg(test)]
+mod calendar_clock_regressions {
+    use super::*;
+    #[test]
+    fn response_uses_calendar_months_in_february_and_at_month_end() {
+        let profile = seeded_profile(&JurisdictionRef::parse("eu").unwrap()).unwrap();
+        for (received, expected) in [
+            ("2026-02-05T12:00:00Z", "2026-03-05T12:00:00Z"),
+            ("2024-01-31T12:00:00Z", "2024-02-29T12:00:00Z"),
+        ] {
+            let received: DateTime<Utc> = received.parse().unwrap();
+            let expected: DateTime<Utc> = expected.parse().unwrap();
+            assert_eq!(response_due(received, &profile), expected);
+        }
     }
 }
