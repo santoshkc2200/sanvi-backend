@@ -52,7 +52,13 @@ pub trait ProviderVerifier: Send + Sync {
     ) -> Result<(), AccountingError>;
 }
 
-pub type BookChange = Box<dyn FnOnce(&mut Book) -> Result<AccountingEvent, AccountingError> + Send>;
+pub type BookChange = Box<
+    dyn for<'a> FnOnce(
+            &'a mut Book,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<Option<AccountingEvent>, AccountingError>> + Send + 'a>,
+        > + Send,
+>;
 
 pub type PostingChange = Box<dyn FnOnce(&mut Posting) -> Result<bool, AccountingError> + Send>;
 
@@ -63,6 +69,10 @@ pub trait AccountingStore: Send + Sync {
     async fn create(&self, book: Book, event: AccountingEvent) -> Result<Book, AccountingError>;
     /// Unlocked snapshot; mutations must pass its revision back to `change`.
     async fn get(&self, tenant_id: TenantId, book_id: BookId) -> Result<Book, AccountingError>;
+    /// Hold the book lock through the asynchronous change. `None` leaves the
+    /// book unchanged, for operations coordinating credentials with routing.
+    /// Acquire this lock before credential locks, and hold it through provider
+    /// verification or revocation to prevent routing with revoked credentials.
     async fn change(
         &self,
         tenant_id: TenantId,

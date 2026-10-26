@@ -310,6 +310,23 @@ CI.
 - The domains registrar runs hard-validated `sandbox` mode; no production registrar adapter exists
   yet, so domain *purchase* is sandbox-scoped while verification/TLS run for real.
 
+## Accounting credential and routing coordination
+
+Tenant data encryption keys enter the process cache only after the credential and
+outbox transaction commits. A failed first authorization cannot leave a cached key
+whose wrapped database row was rolled back; a retry remains decryptable by another
+process using the deployed key encryption key.
+
+Activation, switch scheduling, and revocation hold the same book row lock. Provider
+verification and the revocation routing check run inside that lock, acquired before
+the credential row lock. Revocation therefore cannot invalidate a connection between
+verification and routing activation. Provider revocation remains best-effort; local
+credential revocation and its outbox event commit together.
+
+Regression evidence: `crates/contexts/accounting/tests/authorization_integration.rs`
+(`failed_first_authorization_does_not_cache_a_rolled_back_key`,
+`activation_serializes_with_revocation`, `scheduled_switch_serializes_with_revocation`).
+
 ## PCI DSS scope confirmation (re-confirmed at this refresh)
 
 Scope remains **SAQ-A** (card-not-present, fully outsourced): card data is captured only on

@@ -15,7 +15,7 @@ use sanvi_accounting::{
     application::{
         AccessTokens, AccountingAccess, ActivateBook, Actor, Authorization, CompleteAuthorization,
         CreateBook, CredentialVerifier, Permission, ProviderDirectory, ProviderOAuth,
-        RegisterConnection, RevokeAuthorization, Services, StartAuthorization,
+        RegisterConnection, RevokeAuthorization, ScheduleSwitch, Services, StartAuthorization,
     },
     domain::{
         AccountMappings, AccountingError, Book, Connection, ConnectionId, Provider,
@@ -56,6 +56,7 @@ struct FakeFreee {
     refreshes: AtomicUsize,
     revoked: Mutex<Vec<String>>,
     can_post: Mutex<bool>,
+    catalog_gate: Mutex<Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>>,
 }
 
 impl FakeFreee {
@@ -109,6 +110,11 @@ impl ProviderDirectory for FakeFreee {
     }
     async fn catalog(&self, token: &Secret, _: &str) -> Result<ProviderCatalog, AccountingError> {
         assert!(token.expose().starts_with("at-"));
+        let gate = self.catalog_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.0.notify_one();
+            gate.1.notified().await;
+        }
         Ok(ProviderCatalog {
             can_post: *self.can_post.lock().unwrap(),
             account_ids: ["sales", "returns", "cash"].map(String::from).into(),
@@ -142,6 +148,7 @@ impl Harness {
             refreshes: AtomicUsize::new(0),
             revoked: Mutex::new(Vec::new()),
             can_post: Mutex::new(true),
+            catalog_gate: Mutex::new(None),
         });
         let credentials = Arc::new(PostgresCredentialStore::new(
             transactions.clone(),
@@ -493,4 +500,124 @@ async fn only_connections_that_no_longer_route_can_be_revoked() {
     .unwrap();
     assert!(cleared);
     assert_eq!(*harness.freee.revoked.lock().unwrap(), vec!["rt-0"]);
+}
+
+#[tokio::test]
+async fn failed_first_authorization_does_not_cache_a_rolled_back_key() {
+    let harness = Harness::new().await;
+    let book = harness.book().await;
+    let admin = harness.db.admin_pool().await;
+    sqlx::raw_sql("CREATE FUNCTION platform.reject_authorization() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced outbox failure'; END $$; CREATE TRIGGER reject_authorization BEFORE INSERT ON platform.outbox FOR EACH ROW EXECUTE FUNCTION platform.reject_authorization();")
+        .execute(&admin).await.unwrap();
+    assert!(harness.consent(&book, 3001).await.is_err());
+    let keys: i64 = sqlx::query_scalar("SELECT count(*) FROM accounting.tenant_secret_keys")
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+    assert_eq!(keys, 0);
+    sqlx::raw_sql("DROP TRIGGER reject_authorization ON platform.outbox; DROP FUNCTION platform.reject_authorization();")
+        .execute(&admin).await.unwrap();
+    harness.consent(&book, 3001).await.unwrap();
+
+    // A fresh process must be able to decrypt the retry's persisted tokens.
+    let ids = test_ids();
+    let tokens = AccessTokens {
+        credentials: Arc::new(PostgresCredentialStore::new(
+            TxManager::new(harness.db.app_pool(), ids.clone()),
+            ids,
+            [7; 32],
+            "kek-test".into(),
+        )),
+        providers: vec![harness.freee.clone()],
+        clock: harness.clock.clone(),
+    };
+    assert_eq!(
+        tokens
+            .access_token(harness.user.tenant_id(), &connection(3001, "42"))
+            .await
+            .unwrap()
+            .expose(),
+        "at-0"
+    );
+}
+
+async fn routing_change_serializes_with_revocation(schedule: bool) {
+    let harness = Harness::new().await;
+    let mut book = harness.book().await;
+    harness.consent(&book, 3001).await.unwrap();
+    let target = if schedule {
+        book = ActivateBook(harness.services.clone())
+            .execute(
+                harness.user,
+                book.id(),
+                book.revision(),
+                ConnectionId::try_from(3001).unwrap(),
+                harness.clock.now(),
+            )
+            .await
+            .unwrap();
+        *harness.freee.company.lock().unwrap() = "43".into();
+        harness.consent(&book, 3002).await.unwrap();
+        ConnectionId::try_from(3002).unwrap()
+    } else {
+        ConnectionId::try_from(3001).unwrap()
+    };
+    let gate = Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
+    *harness.freee.catalog_gate.lock().unwrap() = Some(gate.clone());
+    let services = harness.services.clone();
+    let user = harness.user;
+    let book_id = book.id();
+    let routing = tokio::spawn(async move {
+        if schedule {
+            ScheduleSwitch(services)
+                .execute(
+                    user,
+                    book_id,
+                    book.revision(),
+                    target,
+                    "2026-10-27T00:00:00Z".parse().unwrap(),
+                )
+                .await
+        } else {
+            let now = services.clock.now();
+            ActivateBook(services)
+                .execute(user, book_id, book.revision(), target, now)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), gate.0.notified())
+        .await
+        .unwrap();
+    let authorization = harness.authorization.clone();
+    let mut revoke = tokio::spawn(async move {
+        RevokeAuthorization(authorization)
+            .execute(user, book_id, target)
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut revoke)
+            .await
+            .is_err()
+    );
+    gate.1.notify_one();
+    routing.await.unwrap().unwrap();
+    assert!(matches!(
+        revoke.await.unwrap(),
+        Err(AccountingError::Conflict(_) | AccountingError::StaleRevision)
+    ));
+    assert_eq!(
+        harness.status(target.as_i64()).await.as_deref(),
+        Some("active")
+    );
+    assert!(harness.freee.revoked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn activation_serializes_with_revocation() {
+    routing_change_serializes_with_revocation(false).await;
+}
+
+#[tokio::test]
+async fn scheduled_switch_serializes_with_revocation() {
+    routing_change_serializes_with_revocation(true).await;
 }

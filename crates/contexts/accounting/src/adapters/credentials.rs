@@ -102,9 +102,8 @@ impl PostgresCredentialStore {
             .map_err(crypto)?
             .try_into()
             .map_err(|_| AccountingError::Storage("tenant DEK must be 32 bytes".into()))?;
-        if let Ok(mut cache) = self.deks.lock() {
-            cache.insert(tenant, dek);
-        }
+        // The returned key may still be uncommitted. Only publish it after
+        // the credential transaction commits successfully.
         Ok(dek)
     }
 
@@ -172,7 +171,7 @@ impl PostgresCredentialStore {
         scope: &mut ScopedTx<'_>,
         tenant: TenantId,
         credential: &Credential,
-    ) -> Result<(), AccountingError> {
+    ) -> Result<Key, AccountingError> {
         let dek = self.dek(scope, tenant).await?;
         let sealed = Self::seal(&dek, credential)?;
         sqlx::query!(
@@ -183,7 +182,7 @@ impl PostgresCredentialStore {
         ).execute(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?
             .rows_affected()
             .eq(&1)
-            .then_some(())
+            .then_some(dek)
             .ok_or(AccountingError::Conflict("connection belongs to another book"))
     }
 
@@ -255,9 +254,13 @@ impl CredentialStore for PostgresCredentialStore {
         credential: Credential,
     ) -> Result<(), AccountingError> {
         let mut scope = self.begin(tenant_id).await?;
-        self.write(&mut scope, tenant_id, &credential).await?;
+        let dek = self.write(&mut scope, tenant_id, &credential).await?;
         self.append(&mut scope, tenant_id, &credential).await?;
-        scope.commit().await.map_err(storage)
+        scope.commit().await.map_err(storage)?;
+        if let Ok(mut cache) = self.deks.lock() {
+            cache.insert(tenant_id, dek);
+        }
+        Ok(())
     }
 
     async fn update(

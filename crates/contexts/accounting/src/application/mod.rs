@@ -106,8 +106,10 @@ impl RegisterConnection {
                 book_id,
                 revision,
                 Box::new(move |book| {
-                    book.add_connection(connection)?;
-                    Ok(event(book, "connection_registered"))
+                    Box::pin(async move {
+                        book.add_connection(connection)?;
+                        Ok(Some(event(book, "connection_registered")))
+                    })
                 }),
             )
             .await
@@ -130,11 +132,7 @@ impl ActivateBook {
         if book.revision() != revision {
             return Err(AccountingError::StaleRevision);
         }
-        self.0
-            .verifier
-            .verify(actor.tenant_id(), book.connection(connection_id)?)
-            .await?;
-        let now = self.0.clock.now();
+        let services = self.0.clone();
         self.0
             .store
             .change(
@@ -142,8 +140,15 @@ impl ActivateBook {
                 book_id,
                 revision,
                 Box::new(move |book| {
-                    book.activate_initial(connection_id, starts_at, now)?;
-                    Ok(event(book, "destination_activated"))
+                    Box::pin(async move {
+                        services
+                            .verifier
+                            .verify(actor.tenant_id(), book.connection(connection_id)?)
+                            .await?;
+                        let now = services.clock.now();
+                        book.activate_initial(connection_id, starts_at, now)?;
+                        Ok(Some(event(book, "destination_activated")))
+                    })
                 }),
             )
             .await
@@ -166,11 +171,7 @@ impl ScheduleSwitch {
         if book.revision() != revision {
             return Err(AccountingError::StaleRevision);
         }
-        self.0
-            .verifier
-            .verify(actor.tenant_id(), book.connection(connection_id)?)
-            .await?;
-        let now = self.0.clock.now();
+        let services = self.0.clone();
         self.0
             .store
             .change(
@@ -178,8 +179,15 @@ impl ScheduleSwitch {
                 book_id,
                 revision,
                 Box::new(move |book| {
-                    book.schedule_switch(connection_id, cutover_at, now)?;
-                    Ok(event(book, "switch_scheduled"))
+                    Box::pin(async move {
+                        services
+                            .verifier
+                            .verify(actor.tenant_id(), book.connection(connection_id)?)
+                            .await?;
+                        let now = services.clock.now();
+                        book.schedule_switch(connection_id, cutover_at, now)?;
+                        Ok(Some(event(book, "switch_scheduled")))
+                    })
                 }),
             )
             .await
@@ -203,8 +211,10 @@ impl CancelSwitch {
                 book_id,
                 revision,
                 Box::new(move |book| {
-                    book.cancel_switch(now)?;
-                    Ok(event(book, "switch_canceled"))
+                    Box::pin(async move {
+                        book.cancel_switch(now)?;
+                        Ok(Some(event(book, "switch_canceled")))
+                    })
                 }),
             )
             .await

@@ -159,34 +159,51 @@ impl RevokeAuthorization {
         book_id: BookId,
         connection_id: ConnectionId,
     ) -> Result<(), AccountingError> {
-        let auth = &self.0;
+        let auth = self.0.clone();
         auth.user(actor).await?;
         let book = auth.services.store.get(actor.tenant_id(), book_id).await?;
-        let connection = book.connection(connection_id)?;
-        let now = auth.services.clock.now();
-        if book.active_connection(now) == Some(connection_id)
-            || book.draining_connections(now).contains(&connection_id)
-            || book
-                .scheduled_switch(now)
-                .is_some_and(|period| period.connection_id == connection_id)
-        {
-            return Err(AccountingError::Conflict(
-                "connection still routes postings; switch away and wait for the grace window",
-            ));
-        }
-        let oauth = auth.oauth(connection.provider()).ok();
-        auth.credentials
-            .update(
+        let services = auth.services.clone();
+        services
+            .store
+            .change(
                 actor.tenant_id(),
-                connection_id,
-                Box::new(move |credential| {
+                book_id,
+                book.revision(),
+                Box::new(move |book| {
                     Box::pin(async move {
-                        if let (Some(oauth), Some(tokens)) = (oauth, &credential.tokens)
-                            && let Err(error) = oauth.revoke(&tokens.refresh_token).await
+                        let connection = book.connection(connection_id)?;
+                        let now = auth.services.clock.now();
+                        if book.active_connection(now) == Some(connection_id)
+                            || book.draining_connections(now).contains(&connection_id)
+                            || book
+                                .scheduled_switch(now)
+                                .is_some_and(|period| period.connection_id == connection_id)
                         {
-                            tracing::warn!(%error, "accounting: provider token revocation failed");
+                            return Err(AccountingError::Conflict(
+                                "connection still routes postings; switch away and wait for the grace window",
+                            ));
                         }
-                        Ok(credential.revoked())
+                        let oauth = auth.oauth(connection.provider()).ok();
+                        auth.credentials
+                            .update(
+                                actor.tenant_id(),
+                                connection_id,
+                                Box::new(move |credential| {
+                                    Box::pin(async move {
+                                        if credential.book_id != book_id {
+                                            return Err(AccountingError::NotFound);
+                                        }
+                                        if let (Some(oauth), Some(tokens)) = (oauth, &credential.tokens)
+                                            && let Err(error) = oauth.revoke(&tokens.refresh_token).await
+                                        {
+                                            tracing::warn!(%error, "accounting: provider token revocation failed");
+                                        }
+                                        Ok(credential.revoked())
+                                    })
+                                }),
+                            )
+                            .await?;
+                        Ok(None)
                     })
                 }),
             )

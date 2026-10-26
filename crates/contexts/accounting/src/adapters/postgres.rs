@@ -331,7 +331,10 @@ impl AccountingStore for PostgresAccountingStore {
         if book.revision() != revision {
             return Err(AccountingError::StaleRevision);
         }
-        let event = change(&mut book)?;
+        let Some(event) = change(&mut book).await? else {
+            scope.commit().await.map_err(storage)?;
+            return Ok(book);
+        };
         let document = serde_json::to_value(&book).map_err(storage)?;
         sqlx::query!("UPDATE accounting.books SET revision = $3, document = $4 WHERE tenant_id = $1 AND id = $2",
             tenant_id.as_i64(), book_id.as_i64(), book.revision(), document
