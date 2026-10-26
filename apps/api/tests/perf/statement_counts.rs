@@ -159,10 +159,21 @@ async fn statement_snapshot(
         };
         sqlx::Error::Configuration(format!("{err}: {hint}").into())
     })?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, calls, text)| (id, (calls, text)))
-        .collect())
+    Ok(aggregate_statement_rows(rows))
+}
+
+/// pg_stat_statements has a separate row per role (and top-level flag).
+/// A queryid alone is not unique: collecting directly into a map silently
+/// dropped counters, making a real query occasionally appear to issue zero calls.
+fn aggregate_statement_rows(rows: Vec<(i64, i64, String)>) -> BTreeMap<i64, (i64, String)> {
+    let mut snapshot: BTreeMap<i64, (i64, String)> = BTreeMap::new();
+    for (id, calls, text) in rows {
+        snapshot
+            .entry(id)
+            .and_modify(|entry| entry.0 += calls)
+            .or_insert((calls, text));
+    }
+    snapshot
 }
 
 /// Pure core of the gate, unit-tested below: two snapshots become the window
@@ -228,6 +239,16 @@ async fn measured<T>(db: &TestDb, fut: impl Future<Output = T>) -> (T, Statement
 // ---------------------------------------------------------------------------
 // Fixture tests for the harness itself (no database)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn role_counters_add_instead_of_overwriting_each_other() {
+    let sql = "SELECT id FROM tenancy.tenants";
+    let before = aggregate_statement_rows(vec![(1, 3, sql.to_string()), (1, 7, sql.to_string())]);
+    let after = aggregate_statement_rows(vec![(1, 8, sql.to_string()), (1, 4, sql.to_string())]);
+    let window = diff_window(&before, &after);
+    window.assert_exact("FROM tenancy.tenants", 2);
+    assert_eq!(window.total(), 2);
+}
 
 /// A statement the server has never seen has no `before` entry, and its whole
 /// call count belongs to the window.
