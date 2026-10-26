@@ -512,6 +512,28 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Upload, read and delete media assets, and mint delivery URLs, via the tenant's media gateway",
     },
+    // Product services: checked by the product service itself from the
+    // delegated permissions, never by a platform route.
+    PermissionDef {
+        key: "ecommerce.store.read",
+        scope: PermissionScope::Tenant,
+        description: "List and read the tenant's ecommerce stores",
+    },
+    PermissionDef {
+        key: "ecommerce.store.manage",
+        scope: PermissionScope::Tenant,
+        description: "Open and change ecommerce stores, within the plan's store limit",
+    },
+    PermissionDef {
+        key: "ecommerce.product.read",
+        scope: PermissionScope::Tenant,
+        description: "List and read products in the tenant's ecommerce stores",
+    },
+    PermissionDef {
+        key: "ecommerce.product.manage",
+        scope: PermissionScope::Tenant,
+        description: "Create and change products in the tenant's ecommerce stores",
+    },
 ];
 
 /// Registry lookup.

@@ -1671,6 +1671,7 @@ async fn main() -> ExitCode {
     // The worker rebuilds it (providers are stateless ZSTs + repos).
     let privacy_providers: ProviderRegistry = vec![
         std::sync::Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
+        std::sync::Arc::new(sanvi_product_access::adapters::ProductAccessPrivacyProvider::new()),
         std::sync::Arc::new(
             sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
                 privacy_tx.clone(),

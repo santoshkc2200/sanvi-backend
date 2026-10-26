@@ -1676,6 +1676,16 @@ const SHAPE_A_EXCLUSIONS: &[(&str, &str, &str)] = &[
         "/api/v1/tenant/theme/assets/{kind}",
         "the {kind} slot is an asset-type enum, not an entity id",
     ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/{tail}",
+        "the {tail} slot is a path into ecommerce-service, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/{tail}",
+        "the {tail} slot is a path into ecommerce-service, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
 ];
 
 #[test]

@@ -1,0 +1,14 @@
+//! Product access: delegating platform-authenticated requests to separately
+//! deployed product services (ecommerce first).
+
+pub mod delegation;
+pub mod error;
+pub mod forwarding;
+pub mod ports;
+pub mod product;
+
+pub use delegation::{DelegationClaims, EntitlementView, TOKEN_LIFETIME_SECS, UNLIMITED};
+pub use error::ProductAccessError;
+pub use forwarding::{ForwardRequest, ForwardResponse, ProductPath};
+pub use ports::{ProductUpstream, RolePermissions, TenantEntitlements, TokenSigner};
+pub use product::{ECOMMERCE, ISSUER, Product};

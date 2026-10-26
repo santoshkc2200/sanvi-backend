@@ -20,6 +20,7 @@ sanvi-access.workspace = true
 sanvi-accounting.workspace = true
 sanvi-advertising.workspace = true
 sanvi-media.workspace = true
+sanvi-product-access.workspace = true
 sanvi-notifications.workspace = true
 sanvi-audit.workspace = true
 sanvi-cache.workspace = true

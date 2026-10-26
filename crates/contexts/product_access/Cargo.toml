@@ -1,0 +1,29 @@
+[package]
+name = "sanvi-product-access"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+actix-web.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+ring.workspace = true
+sanvi-http.workspace = true
+sanvi-kernel.workspace = true
+sanvi-privacy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

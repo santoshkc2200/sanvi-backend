@@ -84,7 +84,9 @@ def runtime_registration(text, offset, relative):
     _, path = max(choices)
     scopes = list(re.finditer(r'web::scope\("([^"\n]+)"\)', body))
     scope = scopes[-1][1] if scopes else ""
-    return method[1].upper(), scope + path, function[1]
+    # Actix `{name:regex}` segments are OpenAPI's `{name}`.
+    path = re.sub(r"\{(\w+):[^{}]*\}", r"{\1}", scope + path)
+    return method[1].upper(), path, function[1]
 
 def inspect_sources(root):
     handlers, annotated, registered = {}, {}, {}
