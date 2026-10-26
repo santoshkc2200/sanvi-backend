@@ -17,6 +17,7 @@ members = [
     "crates/contexts/audit",
     "crates/contexts/platform_admin",
     "crates/contexts/billing",
+    "crates/contexts/accounting",
     "crates/contexts/privacy",
     "crates/contexts/localization",
     "crates/contexts/theming",
@@ -65,6 +66,7 @@ sanvi-access = { path = "crates/contexts/access" }
 sanvi-audit = { path = "crates/contexts/audit" }
 sanvi-platform-admin = { path = "crates/contexts/platform_admin" }
 sanvi-billing = { path = "crates/contexts/billing" }
+sanvi-accounting = { path = "crates/contexts/accounting" }
 sanvi-privacy = { path = "crates/contexts/privacy" }
 sanvi-localization = { path = "crates/contexts/localization" }
 sanvi-theming = { path = "crates/contexts/theming" }

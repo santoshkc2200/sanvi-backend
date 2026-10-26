@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT book_id FROM accounting.postings WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "book_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "book_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "342e2a8eac138aa62b1f8aa33b5f7000fe43b3d63d8cf4ef913b4423ddf5e198"
+}

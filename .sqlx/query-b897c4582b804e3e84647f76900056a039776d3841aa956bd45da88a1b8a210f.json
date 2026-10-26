@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accounting.books (id, tenant_id, legal_entity_key, revision, document) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (tenant_id, legal_entity_key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b897c4582b804e3e84647f76900056a039776d3841aa956bd45da88a1b8a210f"
+}

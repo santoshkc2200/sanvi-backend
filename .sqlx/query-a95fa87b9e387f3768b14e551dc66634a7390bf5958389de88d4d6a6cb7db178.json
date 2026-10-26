@@ -1,0 +1,186 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, tenant_id, book_id, connection_id, source_event_id, fingerprint, accounting_at, status, attempts, failure_reason, resolution_note, resolved_by, status_changed_at, external_record_id FROM accounting.postings WHERE tenant_id = $1 AND book_id = $2 AND source_event_id = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "book_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "book_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "connection_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "source_event_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "source_event_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "fingerprint",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "fingerprint"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "accounting_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "accounting_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "failure_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "failure_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "resolution_note",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "resolution_note"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "resolved_by",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "resolved_by"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "status_changed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "status_changed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "external_record_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounting.postings",
+            "name": "external_record_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "a95fa87b9e387f3768b14e551dc66634a7390bf5958389de88d4d6a6cb7db178"
+}

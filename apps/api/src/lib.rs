@@ -1755,6 +1755,11 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
     vec![
         Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
         Arc::new(
+            sanvi_accounting::adapters::privacy_provider::AccountingPrivacyProvider::new(
+                tx.clone(),
+            ),
+        ),
+        Arc::new(
             sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
                 tx.clone(),
                 Arc::new(sanvi_tenancy::adapters::repo::SqlxTenantRepository::new()),

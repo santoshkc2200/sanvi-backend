@@ -23,7 +23,7 @@ cd "$(dirname "$0")/.."
 
 FORBIDDEN=(sqlx actix_web actix-web reqwest hyper tokio_postgres diesel redis aws_sdk stripe sanvi_persistence sanvi-persistence)
 
-CONTEXTS="access advertising audit billing domains identity localization media notifications payments platform_admin privacy system tenancy theming"
+CONTEXTS="access accounting advertising audit billing domains identity localization media notifications payments platform_admin privacy system tenancy theming"
 
 is_context() {
     local needle="$1"
@@ -153,6 +153,7 @@ is_accepted_context_ownership_exception() {
             ;;
         # Privacy SPI implementations: each context implements PersonalDataProvider in adapters
         crates/contexts/access/src/adapters/privacy_provider.rs|\
+        crates/contexts/accounting/src/adapters/privacy_provider.rs|\
         crates/contexts/advertising/src/adapters/privacy_provider.rs|\
         crates/contexts/audit/src/adapters/privacy_provider.rs|\
         crates/contexts/billing/src/adapters/privacy_provider.rs|\

@@ -60,5 +60,6 @@
   "20261011000000_erasure_propagations.sql": "maintenance",
   "20261022000100_platform_consumer_recovery.sql": "rolling",
   "20261022000200_payments_idempotency_audit.sql": "rolling",
-  "20261022000300_access_projection_checkpoints.sql": "rolling"
+  "20261022000300_access_projection_checkpoints.sql": "rolling",
+  "20261026000200_accounting_destinations.sql": "rolling"
 }
