@@ -9,7 +9,12 @@ The optional Redis Streams library adapter still requires persistence and
 
 Each required consumer reads retained, published outbox rows against its
 PostgreSQL processed-event inbox and durable parked-event ledger. Polling runs
-in bounded batches. Notifications also read retained history; their existing
+in bounded batches from the group's cursor in `platform.consumer_cursors`, so
+settled history is never rescanned. An event whose outcome cannot be recorded
+holds the cursor and is retried after the recovery interval (30 s), not at
+poll speed. Dispatchers publish one transaction at a time under an advisory
+lock; a stuck dispatcher transaction blocks publication, so alert on
+`outbox_pending_gauge` growth. Notifications also read retained history; their existing
 maximum-event-age policy decides whether old work is actionable. Explicit
 tail-only consumers are unsuitable for required recoverable effects.
 

@@ -153,42 +153,54 @@ impl Scheduler {
     }
 
     async fn run_due_jobs(&self) -> Result<()> {
+        // One query per tick. A job is due at its persisted time, or one current
+        // interval after its last finish when it is not backing off, so a
+        // shortened interval applies without waiting out the old delay.
+        let names: Vec<&str> = self.jobs.iter().map(|job| job.name()).collect();
+        let interval_millis: Vec<f64> = self
+            .jobs
+            .iter()
+            .map(|job| job.interval().as_millis() as f64)
+            .collect();
+        let due: std::collections::HashMap<String, Option<i32>> = sqlx::query_as(
+            "SELECT c.name, j.consecutive_failures
+             FROM unnest($2::text[], $3::float8[]) AS c(name, interval_millis)
+             LEFT JOIN platform.scheduled_jobs j ON j.scheduler_key = $1 AND j.name = c.name
+             WHERE j.name IS NULL
+                OR j.next_run_at <= clock_timestamp()
+                OR (j.consecutive_failures < $4
+                    AND j.last_finished_at + c.interval_millis * interval '1 millisecond'
+                        <= clock_timestamp())",
+        )
+        .bind(&self.lease.name)
+        .bind(&names)
+        .bind(&interval_millis)
+        .bind(self.retry_policy.max_consecutive_failures as i32)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to read due scheduled jobs")?
+        .into_iter()
+        .collect();
         for job in &self.jobs {
-            let mut registration = self.transactions.begin().await?;
-            sqlx::query!(
-                "INSERT INTO platform.scheduled_jobs (scheduler_key, name) VALUES ($1, $2)
-                 ON CONFLICT DO NOTHING",
-                self.lease.name,
-                job.name(),
-            )
-            .execute(&mut **registration.as_inner())
-            .await?;
-            registration.commit().await?;
-            let failures = sqlx::query_scalar!(
-                "SELECT consecutive_failures FROM platform.scheduled_jobs
-                 WHERE scheduler_key = $1 AND name = $2 AND next_run_at <= clock_timestamp()",
-                self.lease.name,
-                job.name(),
-            )
-            .fetch_optional(&self.pool)
-            .await?;
-            let Some(failures) = failures else {
+            let Some(failures) = due.get(job.name()) else {
                 continue;
             };
+            if failures.is_none()
+                && let Err(err) = self.register(job.name()).await
+            {
+                warn!(error = %err, job = job.name(), "failed to register scheduled job");
+                continue;
+            }
+            let failures = failures.unwrap_or(0);
             let (failures, last_error, delay) = match job.run().await {
                 Ok(()) => (0, None, job.interval()),
                 Err(err) => {
                     let failures = failures.saturating_add(1);
                     error!(error = %err, job = job.name(), failures, "scheduled job failed");
                     let delay = if failures as u32 >= self.retry_policy.max_consecutive_failures {
-                        let exponent = (failures as u32).saturating_sub(1).min(16);
-                        Duration::from_secs(
-                            self.retry_policy
-                                .base_backoff_secs
-                                .saturating_mul(1u64 << exponent)
-                                .min(self.retry_policy.max_backoff_secs),
-                        )
-                        .max(job.interval())
+                        self.retry_policy
+                            .skip_window(failures as u32)
+                            .max(job.interval())
                     } else {
                         job.interval()
                     };
@@ -214,6 +226,20 @@ impl Scheduler {
             );
             completion.commit().await?;
         }
+        Ok(())
+    }
+
+    async fn register(&self, name: &str) -> Result<()> {
+        let mut registration = self.transactions.begin().await?;
+        sqlx::query!(
+            "INSERT INTO platform.scheduled_jobs (scheduler_key, name) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+            self.lease.name,
+            name,
+        )
+        .execute(&mut **registration.as_inner())
+        .await?;
+        registration.commit().await?;
         Ok(())
     }
 }

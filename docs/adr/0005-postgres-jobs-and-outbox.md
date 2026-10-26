@@ -14,7 +14,12 @@ queues owned by those contexts; periodic jobs drain them through their existing
 application services.
 
 The worker dispatches committed outbox rows by marking them published, then
-consumer groups poll the retained rows. Each group uses a renewable PostgreSQL
+consumer groups poll the retained rows. Publication assigns a sequence number
+under one transaction-scoped advisory lock, so sequence order is commit order.
+Each group keeps a cursor in `platform.consumer_cursors` below which every
+event is processed or parked; polling starts there instead of rescanning
+history. A tail-only group starts after the last sequence assigned when it is
+first created. Each group uses a renewable PostgreSQL
 lease, a durable processed-event inbox, and the existing durable dead-letter
 ledger and audited replay command. A group processes one batch at a time;
 different groups consume independently. Transactional handlers commit database
@@ -43,15 +48,22 @@ No NATS or Kafka infrastructure or dependency is introduced now.
 
 Apply `20261026000100_platform_postgres_jobs` before starting the new worker.
 The schema expansion preserves all outbox, inbox and dead-letter data and
-restores the dispatcher DELETE grant lost during outbox partition conversion. Existing
+restores the dispatcher DELETE grant lost during outbox partition conversion.
+It indexes outbox partitions oldest first and the parent last. PostgreSQL
+cannot build an index concurrently on a partitioned table or inside a
+migration transaction, so outbox inserts wait from the start of the current
+month's partition build until the migration commits. Apply it at low write
+volume; older months do not block inserts. Existing
 published history is recovered without copying events. Redis remains a cache
 and quota dependency; handlers that touch it can still fail independently.
 
 For this first transport transition, drain and stop every old worker before
 starting PostgreSQL workers. Old binaries use a different scheduler lock and
 do not participate in PostgreSQL consumer leases. Overlapping versions could
-run scheduled or external effects concurrently. API writers may remain online;
-committed outbox work waits safely during the worker handover. Subsequent
+run scheduled or external effects concurrently. API writers may remain online
+after the migration; committed outbox work waits safely during the worker
+handover. Rows published before the migration have no sequence and are
+delivered first by groups that replay history. Subsequent
 PostgreSQL worker replacements share coordination and durable schedules.
 
 For application rollback, drain PostgreSQL workers before starting a compatible

@@ -9,6 +9,11 @@ use tracing::{error, info};
 
 use crate::{EventPublisher, OutboxMetrics, PostgresPublisher};
 
+/// Advisory lock (`hashtextextended(key, 0)`) every dispatcher publishes
+/// under. It makes publication-sequence order commit order, which consumer
+/// cursors rely on.
+pub(crate) const PUBLICATION_LOCK_KEY: &str = "platform.outbox.publication";
+
 /// Base name events are published under. Each event is routed to
 /// `{base}.{context}` (context = the aggregate's first segment), so every
 /// bounded context owns a stream: `sanvi.events.tenancy`, `sanvi.events.billing`, …
@@ -60,6 +65,12 @@ pub(crate) struct OutboxRow {
     attempts: i32,
 }
 
+impl OutboxRow {
+    pub(crate) fn id(&self) -> i64 {
+        self.id
+    }
+}
+
 impl TryFrom<OutboxRow> for OutboxRecord {
     type Error = anyhow::Error;
 
@@ -96,8 +107,9 @@ impl OutboxRecord {
 
 /// Publishes outbox rows through the configured delivery adapter.
 ///
-/// - Polls with `FOR UPDATE SKIP LOCKED` so multiple workers can share the
-///   queue without double-delivery.
+/// - Publishes under [`PUBLICATION_LOCK_KEY`], one dispatcher transaction at
+///   a time, so consumers can follow a commit-ordered publication sequence.
+///   Other workers skip the poll while it is held.
 /// - Publishes then marks published; a crash between the two is safe because
 ///   consumers deduplicate on the event id.
 /// - Failed publishes increment `attempts`; rows are retried on the next
@@ -163,6 +175,17 @@ impl OutboxDispatcher {
             .begin()
             .await
             .context("failed to start outbox claim transaction")?;
+        // One publishing transaction at a time; a busy lock means another
+        // dispatcher is already draining the queue.
+        let locked: bool =
+            sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind(PUBLICATION_LOCK_KEY)
+                .fetch_one(&mut *tx)
+                .await
+                .context("failed to take outbox publication lock")?;
+        if !locked {
+            return Ok((tx, Vec::new()));
+        }
         let rows = sqlx::query_as::<_, OutboxRow>(
             r#"SELECT id, aggregate, aggregate_id, event_type, payload, metadata,
                       occurred_at, published_at, attempts
@@ -185,15 +208,17 @@ impl OutboxDispatcher {
         Ok((tx, rows))
     }
 
+    /// One statement for the whole batch; the publication trigger stamps the
+    /// publishing transaction id that consumers order by.
     async fn mark_published(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        id: EventId,
+        ids: &[i64],
     ) -> Result<()> {
-        sqlx::query("UPDATE platform.outbox SET published_at = now() WHERE id = $1")
-            .bind(id.as_i64())
+        sqlx::query("UPDATE platform.outbox SET published_at = now() WHERE id = ANY($1)")
+            .bind(ids)
             .execute(&mut **tx)
             .await
-            .context("failed to mark outbox row published")?;
+            .context("failed to mark outbox rows published")?;
         Ok(())
     }
 
@@ -260,7 +285,7 @@ impl OutboxDispatcher {
             return Ok(0);
         }
 
-        let mut published = 0;
+        let mut published = Vec::with_capacity(batch.len());
         for record in batch {
             let envelope = record.envelope();
             let stream = self.stream.stream_for(&record.aggregate);
@@ -274,15 +299,7 @@ impl OutboxDispatcher {
             }
 
             match outcome {
-                Ok(_) => {
-                    if let Err(err) = Self::mark_published(&mut tx, record.id).await {
-                        // The event reached the stream; a failed mark means it
-                        // will be delivered again — consumers dedupe on id.
-                        error!(error = %err, event_id = %record.id, "published but failed to mark");
-                        continue;
-                    }
-                    published += 1;
-                }
+                Ok(_) => published.push(record.id.as_i64()),
                 Err(err) => {
                     let exhausted = record.attempts + 1 >= self.max_attempts;
                     error!(error = %err, event_id = %record.id, attempts = record.attempts + 1,
@@ -308,9 +325,14 @@ impl OutboxDispatcher {
                 }
             }
         }
+        // A failed mark rolls the batch back. Broker adapters then deliver those
+        // events again, and consumers dedupe on id.
+        if !published.is_empty() {
+            Self::mark_published(&mut tx, &published).await?;
+        }
         tx.commit().await.context("failed to commit outbox batch")?;
         self.refresh_pending_gauge();
-        Ok(published)
+        Ok(published.len())
     }
 
     fn refresh_pending_gauge(&self) {

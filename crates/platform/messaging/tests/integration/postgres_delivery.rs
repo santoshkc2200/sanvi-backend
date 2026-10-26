@@ -222,6 +222,106 @@ async fn postgres_consumer_rolls_back_business_effects_and_replays_durable_dead_
     assert_eq!(effects, 1);
 }
 
+async fn publish_event(pool: &sqlx::PgPool, id: i64) {
+    sqlx::query("INSERT INTO platform.outbox (id, aggregate, aggregate_id, event_type, payload) VALUES ($1, 'test.aggregate', 1, 'test.created', '{}'::jsonb)")
+        .bind(id).execute(pool).await.unwrap();
+    let dispatcher = OutboxDispatcher::postgres(pool.clone(), StreamName::default(), 100, 5);
+    assert_eq!(dispatcher.run_once().await.unwrap(), 1);
+}
+
+fn spawn_consumer(
+    pool: &sqlx::PgPool,
+    group: &'static str,
+    start_id: &'static str,
+    handler: ConsumerHandler,
+) -> (
+    tokio::sync::watch::Sender<bool>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (shutdown, rx) = tokio::sync::watch::channel(false);
+    let consumer = StreamConsumer::postgres(transactions(pool.clone()));
+    let task = tokio::spawn(async move {
+        consumer
+            .run_until_shutdown_at("sanvi.events.test", group, "worker", handler, rx, start_id)
+            .await;
+    });
+    (shutdown, task)
+}
+
+#[tokio::test]
+async fn unacknowledged_external_effect_waits_before_redelivery() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    // The handler's effect succeeds but its inbox record cannot be written.
+    sqlx::query("REVOKE INSERT ON platform.processed_events FROM sanvi_app")
+        .execute(&db.admin_pool().await)
+        .await
+        .unwrap();
+    publish_event(&pool, 501).await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let (shutdown, task) = spawn_consumer(&pool, "mailer", "0", counting_handler(count.clone()));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    shutdown.send(true).unwrap();
+    task.await.unwrap();
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "an unacknowledged effect must not repeat at poll speed"
+    );
+}
+
+#[tokio::test]
+async fn cursor_skips_settled_history_and_tail_groups_start_at_subscription() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    publish_event(&pool, 601).await;
+    publish_event(&pool, 602).await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let (shutdown, task) = spawn_consumer(&pool, "replay", "0", counting_handler(count.clone()));
+    let (tail_shutdown, tail_task) =
+        spawn_consumer(&pool, "tail", "$", counting_handler(count.clone()));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let cursor: Option<i64> = sqlx::query_scalar(
+                "SELECT event_id FROM platform.consumer_cursors WHERE consumer = 'replay'",
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+            if cursor == Some(602) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the cursor follows the settled prefix");
+    shutdown.send(true).unwrap();
+    task.await.unwrap();
+
+    // Inbox rows pruned by retention cannot resurrect history behind the cursor.
+    sqlx::query("DELETE FROM platform.processed_events WHERE consumer = 'replay'")
+        .execute(&db.admin_pool().await)
+        .await
+        .unwrap();
+    let (shutdown, task) = spawn_consumer(&pool, "replay", "0", counting_handler(count.clone()));
+    publish_event(&pool, 603).await;
+    wait_processed(&pool, "tail", 1).await;
+    wait_processed(&pool, "replay", 1).await;
+    shutdown.send(true).unwrap();
+    tail_shutdown.send(true).unwrap();
+    task.await.unwrap();
+    tail_task.await.unwrap();
+    let tail_seen: Vec<i64> = sqlx::query_scalar(
+        "SELECT event_id FROM platform.processed_events WHERE consumer = 'tail'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tail_seen, vec![603], "tail groups skip earlier history");
+    assert_eq!(count.load(Ordering::SeqCst), 4);
+}
+
 struct UnavailableBroker;
 
 impl sanvi_messaging::EventPublisher for UnavailableBroker {

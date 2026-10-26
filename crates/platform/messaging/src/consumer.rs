@@ -158,12 +158,26 @@ const DEFAULT_MAX_RETRIES: u32 = 3;
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(50);
 const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(2);
 
+/// Where events arrive from and how they are acknowledged.
+#[derive(Clone)]
+enum Transport {
+    Redis(StreamsClient),
+    /// The inbox or durable dead-letter record is the acknowledgement.
+    Postgres(sanvi_persistence::TxManager),
+}
+
+/// Outcome of one PostgreSQL delivery pass.
+struct DeliveryBatch {
+    fetched: usize,
+    /// Events whose outcome could not be made durable; they are redelivered.
+    unsettled: usize,
+}
+
 /// One consumer instance within a durable consumer group.
 #[derive(Clone)]
 pub struct StreamConsumer {
     pool: PgPool,
-    streams: Option<StreamsClient>,
-    transactions: Option<sanvi_persistence::TxManager>,
+    transport: Transport,
     metrics: Option<Arc<ConsumerMetrics>>,
     recovery_min_idle: Duration,
     recovery_interval: Duration,
@@ -174,21 +188,21 @@ pub struct StreamConsumer {
 
 impl StreamConsumer {
     pub fn new(pool: PgPool, streams: StreamsClient) -> Self {
-        Self::with_transport(pool, Some(streams))
+        Self::with_transport(pool, Transport::Redis(streams))
     }
 
     /// Consume retained outbox rows using PostgreSQL coordination, inbox and DLQ.
     pub fn postgres(transactions: sanvi_persistence::TxManager) -> Self {
-        let mut consumer = Self::with_transport(transactions.pool().clone(), None);
-        consumer.transactions = Some(transactions);
-        consumer
+        Self::with_transport(
+            transactions.pool().clone(),
+            Transport::Postgres(transactions),
+        )
     }
 
-    fn with_transport(pool: PgPool, streams: Option<StreamsClient>) -> Self {
+    fn with_transport(pool: PgPool, transport: Transport) -> Self {
         Self {
             pool,
-            streams,
-            transactions: None,
+            transport,
             metrics: None,
             recovery_min_idle: RECOVERY_MIN_IDLE,
             recovery_interval: RECOVERY_INTERVAL,
@@ -299,10 +313,21 @@ impl StreamConsumer {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         start_id: &str,
     ) {
-        let Some(streams) = &self.streams else {
-            self.run_postgres_loop(stream, group, consumer_name, handler, shutdown, start_id)
+        let streams = match &self.transport {
+            Transport::Redis(streams) => streams,
+            Transport::Postgres(transactions) => {
+                self.run_postgres_loop(
+                    transactions,
+                    stream,
+                    group,
+                    consumer_name,
+                    handler,
+                    shutdown,
+                    start_id == "$",
+                )
                 .await;
-            return;
+                return;
+            }
         };
         info!(
             stream,
@@ -321,18 +346,21 @@ impl StreamConsumer {
 
         let mut last_recovery = tokio::time::Instant::now();
         let mut next_outbox_recovery = tokio::time::Instant::now();
-        let recovery_since = (start_id == "$").then(chrono::Utc::now);
+        let tail = start_id == "$";
         loop {
             if *shutdown.borrow() {
                 break;
             }
             if tokio::time::Instant::now() >= next_outbox_recovery {
-                let recovered = self
-                    .recover_outbox(stream, group, &handler, recovery_since)
-                    .await;
+                let recovered = self.recover_outbox(stream, group, &handler, tail).await;
                 next_outbox_recovery = tokio::time::Instant::now()
                     + match recovered {
-                        Ok(count) if count == crate::recovery::RECOVERY_BATCH => POLL_INTERVAL,
+                        Ok(batch)
+                            if batch.unsettled == 0
+                                && batch.fetched == crate::recovery::RECOVERY_BATCH =>
+                        {
+                            POLL_INTERVAL
+                        }
                         Ok(_) => self.recovery_interval,
                         Err(err) => {
                             error!(error = %err, stream, group, "PostgreSQL event recovery failed");
@@ -348,7 +376,7 @@ impl StreamConsumer {
                     }
                     continue;
                 }
-                result = self.read(stream, group, consumer_name) => match result {
+                result = self.read(streams, stream, group, consumer_name) => match result {
                     Ok(batch) => batch,
                     Err(err) => {
                         error!(error = %err, stream, group, "stream read failed");
@@ -373,7 +401,7 @@ impl StreamConsumer {
             // recovery_min_idle across the whole group periodically.
             if last_recovery.elapsed() >= self.recovery_interval {
                 if let Err(err) = self
-                    .recover_pending(stream, group, consumer_name, &handler)
+                    .recover_pending(streams, stream, group, consumer_name, &handler)
                     .await
                 {
                     error!(error = %err, stream, group, "pending recovery failed");
@@ -382,7 +410,7 @@ impl StreamConsumer {
             }
 
             if let Some(metrics) = &self.metrics
-                && let Ok(lag) = self.pending_count(stream, group).await
+                && let Ok(lag) = self.pending_count(streams, stream, group).await
             {
                 metrics.lag.set(lag as i64);
             }
@@ -394,61 +422,55 @@ impl StreamConsumer {
         info!(stream, group, "stream consumer stopped");
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_postgres_loop(
         &self,
+        transactions: &sanvi_persistence::TxManager,
         stream: &str,
         group: &str,
         consumer_name: &str,
         handler: ConsumerHandlerKind,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
-        start_id: &str,
+        tail: bool,
     ) {
-        let Some(transactions) = &self.transactions else {
-            return;
-        };
         let lease = crate::lease::PgLease::new(
             transactions.clone(),
             format!("consumer:{group}:{stream}"),
             consumer_name.into(),
             Duration::from_secs(60),
         );
-        // Worker subscriptions replay retained history. Tail-only subscriptions must
-        // retain their original starting time through restarts and leader changes.
-        let mut since = None;
-        let mut initialized = start_id != "$";
+        // Counting the backlog is O(backlog); refresh the gauge on a timer, not
+        // after every batch of a drain.
+        let mut next_lag_refresh = tokio::time::Instant::now();
         info!(stream, group, "PostgreSQL event consumer started");
         while !*shutdown.borrow() && shutdown.has_changed().is_ok() {
-            let acquired: Result<bool> = async {
-                if !lease.acquire_or_renew().await? {
-                    return Ok(false);
-                }
-                if !initialized {
-                    since = Some(
-                        sqlx::query_scalar!(
-                            "SELECT started_at FROM platform.worker_leases WHERE name = $1",
-                            lease.name,
-                        )
-                        .fetch_one(&self.pool)
-                        .await?,
-                    );
-                    initialized = true;
-                }
-                Ok(true)
-            }
-            .await;
-            match acquired {
+            let mut wait = POLL_INTERVAL;
+            match lease.acquire_or_renew().await {
                 Ok(true) => {
-                    let batch = self.recover_outbox(stream, group, &handler, since);
+                    let batch = self.recover_outbox(stream, group, &handler, tail);
                     match lease.protect(batch, &mut shutdown).await {
-                        Ok(Some(count)) => {
+                        Ok(Some(batch)) => {
                             if let Some(metrics) = &self.metrics
-                                && let Ok(pending) =
-                                    crate::recovery::pending_count(&self.pool, stream, group, since)
-                                        .await
+                                && tokio::time::Instant::now() >= next_lag_refresh
                             {
-                                metrics.lag.set(pending);
+                                next_lag_refresh =
+                                    tokio::time::Instant::now() + self.recovery_interval;
+                                match crate::recovery::pending_count(
+                                    &self.pool, stream, group, tail,
+                                )
+                                .await
+                                {
+                                    Ok(pending) => metrics.lag.set(pending),
+                                    Err(err) => {
+                                        error!(error = %err, stream, group, "consumer lag refresh failed")
+                                    }
+                                }
                             }
-                            if count == crate::recovery::RECOVERY_BATCH {
+                            if batch.unsettled > 0 {
+                                // Redelivering at poll speed would repeat external
+                                // effects whose acknowledgement keeps failing.
+                                wait = self.recovery_interval;
+                            } else if batch.fetched == crate::recovery::RECOVERY_BATCH {
                                 continue;
                             }
                         }
@@ -462,7 +484,7 @@ impl StreamConsumer {
                 Err(err) => error!(error = %err, stream, group, "PostgreSQL consumer lease failed"),
             }
             tokio::select! {
-                _ = tokio::time::sleep(POLL_INTERVAL) => {},
+                _ = tokio::time::sleep(wait) => {},
                 _ = shutdown.changed() => break,
             }
         }
@@ -472,36 +494,47 @@ impl StreamConsumer {
         info!(stream, group, "PostgreSQL event consumer stopped");
     }
 
+    /// Deliver one batch of retained events and advance the group's cursor past
+    /// the settled prefix. An unsettled event holds the cursor just before it.
     async fn recover_outbox(
         &self,
         stream: &str,
         group: &str,
         handler: &ConsumerHandlerKind,
-        since: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<usize> {
-        let events = crate::recovery::pending(&self.pool, stream, group, since).await?;
-        let count = events.len();
-        for envelope in events {
+        tail: bool,
+    ) -> Result<DeliveryBatch> {
+        let events = crate::recovery::pending(&self.pool, stream, group, tail).await?;
+        let fetched = events.len();
+        let mut unsettled = 0;
+        let mut advance_to = None;
+        for (position, envelope) in events {
             let payload = serde_json::to_string(&envelope)?;
             // Valid Redis ID outside the timestamp range of ordinary XADD IDs.
             let entry = format!("0-{}", envelope.id.as_i64());
-            self.process_one(stream, group, &entry, &payload, handler)
+            let settled = self
+                .process_one(stream, group, &entry, &payload, handler)
                 .await;
+            if unsettled == 0 {
+                advance_to = Some(if settled { position } else { position.before() });
+            }
+            if !settled {
+                unsettled += 1;
+            }
         }
-        Ok(count)
+        if let Some(position) = advance_to {
+            crate::recovery::advance(&self.pool, stream, group, position).await?;
+        }
+        Ok(DeliveryBatch { fetched, unsettled })
     }
 
     async fn read(
         &self,
+        streams: &StreamsClient,
         stream: &str,
         group: &str,
         consumer_name: &str,
     ) -> Result<Vec<(String, String)>> {
-        let mut conn = self
-            .streams
-            .as_ref()
-            .context("Redis transport is not configured")?
-            .connection_manager();
+        let mut conn = streams.connection_manager();
         let options = redis::streams::StreamReadOptions::default()
             .group(group, consumer_name)
             .count(32);
@@ -530,16 +563,13 @@ impl StreamConsumer {
     /// claimed them, and (re)process them under `consumer_name`.
     async fn recover_pending(
         &self,
+        streams: &StreamsClient,
         stream: &str,
         group: &str,
         consumer_name: &str,
         handler: &ConsumerHandlerKind,
     ) -> Result<()> {
-        let mut conn = self
-            .streams
-            .as_ref()
-            .context("Redis transport is not configured")?
-            .connection_manager();
+        let mut conn = streams.connection_manager();
         let min_idle_ms = self.recovery_min_idle.as_millis() as usize;
         let mut cursor = "0-0".to_string();
 
@@ -591,7 +621,7 @@ impl StreamConsumer {
         entry_id: &str,
         event_json: &str,
         handler_kind: &ConsumerHandlerKind,
-    ) {
+    ) -> bool {
         let envelope: EventEnvelope = match serde_json::from_str(event_json) {
             Ok(envelope) => envelope,
             Err(err) => {
@@ -609,7 +639,7 @@ impl StreamConsumer {
                 .await
                 {
                     error!(error = %park_err, "failed to park malformed event; refusing to ack");
-                    return;
+                    return false;
                 }
                 if let Err(dlq_err) = self
                     .append_dead_letter(
@@ -624,7 +654,7 @@ impl StreamConsumer {
                         entry_id,
                         "failed to append unparseable event to dead-letter stream; refusing to ack"
                     );
-                    return;
+                    return false;
                 }
                 if let Err(ack_err) = self.ack(stream, group, entry_id).await {
                     error!(error = %ack_err, entry_id, "failed to ack unparseable event");
@@ -632,7 +662,7 @@ impl StreamConsumer {
                 if let Some(metrics) = &self.metrics {
                     metrics.dead_lettered.inc();
                 }
-                return;
+                return true;
             }
         };
 
@@ -644,22 +674,22 @@ impl StreamConsumer {
                 if let Err(err) = self.ack(stream, group, entry_id).await {
                     error!(error = %err, "failed to ack durably parked event");
                 }
-                return;
+                return true;
             }
             Err(err) => {
                 error!(error = %err, "failed to inspect consumer recovery state; refusing to ack");
-                return;
+                return false;
             }
             Ok(false) => {}
         }
         match handler_kind {
             ConsumerHandlerKind::Transactional(handler) => {
                 self.process_transactional(stream, group, entry_id, &envelope, handler)
-                    .await;
+                    .await
             }
             ConsumerHandlerKind::External(handler) => {
                 self.process_external(stream, group, entry_id, &envelope, handler)
-                    .await;
+                    .await
             }
         }
     }
@@ -671,7 +701,7 @@ impl StreamConsumer {
         entry_id: &str,
         envelope: &EventEnvelope,
         handler: &TransactionalConsumerHandler,
-    ) {
+    ) -> bool {
         let mut attempt: u32 = 0;
         loop {
             let mut tx = match self.pool.begin().await {
@@ -684,9 +714,9 @@ impl StreamConsumer {
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                    return self
+                        .dead_letter(stream, group, entry_id, envelope, &err)
                         .await;
-                    return;
                 }
             };
 
@@ -713,9 +743,9 @@ impl StreamConsumer {
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                    return self
+                        .dead_letter(stream, group, entry_id, envelope, &err)
                         .await;
-                    return;
                 }
             };
 
@@ -725,7 +755,7 @@ impl StreamConsumer {
                 if let Err(err) = self.ack(stream, group, entry_id).await {
                     error!(error = %err, entry_id, "failed to ack duplicate event");
                 }
-                return;
+                return true;
             }
 
             match handler(&mut tx, envelope.clone()).await {
@@ -738,15 +768,15 @@ impl StreamConsumer {
                             tokio::time::sleep(backoff).await;
                             continue;
                         }
-                        self.dead_letter(stream, group, entry_id, envelope, &err)
+                        return self
+                            .dead_letter(stream, group, entry_id, envelope, &err)
                             .await;
-                        return;
                     }
 
                     if let Err(err) = self.ack(stream, group, entry_id).await {
                         error!(error = %err, entry_id, "failed to ack processed event");
                     }
-                    return;
+                    return true;
                 }
                 Err(err) => {
                     let _ = tx.rollback().await;
@@ -756,9 +786,9 @@ impl StreamConsumer {
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                    return self
+                        .dead_letter(stream, group, entry_id, envelope, &err)
                         .await;
-                    return;
                 }
             }
         }
@@ -771,7 +801,7 @@ impl StreamConsumer {
         entry_id: &str,
         envelope: &EventEnvelope,
         handler: &ConsumerHandler,
-    ) {
+    ) -> bool {
         let already_done = match sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM platform.processed_events WHERE consumer = $1 AND event_id = $2)",
         )
@@ -783,14 +813,14 @@ impl StreamConsumer {
             Ok(exists) => exists,
             Err(err) => {
                 error!(error = %err, event_id = %envelope.id, group, "dedup check failed; skipping");
-                return;
+                return false;
             }
         };
         if already_done {
             if let Err(err) = self.ack(stream, group, entry_id).await {
                 error!(error = %err, entry_id, "failed to ack duplicate event");
             }
-            return;
+            return true;
         }
 
         let mut attempt: u32 = 0;
@@ -813,12 +843,12 @@ impl StreamConsumer {
                             group,
                             "failed to record processed event; refusing to ack so event will be retried"
                         );
-                        return;
+                        return false;
                     }
                     if let Err(err) = self.ack(stream, group, entry_id).await {
                         error!(error = %err, entry_id, "failed to ack processed event");
                     }
-                    return;
+                    return true;
                 }
                 Err(err) => {
                     if is_transient_error(&err) && attempt < self.max_retries {
@@ -827,9 +857,9 @@ impl StreamConsumer {
                         tokio::time::sleep(backoff).await;
                         continue;
                     }
-                    self.dead_letter(stream, group, entry_id, envelope, &err)
+                    return self
+                        .dead_letter(stream, group, entry_id, envelope, &err)
                         .await;
-                    return;
                 }
             }
         }
@@ -842,7 +872,7 @@ impl StreamConsumer {
         entry_id: &str,
         envelope: &EventEnvelope,
         err: &anyhow::Error,
-    ) {
+    ) -> bool {
         error!(
             error = %err,
             event_id = %envelope.id,
@@ -864,7 +894,7 @@ impl StreamConsumer {
         .await
         {
             error!(error = %park_err, "failed to durably park event; refusing to ack");
-            return;
+            return false;
         }
         if let Err(dlq_err) = self
             .append_dead_letter(
@@ -879,7 +909,7 @@ impl StreamConsumer {
                 entry_id,
                 "failed to append to dead-letter stream; refusing to ack so message is not lost"
             );
-            return;
+            return false;
         }
         if let Err(ack_err) = self.ack(stream, group, entry_id).await {
             error!(error = %ack_err, entry_id, "failed to ack dead-lettered event");
@@ -887,25 +917,21 @@ impl StreamConsumer {
         if let Some(metrics) = &self.metrics {
             metrics.dead_lettered.inc();
         }
+        true
     }
 
     async fn append_dead_letter(&self, stream: &str, fields: &[(&str, &str)]) -> Result<()> {
-        if let Some(streams) = &self.streams {
+        if let Transport::Redis(streams) = &self.transport {
             streams.append_durable(stream, fields).await?;
         }
         Ok(())
     }
 
     async fn ack(&self, stream: &str, group: &str, entry_id: &str) -> Result<()> {
-        if self.streams.is_none() {
-            // The inbox or durable dead-letter record is PostgreSQL's acknowledgement.
+        let Transport::Redis(streams) = &self.transport else {
             return Ok(());
-        }
-        let mut conn = self
-            .streams
-            .as_ref()
-            .context("Redis transport is not configured")?
-            .connection_manager();
+        };
+        let mut conn = streams.connection_manager();
         let _: () = conn
             .xack(stream, group, &[entry_id])
             .await
@@ -913,12 +939,13 @@ impl StreamConsumer {
         Ok(())
     }
 
-    async fn pending_count(&self, stream: &str, group: &str) -> Result<u64> {
-        let mut conn = self
-            .streams
-            .as_ref()
-            .context("Redis transport is not configured")?
-            .connection_manager();
+    async fn pending_count(
+        &self,
+        streams: &StreamsClient,
+        stream: &str,
+        group: &str,
+    ) -> Result<u64> {
+        let mut conn = streams.connection_manager();
         let reply: redis::streams::StreamPendingReply =
             conn.xpending(stream, group).await.with_context(|| {
                 format!("failed to read pending count for group {group} on {stream}")

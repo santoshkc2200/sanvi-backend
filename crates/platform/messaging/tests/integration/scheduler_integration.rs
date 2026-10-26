@@ -427,6 +427,41 @@ async fn successful_schedule_does_not_run_again_after_restart() {
 }
 
 #[tokio::test]
+async fn shortened_interval_applies_without_waiting_out_the_persisted_delay() {
+    let db = sanvi_testsupport::test_db().await;
+    let pool = db.app_pool();
+    let runs = Arc::new(AtomicUsize::new(0));
+    for (instance, interval, expected) in [
+        ("hourly", Duration::from_secs(3600), 1),
+        ("redeployed", Duration::from_millis(30), 3),
+    ] {
+        let count = runs.clone();
+        let job = Arc::new(FnJob::new("sweep", interval, move || {
+            let count = count.clone();
+            Box::pin(async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }));
+        let scheduler = Scheduler::new(transactions(pool.clone()), instance, vec![job])
+            .with_tick(Duration::from_millis(20));
+        let (shutdown, rx) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(async move {
+            scheduler.run_until_shutdown(rx).await;
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while runs.load(Ordering::SeqCst) < expected {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("job must follow its current interval");
+        shutdown.send(true).unwrap();
+        task.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn retry_budget_and_error_survive_scheduler_restart() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool();
