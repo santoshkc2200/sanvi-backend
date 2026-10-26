@@ -1,4 +1,4 @@
-//! PostgreSQL is the recovery source; Redis is the delivery accelerator.
+//! Retained PostgreSQL outbox events support primary delivery and broker recovery.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -38,6 +38,29 @@ pub(crate) async fn pending(
     rows.into_iter()
         .map(|row| Ok(OutboxRecord::try_from(row)?.envelope()))
         .collect()
+}
+
+pub(crate) async fn pending_count(
+    pool: &PgPool,
+    stream: &str,
+    group: &str,
+    since: Option<DateTime<Utc>>,
+) -> Result<i64> {
+    let context = stream.rsplit('.').next().unwrap_or(stream);
+    Ok(sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!" FROM platform.outbox o
+           WHERE split_part(o.aggregate, '.', 1) = $1 AND o.published_at IS NOT NULL
+             AND ($3::timestamptz IS NULL OR o.published_at >= $3)
+             AND NOT EXISTS (SELECT 1 FROM platform.processed_events p
+                             WHERE p.consumer = $2 AND p.event_id = o.id)
+             AND NOT EXISTS (SELECT 1 FROM platform.consumer_dead_letters d
+                             WHERE d.consumer = $2 AND d.event_id = o.id)"#,
+        context,
+        group,
+        since,
+    )
+    .fetch_one(pool)
+    .await?)
 }
 
 pub(crate) async fn park(

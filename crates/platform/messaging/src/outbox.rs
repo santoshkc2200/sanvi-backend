@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use tracing::{error, info};
 
-use crate::{OutboxMetrics, redis::StreamsClient};
+use crate::{EventPublisher, OutboxMetrics, PostgresPublisher};
 
 /// Base name events are published under. Each event is routed to
 /// `{base}.{context}` (context = the aggregate's first segment), so every
@@ -94,7 +94,7 @@ impl OutboxRecord {
     }
 }
 
-/// Relays unpublished outbox rows to Redis Streams.
+/// Publishes outbox rows through the configured delivery adapter.
 ///
 /// - Polls with `FOR UPDATE SKIP LOCKED` so multiple workers can share the
 ///   queue without double-delivery.
@@ -106,7 +106,7 @@ impl OutboxRecord {
 #[derive(Clone)]
 pub struct OutboxDispatcher {
     pool: PgPool,
-    streams: StreamsClient,
+    publisher: std::sync::Arc<dyn EventPublisher>,
     stream: StreamName,
     batch_size: usize,
     max_attempts: i32,
@@ -116,19 +116,29 @@ pub struct OutboxDispatcher {
 impl OutboxDispatcher {
     pub fn new(
         pool: PgPool,
-        streams: StreamsClient,
+        publisher: impl EventPublisher + 'static,
         stream: StreamName,
         batch_size: usize,
         max_attempts: i32,
     ) -> Self {
         Self {
             pool,
-            streams,
+            publisher: std::sync::Arc::new(publisher),
             stream,
             batch_size,
             max_attempts,
             metrics: None,
         }
+    }
+
+    /// Use retained PostgreSQL outbox rows as the durable event queue.
+    pub fn postgres(
+        pool: PgPool,
+        stream: StreamName,
+        batch_size: usize,
+        max_attempts: i32,
+    ) -> Self {
+        Self::new(pool, PostgresPublisher, stream, batch_size, max_attempts)
     }
 
     pub fn with_metrics(mut self, metrics: std::sync::Arc<OutboxMetrics>) -> Self {
@@ -253,15 +263,10 @@ impl OutboxDispatcher {
         let mut published = 0;
         for record in batch {
             let envelope = record.envelope();
-            let payload =
-                serde_json::to_string(&envelope).context("failed to serialize event envelope")?;
             let stream = self.stream.stream_for(&record.aggregate);
 
             let started = std::time::Instant::now();
-            let outcome = self
-                .streams
-                .append_durable(&stream, &[("event", payload.as_str())])
-                .await;
+            let outcome = self.publisher.publish(&stream, &envelope).await;
             if let Some(metrics) = &self.metrics {
                 metrics
                     .publish_latency

@@ -14,7 +14,9 @@ the inactive slot before reloading nginx, then waits for the old proxy
 worker PIDs to exit. Both API slots stay alive throughout the switch, so
 new connections have a destination while earlier requests finish. A slow
 drain blocks the next deployment; it never forces the serving slot down.
-The worker may replay unacked stream entries (handlers are idempotent).
+The worker may replay unfinished PostgreSQL jobs or events (handlers are idempotent).
+The first transition from Redis workers requires the coordinated worker handover
+in [ADR 0005](../adr/0005-postgres-jobs-and-outbox.md); do not overlap the two scheduler implementations.
 
 The first installation, including conversion of the old API's direct
 8080 binding to the stable proxy, requires a maintenance window. Bootstrap

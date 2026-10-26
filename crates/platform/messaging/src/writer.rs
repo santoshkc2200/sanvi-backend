@@ -2,8 +2,8 @@
 //!
 //! Use cases call [`OutboxWriter::append`] inside the same transaction as the
 //! state change that produced the event, so the event and its source state
-//! commit or roll back together. The dispatcher (in `apps/worker`) relays
-//! unpublished rows to Redis Streams.
+//! commit or roll back together. The dispatcher (in `apps/worker`) publishes
+//! committed rows through a delivery adapter; PostgreSQL is the default.
 
 use anyhow::{Context, Result};
 use sanvi_kernel::EventEnvelope;

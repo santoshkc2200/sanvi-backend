@@ -137,7 +137,7 @@ crates/
   platform/
     http/                  # actix server, middleware, tenant resolution, authn/authz, problem+json, OpenAPI
     persistence/           # pool, TxManager (scoped transactions), migrations, idempotency
-    messaging/             # outbox writer/dispatcher, stream consumers, scheduler, Redis
+    messaging/             # outbox writer/dispatcher, PostgreSQL consumers and jobs, Redis
     cache/                 # tenant-namespaced caching (prefix enforced by construction)
     telemetry/             # tracing, OTel, Prometheus, redaction
   contexts/
@@ -168,7 +168,9 @@ A modular monolith of bounded contexts, each with hexagonal layering:
 `domain` (pure, ports as traits) ← `application` (use cases) ← `adapters`
 (driving: HTTP handlers; driven: sqlx/redis/stripe/ory implementations).
 Contexts talk synchronously through self-defined ports or asynchronously via
-the transactional outbox → Redis Streams. Postgres uses one schema per
+the transactional outbox backed by PostgreSQL. Recurring jobs persist their
+schedules and retries in PostgreSQL; Redis supports caching and quotas. Delivery
+adapters allow future NATS or Kafka integration. Postgres uses one schema per
 context and row-level security for tenant isolation. The rules are enforced
 by `scripts/check-layering.sh` in CI, not by convention.
 

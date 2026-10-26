@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.worker_leases SET expires_at = clock_timestamp()\n             WHERE name = $1 AND owner = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c11fefe9ec9389ca53d69fe194799d7fedb9595727188c8ac23da7887801d14"
+}

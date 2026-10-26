@@ -1,20 +1,26 @@
 # Event recovery and worker management
 
-PostgreSQL `platform.outbox` is the retained source of first-party events.
-Redis Streams accelerates delivery; publishing and dead-lettering no longer
-trim required work by a fixed entry count. Configure the event Redis service
-with persistence and `maxmemory-policy noeviction`; cache eviction must not
-be applied to streams, rate-limit state, or coordination keys. Monitor memory
-and disk capacity before admission starts failing.
+PostgreSQL `platform.outbox` is the retained source and default delivery queue
+for first-party events. The worker consumes published rows directly, using
+PostgreSQL leases to coordinate each consumer group. Redis supports caches and
+quotas; job coordination and event delivery state do not depend on Redis.
+The optional Redis Streams library adapter still requires persistence and
+`maxmemory-policy noeviction` if used.
 
-Each required consumer starts at stream ID `0`, and independently checks
-retained, published outbox rows against its PostgreSQL processed-event inbox
-and durable parked-event ledger. Startup checks run immediately; periodic
-checks recover Redis loss or previously trimmed payloads. Catch-up proceeds
-in bounded batches without requiring the missing Redis payload. Notifications
-also start at `0`; their existing maximum-event-age policy decides whether
-old work is still actionable. Explicit tail-only consumers are unsuitable
-for required recoverable effects.
+Each required consumer reads retained, published outbox rows against its
+PostgreSQL processed-event inbox and durable parked-event ledger. Polling runs
+in bounded batches. Notifications also read retained history; their existing
+maximum-event-age policy decides whether old work is actionable. Explicit
+tail-only consumers are unsuitable for required recoverable effects.
+
+Recurring schedules and retry budgets live in `platform.scheduled_jobs`,
+including `next_run_at`, `consecutive_failures`, `last_error` and
+`last_finished_at`. `platform.worker_leases` exposes active ownership and expiry.
+A crashed worker's unfinished work remains due; a replacement acquires the lease
+after expiry. Repeated failures back off rather than resetting on restart.
+See [ADR 0005](../adr/0005-postgres-jobs-and-outbox.md) for the initial migration
+handover and rollback. Drain old workers before switching transport; their Redis
+scheduler lock does not coordinate with PostgreSQL leases.
 
 Do not manually archive, delete, or drop an outbox partition unless every
 required consumer has processed or durably parked its events and the agreed
@@ -26,7 +32,7 @@ work in the meantime.
 
 Consumer failures, including malformed raw messages, are durably retained in
 `platform.consumer_dead_letters` before the source message is acknowledged.
-The Redis DLQ is a delivery/inspection copy. Triage with:
+When using the optional Redis adapter, its DLQ is a delivery/inspection copy. Triage with:
 
 ```sh
 cargo run -p sanvi-cli -- dlq consumer-list --limit 20

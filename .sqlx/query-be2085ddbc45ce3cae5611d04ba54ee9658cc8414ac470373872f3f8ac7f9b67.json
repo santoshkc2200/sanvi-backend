@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM platform.outbox o\n           WHERE split_part(o.aggregate, '.', 1) = $1 AND o.published_at IS NOT NULL\n             AND ($3::timestamptz IS NULL OR o.published_at >= $3)\n             AND NOT EXISTS (SELECT 1 FROM platform.processed_events p\n                             WHERE p.consumer = $2 AND p.event_id = o.id)\n             AND NOT EXISTS (SELECT 1 FROM platform.consumer_dead_letters d\n                             WHERE d.consumer = $2 AND d.event_id = o.id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "be2085ddbc45ce3cae5611d04ba54ee9658cc8414ac470373872f3f8ac7f9b67"
+}

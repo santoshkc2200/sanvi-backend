@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.scheduled_jobs\n                 SET next_run_at = clock_timestamp() + $3::float8 * interval '1 millisecond',\n                     consecutive_failures = $4, last_error = $5, last_finished_at = clock_timestamp()\n                 WHERE scheduler_key = $1 AND name = $2 AND EXISTS (\n                     SELECT 1 FROM platform.worker_leases\n                     WHERE name = $1 AND owner = $6 AND expires_at > clock_timestamp())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3400c88053c33c6729a9991c530cef878c961ba947a0ccf2b6238f476a7eea51"
+}

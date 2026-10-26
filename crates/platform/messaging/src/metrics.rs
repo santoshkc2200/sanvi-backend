@@ -11,7 +11,7 @@ use prometheus::{Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry,
 pub struct OutboxMetrics {
     /// Unpublished rows waiting in `platform.outbox`.
     pub pending: IntGauge,
-    /// Stream publish round-trip latency (seconds).
+    /// Delivery-adapter publish latency (seconds).
     pub publish_latency: Histogram,
     /// Events abandoned to `platform.outbox_dlq`.
     pub dead_lettered: IntCounter,
@@ -26,7 +26,7 @@ impl OutboxMetrics {
         .expect("metric definition is constant");
         let publish_latency = Histogram::with_opts(HistogramOpts::new(
             "outbox_publish_latency",
-            "Seconds taken to publish one event to the stream",
+            "Seconds taken to publish one event through the delivery adapter",
         ))
         .expect("metric definition is constant");
         let dead_lettered = IntCounter::with_opts(Opts::new(
@@ -56,14 +56,13 @@ impl Default for OutboxMetrics {
     }
 }
 
-/// Stream consumer instruments: per-consumer-group delivery lag and poison
+/// Event consumer instruments: per-consumer-group delivery lag and poison
 /// messages.
 #[derive(Debug, Clone)]
 pub struct ConsumerMetrics {
-    /// Delivery lag per consumer group: messages pending in the stream not
-    /// yet processed by this group.
+    /// Delivery lag per consumer group: published events not yet processed or parked by this group.
     pub lag: IntGauge,
-    /// Handler failures forwarded to the dead-letter stream.
+    /// Handler failures retained in the dead-letter ledger.
     pub dead_lettered: IntCounter,
 }
 

@@ -1,24 +1,25 @@
-//! Sanvi messaging: Redis Streams client, the transactional outbox (writer +
-//! dispatcher), stream consumers and the leader-elected scheduler.
+//! PostgreSQL-backed jobs and transactional event delivery.
 //!
-//! Contexts write domain events to `platform.outbox` in the same transaction
-//! as their state change. [`OutboxDispatcher`] (running in `apps/worker`)
-//! relays unpublished events to per-context Redis Streams
-//! (`sanvi.events.{context}`); [`StreamConsumer`]s read from streams as
-//! consumer groups and deduplicate on the event id, with dead-lettering for
-//! poison messages. [`Scheduler`] runs periodic jobs on a leader-elected
-//! worker.
+//! Contexts write events to `platform.outbox` atomically with business state.
+//! [`OutboxDispatcher::postgres`] makes committed events available to
+//! [`EventConsumer::postgres`], which uses durable inbox deduplication, dead
+//! letters and renewable PostgreSQL leases. [`Scheduler`] persists recurring
+//! due times and retry state. Redis delivery remains an adapter; future brokers
+//! implement [`EventPublisher`] without changing context event writers.
 
 mod config;
 mod consumer;
+mod lease;
 mod metrics;
 mod outbox;
+mod publisher;
 mod recovery;
 mod redis;
 mod scheduler;
 mod writer;
 
 pub use config::RedisConfig;
+pub use consumer::StreamConsumer as EventConsumer;
 pub use consumer::{
     ConsumerHandler, HandlerError, StreamConsumer, TransactionalConsumerHandler, is_transient_error,
 };
@@ -31,3 +32,5 @@ pub use recovery::{ConsumerDeadLetter, list_consumer_dead_letters, replay_consum
 pub use redis::{StreamsClient, connect_redis};
 pub use scheduler::{FnJob, Job, Scheduler};
 pub use writer::OutboxWriter;
+
+pub use publisher::{EventPublisher, PostgresPublisher, PublishFuture};

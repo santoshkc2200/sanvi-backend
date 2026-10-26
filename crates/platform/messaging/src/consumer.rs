@@ -1,4 +1,10 @@
-//! Redis Streams consumer with at-least-once delivery and durable processing.
+//! Event consumer with PostgreSQL delivery and an optional Redis Streams adapter.
+//!
+//! [`StreamConsumer::postgres`] polls retained published outbox events with a
+//! renewable PostgreSQL lease per group. Inbox records and durable dead letters
+//! acknowledge work without Redis. Interrupted batches replay safely; external
+//! effects must be idempotent. [`StreamConsumer::new`] selects the Redis adapter.
+//! The Redis delivery and recovery details below apply to that adapter.
 //!
 //! - **Guarantees**:
 //!   Redis Streams provides at-least-once delivery semantics. To ensure correctness:
@@ -152,11 +158,12 @@ const DEFAULT_MAX_RETRIES: u32 = 3;
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(50);
 const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(2);
 
-/// One consumer instance within a consumer group.
+/// One consumer instance within a durable consumer group.
 #[derive(Clone)]
 pub struct StreamConsumer {
     pool: PgPool,
-    streams: StreamsClient,
+    streams: Option<StreamsClient>,
+    transactions: Option<sanvi_persistence::TxManager>,
     metrics: Option<Arc<ConsumerMetrics>>,
     recovery_min_idle: Duration,
     recovery_interval: Duration,
@@ -167,9 +174,21 @@ pub struct StreamConsumer {
 
 impl StreamConsumer {
     pub fn new(pool: PgPool, streams: StreamsClient) -> Self {
+        Self::with_transport(pool, Some(streams))
+    }
+
+    /// Consume retained outbox rows using PostgreSQL coordination, inbox and DLQ.
+    pub fn postgres(transactions: sanvi_persistence::TxManager) -> Self {
+        let mut consumer = Self::with_transport(transactions.pool().clone(), None);
+        consumer.transactions = Some(transactions);
+        consumer
+    }
+
+    fn with_transport(pool: PgPool, streams: Option<StreamsClient>) -> Self {
         Self {
             pool,
             streams,
+            transactions: None,
             metrics: None,
             recovery_min_idle: RECOVERY_MIN_IDLE,
             recovery_interval: RECOVERY_INTERVAL,
@@ -280,6 +299,11 @@ impl StreamConsumer {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         start_id: &str,
     ) {
+        let Some(streams) = &self.streams else {
+            self.run_postgres_loop(stream, group, consumer_name, handler, shutdown, start_id)
+                .await;
+            return;
+        };
         info!(
             stream,
             group,
@@ -287,8 +311,7 @@ impl StreamConsumer {
             start_id,
             "stream consumer started"
         );
-        if let Err(err) = self
-            .streams
+        if let Err(err) = streams
             .ensure_consumer_group_at(stream, group, start_id)
             .await
         {
@@ -331,7 +354,7 @@ impl StreamConsumer {
                         error!(error = %err, stream, group, "stream read failed");
                         // A Redis restart or eviction may remove the group.
                         // Re-create it and let PostgreSQL fill any missing tail.
-                        if let Err(err) = self.streams.ensure_consumer_group_at(stream, group, "0").await {
+                        if let Err(err) = streams.ensure_consumer_group_at(stream, group, "0").await {
                             error!(error = %err, "failed to recreate consumer group");
                         }
                         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -371,6 +394,84 @@ impl StreamConsumer {
         info!(stream, group, "stream consumer stopped");
     }
 
+    async fn run_postgres_loop(
+        &self,
+        stream: &str,
+        group: &str,
+        consumer_name: &str,
+        handler: ConsumerHandlerKind,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+        start_id: &str,
+    ) {
+        let Some(transactions) = &self.transactions else {
+            return;
+        };
+        let lease = crate::lease::PgLease::new(
+            transactions.clone(),
+            format!("consumer:{group}:{stream}"),
+            consumer_name.into(),
+            Duration::from_secs(60),
+        );
+        // Worker subscriptions replay retained history. Tail-only subscriptions must
+        // retain their original starting time through restarts and leader changes.
+        let mut since = None;
+        let mut initialized = start_id != "$";
+        info!(stream, group, "PostgreSQL event consumer started");
+        while !*shutdown.borrow() && shutdown.has_changed().is_ok() {
+            let acquired: Result<bool> = async {
+                if !lease.acquire_or_renew().await? {
+                    return Ok(false);
+                }
+                if !initialized {
+                    since = Some(
+                        sqlx::query_scalar!(
+                            "SELECT started_at FROM platform.worker_leases WHERE name = $1",
+                            lease.name,
+                        )
+                        .fetch_one(&self.pool)
+                        .await?,
+                    );
+                    initialized = true;
+                }
+                Ok(true)
+            }
+            .await;
+            match acquired {
+                Ok(true) => {
+                    let batch = self.recover_outbox(stream, group, &handler, since);
+                    match lease.protect(batch, &mut shutdown).await {
+                        Ok(Some(count)) => {
+                            if let Some(metrics) = &self.metrics
+                                && let Ok(pending) =
+                                    crate::recovery::pending_count(&self.pool, stream, group, since)
+                                        .await
+                            {
+                                metrics.lag.set(pending);
+                            }
+                            if count == crate::recovery::RECOVERY_BATCH {
+                                continue;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(err) => {
+                            error!(error = %err, stream, group, "PostgreSQL event delivery interrupted")
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(err) => error!(error = %err, stream, group, "PostgreSQL consumer lease failed"),
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(POLL_INTERVAL) => {},
+                _ = shutdown.changed() => break,
+            }
+        }
+        if let Err(err) = lease.release().await {
+            error!(error = %err, stream, group, "failed to release consumer lease");
+        }
+        info!(stream, group, "PostgreSQL event consumer stopped");
+    }
+
     async fn recover_outbox(
         &self,
         stream: &str,
@@ -396,7 +497,11 @@ impl StreamConsumer {
         group: &str,
         consumer_name: &str,
     ) -> Result<Vec<(String, String)>> {
-        let mut conn = self.streams.connection_manager();
+        let mut conn = self
+            .streams
+            .as_ref()
+            .context("Redis transport is not configured")?
+            .connection_manager();
         let options = redis::streams::StreamReadOptions::default()
             .group(group, consumer_name)
             .count(32);
@@ -430,7 +535,11 @@ impl StreamConsumer {
         consumer_name: &str,
         handler: &ConsumerHandlerKind,
     ) -> Result<()> {
-        let mut conn = self.streams.connection_manager();
+        let mut conn = self
+            .streams
+            .as_ref()
+            .context("Redis transport is not configured")?
+            .connection_manager();
         let min_idle_ms = self.recovery_min_idle.as_millis() as usize;
         let mut cursor = "0-0".to_string();
 
@@ -503,8 +612,7 @@ impl StreamConsumer {
                     return;
                 }
                 if let Err(dlq_err) = self
-                    .streams
-                    .append_durable(
+                    .append_dead_letter(
                         &dlq,
                         &[("raw_event", event_json), ("error", &err.to_string())],
                     )
@@ -759,8 +867,7 @@ impl StreamConsumer {
             return;
         }
         if let Err(dlq_err) = self
-            .streams
-            .append_durable(
+            .append_dead_letter(
                 &dlq,
                 &[("event", payload.as_str()), ("error", &err.to_string())],
             )
@@ -782,8 +889,23 @@ impl StreamConsumer {
         }
     }
 
+    async fn append_dead_letter(&self, stream: &str, fields: &[(&str, &str)]) -> Result<()> {
+        if let Some(streams) = &self.streams {
+            streams.append_durable(stream, fields).await?;
+        }
+        Ok(())
+    }
+
     async fn ack(&self, stream: &str, group: &str, entry_id: &str) -> Result<()> {
-        let mut conn = self.streams.connection_manager();
+        if self.streams.is_none() {
+            // The inbox or durable dead-letter record is PostgreSQL's acknowledgement.
+            return Ok(());
+        }
+        let mut conn = self
+            .streams
+            .as_ref()
+            .context("Redis transport is not configured")?
+            .connection_manager();
         let _: () = conn
             .xack(stream, group, &[entry_id])
             .await
@@ -792,7 +914,11 @@ impl StreamConsumer {
     }
 
     async fn pending_count(&self, stream: &str, group: &str) -> Result<u64> {
-        let mut conn = self.streams.connection_manager();
+        let mut conn = self
+            .streams
+            .as_ref()
+            .context("Redis transport is not configured")?
+            .connection_manager();
         let reply: redis::streams::StreamPendingReply =
             conn.xpending(stream, group).await.with_context(|| {
                 format!("failed to read pending count for group {group} on {stream}")

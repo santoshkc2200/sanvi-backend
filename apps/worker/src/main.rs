@@ -1,17 +1,11 @@
-//! `sanvi-worker` — background worker: outbox dispatcher, stream consumers
-//! and the leader-elected scheduler.
+//! `sanvi-worker`: PostgreSQL outbox consumers and durable recurring jobs.
 //!
-//! - Outbox dispatcher relays unpublished domain events to per-context
-//!   Redis Streams, dead-lettering rows that exhaust retries.
-//! - Consumers process `sanvi.events.tenancy` (cache invalidation),
-//!   `sanvi.events.identity` (Keto sync) and `sanvi.events.access`
-//!   (entitlement cache invalidation, role → Keto tuple sync) with
-//!   exactly-once semantics via `platform.processed_events`.
-//! - The scheduler runs periodic jobs (purge sweep, idempotency sweep,
-//!   quota rollover, entitlement expiry sweep, audit chain verification)
-//!   on the elected leader only.
-//! - Graceful shutdown: SIGTERM/SIGINT stops polling, in-flight batches
-//!   complete, pools close.
+//! Committed outbox events are delivered from PostgreSQL with per-group leases,
+//! durable inbox deduplication and replayable dead letters. Database effects can
+//! share the inbox transaction; external effects must be idempotent.
+//! Recurring schedules and failure budgets survive worker restarts in PostgreSQL.
+//! Redis supports cache invalidation and quotas independently of job coordination.
+//! SIGTERM/SIGINT stops polling; interrupted work remains available for replay.
 
 use std::process::ExitCode;
 mod management;
@@ -85,8 +79,8 @@ use sanvi_localization::{
     domain::Arg as LocalizationArg,
 };
 use sanvi_messaging::{
-    ConsumerMetrics, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
-    StreamConsumer, StreamName, StreamsClient, connect_redis,
+    ConsumerMetrics, EventConsumer, FnJob, OutboxDispatcher, OutboxMetrics, RedisConfig, Scheduler,
+    StreamName, connect_redis,
 };
 use sanvi_notifications::{
     CopyRenderer, EnqueueEmail, HttpNotificationGateway, NotificationDispatcher, NotificationError,
@@ -1000,11 +994,8 @@ async fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let streams = StreamsClient::new(redis.clone());
-
-    let dispatcher = OutboxDispatcher::new(
+    let dispatcher = OutboxDispatcher::postgres(
         pool.clone(),
-        streams.clone(),
         StreamName(config.outbox.stream.clone()),
         config.outbox.batch_size,
         config.outbox.max_attempts,
@@ -1043,7 +1034,7 @@ async fn main() -> ExitCode {
             });
         }
     };
-    let tenancy_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let tenancy_consumer = EventConsumer::postgres(tx_manager.clone());
     let tenancy_consumer_metrics = Arc::new(ConsumerMetrics::new("tenancy"));
     if let Err(err) = tenancy_consumer_metrics.register(registry) {
         eprintln!("failed to register tenancy consumer metrics: {err}");
@@ -1069,7 +1060,7 @@ async fn main() -> ExitCode {
         localization_service.clone(),
         config.localization.clone(),
     ));
-    let localization_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let localization_consumer = EventConsumer::postgres(tx_manager.clone());
     let localization_consumer_metrics = Arc::new(ConsumerMetrics::new("localization"));
     if let Err(err) = localization_consumer_metrics.register(registry) {
         eprintln!("failed to register localization consumer metrics: {err}");
@@ -1092,7 +1083,7 @@ async fn main() -> ExitCode {
             metrics.prometheus_registry(),
         )),
     ));
-    let theming_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let theming_consumer = EventConsumer::postgres(tx_manager.clone());
     let theming_consumer_metrics = Arc::new(ConsumerMetrics::new("theming"));
     if let Err(err) = theming_consumer_metrics.register(registry) {
         eprintln!("failed to register theming consumer metrics: {err}");
@@ -1104,7 +1095,7 @@ async fn main() -> ExitCode {
     // --- domains consumer: host→tenant resolution-cache invalidation ------
     // Verification/live/removal events clear the shared + local host cache
     // so the tenancy resolver never serves a stale custom-domain mapping.
-    let domains_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let domains_consumer = EventConsumer::postgres(tx_manager.clone());
     let domains_consumer_metrics = Arc::new(ConsumerMetrics::new("domains"));
     if let Err(err) = domains_consumer_metrics.register(registry) {
         eprintln!("failed to register domains consumer metrics: {err}");
@@ -1133,7 +1124,7 @@ async fn main() -> ExitCode {
             Arc::new(sanvi_identity::adapters::repo::SqlxMembershipRepository::new()),
             access_store.clone(),
         ));
-    let access_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let access_consumer = EventConsumer::postgres(tx_manager.clone());
     let access_consumer_metrics = Arc::new(ConsumerMetrics::new("access"));
     if let Err(err) = access_consumer_metrics.register(registry) {
         eprintln!("failed to register access consumer metrics: {err}");
@@ -1187,7 +1178,7 @@ async fn main() -> ExitCode {
         Arc::new(AccessSystemClock),
     ));
 
-    let entitlement_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let entitlement_consumer = EventConsumer::postgres(tx_manager.clone());
     let entitlement_consumer_metrics = Arc::new(ConsumerMetrics::new("access-entitlements"));
     if let Err(err) = entitlement_consumer_metrics.register(registry) {
         eprintln!("failed to register access-entitlements consumer metrics: {err}");
@@ -1377,7 +1368,7 @@ async fn main() -> ExitCode {
     );
 
     // --- billing events consumer: entitlement cache invalidation ------------
-    let billing_consumer = StreamConsumer::new(pool.clone(), streams.clone());
+    let billing_consumer = EventConsumer::postgres(tx_manager.clone());
     let billing_consumer_metrics = std::sync::Arc::new(ConsumerMetrics::new("billing"));
     if let Err(err) = billing_consumer_metrics.register(registry) {
         eprintln!("failed to register billing consumer metrics: {err}");
@@ -3299,7 +3290,7 @@ async fn main() -> ExitCode {
         )),
     ];
     let scheduler = Scheduler::new(
-        redis.clone(),
+        tx_manager.clone(),
         format!("worker-{}", uuid::Uuid::now_v7()),
         jobs,
     );
@@ -3532,7 +3523,7 @@ async fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
 
-            let consumer = StreamConsumer::new(pool.clone(), streams.clone()).with_metrics(metrics);
+            let consumer = EventConsumer::postgres(tx_manager.clone()).with_metrics(metrics);
             let dispatcher = Arc::new(NotificationDispatcher::new(
                 notif_gateway.clone(),
                 notif_directory.clone(),

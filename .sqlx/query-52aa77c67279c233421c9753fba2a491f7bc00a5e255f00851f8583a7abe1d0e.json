@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE platform.worker_leases\n             SET expires_at = clock_timestamp() + $3::float8 * interval '1 millisecond'\n             WHERE name = $1 AND owner = $2 AND expires_at > clock_timestamp()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "52aa77c67279c233421c9753fba2a491f7bc00a5e255f00851f8583a7abe1d0e"
+}

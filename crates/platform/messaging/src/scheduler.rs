@@ -1,46 +1,18 @@
-//! Leader-elected periodic job scheduler.
+//! PostgreSQL-backed recurring jobs with durable schedules and retry state.
 //!
-//! One worker instance holds a Redis lock (`SET NX EX`, renewed on every
-//! tick); only the leader runs jobs, so cron-style work (purge sweeps,
-//! retention, sync) executes exactly once per interval across the fleet.
-//! Jobs run sequentially on the leader; a job that overruns its interval
-//! simply runs late (no overlapping runs of the same job).
+//! One renewable PostgreSQL lease coordinates a scheduler fleet. Completion
+//! advances the persisted due time; interrupted work stays due for replay.
+//! Jobs must be idempotent because a crash after an external effect can replay it.
 
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use sanvi_resilience::{JobRetryBudget, JobRetryPolicy, RetryOutcome};
-use tracing::{debug, error, info, warn};
+use sanvi_persistence::TxManager;
+use sanvi_resilience::JobRetryPolicy;
+use sqlx::PgPool;
+use tracing::{error, info, warn};
 
-static ACQUIRE_OR_RENEW_SCRIPT: std::sync::LazyLock<redis::Script> =
-    std::sync::LazyLock::new(|| {
-        redis::Script::new(
-            r#"
-        local current = redis.call('GET', KEYS[1])
-        if not current then
-            redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
-            return 1
-        elseif current == ARGV[1] then
-            redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
-            return 1
-        else
-            return 0
-        end
-        "#,
-        )
-    });
-
-static RELEASE_SCRIPT: std::sync::LazyLock<redis::Script> = std::sync::LazyLock::new(|| {
-    redis::Script::new(
-        r#"
-        if redis.call('GET', KEYS[1]) == ARGV[1] then
-            return redis.call('DEL', KEYS[1])
-        else
-            return 0
-        end
-        "#,
-    )
-});
+use crate::lease::PgLease;
 
 /// Boxed job future.
 pub type JobFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
@@ -87,275 +59,162 @@ impl Job for FnJob {
     }
 }
 
-/// Lease duration for the leader lock (renewed every tick).
-const LOCK_TTL_SECS: u64 = 60;
-/// Tick cadence: how often jobs are checked for due-ness.
-const TICK: Duration = Duration::from_secs(5);
-
 pub struct Scheduler {
-    conn: redis::aio::ConnectionManager,
-    lock_key: String,
-    instance_id: String,
+    pool: PgPool,
+    transactions: TxManager,
+    lease: PgLease,
     jobs: Vec<Arc<dyn Job>>,
-    lock_ttl_secs: u64,
     tick: Duration,
-    /// One retry budget per job name (TASK-023 step 7): a permanently
-    /// failing job suspends at its budget instead of burning capacity
-    /// forever, until the skip window lapses (one probe run) or the
-    /// operator replays it.
     retry_policy: JobRetryPolicy,
-    budgets: std::sync::Mutex<HashMap<String, JobRetryBudget>>,
 }
 
 impl Scheduler {
     pub fn new(
-        conn: redis::aio::ConnectionManager,
+        transactions: TxManager,
         instance_id: impl Into<String>,
         jobs: Vec<Arc<dyn Job>>,
     ) -> Self {
+        let pool = transactions.pool().clone();
         Self {
-            conn,
-            lock_key: "sanvi:scheduler:leader".to_string(),
-            instance_id: instance_id.into(),
+            lease: PgLease::new(
+                transactions.clone(),
+                "sanvi:scheduler:leader".into(),
+                instance_id.into(),
+                Duration::from_secs(60),
+            ),
+            pool,
+            transactions,
             jobs,
-            lock_ttl_secs: LOCK_TTL_SECS,
-            tick: TICK,
+            tick: Duration::from_secs(5),
             retry_policy: JobRetryPolicy::default(),
-            budgets: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn with_lock_key(mut self, lock_key: impl Into<String>) -> Self {
-        self.lock_key = lock_key.into();
+    pub fn with_lock_key(mut self, key: impl Into<String>) -> Self {
+        self.lease.name = key.into();
         self
     }
 
     pub fn with_lock_ttl(mut self, ttl_secs: u64) -> Self {
-        self.lock_ttl_secs = ttl_secs;
+        self.lease.ttl = Duration::from_secs(ttl_secs.max(1));
         self
     }
 
     pub fn with_tick(mut self, tick: Duration) -> Self {
-        self.tick = tick;
+        self.tick = tick.max(Duration::from_millis(1));
         self
     }
 
-    /// Bound every job's consecutive failures: past the budget the job
-    /// suspends (skipped with a warning) instead of running forever.
     pub fn with_retry_policy(mut self, policy: JobRetryPolicy) -> Self {
         self.retry_policy = policy;
         self
     }
 
-    /// Run until `shutdown` fires.
+    pub async fn acquire_or_renew(&self) -> Result<bool> {
+        self.lease.acquire_or_renew().await
+    }
+
+    pub async fn release_lock(&self) -> Result<bool> {
+        self.lease.release().await
+    }
+
+    /// Jobs run sequentially; failover preserves due times and retry budgets.
     pub async fn run_until_shutdown(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
-        info!(instance = %self.instance_id, jobs = self.jobs.len(), "scheduler started");
-        if *shutdown.borrow() {
-            info!("scheduler stopped: already shut down");
+        if *shutdown.borrow() || shutdown.has_changed().is_err() {
             return;
         }
-
-        let mut next_due: Vec<tokio::time::Instant> = self
-            .jobs
-            .iter()
-            .map(|_| tokio::time::Instant::now())
-            .collect();
-
+        info!(instance = %self.lease.owner, jobs = self.jobs.len(), "PostgreSQL scheduler started");
         let mut ticker = tokio::time::interval(self.tick);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
         loop {
             tokio::select! {
-                _ = ticker.tick() => {}
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        break;
-                    }
-                    continue;
-                }
+                _ = ticker.tick() => {},
+                _ = shutdown.changed() => break,
             }
-
             if *shutdown.borrow() {
                 break;
             }
-
             match self.acquire_or_renew().await {
-                Ok(true) => {
-                    // We are (still) the leader: run due jobs with lease renewal.
-                    self.run_due_jobs(&mut next_due, &mut shutdown).await;
-                    if *shutdown.borrow() {
-                        break;
+                Ok(true) => match self.lease.protect(self.run_due_jobs(), &mut shutdown).await {
+                    Ok(Some(())) => {}
+                    Ok(None) => break,
+                    Err(err) => {
+                        warn!(error = %err, "scheduled jobs interrupted; pending work will retry")
                     }
-                }
-                Ok(false) => {
-                    debug!("scheduler is not the leader; waiting");
-                }
-                Err(err) => {
-                    warn!(error = %err, "scheduler lock check failed; waiting");
-                }
+                },
+                Ok(false) => {}
+                Err(err) => warn!(error = %err, "scheduler lease check failed"),
             }
         }
-
         if let Err(err) = self.release_lock().await {
-            warn!(error = %err, "failed to release scheduler lock on shutdown");
+            warn!(error = %err, "failed to release scheduler lease");
         }
-        info!("scheduler stopped");
+        info!("PostgreSQL scheduler stopped");
     }
 
-    async fn run_due_jobs(
-        &self,
-        next_due: &mut [tokio::time::Instant],
-        shutdown: &mut tokio::sync::watch::Receiver<bool>,
-    ) {
-        let now = tokio::time::Instant::now();
-        let due_indices: Vec<usize> = self
-            .jobs
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| next_due[*index] <= now)
-            .map(|(index, _)| index)
-            .collect();
-
-        if due_indices.is_empty() {
-            return;
+    async fn run_due_jobs(&self) -> Result<()> {
+        for job in &self.jobs {
+            let mut registration = self.transactions.begin().await?;
+            sqlx::query!(
+                "INSERT INTO platform.scheduled_jobs (scheduler_key, name) VALUES ($1, $2)
+                 ON CONFLICT DO NOTHING",
+                self.lease.name,
+                job.name(),
+            )
+            .execute(&mut **registration.as_inner())
+            .await?;
+            registration.commit().await?;
+            let failures = sqlx::query_scalar!(
+                "SELECT consecutive_failures FROM platform.scheduled_jobs
+                 WHERE scheduler_key = $1 AND name = $2 AND next_run_at <= clock_timestamp()",
+                self.lease.name,
+                job.name(),
+            )
+            .fetch_optional(&self.pool)
+            .await?;
+            let Some(failures) = failures else {
+                continue;
+            };
+            let (failures, last_error, delay) = match job.run().await {
+                Ok(()) => (0, None, job.interval()),
+                Err(err) => {
+                    let failures = failures.saturating_add(1);
+                    error!(error = %err, job = job.name(), failures, "scheduled job failed");
+                    let delay = if failures as u32 >= self.retry_policy.max_consecutive_failures {
+                        let exponent = (failures as u32).saturating_sub(1).min(16);
+                        Duration::from_secs(
+                            self.retry_policy
+                                .base_backoff_secs
+                                .saturating_mul(1u64 << exponent)
+                                .min(self.retry_policy.max_backoff_secs),
+                        )
+                        .max(job.interval())
+                    } else {
+                        job.interval()
+                    };
+                    (failures, Some(err.to_string()), delay)
+                }
+            };
+            // Fencing prevents an expired leader from advancing durable schedule state.
+            let delay_millis = delay.as_millis() as f64;
+            let mut completion = self.transactions.begin().await?;
+            let updated = sqlx::query!(
+                "UPDATE platform.scheduled_jobs
+                 SET next_run_at = clock_timestamp() + $3::float8 * interval '1 millisecond',
+                     consecutive_failures = $4, last_error = $5, last_finished_at = clock_timestamp()
+                 WHERE scheduler_key = $1 AND name = $2 AND EXISTS (
+                     SELECT 1 FROM platform.worker_leases
+                     WHERE name = $1 AND owner = $6 AND expires_at > clock_timestamp())",
+                self.lease.name, job.name(), delay_millis, failures, last_error, self.lease.owner,
+            )
+            .execute(&mut **completion.as_inner()).await.context("failed to persist scheduled job outcome")?;
+            anyhow::ensure!(
+                updated.rows_affected() == 1,
+                "scheduler lease lost before recording job outcome"
+            );
+            completion.commit().await?;
         }
-
-        // Renew frequently enough that a sequence outliving the lease cannot cause
-        // lease expiry. We renew at min(tick, 1/3 TTL), bounded to at least 10ms.
-        let ttl_third = Duration::from_millis(((self.lock_ttl_secs * 1000) / 3).max(10));
-        let renew_interval = self.tick.min(ttl_third).max(Duration::from_millis(10));
-
-        let mut renew_interval_timer = tokio::time::interval(renew_interval);
-        renew_interval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // First tick completes immediately, consume it since lock was just acquired/renewed
-        renew_interval_timer.tick().await;
-
-        let keepalive = async {
-            loop {
-                renew_interval_timer.tick().await;
-                match self.acquire_or_renew().await {
-                    Ok(true) => {
-                        debug!(instance = %self.instance_id, "renewed leader lease during job execution");
-                    }
-                    Ok(false) => {
-                        warn!(instance = %self.instance_id, "lost leader lease during job execution");
-                        return Err(anyhow::anyhow!("lease lost to another worker"));
-                    }
-                    Err(err) => {
-                        warn!(error = %err, instance = %self.instance_id, "failed to renew leader lease during job execution");
-                        return Err(err);
-                    }
-                }
-            }
-            #[allow(unreachable_code)]
-            Ok::<(), anyhow::Error>(())
-        };
-
-        let shutdown_jobs = shutdown.clone();
-        let jobs_runner = async {
-            for index in due_indices {
-                if *shutdown_jobs.borrow() {
-                    break;
-                }
-                let job = &self.jobs[index];
-                if !self.admit(job.name()) {
-                    continue;
-                }
-                debug!(job = job.name(), "running scheduled job");
-                match job.run().await {
-                    Ok(()) => self.record_success(job.name()),
-                    Err(err) => {
-                        error!(error = %err, job = job.name(), "scheduled job failed");
-                        self.record_failure(job.name());
-                    }
-                }
-                next_due[index] = tokio::time::Instant::now() + job.interval();
-            }
-        };
-
-        tokio::select! {
-            biased;
-
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    info!("shutdown signaled during job execution; cancelling remaining jobs");
-                }
-            }
-            lease_res = keepalive => {
-                if let Err(err) = lease_res {
-                    error!(error = %err, "lost leadership lease during job sequence; cancelled running jobs");
-                }
-            }
-            _ = jobs_runner => {
-                debug!("completed due jobs sequence");
-            }
-        }
-    }
-
-    /// May this job run on this tick? A suspended job is skipped with a
-    /// warning — the operator path back is the DLQ/CLI replay surface, or
-    /// the probe run the budget allows once the skip window lapses.
-    fn admit(&self, job_name: &str) -> bool {
-        let mut budgets = self.budgets.lock().expect("scheduler budget lock");
-        let budget = budgets
-            .entry(job_name.to_string())
-            .or_insert_with(|| JobRetryBudget::new(self.retry_policy));
-        match budget.admit() {
-            RetryOutcome::Run => true,
-            RetryOutcome::SkipUntil(until) => {
-                warn!(
-                    job = job_name,
-                    resume_at = ?until,
-                    "scheduled job suspended at its retry budget; skipping"
-                );
-                false
-            }
-        }
-    }
-
-    fn record_success(&self, job_name: &str) {
-        let budgets = self.budgets.lock().expect("scheduler budget lock");
-        if let Some(budget) = budgets.get(job_name) {
-            budget.record_success();
-        }
-    }
-
-    fn record_failure(&self, job_name: &str) {
-        let mut budgets = self.budgets.lock().expect("scheduler budget lock");
-        let budget = budgets
-            .entry(job_name.to_string())
-            .or_insert_with(|| JobRetryBudget::new(self.retry_policy));
-        budget.record_failure();
-    }
-
-    /// Take the leader lock, or extend it if we already hold it.
-    ///
-    /// Atomic single round trip using Lua compare-and-set:
-    /// - If nobody holds the lock, claims it with TTL.
-    /// - If this instance already holds the lock, refreshes the TTL.
-    /// - If another instance holds the lock, returns `Ok(false)` without modifying it.
-    pub async fn acquire_or_renew(&self) -> Result<bool> {
-        let mut conn = self.conn.clone();
-        let res: i64 = ACQUIRE_OR_RENEW_SCRIPT
-            .key(&self.lock_key)
-            .arg(&self.instance_id)
-            .arg(self.lock_ttl_secs)
-            .invoke_async(&mut conn)
-            .await
-            .context("failed to acquire or renew scheduler leader lock")?;
-        Ok(res == 1)
-    }
-
-    /// Release the leader lock if held by this instance.
-    pub async fn release_lock(&self) -> Result<bool> {
-        let mut conn = self.conn.clone();
-        let res: i64 = RELEASE_SCRIPT
-            .key(&self.lock_key)
-            .arg(&self.instance_id)
-            .invoke_async(&mut conn)
-            .await
-            .context("failed to release scheduler leader lock")?;
-        Ok(res == 1)
+        Ok(())
     }
 }
 

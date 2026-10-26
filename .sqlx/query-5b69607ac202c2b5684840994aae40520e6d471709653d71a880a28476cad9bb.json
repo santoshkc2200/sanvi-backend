@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform.worker_leases (name, owner, expires_at)\n             VALUES ($1, $2, clock_timestamp() + $3::float8 * interval '1 millisecond')\n             ON CONFLICT (name) DO UPDATE\n             SET owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at\n             WHERE platform.worker_leases.owner = EXCLUDED.owner\n                OR platform.worker_leases.expires_at <= clock_timestamp()\n             RETURNING owner",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform.worker_leases",
+            "name": "owner"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5b69607ac202c2b5684840994aae40520e6d471709653d71a880a28476cad9bb"
+}

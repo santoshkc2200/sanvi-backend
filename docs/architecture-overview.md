@@ -66,13 +66,16 @@ The architecture gate enforces domain purity and dependency direction, with narr
   root wires in an adapter that calls the other context's application service. No context imports
   another context's domain types.
 - **Asynchronous**: domain events written to the `outbox` table in the same transaction as the state
-  change. A dispatcher in `apps/worker` publishes to Redis Streams; consumers are idempotent by
-  `(consumer_group, event_id)`. This is the default for anything cross-context and non-critical-path.
+  change. A dispatcher in `apps/worker` makes retained rows available to PostgreSQL consumers,
+  which are idempotent by `(consumer_group, event_id)`. This is the default for anything cross-context and non-critical-path.
 - **Recovery**: published outbox rows remain the PostgreSQL replay source. Required consumers
-  recover unprocessed/unparked events independently of Redis; publication never trims streams by
-  fixed length. Consumer failures are parked durably before acknowledgment. Retention and manual
-  archival must preserve recovery and deduplication history; see `runbooks/event-recovery.md`.
+  poll unprocessed/unparked events using PostgreSQL leases; publication never removes required
+  history. Consumer failures are parked durably before acknowledgment. Retention and manual archival must preserve recovery and deduplication history; see `runbooks/event-recovery.md`.
 - **Forbidden**: cross-schema SQL joins, shared tables, direct repository reuse across contexts.
+
+PostgreSQL also persists recurring-job schedules and retry budgets. See
+[ADR 0005](adr/0005-postgres-jobs-and-outbox.md) for delivery guarantees, future
+broker adapters, and the initial worker handover procedure.
 
 ### 3.1 Accepted Context Ownership Exceptions (Enforced by `scripts/check-layering.sh`)
 

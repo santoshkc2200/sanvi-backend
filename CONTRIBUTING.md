@@ -15,7 +15,12 @@
    `cargo run -p sanvi-cli -- openapi --write`.
 4. **Transactions.** Every write path runs in a `Tx` from
    `sanvi_persistence::TxManager`; anything that emits domain events writes
-   to `platform.outbox` in the same transaction.
+   to `platform.outbox` in the same transaction. Use PostgreSQL-backed jobs for
+   durable background work and the shared scheduler for recurring maintenance.
+   Never rely on a detached task or Redis as the only durable record of work.
+   Consumers must be idempotent; database-only effects and inbox acknowledgement
+   should share a transaction. Keep broker SDKs behind platform delivery adapters
+   so NATS or Kafka can be added without changing context use cases.
 5. **Secrets.** Never in config files or `.env.example`. Local-only dev
    values go in your gitignored `.env`.
 6. **SQL.** Migrations are timestamped, context-tagged, reversible, and only

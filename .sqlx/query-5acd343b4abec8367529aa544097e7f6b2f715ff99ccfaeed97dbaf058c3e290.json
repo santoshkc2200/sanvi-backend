@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT consecutive_failures FROM platform.scheduled_jobs\n                 WHERE scheduler_key = $1 AND name = $2 AND next_run_at <= clock_timestamp()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "consecutive_failures",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "platform.scheduled_jobs",
+            "name": "consecutive_failures"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5acd343b4abec8367529aa544097e7f6b2f715ff99ccfaeed97dbaf058c3e290"
+}
