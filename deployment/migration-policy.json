@@ -58,8 +58,14 @@
   "20261010000600_offboarding_delete_grants.sql": "maintenance",
   "20261010000700_vacuum_tuning_index_pruning.sql": "maintenance",
   "20261011000000_erasure_propagations.sql": "maintenance",
+  "20261015000100_privacy_rights_enforcement.sql": "rolling",
+  "20261015000200_privacy_breach_reports.sql": "rolling",
+  "20261015000300_media_subject_index.sql": "rolling",
+  "20261015000400_privacy_jurisdiction_mapping.sql": "maintenance",
+  "20261015000500_privacy_manual_rights.sql": "rolling",
   "20261022000100_platform_consumer_recovery.sql": "rolling",
   "20261022000200_payments_idempotency_audit.sql": "rolling",
   "20261022000300_access_projection_checkpoints.sql": "rolling",
+  "20261026000100_platform_postgres_jobs.sql": "maintenance",
   "20261026000200_accounting_destinations.sql": "rolling"
 }
