@@ -14,6 +14,14 @@ pub enum AccountingError {
     Conflict(&'static str),
     #[error("provider verification is unavailable")]
     VerificationUnavailable,
+    #[error("provider verification failed: {0}")]
+    VerificationFailed(&'static str),
+    #[error("provider authorization was rejected: {0}")]
+    AuthorizationRejected(&'static str),
+    #[error("provider authorization must be granted again")]
+    ReauthorizationRequired,
+    #[error("accounting provider is unavailable")]
+    ProviderUnavailable,
     #[error("historical imports require a separate reviewed migration")]
     HistoricalImport,
     #[error("source event was already assigned with different content")]

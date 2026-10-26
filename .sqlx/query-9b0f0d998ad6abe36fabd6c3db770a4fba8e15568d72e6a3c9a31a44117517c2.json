@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accounting.tenant_secret_keys (tenant_id, wrapped_dek, kek_id) VALUES ($1, $2, $3) ON CONFLICT (tenant_id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id RETURNING wrapped_dek, kek_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "wrapped_dek",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "accounting.tenant_secret_keys",
+            "name": "wrapped_dek"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "kek_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounting.tenant_secret_keys",
+            "name": "kek_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9b0f0d998ad6abe36fabd6c3db770a4fba8e15568d72e6a3c9a31a44117517c2"
+}

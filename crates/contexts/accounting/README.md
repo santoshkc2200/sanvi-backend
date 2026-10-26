@@ -1,8 +1,9 @@
 # Accounting integration foundation
 
-This bounded context stores tenant accounting destinations and controlled
-provider cutovers. It does not implement accounting books, stock management,
-OAuth, provider posting, a public HTTP API, or tenant-admin screens yet.
+This bounded context stores tenant accounting destinations, controlled
+provider cutovers, and freee OAuth consent. It does not implement accounting
+books, stock management, provider posting, a public HTTP API, or tenant-admin
+screens yet.
 
 ## Implemented
 
@@ -40,6 +41,19 @@ OAuth, provider posting, a public HTTP API, or tenant-admin screens yet.
 | `submitted` | `failed` | `RecordFailure(reason)` | system (`Export`) |
 | `pending`, `submitted`, `failed` | `resolved_manually` | `ResolvePosting(note, external_record_id?)` | user (`Manage`) |
 
+- freee OAuth (`adapters::freee`, `application::authorization`):
+  `StartAuthorization` issues signed, single-use, 10-minute state bound to the
+  tenant, user, book and connection; `CompleteAuthorization` burns it before
+  exchanging the code and keeps the grant only if freee's `company_id` equals
+  the registered organization. Tokens are sealed per tenant
+  (`accounting.provider_credentials`, DEKs in `accounting.tenant_secret_keys`,
+  KEK from deployed config). `AccessTokens` refreshes under the credential row
+  lock because freee refresh tokens are single-use; a refused refresh moves the
+  credential to `reauthorization_required`. `RevokeAuthorization` is refused
+  while the connection is active, scheduled or draining.
+- `CredentialVerifier` replaces `UnavailableVerifier` once composed: it needs
+  an active credential, a freee role of `admin` or `simple_accounting`, and
+  every mapped account and tax code available in that company.
 - Separation of `Actor::User` (for tenant users with `Read` or `Manage` permissions)
   from `Actor::System` (for background workers with `Export` permission). Users cannot
   execute export operations; system actors cannot access management endpoints.
@@ -61,10 +75,11 @@ context, and system actors represent trusted background services. Connection IDs
 come from the platform Snowflake generator when an enrollment adapter is added.
 
 `PostgresAccountingStore` implements atomic persistence. Authorization and
-provider verification have no permissive production defaults. A real verifier
-must resolve encrypted tenant/connection-bound credentials, validate organization
-access and the existence/compatibility of all mapping IDs. Do not compose a test
-verifier into an application. There is no in-process success fallback.
+provider verification have no permissive production defaults. Compose
+`CredentialVerifier` with `FreeeClient` and `PostgresCredentialStore` once the
+freee app credentials, state key and token KEK are deployed; until then keep
+`UnavailableVerifier`. Do not compose a test verifier into an application.
+There is no in-process success fallback.
 
 `AssignPosting` accepts an event ID, accounting timestamp and a fingerprint of
 canonical source facts. It stores routing metadata only; no money is sent and no

@@ -51,6 +51,10 @@ HTTP handlers are introduced.
 
 ### Provider authorization and credentials
 
+Backend adapter implemented; see `2026-10-26-accounting-freee-oauth.md`. Still
+open here: registering the freee developer app, deploying its client ID/secret,
+state key and token KEK, and composing the adapter.
+
 Implement freee as the first concrete adapter while retaining provider-neutral
 ports. Register the developer app and configure OAuth credentials through the
 existing secret-management boundary. Add tenant/user/provider-bound single-use

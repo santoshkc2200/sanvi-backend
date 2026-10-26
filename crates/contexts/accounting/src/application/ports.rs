@@ -1,9 +1,12 @@
+use std::{future::Future, pin::Pin};
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sanvi_kernel::{EventId, TenantId, UserId};
 
 use crate::domain::{
-    AccountingError, AccountingEvent, Book, BookId, Connection, Posting, PostingId,
+    AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId, Credential,
+    OAuthStateClaims, Posting, PostingId, Provider, ProviderCatalog, Secret, TokenGrant,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,4 +91,59 @@ pub struct AssignCommand {
     /// SHA-256 of canonical source content; reuse with changed content conflicts.
     pub fingerprint: String,
     pub accounting_at: DateTime<Utc>,
+}
+
+/// One provider's OAuth client. Errors map to `ReauthorizationRequired` when
+/// the provider refuses a grant, `ProviderUnavailable` when it cannot be
+/// reached or is rate limiting, and `AuthorizationRejected` otherwise.
+#[async_trait]
+pub trait ProviderOAuth: Send + Sync {
+    fn provider(&self) -> Provider;
+    /// The consent URL carrying `state`; it limits consent to one organization.
+    fn authorization_url(&self, state: &str) -> String;
+    async fn exchange_code(&self, code: &str) -> Result<TokenGrant, AccountingError>;
+    async fn refresh(&self, refresh_token: &Secret) -> Result<TokenGrant, AccountingError>;
+    async fn revoke(&self, refresh_token: &Secret) -> Result<(), AccountingError>;
+}
+
+/// Read-only provider lookups used to verify a connection's mappings.
+#[async_trait]
+pub trait ProviderDirectory: Send + Sync {
+    fn provider(&self) -> Provider;
+    async fn catalog(
+        &self,
+        access_token: &Secret,
+        organization_id: &str,
+    ) -> Result<ProviderCatalog, AccountingError>;
+}
+
+pub type CredentialChange = Box<
+    dyn FnOnce(
+            Credential,
+        ) -> Pin<Box<dyn Future<Output = Result<Credential, AccountingError>> + Send>>
+        + Send,
+>;
+
+/// Encrypted credential persistence and single-use OAuth nonces.
+#[async_trait]
+pub trait CredentialStore: Send + Sync {
+    async fn issue_state(&self, claims: &OAuthStateClaims) -> Result<(), AccountingError>;
+    /// Atomically burn a nonce; `false` if unknown or already used. Expiry is
+    /// checked by the caller's clock against the signed `expires_at`.
+    async fn consume_state(&self, claims: &OAuthStateClaims) -> Result<bool, AccountingError>;
+    /// Insert or replace the connection's credential with a fresh consent.
+    async fn authorize(
+        &self,
+        tenant_id: TenantId,
+        credential: Credential,
+    ) -> Result<(), AccountingError>;
+    /// Lock the credential row for the whole of `change`, which may call the
+    /// provider, then persist its result in the same transaction. A status
+    /// change writes its outbox event in that transaction too.
+    async fn update(
+        &self,
+        tenant_id: TenantId,
+        connection_id: ConnectionId,
+        change: CredentialChange,
+    ) -> Result<Credential, AccountingError>;
 }

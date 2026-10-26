@@ -668,22 +668,24 @@ async fn concurrent_assignments_at_cutover_route_by_date() {
 async fn accounting_migration_reverses_without_touching_other_contexts() {
     let db = test_db().await;
     let admin = db.admin_pool().await;
-    sqlx::raw_sql(include_str!(
-        "../../../../migrations/20261026000200_accounting_destinations.down.sql"
-    ))
-    .execute(&admin)
-    .await
-    .unwrap();
+    for down in [
+        include_str!(
+            "../../../../migrations/20261026000300_accounting_provider_credentials.down.sql"
+        ),
+        include_str!("../../../../migrations/20261026000200_accounting_destinations.down.sql"),
+    ] {
+        sqlx::raw_sql(down).execute(&admin).await.unwrap();
+    }
     let absent: bool = sqlx::query_scalar("SELECT to_regnamespace('accounting') IS NULL AND to_regclass('tenancy.tenants') IS NOT NULL").fetch_one(&admin).await.unwrap();
     assert!(absent);
-    sqlx::raw_sql(include_str!(
-        "../../../../migrations/20261026000200_accounting_destinations.sql"
-    ))
-    .execute(&admin)
-    .await
-    .unwrap();
-    let forced: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_class WHERE relnamespace = 'accounting'::regnamespace AND relname IN ('books', 'postings') AND relrowsecurity AND relforcerowsecurity").fetch_one(&admin).await.unwrap();
-    assert_eq!(forced, 2);
+    for up in [
+        include_str!("../../../../migrations/20261026000200_accounting_destinations.sql"),
+        include_str!("../../../../migrations/20261026000300_accounting_provider_credentials.sql"),
+    ] {
+        sqlx::raw_sql(up).execute(&admin).await.unwrap();
+    }
+    let forced: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_class WHERE relnamespace = 'accounting'::regnamespace AND relname IN ('books', 'postings', 'oauth_states', 'tenant_secret_keys', 'provider_credentials') AND relrowsecurity AND relforcerowsecurity").fetch_one(&admin).await.unwrap();
+    assert_eq!(forced, 5);
 }
 
 #[tokio::test]

@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT book_id, status, refresh_ciphertext, refresh_issued_at, access_ciphertext, access_expires_at FROM accounting.provider_credentials WHERE tenant_id = $1 AND connection_id = $2 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "book_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "accounting.provider_credentials",
+            "name": "book_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounting.provider_credentials",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "refresh_ciphertext",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "accounting.provider_credentials",
+            "name": "refresh_ciphertext"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "refresh_issued_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "accounting.provider_credentials",
+            "name": "refresh_issued_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "access_ciphertext",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "accounting.provider_credentials",
+            "name": "access_ciphertext"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "access_expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "accounting.provider_credentials",
+            "name": "access_expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e16c76715ea588a9f3633b7f626e9b6cae87a50f9ed183d7a76377e5a24da5e4"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounting.oauth_states SET redeemed_at = now() WHERE nonce = $1 AND tenant_id = $2 AND user_id = $3 AND book_id = $4 AND connection_id = $5 AND provider = $6 AND expires_at = $7 AND redeemed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27212b07ebde3fdad9a204c922a8d024be33a1bdad1ff1beeddeebbce8b9d72a"
+}

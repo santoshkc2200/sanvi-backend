@@ -1,4 +1,6 @@
-//! Authorized use cases. There are no live OAuth or posting adapters yet.
+//! Authorized use cases. Provider consent lives in `authorization`; there is
+//! no posting exporter yet.
+pub mod authorization;
 pub mod ports;
 
 use std::sync::Arc;
@@ -9,8 +11,13 @@ use sanvi_kernel::{Clock, RawIdGenerator};
 use crate::domain::{
     AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId, Posting, PostingId,
 };
+pub use authorization::{
+    AccessTokens, Authorization, CompleteAuthorization, CredentialVerifier, RevokeAuthorization,
+    StartAuthorization,
+};
 pub use ports::{
-    AccountingAccess, AccountingStore, Actor, AssignCommand, Permission, ProviderVerifier,
+    AccountingAccess, AccountingStore, Actor, AssignCommand, CredentialStore, Permission,
+    ProviderDirectory, ProviderOAuth, ProviderVerifier,
 };
 
 pub struct Services {

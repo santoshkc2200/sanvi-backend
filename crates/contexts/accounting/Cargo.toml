@@ -10,14 +10,19 @@ publish.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+reqwest.workspace = true
+sanvi-crypto.workspace = true
 sanvi-kernel.workspace = true
 sanvi-messaging.workspace = true
 sanvi-persistence.workspace = true
 sanvi-privacy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_urlencoded.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 sanvi-testsupport.workspace = true

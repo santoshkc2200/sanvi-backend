@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accounting.provider_credentials (connection_id, tenant_id, book_id, status, refresh_ciphertext, refresh_issued_at, access_ciphertext, access_expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (connection_id) DO UPDATE SET status = EXCLUDED.status, refresh_ciphertext = EXCLUDED.refresh_ciphertext, refresh_issued_at = EXCLUDED.refresh_issued_at, access_ciphertext = EXCLUDED.access_ciphertext, access_expires_at = EXCLUDED.access_expires_at, updated_at = now() WHERE accounting.provider_credentials.tenant_id = EXCLUDED.tenant_id AND accounting.provider_credentials.book_id = EXCLUDED.book_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Text",
+        "Bytea",
+        "Timestamptz",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b6a4c48b32e84628a62fee9eba19f2bba8fd9f4deb5b863429a20e451db83570"
+}
