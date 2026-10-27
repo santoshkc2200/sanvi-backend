@@ -442,6 +442,17 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Search, purchase and manage domain orders (registrar journeys)",
     },
+    // --- accounting -----------------------------------------------------------
+    PermissionDef {
+        key: "tenant.accounting.read",
+        scope: PermissionScope::Tenant,
+        description: "Read accounting books, connections, periods and credential status",
+    },
+    PermissionDef {
+        key: "tenant.accounting.manage",
+        scope: PermissionScope::Tenant,
+        description: "Create accounting books, register connections, grant or revoke provider consent, and schedule destination changes (audited)",
+    },
     PermissionDef {
         key: "platform.domain.read",
         scope: PermissionScope::Platform,
@@ -585,6 +596,14 @@ mod tests {
         );
         for bad in ["", "a.b", "a..b", "a.b.c.d.e.f", "no..dots"] {
             assert!(Permission::parse(bad).is_err(), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn accounting_permissions_are_tenant_scoped() {
+        for key in ["tenant.accounting.read", "tenant.accounting.manage"] {
+            let def = PERMISSIONS.iter().find(|p| p.key == key).expect(key);
+            assert_eq!(def.scope, PermissionScope::Tenant);
         }
     }
 }
