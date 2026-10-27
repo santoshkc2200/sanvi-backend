@@ -12,10 +12,10 @@ use sanvi_product_access::ProductAccessConfig;
 use sanvi_product_access::adapters::http::ProductAccessState;
 use sanvi_product_access::adapters::signer::DisabledSigner;
 use sanvi_product_access::adapters::{Ed25519Signer, HttpProductUpstream};
-use sanvi_product_access::application::ProxyRequest;
+use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest};
 use sanvi_product_access::domain::{
-    ECOMMERCE, EntitlementView, ProductAccessError, RolePermissions, TenantEntitlements,
-    TokenSigner,
+    CONNECTORS, ECOMMERCE, EntitlementView, ProductAccessError, RolePermissions,
+    TenantEntitlements, TokenSigner,
 };
 
 use crate::AccessWiring;
@@ -71,7 +71,7 @@ pub fn build_product_access_state(
         match Ed25519Signer::from_seed_hex(&config.signing_key_id, &config.signing_key_seed) {
             Ok(signer) => Arc::new(signer),
             Err(err) => {
-                if !config.ecommerce.base_url.is_empty() {
+                if !config.ecommerce.base_url.is_empty() || !config.connectors.base_url.is_empty() {
                     tracing::error!(error = %err, "product access signing key unusable");
                 }
                 Arc::new(DisabledSigner)
@@ -88,17 +88,37 @@ pub fn build_product_access_state(
     })
     .expect("an unconfigured upstream always builds");
 
+    let connectors_upstream = HttpProductUpstream::new(
+        &CONNECTORS,
+        &config.connectors.base_url,
+        &config.connectors.service_key,
+    )
+    .or_else(|err| {
+        tracing::error!(error = %err, "connectors upstream unusable");
+        HttpProductUpstream::new(&CONNECTORS, "", "")
+    })
+    .expect("an unconfigured upstream always builds");
+
+    let entitlements = Arc::new(AccessEntitlements(
+        access.state.list_tenant_entitlements.clone(),
+    ));
+    let permissions = Arc::new(AccessRolePermissions(SqlxRoleCatalog::new(
+        access.tx_manager.clone(),
+        access.role_repository.clone(),
+    )));
+
     ProductAccessState {
         ecommerce: Arc::new(ProxyRequest::new(
-            Arc::new(AccessEntitlements(
-                access.state.list_tenant_entitlements.clone(),
-            )),
-            Arc::new(AccessRolePermissions(SqlxRoleCatalog::new(
-                access.tx_manager.clone(),
-                access.role_repository.clone(),
-            ))),
-            signer,
+            entitlements.clone(),
+            permissions.clone(),
+            signer.clone(),
             Arc::new(upstream),
+        )),
+        imports: Arc::new(ProxyImportRequest::new(
+            entitlements,
+            permissions,
+            signer,
+            Arc::new(connectors_upstream),
         )),
     }
 }

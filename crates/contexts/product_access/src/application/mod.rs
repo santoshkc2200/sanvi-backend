@@ -11,6 +11,9 @@ use crate::domain::{
     RolePermissions, TenantEntitlements, TokenSigner,
 };
 
+pub mod imports;
+pub use imports::ProxyImportRequest;
+
 /// The verified caller as the platform resolved it for this request.
 #[derive(Debug, Clone, Copy)]
 pub struct Caller<'a> {
@@ -121,6 +124,13 @@ mod tests {
         fn sign_privacy(
             &self,
             claims: &crate::domain::PrivacyClaims,
+        ) -> Result<String, ProductAccessError> {
+            Ok(serde_json::to_string(claims).unwrap())
+        }
+
+        fn sign_connector(
+            &self,
+            claims: &crate::domain::ConnectorClaims,
         ) -> Result<String, ProductAccessError> {
             Ok(serde_json::to_string(claims).unwrap())
         }

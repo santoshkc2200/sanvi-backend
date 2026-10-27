@@ -108,10 +108,54 @@ and a privacy-scoped delegation token (`aud: ecommerce-service/privacy`,
 `sub: user_id`, fresh `jti`). User-created records are exported under the
 `EcommerceAttribution` data class and anonymised across all tenants on erasure.
 
+## Catalog imports (ecommerce-connectors)
+
+`ecommerce-connectors` handles catalog imports from external platforms (Shopify, Amazon). It is reached through the platform proxy under a dedicated route family:
+
+### Routes and Permission Map
+
+- `GET|POST|DELETE /api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}` forwards to `{product_access.connectors.base_url}/v1/{tail}`.
+- `GET /api/v1/tenant/ecommerce-imports/stores/{store_id}/connections/{provider}/callback` forwards to `{product_access.connectors.base_url}/v1/connections/{provider}/callback`.
+
+Unlike `ecommerce-service`, the connector authorizes nothing by permission. The platform declares permissions on every route via `PermissionMap` in `product_access_tenant_scope_routes`:
+- `GET .../stores/{store_id}/{tail}` requires `ecommerce.import.read`.
+- `POST|DELETE .../stores/{store_id}/{tail}` requires `ecommerce.import.manage`.
+- `GET .../stores/{store_id}/connections/{provider}/callback` requires `ecommerce.import.manage` because the callback establishes a connection. It is registered before the generic `{tail:.+}` route so read-only users cannot complete an OAuth connection (fails with 403).
+
+In the access context, `tenant_owner` and `tenant_admin` receive both `ecommerce.import.read` and `ecommerce.import.manage`. `tenant_member` receives neither.
+
+### Token claims (vs identity token v2)
+
+The connector token is a compact JWT signed with `alg: EdDSA` using the shared platform signing key (`[product_access] signing_key_id/seed`). It differs from identity token v2 in its claim shape (connector spec §6.2):
+- `tenant_id`: JSON integer (`i64`), not a decimal string.
+- `user_id`: JSON integer (`i64`), not `sub` string.
+- `destination_store_id`: string representing the canonical store ID.
+- `aud`: `"ecommerce-connectors"`.
+- `iat`, `exp`: UNIX timestamps (lifetime 60 s; connector ceiling is 120 s).
+- `jti`: fresh UUIDv7 string per request (`Uuid::now_v7().simple()`), preventing replay.
+- No `permissions` or `limits` lists: the platform enforces all permissions before minting.
+
+### Store ID trust decision
+
+The `store_id` slot must be a canonical positive decimal `i64` (`1..=i64::MAX`, no leading zero, no sign, no path traversal or URL encoding). Malformed values like `0`, `007`, `-1`, `%31` or `../` are rejected with 400.
+The platform passes `store_id` as `destination_store_id` without verifying that the store exists in `ecommerce-service`: the tenant is derived from the authenticated session, so a wrong store ID can only name another store within the *same* tenant, and `ecommerce-service` validates tenant and store during catalog ingestion.
+
+### Configuration
+
+`[product_access.connectors]` in `configs/base.toml`:
+- `base_url`: e.g. `http://ecommerce-connectors:8080`.
+- `service_key`: matching `CONNECTOR_SERVICE_KEY_CURRENT` (env `SANVI__PRODUCT_ACCESS__CONNECTORS__SERVICE_KEY`).
+Empty values are valid and cause the proxy to fail closed with 503.
+
+### Callback flow
+
+During OAuth connection (e.g. Shopify), the admin SPA redirects the merchant to the provider. The provider returns to the SPA's callback page with query parameters (`code`, `hmac`, `shop`, `state`, `timestamp`). The SPA forwards this to `GET /api/v1/tenant/ecommerce-imports/stores/{store_id}/connections/{provider}/callback?<provider query>`. The query string is forwarded byte-for-byte to preserve HMAC verification.
+
 ## Not done
 
 - Plans that include ecommerce (`ecommerce-starter`, bundle) and their
   billing wiring.
 - Admin frontend screens calling these routes.
+- Connector personal data: `ecommerce-connectors` stores `user_id` in connections, jobs and audit logs, but is not yet wired into the platform export and erasure pipelines.
 - Restaurant: add a `Product` constant and its upstream when that service
   exists; the delegation and forwarding code is product-neutral.

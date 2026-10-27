@@ -15,6 +15,8 @@ pub struct ProductAccessConfig {
     pub signing_key_seed: String,
     #[serde(default)]
     pub ecommerce: UpstreamConfig,
+    #[serde(default)]
+    pub connectors: UpstreamConfig,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -33,6 +35,7 @@ impl std::fmt::Debug for ProductAccessConfig {
             .field("signing_key_id", &self.signing_key_id)
             .field("signing_key_seed", &"[REDACTED]")
             .field("ecommerce", &self.ecommerce)
+            .field("connectors", &self.connectors)
             .finish()
     }
 }
@@ -49,10 +52,11 @@ impl std::fmt::Debug for UpstreamConfig {
 impl serde::Serialize for ProductAccessConfig {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ProductAccessConfig", 3)?;
+        let mut state = serializer.serialize_struct("ProductAccessConfig", 4)?;
         state.serialize_field("signing_key_id", &self.signing_key_id)?;
         state.serialize_field("signing_key_seed", "[REDACTED]")?;
         state.serialize_field("ecommerce", &self.ecommerce)?;
+        state.serialize_field("connectors", &self.connectors)?;
         state.end()
     }
 }
@@ -71,16 +75,31 @@ impl ProductAccessConfig {
     /// A configured upstream needs a service key and a signing key; a
     /// half-configured product is a startup error, not a silent 503.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.ecommerce.base_url.is_empty() {
-            return Ok(());
+        let has_upstream =
+            !self.ecommerce.base_url.is_empty() || !self.connectors.base_url.is_empty();
+        if !self.ecommerce.base_url.is_empty() {
+            reqwest::Url::parse(&self.ecommerce.base_url).map_err(|e| {
+                anyhow::anyhow!("product_access.ecommerce.base_url is not a URL: {e}")
+            })?;
+            if self.ecommerce.service_key.len() < 16 {
+                anyhow::bail!("product_access.ecommerce.service_key must be at least 16 bytes");
+            }
         }
-        reqwest::Url::parse(&self.ecommerce.base_url)
-            .map_err(|e| anyhow::anyhow!("product_access.ecommerce.base_url is not a URL: {e}"))?;
-        if self.ecommerce.service_key.len() < 16 {
-            anyhow::bail!("product_access.ecommerce.service_key must be at least 16 bytes");
+        if !self.connectors.base_url.is_empty() {
+            reqwest::Url::parse(&self.connectors.base_url).map_err(|e| {
+                anyhow::anyhow!("product_access.connectors.base_url is not a URL: {e}")
+            })?;
+            if self.connectors.service_key.len() < 16 {
+                anyhow::bail!("product_access.connectors.service_key must be at least 16 bytes");
+            }
         }
-        crate::adapters::Ed25519Signer::from_seed_hex(&self.signing_key_id, &self.signing_key_seed)
+        if has_upstream {
+            crate::adapters::Ed25519Signer::from_seed_hex(
+                &self.signing_key_id,
+                &self.signing_key_seed,
+            )
             .map_err(|e| anyhow::anyhow!("product_access signing key: {e}"))?;
+        }
         Ok(())
     }
 }
@@ -99,6 +118,7 @@ mod tests {
                 base_url: "http://127.0.0.1:18081".into(),
                 service_key: "dev-service-key-current".into(),
             },
+            connectors: UpstreamConfig::default(),
         }
     }
 
@@ -116,16 +136,25 @@ mod tests {
         let mut no_seed = configured();
         no_seed.signing_key_seed = String::new();
         assert!(no_seed.validate().is_err());
+        let mut short_conn_key = configured();
+        short_conn_key.connectors.base_url = "http://127.0.0.1:18082".into();
+        short_conn_key.connectors.service_key = "short".into();
+        assert!(short_conn_key.validate().is_err());
     }
 
     #[test]
     fn secrets_never_print() {
-        let config = configured();
+        let mut config = configured();
+        config.connectors = UpstreamConfig {
+            base_url: "http://127.0.0.1:18082".into(),
+            service_key: "dev-connector-service-key-current".into(),
+        };
         let debug = format!("{config:?}");
         let json = serde_json::to_string(&config).unwrap();
         for text in [debug, json] {
             assert!(!text.contains(SEED));
             assert!(!text.contains("dev-service-key-current"));
+            assert!(!text.contains("dev-connector-service-key-current"));
         }
     }
 }

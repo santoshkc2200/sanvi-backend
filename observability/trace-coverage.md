@@ -131,6 +131,7 @@ Rules:
 | privacy | processing.rs | 2 | 2 | yes | covered
 | privacy | requests.rs | 8 | 10 | yes | covered
 | privacy | retention.rs | 3 | 3 | no | covered
+| product_access | imports.rs | 1 | 1 | yes | covered
 | system | check_liveness.rs | 1 | 1 | no | covered
 | system | check_readiness.rs | 1 | 1 | no | covered
 | system | get_build_info.rs | 2 | 2 | no | covered

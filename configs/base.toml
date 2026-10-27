@@ -638,6 +638,14 @@ signing_key_seed = ""
 base_url = ""
 service_key = ""
 
+[product_access.connectors]
+# ecommerce-connectors root (`/v1/...` is appended) and the bearer key it
+# accepts from the platform (SANVI__PRODUCT_ACCESS__CONNECTORS__SERVICE_KEY).
+# Empty is valid: every /api/v1/tenant/ecommerce-imports/* request then answers 503
+# after the entitlement and permission checks.
+base_url = ""
+service_key = ""
+
 [notification]
 # All values are environment-only (SANVI__NOTIFICATION__BASE_URL,
 # SANVI__NOTIFICATION__SEND_API_KEY, SANVI__NOTIFICATION__READ_API_KEY),

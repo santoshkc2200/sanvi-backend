@@ -255,6 +255,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.store.manage",
             "ecommerce.product.read",
             "ecommerce.product.manage",
+            "ecommerce.import.read",
+            "ecommerce.import.manage",
         ],
     },
     RoleSeed {
@@ -293,6 +295,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.store.manage",
             "ecommerce.product.read",
             "ecommerce.product.manage",
+            "ecommerce.import.read",
+            "ecommerce.import.manage",
         ],
     },
     RoleSeed {
@@ -435,6 +439,21 @@ mod tests {
         assert!(!member.contains(&"advertising.connect"));
         assert!(!member.contains(&"advertising.budget.manage"));
         assert!(!member.contains(&"media.assets.manage"));
+    }
+
+    #[test]
+    fn import_permissions_are_reachable_from_admin_and_owner_roles_only() {
+        let owner = seed_by_key("tenant_owner").unwrap().permissions;
+        let admin = seed_by_key("tenant_admin").unwrap().permissions;
+        let member = seed_by_key("tenant_member").unwrap().permissions;
+        for permission in ["ecommerce.import.read", "ecommerce.import.manage"] {
+            assert!(owner.contains(&permission), "owner needs {permission}");
+            assert!(admin.contains(&permission), "admin needs {permission}");
+            assert!(
+                !member.contains(&permission),
+                "member must not have {permission}"
+            );
+        }
     }
 
     #[test]
