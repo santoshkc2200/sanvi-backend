@@ -38,7 +38,7 @@ that stays off. Nothing posts money: ingestion and export are the next step.
   ingestion ships, so the routes would have nothing to act on **(design call)**.
 - Money Forward and Xero connectors. Their enum values stay registrable as
   metadata; consent and verification for them fail closed as today.
-- A legal-entity registry (see Open decisions).
+- A legal-entity registry (see Owner decisions).
 - Registering the freee developer app and deploying its secrets. That is an
   operator task outside the repository; this step only reads the config.
 - Frontend screens.
@@ -94,7 +94,7 @@ Add to `crates/contexts/access/src/domain/permissions.rs`, tenant scope:
 
 Names follow the plan and the existing `tenant.domains.*` / `tenant.theming.*`
 keys. Default roles: `tenant_owner` and `tenant_admin` get both; `tenant_member`
-gets neither **(design call, matching payments.manage and advertising.connect)**.
+gets neither (owner decision).
 
 The exporter capability is not a catalog permission. `Permission::Export` is
 only reachable through `Actor::System`, which no HTTP handler can construct.
@@ -143,8 +143,10 @@ The routes need a few things the library lacks:
 3. **Credential status for reads.** `GetBook` and `ListBooks` responses include
    each connection's `CredentialStatus` (`none`, `active`,
    `reauthorization_required`, `revoked`). Add a read-only
-   `CredentialStore::statuses(tenant_id, book_id)` that never selects token
-   columns.
+   `AccountingStore::credential_statuses(tenant_id, book_id)` that selects only
+   `connection_id` and `status`. It lives on the book store, not
+   `CredentialStore`, because the credential store needs the KEK and reads must
+   work while freee secrets are absent.
 4. **Audit commands** (below) on every `Manage` use case.
 
 ### Audit
@@ -161,7 +163,7 @@ and set `delivered_at` once; it gets no delete and no update of `entry`.
 - Actions: `accounting.book.created`, `accounting.connection.registered`,
   `accounting.connection.authorized`, `accounting.connection.revoked`,
   `accounting.destination.activated`, `accounting.switch.scheduled`,
-  `accounting.switch.canceled`. `resource_type` is `accounting_book`;
+  `accounting.switch.canceled`, `accounting.posting.resolved` (the library use case has no route yet). `resource_type` is `accounting_book`;
   `resource_id` is the book ID. `after` holds IDs, provider, organization ID,
   dates and mapping codes, and never credential material.
 - Failed consent attempts (state rejected, organization mismatch) are not
@@ -172,11 +174,13 @@ and set `delivered_at` once; it gets no delete and no update of `entry`.
   `features.accounting` is on: in one unscoped transaction it locks pending
   rows (`FOR UPDATE SKIP LOCKED`, batch limit), appends each through
   `AuditWriter`, and sets `delivered_at`, like `DrainRefundAudits`.
-- Privacy: `entry` contains the acting user's ID. Extend
-  `AccountingPrivacyProvider` so a tenant-user access request exports that
-  user's undelivered and delivered command rows, and erasure is handled by the
-  same review requirement the provider already raises. It must not claim
-  automatic erasure. The audit chain's own lifecycle is unchanged.
+- Privacy: `entry` contains the acting user's ID, as `accounting.oauth_states`
+  already does. Every command row belongs to a book, and
+  `AccountingPrivacyProvider` already answers `ProcessingPending` to every
+  tenant-user request while the tenant has a book, so these rows fall under
+  that explicit review. No export path is added in this step. Correct the
+  provider's module comment, which says no user identifiers are stored, and
+  pin the behaviour with a test. The audit chain's own lifecycle is unchanged.
 
 ### Routes
 
@@ -222,7 +226,7 @@ path because the state carries it.
 
 Bodies:
 
-- `POST /books`: `{ "legal_entity_key": string }`. See Open decisions.
+- `POST /books`: `{ "legal_entity_key": string }`, admin-supplied (see Owner decisions).
 - `POST /connections`: `{ "provider": "freee" | "money_forward" | "xero",
   "organization_id": string, "mappings": { revenue, refund, clearing,
   tax_codes } }`, in the domain's existing field shapes, `deny_unknown_fields`.
@@ -286,8 +290,8 @@ configured, 422 when verification fails).
   mismatch and success paths end to end through the handler.
 - Composition: flag on with empty secrets keeps `UnavailableVerifier`
   (activation answers 503) and start answers 503; a malformed KEK fails boot.
-- Privacy provider: an access request for the acting user includes their audit
-  commands.
+- Privacy provider: a tenant-user access or erasure request for a user who
+  appears in audit commands answers `ProcessingPending`.
 - Contract: `api/accounting.yaml` is regenerated and the OpenAPI gate passes.
 - Gates: `just ci-quiet` (or its `scripts/*.sh` equivalents), with the new
   migration classified.
@@ -310,13 +314,12 @@ commands first.
 - Whether the request context is a new struct or extends `Actor`; it must not
   become part of authorization.
 
-## Open decisions for the owner
+## Owner decisions (2026-10-27)
 
-1. **Where `legal_entity_key` comes from.** The README says a trusted registry
-   supplies it, and no registry exists. This draft accepts an admin-supplied
-   key (1–64 chars, `[a-z0-9_-]`), unique per tenant, as a stable label and
-   not a verified legal entity. The alternative is one implicit book per
-   tenant with a fixed key until a registry exists.
-2. **Default roles.** This draft grants manage to `tenant_admin` as well as
-   the owner. If switching a company's accounting destination should be
-   owner-only, like refunds, drop it from `tenant_admin`.
+1. **`legal_entity_key` is admin-supplied.** No legal-entity registry exists.
+   The key is a stable tenant-local label, not a verified legal entity, and
+   uses the domain's existing rule in `Book::new` (1–128 bytes, no
+   surrounding whitespace) and per-tenant uniqueness. The API adds no
+   narrower format. Update the README sentence about a trusted registry to say
+   the key is supplied by a tenant admin.
+2. **`tenant_owner` and `tenant_admin` both get read and manage.**
