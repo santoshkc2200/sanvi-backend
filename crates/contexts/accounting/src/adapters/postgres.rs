@@ -12,8 +12,8 @@ use crate::{
         ports::{AuditRecord, BookChange, PostingChange},
     },
     domain::{
-        AccountingError, AccountingEvent, Book, BookId, ConnectionId, Posting, PostingId,
-        PostingStatus,
+        AccountingError, AccountingEvent, Book, BookId, ConnectionId, CredentialStatus, Posting,
+        PostingId, PostingStatus,
     },
 };
 
@@ -25,6 +25,18 @@ struct BookRow {
     document: serde_json::Value,
     revision: i64,
     legal_entity_key: String,
+}
+
+struct BookListRow {
+    id: i64,
+    document: serde_json::Value,
+    revision: i64,
+    legal_entity_key: String,
+}
+
+struct CredentialStatusRow {
+    connection_id: i64,
+    status: String,
 }
 
 pub struct PostgresAccountingStore {
@@ -326,6 +338,57 @@ impl AccountingStore for PostgresAccountingStore {
         let book = Self::read(&mut scope, tenant, book).await?;
         scope.commit().await.map_err(storage)?;
         Ok(book)
+    }
+
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Book>, AccountingError> {
+        let mut scope = self.begin(tenant).await?;
+        let rows = sqlx::query_as!(
+            BookListRow,
+            "SELECT id, document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 ORDER BY id ASC LIMIT $2",
+            tenant.as_i64(),
+            crate::application::LIST_BOOKS_LIMIT
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        let mut books = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id = BookId::try_from(row.id).map_err(storage)?;
+            let book_row = BookRow {
+                document: row.document,
+                revision: row.revision,
+                legal_entity_key: row.legal_entity_key,
+            };
+            books.push(Self::decode(book_row, tenant, id)?);
+        }
+        scope.commit().await.map_err(storage)?;
+        Ok(books)
+    }
+
+    async fn credential_statuses(
+        &self,
+        tenant: TenantId,
+        book_id: BookId,
+    ) -> Result<Vec<(ConnectionId, CredentialStatus)>, AccountingError> {
+        let mut scope = self.begin(tenant).await?;
+        let rows = sqlx::query_as!(
+            CredentialStatusRow,
+            "SELECT connection_id, status FROM accounting.provider_credentials WHERE tenant_id = $1 AND book_id = $2 ORDER BY connection_id ASC",
+            tenant.as_i64(),
+            book_id.as_i64()
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        let mut statuses = Vec::with_capacity(rows.len());
+        for row in rows {
+            let connection_id = ConnectionId::try_from(row.connection_id).map_err(storage)?;
+            let status = CredentialStatus::parse(&row.status)
+                .ok_or_else(|| AccountingError::Storage(format!("unknown credential status: {}", row.status)))?;
+            statuses.push((connection_id, status));
+        }
+        scope.commit().await.map_err(storage)?;
+        Ok(statuses)
     }
 
     async fn change(

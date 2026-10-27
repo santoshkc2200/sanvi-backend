@@ -6,7 +6,8 @@ use sanvi_kernel::{EventId, TenantId, UserId};
 
 use crate::domain::{
     AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId, Credential,
-    OAuthStateClaims, Posting, PostingId, Provider, ProviderCatalog, Secret, TokenGrant,
+    CredentialStatus, OAuthStateClaims, Posting, PostingId, Provider, ProviderCatalog, Secret,
+    TokenGrant,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -92,6 +93,12 @@ pub trait AccountingStore: Send + Sync {
     ) -> Result<Book, AccountingError>;
     /// Unlocked snapshot; mutations must pass its revision back to `change`.
     async fn get(&self, tenant_id: TenantId, book_id: BookId) -> Result<Book, AccountingError>;
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<Book>, AccountingError>;
+    async fn credential_statuses(
+        &self,
+        tenant_id: TenantId,
+        book_id: BookId,
+    ) -> Result<Vec<(ConnectionId, CredentialStatus)>, AccountingError>;
     /// Hold the book lock through the asynchronous change. `None` leaves the
     /// book unchanged, for operations coordinating credentials with routing.
     /// Acquire this lock before credential locks, and hold it through provider

@@ -7,12 +7,14 @@ use sanvi_accounting::{
     adapters::{PostgresAccountingStore, UnavailableVerifier},
     application::{
         AccountingAccess, ActivateBook, Actor, AssignCommand, AssignPosting, CancelSwitch,
-        CreateBook, GetBook, MarkSubmitted, Permission, ProviderVerifier, RecordDelivery,
-        RecordFailure, RegisterConnection, ResolvePosting, ScheduleSwitch, Services,
+        CreateBook, GetBook, ListBooks, MarkSubmitted, Permission, ProviderVerifier,
+        RecordDelivery, RecordFailure, RegisterConnection, RegisterConnectionCommand,
+        ResolvePosting, ScheduleSwitch, Services,
         ports::RequestContext,
     },
     domain::{
-        AccountMappings, AccountingError, Book, Connection, ConnectionId, PostingStatus, Provider,
+        AccountMappings, AccountingError, Book, Connection, CredentialStatus, PostingStatus,
+        Provider,
     },
 };
 use sanvi_kernel::{Clock, EventId, TenantId, UserId};
@@ -98,25 +100,24 @@ impl Harness {
             .execute(self.user, RequestContext::default(), "main".into())
             .await
             .unwrap();
-        let first = connection(3001, Provider::Freee);
-        let first_id = first.id();
         let book = RegisterConnection(services.clone())
             .execute(
                 self.user,
                 RequestContext::default(),
                 book.id(),
                 book.revision(),
-                first,
+                register_cmd(3001, Provider::Freee),
             )
             .await
             .unwrap();
+        let first_id = book.connections()[0].id();
         let book = RegisterConnection(services.clone())
             .execute(
                 self.user,
                 RequestContext::default(),
                 book.id(),
                 book.revision(),
-                connection(3002, Provider::Xero),
+                register_cmd(3002, Provider::Xero),
             )
             .await
             .unwrap();
@@ -143,19 +144,21 @@ impl Harness {
     }
 }
 
-fn connection(id: i64, provider: Provider) -> Connection {
-    Connection::new(
-        ConnectionId::try_from(id).unwrap(),
+fn mappings() -> AccountMappings {
+    AccountMappings {
+        revenue_account: "sales".into(),
+        refund_account: "returns".into(),
+        clearing_account: "cash".into(),
+        tax_codes: std::collections::BTreeMap::from([("standard".into(), "tax".into())]),
+    }
+}
+
+fn register_cmd(id: i64, provider: Provider) -> RegisterConnectionCommand {
+    RegisterConnectionCommand {
         provider,
-        format!("company-{id}"),
-        AccountMappings {
-            revenue_account: "sales".into(),
-            refund_account: "returns".into(),
-            clearing_account: "cash".into(),
-            tax_codes: std::collections::BTreeMap::from([("standard".into(), "tax".into())]),
-        },
-    )
-    .unwrap()
+        organization_id: format!("company-{id}"),
+        mappings: mappings(),
+    }
 }
 
 #[tokio::test]
@@ -204,6 +207,8 @@ async fn late_event_after_cutover_routes_to_previous_binding() {
     let user = harness.user;
     let system = harness.system;
     let book = harness.configured().await;
+    let conn1_id = book.connections()[0].id();
+    let conn2_id = book.connections()[1].id();
     let now = harness.clock.now();
     let original = harness.command(&book, 4001);
     let posting = AssignPosting(service.clone())
@@ -217,7 +222,7 @@ async fn late_event_after_cutover_routes_to_previous_binding() {
             RequestContext::default(),
             book.id(),
             book.revision(),
-            ConnectionId::try_from(3002).unwrap(),
+            conn2_id,
             cutoff,
         )
         .await
@@ -232,7 +237,7 @@ async fn late_event_after_cutover_routes_to_previous_binding() {
         .unwrap();
     assert_eq!(
         post_4002.connection_id,
-        ConnectionId::try_from(3001).unwrap()
+        conn1_id
     );
 
     let mut cmd_4003 = harness.command(&book, 4003);
@@ -243,7 +248,7 @@ async fn late_event_after_cutover_routes_to_previous_binding() {
         .unwrap();
     assert_eq!(
         post_4003.connection_id,
-        ConnectionId::try_from(3002).unwrap()
+        conn2_id
     );
 
     let replay = AssignPosting(service.clone())
@@ -251,7 +256,7 @@ async fn late_event_after_cutover_routes_to_previous_binding() {
         .await
         .unwrap();
     assert_eq!(replay.id, posting.id);
-    assert_eq!(replay.connection_id, ConnectionId::try_from(3001).unwrap());
+    assert_eq!(replay.connection_id, conn1_id);
 
     let mut changed = original;
     changed.fingerprint = "b".repeat(64);
@@ -328,14 +333,14 @@ async fn concurrent_management_changes_have_one_winner() {
             RequestContext::default(),
             book.id(),
             book.revision(),
-            connection(3003, Provider::MoneyForward)
+            register_cmd(3003, Provider::MoneyForward),
         ),
         second.execute(
             harness.user,
             RequestContext::default(),
             book.id(),
             book.revision(),
-            connection(3004, Provider::MoneyForward)
+            register_cmd(3004, Provider::MoneyForward),
         )
     );
     assert_eq!(usize::from(one.is_ok()) + usize::from(two.is_ok()), 1);
@@ -387,10 +392,11 @@ async fn provider_verification_and_authorization_fail_closed() {
             RequestContext::default(),
             book.id(),
             book.revision(),
-            connection(3001, Provider::Freee),
+            register_cmd(3001, Provider::Freee),
         )
         .await
         .unwrap();
+    let conn_id = book.connections()[0].id();
     let restricted = Arc::new(Services {
         store: harness.services.store.clone(),
         access: Arc::new(TestAccess(true)),
@@ -405,7 +411,7 @@ async fn provider_verification_and_authorization_fail_closed() {
                 RequestContext::default(),
                 book.id(),
                 book.revision(),
-                ConnectionId::try_from(3001).unwrap(),
+                conn_id,
                 harness.clock.now()
             )
             .await
@@ -416,7 +422,7 @@ async fn provider_verification_and_authorization_fail_closed() {
         .execute(harness.user, book.id())
         .await
         .unwrap();
-    assert!(unchanged.active_connection(harness.clock.now()).is_none());
+    assert!(unchanged.book.active_connection(harness.clock.now()).is_none());
     let denied = Arc::new(Services {
         store: harness.services.store.clone(),
         access: Arc::new(TestAccess(false)),
@@ -449,7 +455,7 @@ async fn outbox_failure_rolls_back_book_and_posting_mutations() {
                 RequestContext::default(),
                 book.id(),
                 book.revision(),
-                connection(3003, Provider::MoneyForward)
+                register_cmd(3003, Provider::MoneyForward),
             )
             .await
             .is_err()
@@ -464,7 +470,7 @@ async fn outbox_failure_rolls_back_book_and_posting_mutations() {
         .execute(harness.user, book.id())
         .await
         .unwrap();
-    assert_eq!(unchanged, book);
+    assert_eq!(unchanged.book, book);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM accounting.postings")
         .fetch_one(&admin)
         .await
@@ -687,6 +693,8 @@ async fn user_can_resolve_stuck_posting() {
 async fn concurrent_assignments_at_cutover_route_by_date() {
     let harness = Harness::new().await;
     let book = harness.configured().await;
+    let conn1_id = book.connections()[0].id();
+    let conn2_id = book.connections()[1].id();
     let cutoff = harness.clock.now() + TimeDelta::hours(1);
     let book = ScheduleSwitch(harness.services.clone())
         .execute(
@@ -694,7 +702,7 @@ async fn concurrent_assignments_at_cutover_route_by_date() {
             RequestContext::default(),
             book.id(),
             book.revision(),
-            ConnectionId::try_from(3002).unwrap(),
+            conn2_id,
             cutoff,
         )
         .await
@@ -714,11 +722,11 @@ async fn concurrent_assignments_at_cutover_route_by_date() {
     );
     assert_eq!(
         res1.unwrap().connection_id,
-        ConnectionId::try_from(3001).unwrap()
+        conn1_id
     );
     assert_eq!(
         res2.unwrap().connection_id,
-        ConnectionId::try_from(3002).unwrap()
+        conn2_id
     );
 }
 
@@ -791,7 +799,7 @@ async fn privacy_metadata_requires_review_without_exposing_or_erasing_other_tena
         .execute(harness.user, book.id())
         .await
         .unwrap();
-    assert_eq!(unchanged, book);
+    assert_eq!(unchanged.book, book);
 }
 
 #[tokio::test]
@@ -806,18 +814,17 @@ async fn every_management_change_writes_one_audit_command() {
         .execute(harness.user, request.clone(), "main".into())
         .await
         .unwrap();
-    let conn = connection(3001, Provider::Freee);
-    let conn_id = conn.id();
     let book = RegisterConnection(harness.services.clone())
         .execute(
             harness.user,
             request.clone(),
             book.id(),
             book.revision(),
-            conn,
+            register_cmd(3001, Provider::Freee),
         )
         .await
         .unwrap();
+    let conn_id = book.connections()[0].id();
     let starts_at = "2026-10-26T00:00:00Z".parse().unwrap();
     let book = ActivateBook(harness.services.clone())
         .execute(
@@ -830,18 +837,17 @@ async fn every_management_change_writes_one_audit_command() {
         )
         .await
         .unwrap();
-    let second_conn = connection(3002, Provider::Freee);
-    let second_id = second_conn.id();
     let book = RegisterConnection(harness.services.clone())
         .execute(
             harness.user,
             request.clone(),
             book.id(),
             book.revision(),
-            second_conn,
+            register_cmd(3002, Provider::Freee),
         )
         .await
         .unwrap();
+    let second_id = book.connections()[1].id();
     let cutover_at = "2026-11-01T00:00:00Z".parse().unwrap();
     let book = ScheduleSwitch(harness.services.clone())
         .execute(
@@ -915,14 +921,13 @@ async fn stale_revision_writes_no_audit_command() {
             .unwrap();
     assert_eq!(count_before, 1);
 
-    let conn = connection(3001, Provider::Freee);
     let result = RegisterConnection(harness.services.clone())
         .execute(
             harness.user,
             request.clone(),
             book.id(),
             book.revision() - 1,
-            conn,
+            register_cmd(3001, Provider::Freee),
         )
         .await;
     assert!(matches!(result, Err(AccountingError::StaleRevision)));
@@ -944,18 +949,17 @@ async fn failed_verification_rolls_back_audit_command() {
         .execute(harness.user, request.clone(), "main".into())
         .await
         .unwrap();
-    let conn = connection(3001, Provider::Freee);
-    let conn_id = conn.id();
     let book = RegisterConnection(harness.services.clone())
         .execute(
             harness.user,
             request.clone(),
             book.id(),
             book.revision(),
-            conn,
+            register_cmd(3001, Provider::Freee),
         )
         .await
         .unwrap();
+    let conn_id = book.connections()[0].id();
 
     let count_before: i64 =
         sqlx::query_scalar("SELECT count(*) FROM accounting.audit_commands WHERE tenant_id = $1")
@@ -1061,4 +1065,162 @@ async fn audit_command_entry_is_immutable() {
         "42501",
         "commands cannot be deleted"
     );
+}
+
+#[tokio::test]
+async fn list_books_returns_only_the_callers_tenant_in_id_order() {
+    let harness = Harness::new().await;
+    let request = RequestContext::default();
+    let b1 = CreateBook(harness.services.clone())
+        .execute(harness.user, request.clone(), "tenant-a-1".into())
+        .await
+        .unwrap();
+    let b2 = CreateBook(harness.services.clone())
+        .execute(harness.user, request.clone(), "tenant-a-2".into())
+        .await
+        .unwrap();
+
+    let user_b = Actor::User {
+        tenant_id: TenantId::try_from(1002).unwrap(),
+        user_id: UserId::try_from(2002).unwrap(),
+    };
+    let _b_other = CreateBook(harness.services.clone())
+        .execute(user_b, request, "tenant-b-1".into())
+        .await
+        .unwrap();
+
+    let list = ListBooks(harness.services.clone())
+        .execute(harness.user)
+        .await
+        .unwrap();
+
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].book.id(), b1.id().min(b2.id()));
+    assert_eq!(list[1].book.id(), b1.id().max(b2.id()));
+    assert_eq!(list[0].book.tenant_id(), harness.user.tenant_id());
+    assert_eq!(list[1].book.tenant_id(), harness.user.tenant_id());
+}
+
+#[tokio::test]
+async fn get_book_reports_credential_status_per_connection() {
+    let harness = Harness::new().await;
+    let request = RequestContext::default();
+    let book = CreateBook(harness.services.clone())
+        .execute(harness.user, request.clone(), "main".into())
+        .await
+        .unwrap();
+
+    let book = RegisterConnection(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            RegisterConnectionCommand {
+                provider: Provider::Freee,
+                organization_id: "company-1".into(),
+                mappings: mappings(),
+            },
+        )
+        .await
+        .unwrap();
+    let conn1_id = book.connections()[0].id();
+
+    let book = RegisterConnection(harness.services.clone())
+        .execute(
+            harness.user,
+            request,
+            book.id(),
+            book.revision(),
+            RegisterConnectionCommand {
+                provider: Provider::Xero,
+                organization_id: "company-2".into(),
+                mappings: mappings(),
+            },
+        )
+        .await
+        .unwrap();
+    let _conn2_id = book.connections()[1].id();
+
+    // Insert active credential for connection 1
+    sqlx::query(
+        "INSERT INTO accounting.provider_credentials (connection_id, tenant_id, book_id, status, refresh_ciphertext, refresh_issued_at, access_ciphertext, access_expires_at) VALUES ($1, $2, $3, 'active', 'abc', now(), 'def', now() + interval '1 hour')",
+    )
+    .bind(conn1_id.as_i64())
+    .bind(harness.user.tenant_id().as_i64())
+    .bind(book.id().as_i64())
+    .execute(&harness.db.admin_pool().await)
+    .await
+    .unwrap();
+
+    let summary = GetBook(harness.services.clone())
+        .execute(harness.user, book.id())
+        .await
+        .unwrap();
+
+    assert_eq!(summary.book.id(), book.id());
+    assert_eq!(summary.credentials.len(), 1);
+    assert_eq!(summary.credentials[0], (conn1_id, CredentialStatus::Active));
+}
+
+#[tokio::test]
+async fn register_connection_assigns_a_snowflake_id() {
+    let harness = Harness::new().await;
+    let request = RequestContext::default();
+    let book = CreateBook(harness.services.clone())
+        .execute(harness.user, request.clone(), "main".into())
+        .await
+        .unwrap();
+
+    let book1 = RegisterConnection(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            RegisterConnectionCommand {
+                provider: Provider::Freee,
+                organization_id: "company-1".into(),
+                mappings: mappings(),
+            },
+        )
+        .await
+        .unwrap();
+    let id1 = book1.connections()[0].id();
+    assert!(id1.as_i64() > 0);
+    assert_ne!(id1.as_i64(), book.id().as_i64());
+
+    let book2 = RegisterConnection(harness.services.clone())
+        .execute(
+            harness.user,
+            request,
+            book1.id(),
+            book1.revision(),
+            RegisterConnectionCommand {
+                provider: Provider::MoneyForward,
+                organization_id: "company-2".into(),
+                mappings: mappings(),
+            },
+        )
+        .await
+        .unwrap();
+    let id2 = book2.connections()[1].id();
+    assert_ne!(id1, id2);
+}
+
+#[tokio::test]
+async fn read_requires_read_permission() {
+    let harness = Harness::new().await;
+    let restricted = Arc::new(Services {
+        store: harness.services.store.clone(),
+        access: Arc::new(TestAccess(false)),
+        verifier: harness.services.verifier.clone(),
+        clock: harness.services.clock.clone(),
+        ids: harness.services.ids.clone(),
+    });
+
+    let result = ListBooks(restricted)
+        .execute(harness.user)
+        .await;
+    assert_eq!(result.unwrap_err(), AccountingError::Forbidden);
 }

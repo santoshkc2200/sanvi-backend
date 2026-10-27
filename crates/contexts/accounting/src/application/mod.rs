@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 use sanvi_kernel::{Clock, RawIdGenerator};
 
 use crate::domain::{
-    AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId, Posting, PostingId,
+    AccountMappings, AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId,
+    CredentialStatus, Posting, PostingId, Provider,
 };
 pub use authorization::{
     AccessTokens, Authorization, CompleteAuthorization, CredentialVerifier, RevokeAuthorization,
@@ -19,6 +20,22 @@ pub use ports::{
     AccountingAccess, AccountingStore, Actor, AssignCommand, AuditRecord, CredentialStore,
     Permission, ProviderDirectory, ProviderOAuth, ProviderVerifier, RequestContext,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BookSummary {
+    pub book: Book,
+    /// Connections with no credential row are absent.
+    pub credentials: Vec<(ConnectionId, CredentialStatus)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegisterConnectionCommand {
+    pub provider: Provider,
+    pub organization_id: String,
+    pub mappings: AccountMappings,
+}
+
+pub const LIST_BOOKS_LIMIT: i64 = 100;
 
 pub struct Services {
     pub store: Arc<dyn AccountingStore>,
@@ -115,11 +132,39 @@ impl CreateBook {
     }
 }
 
+pub struct ListBooks(pub Arc<Services>);
+impl ListBooks {
+    pub async fn execute(&self, actor: Actor) -> Result<Vec<BookSummary>, AccountingError> {
+        self.0.authorize(actor, Permission::Read).await?;
+        let books = self.0.store.list(actor.tenant_id()).await?;
+        let mut summaries = Vec::with_capacity(books.len());
+        for book in books {
+            let credentials = self
+                .0
+                .store
+                .credential_statuses(actor.tenant_id(), book.id())
+                .await?;
+            summaries.push(BookSummary { book, credentials });
+        }
+        Ok(summaries)
+    }
+}
+
 pub struct GetBook(pub Arc<Services>);
 impl GetBook {
-    pub async fn execute(&self, actor: Actor, book_id: BookId) -> Result<Book, AccountingError> {
+    pub async fn execute(
+        &self,
+        actor: Actor,
+        book_id: BookId,
+    ) -> Result<BookSummary, AccountingError> {
         self.0.authorize(actor, Permission::Read).await?;
-        self.0.store.get(actor.tenant_id(), book_id).await
+        let book = self.0.store.get(actor.tenant_id(), book_id).await?;
+        let credentials = self
+            .0
+            .store
+            .credential_statuses(actor.tenant_id(), book_id)
+            .await?;
+        Ok(BookSummary { book, credentials })
     }
 }
 
@@ -132,9 +177,21 @@ impl RegisterConnection {
         request: RequestContext,
         book_id: BookId,
         revision: i64,
-        connection: Connection,
+        command: RegisterConnectionCommand,
     ) -> Result<Book, AccountingError> {
         self.0.authorize(actor, Permission::Manage).await?;
+        let connection_id = self
+            .0
+            .ids
+            .next_id()
+            .map(ConnectionId::from_snowflake)
+            .map_err(|error| AccountingError::Storage(error.to_string()))?;
+        let connection = Connection::new(
+            connection_id,
+            command.provider,
+            command.organization_id,
+            command.mappings,
+        )?;
         let now = self.0.clock.now();
         let audit = audit_record(
             actor,

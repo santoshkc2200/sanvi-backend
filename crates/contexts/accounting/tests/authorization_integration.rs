@@ -15,12 +15,13 @@ use sanvi_accounting::{
     application::{
         AccessTokens, AccountingAccess, ActivateBook, Actor, Authorization, CompleteAuthorization,
         CreateBook, CredentialVerifier, Permission, ProviderDirectory, ProviderOAuth,
-        RegisterConnection, RevokeAuthorization, ScheduleSwitch, Services, StartAuthorization,
+        RegisterConnection, RegisterConnectionCommand, RevokeAuthorization, ScheduleSwitch,
+        Services, StartAuthorization,
         ports::RequestContext,
     },
     domain::{
-        AccountMappings, AccountingError, Book, Connection, ConnectionId, Provider,
-        ProviderCatalog, Secret, TokenGrant,
+        AccountMappings, AccountingError, Book, ConnectionId, Provider, ProviderCatalog, Secret,
+        TokenGrant,
     },
 };
 use sanvi_kernel::{Clock, TenantId, UserId};
@@ -205,7 +206,11 @@ impl Harness {
                 RequestContext::default(),
                 book.id(),
                 book.revision(),
-                connection(3001, "42"),
+                RegisterConnectionCommand {
+                    provider: Provider::Freee,
+                    organization_id: "42".into(),
+                    mappings: mappings(),
+                },
             )
             .await
             .unwrap();
@@ -215,74 +220,73 @@ impl Harness {
                 RequestContext::default(),
                 book.id(),
                 book.revision(),
-                connection(3002, "43"),
+                RegisterConnectionCommand {
+                    provider: Provider::Freee,
+                    organization_id: "43".into(),
+                    mappings: mappings(),
+                },
             )
             .await
             .unwrap()
     }
 
-    async fn consent(&self, book: &Book, connection: i64) -> Result<(), AccountingError> {
+    async fn consent(&self, book: &Book, connection: ConnectionId) -> Result<(), AccountingError> {
         let state = self.start(book, connection).await;
         CompleteAuthorization(self.authorization.clone())
             .execute(self.user, RequestContext::default(), &state, "good-code")
             .await
     }
 
-    async fn start(&self, book: &Book, connection: i64) -> String {
+    async fn start(&self, book: &Book, connection: ConnectionId) -> String {
         let url = StartAuthorization(self.authorization.clone())
             .execute(
                 self.user,
                 RequestContext::default(),
                 book.id(),
-                ConnectionId::try_from(connection).unwrap(),
+                connection,
             )
             .await
             .unwrap();
         url.split_once("state=").unwrap().1.to_string()
     }
 
-    async fn events(&self, event_type: &str, connection: i64) -> i64 {
+    async fn events(&self, event_type: &str, connection: ConnectionId) -> i64 {
         sqlx::query_scalar(
             "SELECT count(*) FROM platform.outbox WHERE aggregate_id = $1 AND event_type = $2",
         )
-        .bind(connection)
+        .bind(connection.as_i64())
         .bind(event_type)
         .fetch_one(&self.db.admin_pool().await)
         .await
         .unwrap()
     }
 
-    async fn status(&self, connection: i64) -> Option<String> {
+    async fn status(&self, connection: ConnectionId) -> Option<String> {
         sqlx::query_scalar(
             "SELECT status FROM accounting.provider_credentials WHERE connection_id = $1",
         )
-        .bind(connection)
+        .bind(connection.as_i64())
         .fetch_optional(&self.db.admin_pool().await)
         .await
         .unwrap()
     }
 }
 
-fn connection(id: i64, company: &str) -> Connection {
-    Connection::new(
-        ConnectionId::try_from(id).unwrap(),
-        Provider::Freee,
-        company.into(),
-        AccountMappings {
-            revenue_account: "sales".into(),
-            refund_account: "returns".into(),
-            clearing_account: "cash".into(),
-            tax_codes: std::collections::BTreeMap::from([("standard".into(), "tax".into())]),
-        },
-    )
-    .unwrap()
+fn mappings() -> AccountMappings {
+    AccountMappings {
+        revenue_account: "sales".into(),
+        refund_account: "returns".into(),
+        clearing_account: "cash".into(),
+        tax_codes: std::collections::BTreeMap::from([("standard".into(), "tax".into())]),
+    }
 }
 
 #[tokio::test]
 async fn consent_is_single_use_user_bound_and_stored_encrypted() {
     let harness = Harness::new().await;
     let book = harness.book().await;
-    let state = harness.start(&book, 3001).await;
+    let first = book.connections()[0].id();
+    let state = harness.start(&book, first).await;
 
     let other_user = Actor::User {
         tenant_id: TenantId::try_from(1001).unwrap(),
@@ -317,16 +321,17 @@ async fn consent_is_single_use_user_bound_and_stored_encrypted() {
         Err(AccountingError::AuthorizationRejected(_))
     ));
 
-    assert_eq!(harness.status(3001).await.as_deref(), Some("active"));
+    assert_eq!(harness.status(first).await.as_deref(), Some("active"));
     assert_eq!(
         harness
-            .events("accounting.connection_authorized", 3001)
+            .events("accounting.connection_authorized", first)
             .await,
         1
     );
     let (refresh, access): (Vec<u8>, Vec<u8>) = sqlx::query_as(
-        "SELECT refresh_ciphertext, access_ciphertext FROM accounting.provider_credentials WHERE connection_id = 3001",
+        "SELECT refresh_ciphertext, access_ciphertext FROM accounting.provider_credentials WHERE connection_id = $1",
     )
+    .bind(first.as_i64())
     .fetch_one(&harness.db.admin_pool().await)
     .await
     .unwrap();
@@ -348,7 +353,8 @@ async fn consent_is_single_use_user_bound_and_stored_encrypted() {
 async fn expired_state_is_rejected() {
     let harness = Harness::new().await;
     let book = harness.book().await;
-    let state = harness.start(&book, 3001).await;
+    let first = book.connections()[0].id();
+    let state = harness.start(&book, first).await;
     harness.clock.advance(TimeDelta::minutes(11));
     assert!(matches!(
         CompleteAuthorization(harness.authorization.clone())
@@ -356,19 +362,20 @@ async fn expired_state_is_rejected() {
             .await,
         Err(AccountingError::AuthorizationRejected(_))
     ));
-    assert_eq!(harness.status(3001).await, None);
+    assert_eq!(harness.status(first).await, None);
 }
 
 #[tokio::test]
 async fn consent_for_another_company_is_discarded_and_revoked() {
     let harness = Harness::new().await;
     let book = harness.book().await;
+    let first = book.connections()[0].id();
     *harness.freee.company.lock().unwrap() = "99".into();
     assert!(matches!(
-        harness.consent(&book, 3001).await,
+        harness.consent(&book, first).await,
         Err(AccountingError::AuthorizationRejected(_))
     ));
-    assert_eq!(harness.status(3001).await, None);
+    assert_eq!(harness.status(first).await, None);
     assert_eq!(*harness.freee.revoked.lock().unwrap(), vec!["rt-0"]);
 }
 
@@ -376,8 +383,9 @@ async fn consent_for_another_company_is_discarded_and_revoked() {
 async fn concurrent_callers_share_one_refresh_of_a_single_use_token() {
     let harness = Harness::new().await;
     let book = harness.book().await;
-    harness.consent(&book, 3001).await.unwrap();
-    let connection = connection(3001, "42");
+    let first = book.connections()[0].id();
+    harness.consent(&book, first).await.unwrap();
+    let connection = book.connection(first).unwrap().clone();
     let tenant = harness.user.tenant_id();
 
     // Still valid: no refresh.
@@ -401,18 +409,19 @@ async fn concurrent_callers_share_one_refresh_of_a_single_use_token() {
         assert_eq!(call.await.unwrap().unwrap().expose(), "at-1");
     }
     assert_eq!(harness.freee.refreshes.load(Ordering::SeqCst), 1);
-    assert_eq!(harness.status(3001).await.as_deref(), Some("active"));
+    assert_eq!(harness.status(first).await.as_deref(), Some("active"));
 }
 
 #[tokio::test]
 async fn refused_refresh_requires_reauthorization_once() {
     let harness = Harness::new().await;
     let book = harness.book().await;
-    harness.consent(&book, 3001).await.unwrap();
+    let first = book.connections()[0].id();
+    harness.consent(&book, first).await.unwrap();
     // The provider no longer accepts the stored token (revoked in freee).
     *harness.freee.current_refresh.lock().unwrap() = "elsewhere".into();
     harness.clock.advance(TimeDelta::hours(7));
-    let connection = connection(3001, "42");
+    let connection = book.connection(first).unwrap().clone();
     for _ in 0..2 {
         assert_eq!(
             harness
@@ -424,19 +433,19 @@ async fn refused_refresh_requires_reauthorization_once() {
         );
     }
     assert_eq!(
-        harness.status(3001).await.as_deref(),
+        harness.status(first).await.as_deref(),
         Some("reauthorization_required")
     );
     assert_eq!(
         harness
-            .events("accounting.reauthorization_required", 3001)
+            .events("accounting.reauthorization_required", first)
             .await,
         1
     );
 
     // Consenting again restores the connection.
-    harness.consent(&book, 3001).await.unwrap();
-    assert_eq!(harness.status(3001).await.as_deref(), Some("active"));
+    harness.consent(&book, first).await.unwrap();
+    assert_eq!(harness.status(first).await.as_deref(), Some("active"));
 }
 
 #[tokio::test]
@@ -445,7 +454,7 @@ async fn activation_requires_consent_and_a_user_allowed_to_post() {
     let book = harness.book().await;
     let activate = ActivateBook(harness.services.clone());
     let now = harness.clock.now();
-    let first = ConnectionId::try_from(3001).unwrap();
+    let first = book.connections()[0].id();
     assert_eq!(
         activate
             .execute(
@@ -460,7 +469,7 @@ async fn activation_requires_consent_and_a_user_allowed_to_post() {
             .unwrap_err(),
         AccountingError::VerificationFailed("connection has not been authorized")
     );
-    harness.consent(&book, 3001).await.unwrap();
+    harness.consent(&book, first).await.unwrap();
     *harness.freee.can_post.lock().unwrap() = false;
     assert!(matches!(
         activate
@@ -494,10 +503,11 @@ async fn activation_requires_consent_and_a_user_allowed_to_post() {
 async fn only_connections_that_no_longer_route_can_be_revoked() {
     let harness = Harness::new().await;
     let book = harness.book().await;
-    harness.consent(&book, 3001).await.unwrap();
+    let first = book.connections()[0].id();
+    let second = book.connections()[1].id();
+    harness.consent(&book, first).await.unwrap();
     *harness.freee.company.lock().unwrap() = "43".into();
-    harness.consent(&book, 3002).await.unwrap();
-    let first = ConnectionId::try_from(3001).unwrap();
+    harness.consent(&book, second).await.unwrap();
     ActivateBook(harness.services.clone())
         .execute(
             harness.user,
@@ -522,18 +532,19 @@ async fn only_connections_that_no_longer_route_can_be_revoked() {
             harness.user,
             RequestContext::default(),
             book.id(),
-            ConnectionId::try_from(3002).unwrap(),
+            second,
         )
         .await
         .unwrap();
-    assert_eq!(harness.status(3002).await.as_deref(), Some("revoked"));
+    assert_eq!(harness.status(second).await.as_deref(), Some("revoked"));
     assert_eq!(
-        harness.events("accounting.credential_revoked", 3002).await,
+        harness.events("accounting.credential_revoked", second).await,
         1
     );
     let cleared: bool = sqlx::query_scalar(
-        "SELECT refresh_ciphertext IS NULL AND access_ciphertext IS NULL FROM accounting.provider_credentials WHERE connection_id = 3002",
+        "SELECT refresh_ciphertext IS NULL AND access_ciphertext IS NULL FROM accounting.provider_credentials WHERE connection_id = $1",
     )
+    .bind(second.as_i64())
     .fetch_one(&harness.db.admin_pool().await)
     .await
     .unwrap();
@@ -545,10 +556,11 @@ async fn only_connections_that_no_longer_route_can_be_revoked() {
 async fn failed_first_authorization_does_not_cache_a_rolled_back_key() {
     let harness = Harness::new().await;
     let book = harness.book().await;
+    let first = book.connections()[0].id();
     let admin = harness.db.admin_pool().await;
     sqlx::raw_sql("CREATE FUNCTION platform.reject_authorization() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced outbox failure'; END $$; CREATE TRIGGER reject_authorization BEFORE INSERT ON platform.outbox FOR EACH ROW EXECUTE FUNCTION platform.reject_authorization();")
         .execute(&admin).await.unwrap();
-    assert!(harness.consent(&book, 3001).await.is_err());
+    assert!(harness.consent(&book, first).await.is_err());
     let keys: i64 = sqlx::query_scalar("SELECT count(*) FROM accounting.tenant_secret_keys")
         .fetch_one(&admin)
         .await
@@ -556,7 +568,7 @@ async fn failed_first_authorization_does_not_cache_a_rolled_back_key() {
     assert_eq!(keys, 0);
     sqlx::raw_sql("DROP TRIGGER reject_authorization ON platform.outbox; DROP FUNCTION platform.reject_authorization();")
         .execute(&admin).await.unwrap();
-    harness.consent(&book, 3001).await.unwrap();
+    harness.consent(&book, first).await.unwrap();
 
     // A fresh process must be able to decrypt the retry's persisted tokens.
     let ids = test_ids();
@@ -572,7 +584,7 @@ async fn failed_first_authorization_does_not_cache_a_rolled_back_key() {
     };
     assert_eq!(
         tokens
-            .access_token(harness.user.tenant_id(), &connection(3001, "42"))
+            .access_token(harness.user.tenant_id(), book.connection(first).unwrap())
             .await
             .unwrap()
             .expose(),
@@ -583,7 +595,9 @@ async fn failed_first_authorization_does_not_cache_a_rolled_back_key() {
 async fn routing_change_serializes_with_revocation(schedule: bool) {
     let harness = Harness::new().await;
     let mut book = harness.book().await;
-    harness.consent(&book, 3001).await.unwrap();
+    let first = book.connections()[0].id();
+    let second = book.connections()[1].id();
+    harness.consent(&book, first).await.unwrap();
     let target = if schedule {
         book = ActivateBook(harness.services.clone())
             .execute(
@@ -591,16 +605,16 @@ async fn routing_change_serializes_with_revocation(schedule: bool) {
                 RequestContext::default(),
                 book.id(),
                 book.revision(),
-                ConnectionId::try_from(3001).unwrap(),
+                first,
                 harness.clock.now(),
             )
             .await
             .unwrap();
         *harness.freee.company.lock().unwrap() = "43".into();
-        harness.consent(&book, 3002).await.unwrap();
-        ConnectionId::try_from(3002).unwrap()
+        harness.consent(&book, second).await.unwrap();
+        second
     } else {
-        ConnectionId::try_from(3001).unwrap()
+        first
     };
     let gate = Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
     *harness.freee.catalog_gate.lock().unwrap() = Some(gate.clone());
@@ -654,7 +668,7 @@ async fn routing_change_serializes_with_revocation(schedule: bool) {
         Err(AccountingError::Conflict(_) | AccountingError::StaleRevision)
     ));
     assert_eq!(
-        harness.status(target.as_i64()).await.as_deref(),
+        harness.status(target).await.as_deref(),
         Some("active")
     );
     assert!(harness.freee.revoked.lock().unwrap().is_empty());
@@ -679,8 +693,8 @@ async fn callback_and_revoke_are_audited_without_secrets() {
         user_agent: Some("test-agent".into()),
     };
     let book = harness.book().await;
-    let connection_id = ConnectionId::try_from(3001).unwrap();
-    let state = harness.start(&book, 3001).await;
+    let connection_id = book.connections()[0].id();
+    let state = harness.start(&book, connection_id).await;
 
     CompleteAuthorization(harness.authorization.clone())
         .execute(harness.user, request.clone(), &state, "good-code")
@@ -723,7 +737,8 @@ async fn callback_and_revoke_are_audited_without_secrets() {
 async fn concurrent_callbacks_with_one_state_authorize_once() {
     let harness = Harness::new().await;
     let book = harness.book().await;
-    let state = harness.start(&book, 3001).await;
+    let first = book.connections()[0].id();
+    let state = harness.start(&book, first).await;
     let auth = harness.authorization.clone();
     let user = harness.user;
 
@@ -770,8 +785,8 @@ async fn concurrent_callbacks_with_one_state_authorize_once() {
 async fn revoking_twice_audits_once() {
     let harness = Harness::new().await;
     let book = harness.book().await;
-    let connection_id = ConnectionId::try_from(3001).unwrap();
-    harness.consent(&book, 3001).await.unwrap();
+    let connection_id = book.connections()[0].id();
+    harness.consent(&book, connection_id).await.unwrap();
 
     let count_before: i64 =
         sqlx::query_scalar("SELECT count(*) FROM accounting.audit_commands WHERE tenant_id = $1")
