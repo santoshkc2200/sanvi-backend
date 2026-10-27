@@ -34,6 +34,64 @@ pub struct EntitlementView {
     pub limit: Option<i64>,
 }
 
+/// A canonical, positive decimal store identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DestinationStoreId(i64);
+
+impl DestinationStoreId {
+    /// Parses a store identifier, accepting only canonical positive decimals
+    /// (`1..=i64::MAX`, no leading zero, no sign).
+    pub fn parse(s: &str) -> Result<Self, ProductAccessError> {
+        let n = s.parse::<i64>().map_err(|_| {
+            ProductAccessError::BadRequest(format!("invalid destination store id: {s:?}"))
+        })?;
+        if n > 0 && n.to_string() == s {
+            Ok(Self(n))
+        } else {
+            Err(ProductAccessError::BadRequest(format!(
+                "invalid destination store id: {s:?}"
+            )))
+        }
+    }
+
+    pub const fn as_i64(self) -> i64 {
+        self.0
+    }
+}
+
+/// Checks that the tenant has the product enabled and the user holds at
+/// least one permission for it. Returns the matching permissions sorted
+/// and deduplicated.
+fn authorize(
+    product: &Product,
+    permissions: &[String],
+    entitlements: &[EntitlementView],
+) -> Result<Vec<String>, ProductAccessError> {
+    let enabled = entitlements
+        .iter()
+        .any(|entry| entry.key == product.feature && entry.enabled);
+    if !enabled {
+        return Err(ProductAccessError::NotEntitled {
+            feature: product.feature,
+        });
+    }
+
+    let mut delegated: Vec<String> = permissions
+        .iter()
+        .filter(|permission| permission.starts_with(product.permission_prefix))
+        .cloned()
+        .collect();
+    delegated.sort();
+    delegated.dedup();
+    if delegated.is_empty() {
+        return Err(ProductAccessError::NoPermissions {
+            product: product.key,
+        });
+    }
+
+    Ok(delegated)
+}
+
 /// Signed-token claims. Ids travel as decimal strings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DelegationClaims {
@@ -60,27 +118,7 @@ impl DelegationClaims {
         jti: String,
         now: DateTime<Utc>,
     ) -> Result<Self, ProductAccessError> {
-        let enabled = entitlements
-            .iter()
-            .any(|entry| entry.key == product.feature && entry.enabled);
-        if !enabled {
-            return Err(ProductAccessError::NotEntitled {
-                feature: product.feature,
-            });
-        }
-
-        let mut delegated: Vec<String> = permissions
-            .iter()
-            .filter(|permission| permission.starts_with(product.permission_prefix))
-            .cloned()
-            .collect();
-        delegated.sort();
-        delegated.dedup();
-        if delegated.is_empty() {
-            return Err(ProductAccessError::NoPermissions {
-                product: product.key,
-            });
-        }
+        let delegated = authorize(product, permissions, entitlements)?;
 
         // A disabled or absent quota is left out, which services read as 0.
         let limits = product
@@ -105,6 +143,45 @@ impl DelegationClaims {
             jti,
             iat,
             exp: iat + TOKEN_LIFETIME_SECS,
+        })
+    }
+}
+
+/// Signed identity claims for the ecommerce-connectors service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConnectorClaims {
+    pub tenant_id: i64,
+    pub user_id: i64,
+    pub destination_store_id: String,
+    pub aud: &'static str,
+    pub iat: i64,
+    pub exp: i64,
+    pub jti: String,
+}
+
+impl ConnectorClaims {
+    /// Builds the claims for `user` in `tenant` against `store`, or refuses when
+    /// the tenant lacks the product or the user holds none of its permissions.
+    pub fn grant(
+        product: &Product,
+        tenant_id: TenantId,
+        user_id: UserId,
+        store: DestinationStoreId,
+        permissions: &[String],
+        entitlements: &[EntitlementView],
+        jti: String,
+        now: DateTime<Utc>,
+    ) -> Result<Self, ProductAccessError> {
+        let _ = authorize(product, permissions, entitlements)?;
+        let iat = now.timestamp();
+        Ok(Self {
+            tenant_id: tenant_id.as_i64(),
+            user_id: user_id.as_i64(),
+            destination_store_id: store.as_i64().to_string(),
+            aud: product.audience,
+            iat,
+            exp: iat + TOKEN_LIFETIME_SECS,
+            jti,
         })
     }
 }
@@ -261,5 +338,114 @@ mod tests {
         );
         assert_eq!(claims.aud, "ecommerce-service/privacy");
         assert_eq!(claims.exp - claims.iat, 60);
+    }
+
+    #[test]
+    fn connector_claims_match_the_connector_contract() {
+        let claims = ConnectorClaims::grant(
+            &crate::domain::product::CONNECTORS,
+            TenantId::try_from(1001_i64).unwrap(),
+            UserId::try_from(3001_i64).unwrap(),
+            DestinationStoreId::parse("42").unwrap(),
+            &[
+                "ecommerce.import.read".to_owned(),
+                "ecommerce.store.read".to_owned(),
+            ],
+            &[entitlement("products.ecommerce.enabled", true, None)],
+            "test-jti-0000000000000000000000".to_owned(),
+            DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        )
+        .unwrap();
+
+        let json = serde_json::to_value(&claims).unwrap();
+        let obj = json.as_object().unwrap();
+        let mut keys: Vec<&String> = obj.keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "aud",
+                "destination_store_id",
+                "exp",
+                "iat",
+                "jti",
+                "tenant_id",
+                "user_id"
+            ]
+        );
+        assert_eq!(obj["tenant_id"], 1001);
+        assert_eq!(obj["user_id"], 3001);
+        assert_eq!(obj["destination_store_id"], "42");
+        assert_eq!(obj["aud"], "ecommerce-connectors");
+        assert_eq!(claims.exp - claims.iat, 60);
+    }
+
+    #[test]
+    fn connector_claims_refuse_without_the_product_or_an_import_permission() {
+        let grant_connector = |perms: &[&str], ents: &[EntitlementView]| {
+            let perms: Vec<String> = perms.iter().map(|p| (*p).to_owned()).collect();
+            ConnectorClaims::grant(
+                &crate::domain::product::CONNECTORS,
+                TenantId::try_from(1001_i64).unwrap(),
+                UserId::try_from(3001_i64).unwrap(),
+                DestinationStoreId::parse("42").unwrap(),
+                &perms,
+                ents,
+                "test-jti".to_owned(),
+                DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+            )
+        };
+
+        assert_eq!(
+            grant_connector(&["ecommerce.import.read"], &[]),
+            Err(ProductAccessError::NotEntitled {
+                feature: "products.ecommerce.enabled"
+            })
+        );
+        assert_eq!(
+            grant_connector(
+                &["ecommerce.import.read"],
+                &[entitlement("products.ecommerce.enabled", false, None)]
+            ),
+            Err(ProductAccessError::NotEntitled {
+                feature: "products.ecommerce.enabled"
+            })
+        );
+        assert_eq!(
+            grant_connector(
+                &["ecommerce.store.read"],
+                &[entitlement("products.ecommerce.enabled", true, None)]
+            ),
+            Err(ProductAccessError::NoPermissions {
+                product: "ecommerce-imports"
+            })
+        );
+    }
+
+    #[test]
+    fn store_ids_are_canonical_positive_decimals() {
+        for valid in ["1", "42", "9223372036854775807"] {
+            let store = DestinationStoreId::parse(valid).unwrap();
+            assert_eq!(store.as_i64().to_string(), valid);
+        }
+        for invalid in [
+            "",
+            "0",
+            "007",
+            "-1",
+            "+1",
+            "1.0",
+            "9223372036854775808",
+            "%31",
+            "a",
+        ] {
+            assert!(
+                matches!(
+                    DestinationStoreId::parse(invalid),
+                    Err(ProductAccessError::BadRequest(_))
+                ),
+                "expected BadRequest for {invalid:?}"
+            );
+        }
     }
 }

@@ -25,5 +25,14 @@ pub const ECOMMERCE: Product = Product {
     limits: &["ecommerce.stores.max"],
 };
 
+/// Ecommerce connectors (`ecommerce-connectors`).
+pub const CONNECTORS: Product = Product {
+    key: "ecommerce-imports",
+    audience: "ecommerce-connectors",
+    feature: "products.ecommerce.enabled",
+    permission_prefix: "ecommerce.import.",
+    limits: &[],
+};
+
 /// Issuer every delegation token names.
 pub const ISSUER: &str = "sanvi-backend";

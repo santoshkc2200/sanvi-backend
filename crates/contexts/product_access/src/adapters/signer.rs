@@ -5,7 +5,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
-use crate::domain::{DelegationClaims, PrivacyClaims, ProductAccessError, TokenSigner};
+use crate::domain::{
+    ConnectorClaims, DelegationClaims, PrivacyClaims, ProductAccessError, TokenSigner,
+};
 
 pub struct Ed25519Signer {
     kid: String,
@@ -74,6 +76,10 @@ impl TokenSigner for Ed25519Signer {
     fn sign_privacy(&self, claims: &PrivacyClaims) -> Result<String, ProductAccessError> {
         self.sign_json(claims)
     }
+
+    fn sign_connector(&self, claims: &ConnectorClaims) -> Result<String, ProductAccessError> {
+        self.sign_json(claims)
+    }
 }
 
 /// Stands in when no signing key is configured: nothing is ever forwarded.
@@ -87,6 +93,12 @@ impl TokenSigner for DisabledSigner {
     }
 
     fn sign_privacy(&self, _: &PrivacyClaims) -> Result<String, ProductAccessError> {
+        Err(ProductAccessError::Unavailable(
+            "no delegation signing key is configured".to_owned(),
+        ))
+    }
+
+    fn sign_connector(&self, _: &ConnectorClaims) -> Result<String, ProductAccessError> {
         Err(ProductAccessError::Unavailable(
             "no delegation signing key is configured".to_owned(),
         ))
