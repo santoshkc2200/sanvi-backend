@@ -534,6 +534,16 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Create and change products in the tenant's ecommerce stores",
     },
+    PermissionDef {
+        key: "ecommerce.import.read",
+        scope: PermissionScope::Tenant,
+        description: "See the tenant's catalog import connections, jobs, previews and failures",
+    },
+    PermissionDef {
+        key: "ecommerce.import.manage",
+        scope: PermissionScope::Tenant,
+        description: "Connect Shopify or Amazon accounts and run, confirm, cancel or retry catalog imports",
+    },
 ];
 
 /// Registry lookup.

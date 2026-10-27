@@ -6,7 +6,10 @@ use actix_web::{App, HttpMessage, HttpRequest, HttpResponse, HttpServer, test, w
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use sanvi_http::{ResolutionSource, Subject, TenantContext, TenantRuntimeStatus};
+use sanvi_http::{
+    Decision, PermissionGate, ResolutionSource, ResourceRef, Subject, TenantContext,
+    TenantRuntimeStatus,
+};
 use sanvi_kernel::{RoleId, TenantId, UserId};
 use sanvi_product_access::adapters::http::ProductAccessState;
 use sanvi_product_access::adapters::{Ed25519Signer, HttpProductUpstream};
@@ -43,6 +46,9 @@ async fn upstream_handler(
             .collect(),
         body: String::from_utf8_lossy(&body).into_owned(),
     });
+    if request.method() == actix_web::http::Method::DELETE {
+        return HttpResponse::NoContent().finish();
+    }
     match request.path() {
         "/v1/unauthorized" => HttpResponse::Unauthorized().finish(),
         "/v1/missing" => HttpResponse::NotFound()
@@ -73,6 +79,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<Received>>>) {
     (address, shared)
 }
 
+#[derive(Clone)]
 struct Grants {
     enabled: bool,
     permissions: Vec<String>,
@@ -104,6 +111,27 @@ impl RolePermissions for Grants {
         _: &[RoleId],
     ) -> Result<Vec<String>, ProductAccessError> {
         Ok(self.permissions.clone())
+    }
+}
+
+impl PermissionGate for Grants {
+    fn check<'a>(
+        &'a self,
+        _subject: &'a Subject,
+        permission: &'a str,
+        _resource: &'a ResourceRef,
+        _write: bool,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Decision, sanvi_http::ApiError>> + Send + 'a>,
+    > {
+        let allowed = self.permissions.iter().any(|p| p == permission);
+        Box::pin(async move {
+            Ok(if allowed {
+                Decision::Allowed
+            } else {
+                Decision::Denied
+            })
+        })
     }
 }
 
@@ -153,6 +181,22 @@ fn state(base_url: &str, grants: Grants) -> ProductAccessState {
 /// The app as the platform mounts it, with tenancy and authentication
 /// already resolved by the (here simulated) middleware.
 macro_rules! app {
+    ($state:expr, $gate:expr) => {
+        test::init_service(
+            App::new()
+                .app_data(web::Data::new($state))
+                .app_data(web::Data::new($gate))
+                .wrap_fn(|request, service| {
+                    request.extensions_mut().insert(tenant());
+                    request.extensions_mut().insert(subject());
+                    service.call(request)
+                })
+                .service(
+                    web::scope("/api/v1/tenant").configure(product_access_tenant_scope_routes),
+                ),
+        )
+        .await
+    };
     ($state:expr) => {
         test::init_service(
             App::new()
@@ -326,4 +370,150 @@ async fn unreachable_or_unconfigured_products_answer_503() {
         .await;
         assert_eq!(response.status(), 503);
     }
+}
+
+#[actix_web::test]
+async fn import_get_forwards_to_v1_with_the_store_in_the_token() {
+    let (address, log) = start_upstream().await;
+    let mut grants = manager();
+    grants.permissions.push("ecommerce.import.read".into());
+    let app = app!(state(&format!("http://{address}"), grants));
+
+    let request = test::TestRequest::get()
+        .uri("/api/v1/tenant/ecommerce-imports/stores/42/jobs?limit=5")
+        .to_request();
+    let response = test::call_service(&app, request).await;
+
+    assert_eq!(response.status(), 201);
+
+    let received = log.lock().unwrap()[0].clone();
+    assert_eq!(received.method, "GET");
+    assert_eq!(received.uri, "/v1/jobs?limit=5");
+    let header = |name: &str| {
+        received
+            .headers
+            .iter()
+            .filter(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(header("authorization"), [format!("Bearer {SERVICE_KEY}")]);
+    let tokens = header("x-identity-token");
+    assert_eq!(tokens.len(), 1);
+    let claims = claims(&tokens[0]);
+    assert_eq!(claims["destination_store_id"], "42");
+    assert_eq!(claims["aud"], "ecommerce-connectors");
+}
+
+#[actix_web::test]
+async fn delete_revokes_a_connection() {
+    let (address, log) = start_upstream().await;
+    let mut grants = manager();
+    grants.permissions.push("ecommerce.import.manage".into());
+    let app = app!(state(&format!("http://{address}"), grants));
+
+    let request = test::TestRequest::delete()
+        .uri("/api/v1/tenant/ecommerce-imports/stores/42/connections/9")
+        .to_request();
+    let response = test::call_service(&app, request).await;
+
+    assert_eq!(response.status(), 204);
+
+    let received = log.lock().unwrap()[0].clone();
+    assert_eq!(received.method, "DELETE");
+    assert_eq!(received.uri, "/v1/connections/9");
+}
+
+#[actix_web::test]
+async fn callback_query_passes_through_verbatim() {
+    let (address, log) = start_upstream().await;
+    let mut grants = manager();
+    grants.permissions.push("ecommerce.import.manage".into());
+    let app = app!(state(&format!("http://{address}"), grants));
+
+    let query = "code=c&hmac=ab%2Bcd&shop=x.myshopify.com&state=s&timestamp=1";
+    let request = test::TestRequest::get()
+        .uri(&format!(
+            "/api/v1/tenant/ecommerce-imports/stores/42/connections/shopify/callback?{query}"
+        ))
+        .to_request();
+    let response = test::call_service(&app, request).await;
+
+    assert_eq!(response.status(), 201);
+
+    let received = log.lock().unwrap()[0].clone();
+    assert_eq!(received.method, "GET");
+    assert_eq!(
+        received.uri,
+        format!("/v1/connections/shopify/callback?{query}")
+    );
+}
+
+#[actix_web::test]
+async fn read_only_member_cannot_complete_a_callback() {
+    let (address, log) = start_upstream().await;
+    let mut grants = manager();
+    grants.permissions = vec!["ecommerce.import.read".into()];
+    let gate: Arc<dyn PermissionGate> = Arc::new(grants.clone());
+    let app = app!(state(&format!("http://{address}"), grants), gate);
+
+    let request_cb = test::TestRequest::get()
+        .uri("/api/v1/tenant/ecommerce-imports/stores/42/connections/shopify/callback?code=c")
+        .to_request();
+    let response_cb = test::call_service(&app, request_cb).await;
+    assert_eq!(response_cb.status(), 403);
+
+    let request_jobs = test::TestRequest::get()
+        .uri("/api/v1/tenant/ecommerce-imports/stores/42/jobs")
+        .to_request();
+    let response_jobs = test::call_service(&app, request_jobs).await;
+    assert_eq!(response_jobs.status(), 201);
+
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+#[actix_web::test]
+async fn malformed_store_ids_are_refused_before_forwarding() {
+    let (address, log) = start_upstream().await;
+    let mut grants = manager();
+    grants.permissions.push("ecommerce.import.read".into());
+    let app = app!(state(&format!("http://{address}"), grants));
+
+    for bad_id in ["0", "007", "-1", "%31"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri(&format!(
+                    "/api/v1/tenant/ecommerce-imports/stores/{bad_id}/jobs"
+                ))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), 400, "expected 400 for bad_id: {bad_id}");
+    }
+    assert!(log.lock().unwrap().is_empty());
+}
+
+#[actix_web::test]
+async fn tenant_without_ecommerce_gets_the_feature_problem() {
+    let (address, log) = start_upstream().await;
+    let mut grants = manager();
+    grants.enabled = false;
+    grants.permissions.push("ecommerce.import.read".into());
+    let app = app!(state(&format!("http://{address}"), grants));
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v1/tenant/ecommerce-imports/stores/42/jobs")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 403);
+    let body: serde_json::Value = serde_json::from_slice(&test::read_body(response).await).unwrap();
+    assert_eq!(
+        body["detail"],
+        "feature not enabled: products.ecommerce.enabled"
+    );
+    assert!(log.lock().unwrap().is_empty());
 }

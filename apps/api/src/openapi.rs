@@ -259,6 +259,10 @@ use utoipa::OpenApi;
         sanvi_media::adapters::http::handlers::create_media_asset_delivery,
         sanvi_product_access::adapters::http::handlers::proxy_ecommerce_get,
         sanvi_product_access::adapters::http::handlers::proxy_ecommerce_post,
+        sanvi_product_access::adapters::http::handlers::proxy_import_get,
+        sanvi_product_access::adapters::http::handlers::proxy_import_post,
+        sanvi_product_access::adapters::http::handlers::proxy_import_delete,
+        sanvi_product_access::adapters::http::handlers::proxy_import_callback,
     ),
     components(schemas(
         sanvi_http::quotas::TenantUsage,
@@ -301,7 +305,7 @@ use utoipa::OpenApi;
         (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/provider-auth, payments/provider-rate-limited, payments/invalid-country, payments/country-unsupported, payments/connection-exists, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header; connection creation keys the provider-side idempotency chain, so retries adopt instead of duplicate. Account Session secrets are never persisted or logged."),
         (name = "advertising", description = "Tenant advertising. Money is integer minor units paired with ISO-4217 account currency; rendered FX values carry their rate date. Problem types: advertising/platform-unavailable, advertising/connection-not-active, advertising/capability-unsupported, advertising/token-expired, advertising/directive-suppressed, advertising/budget-cap-reached. Every mutating endpoint requires Idempotency-Key."),
         (name = "media", description = "Tenant media assets: multipart upload (presign/complete), asset reads/deletes and delivery URLs via hitox-media-service. Upstream failures surface as problems carrying a `code` extension member."),
-        (name = "product_access", description = "Platform proxy to separately deployed product services. `/api/v1/tenant/ecommerce/{tail}` forwards to ecommerce-service `/v1/{tail}` with a signed delegation (tenant, user, the user's ecommerce.* permissions, plan limits) after checking the tenant's products.ecommerce.enabled entitlement. The product service's own contract documents each route; its responses pass through.")
+        (name = "product_access", description = "Platform proxy to separately deployed product services. `/api/v1/tenant/ecommerce/{tail}` forwards to ecommerce-service `/v1/{tail}` with a signed delegation (tenant, user, the user's ecommerce.* permissions, plan limits) after checking the tenant's products.ecommerce.enabled entitlement. `/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}` forwards to ecommerce-connectors `/v1/{tail}` with a signed connector identity token after checking products.ecommerce.enabled and ecommerce.import.* permissions. The product service's own contract documents each route; its responses pass through.")
     ),
     info(
         title = "Sanvi API",
