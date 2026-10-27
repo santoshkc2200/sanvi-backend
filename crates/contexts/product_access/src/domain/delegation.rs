@@ -40,6 +40,7 @@ pub struct DelegationClaims {
     pub tenant_id: String,
     pub permissions: Vec<String>,
     pub limits: BTreeMap<String, i64>,
+    pub jti: String,
     pub iat: i64,
     pub exp: i64,
 }
@@ -53,6 +54,7 @@ impl DelegationClaims {
         user_id: UserId,
         permissions: &[String],
         entitlements: &[EntitlementView],
+        jti: String,
         now: DateTime<Utc>,
     ) -> Result<Self, ProductAccessError> {
         let enabled = entitlements
@@ -97,6 +99,7 @@ impl DelegationClaims {
             tenant_id: tenant_id.to_string(),
             permissions: delegated,
             limits,
+            jti,
             iat,
             exp: iat + TOKEN_LIFETIME_SECS,
         })
@@ -127,6 +130,7 @@ mod tests {
             UserId::try_from(3001_i64).unwrap(),
             &permissions,
             entitlements,
+            "test-jti-0000000000000000000000".to_owned(),
             DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
         )
     }
@@ -147,6 +151,7 @@ mod tests {
             ],
         )
         .unwrap();
+        assert_eq!(claims.jti, "test-jti-0000000000000000000000");
         assert_eq!(
             claims.permissions,
             ["ecommerce.product.manage", "ecommerce.store.read"]

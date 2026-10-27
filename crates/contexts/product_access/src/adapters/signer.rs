@@ -97,6 +97,7 @@ mod tests {
             tenant_id: "1001".into(),
             permissions: vec!["ecommerce.store.read".into()],
             limits: BTreeMap::from([("ecommerce.stores.max".into(), 3)]),
+            jti: "018f0000000070008000000000000000".into(),
             iat: 1_800_000_000,
             exp: 1_800_000_060,
         }

@@ -67,12 +67,14 @@ impl ProxyRequest {
                 .permissions(caller.tenant_id, caller.role_ids)
                 .await?
         };
+        let jti = uuid::Uuid::now_v7().simple().to_string();
         let claims = DelegationClaims::grant(
             product,
             caller.tenant_id,
             caller.user_id,
             &permissions,
             &entitlements,
+            jti,
             (self.clock)(),
         )?;
         let token = self.signer.sign(&claims)?;
@@ -179,6 +181,21 @@ mod tests {
             user_id: UserId::try_from(3001_i64).unwrap(),
             role_ids,
         }
+    }
+
+    fn role() -> RoleId {
+        RoleId::try_from(7_i64).unwrap()
+    }
+
+    #[tokio::test]
+    async fn every_delegation_carries_a_fresh_jti() {
+        let (upstream, proxy) = proxy(true, &["ecommerce.store.read"]);
+        proxy.execute(caller(&[role()]), &request()).await.unwrap();
+        proxy.execute(caller(&[role()]), &request()).await.unwrap();
+        let tokens = upstream.0.lock().unwrap().clone();
+        let jti = |t: &str| serde_json::from_str::<serde_json::Value>(t).unwrap()["jti"].as_str().unwrap().to_owned();
+        assert_eq!(jti(&tokens[0]).len(), 32);
+        assert_ne!(jti(&tokens[0]), jti(&tokens[1]));
     }
 
     #[tokio::test]

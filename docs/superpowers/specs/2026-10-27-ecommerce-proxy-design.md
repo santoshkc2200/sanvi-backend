@@ -43,9 +43,9 @@ Compact JWT, `alg: EdDSA`, header `kid`, 60 s lifetime (the service accepts at
 most 120 s). Claims: `iss` `sanvi-backend`, `aud` `ecommerce-service`, `sub`
 user id, `tenant_id`, `permissions` (sorted `ecommerce.*`), `limits` (e.g.
 `{"ecommerce.stores.max": 3}`; a disabled quota is omitted, which the service
-reads as 0; an enabled quota with no limit is sent as `i64::MAX`), `iat`,
-`exp`. Ids are decimal strings. The service's side is documented in
-`ecommerce-service/docs/architecture.md`.
+reads as 0; an enabled quota with no limit is sent as `i64::MAX`), `jti`
+(unique per mint, 32 hex chars), `iat`, `exp`. Ids are decimal strings. The
+service's side is documented in `ecommerce-service/docs/architecture.md`.
 
 ## What crosses
 
@@ -100,8 +100,6 @@ then drop the old public key after the token lifetime has passed.
 
 ## Not done
 
-- No `jti` replay store on either side; a captured token plus the service key
-  is reusable for its 60 s lifetime.
 - Plans that include ecommerce (`ecommerce-starter`, bundle) and their
   billing wiring.
 - Admin frontend screens calling these routes.
