@@ -1286,6 +1286,7 @@ async fn build_sweep_app(
         domains,
         payments,
         advertising,
+        None,                                                                  // accounting
         None,                                                                  // redis
         None,                                                                  // ssr_cache
         std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()), // degradation

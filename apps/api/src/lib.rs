@@ -5,6 +5,7 @@
 //! `main.rs` is a thin binary: read config → init telemetry → connect
 //! infrastructure → inject adapters into use cases → serve.
 
+pub mod accounting;
 pub mod compliance;
 pub mod config;
 pub mod openapi;
@@ -3928,6 +3929,7 @@ pub fn build_app(
     domains: Option<DomainsWiring>,
     payments: Option<sanvi_payments::adapters::http::PaymentsState>,
     advertising: Option<sanvi_advertising::adapters::http::AdvertisingState>,
+    accounting: Option<sanvi_accounting::adapters::http::AccountingState>,
     redis: Option<redis::aio::ConnectionManager>,
     ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
     degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
@@ -3945,6 +3947,7 @@ pub fn build_app(
     > + 'static,
 > {
     let server_config = config.server.clone();
+    let _ = accounting;
 
     let state = AppState {
         build_info: system.build_info.execute(),

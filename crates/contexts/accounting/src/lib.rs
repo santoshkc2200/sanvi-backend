@@ -4,4 +4,7 @@
 //! Provider authorization and HTTP/UI composition are deliberately not enabled yet.
 pub mod adapters;
 pub mod application;
+pub mod config;
 pub mod domain;
+
+pub use config::AccountingConfig;

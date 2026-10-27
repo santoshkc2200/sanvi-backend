@@ -471,6 +471,8 @@ payments = true
 # Phase 10 starts deployed but unreachable. Rollback remains a boundary-only
 # flag until future slices introduce background token/conversion work.
 advertising = false
+# Tenant accounting destinations and freee provider consent: off until staged rollout.
+accounting = false
 notifications = true
 # TASK-028 (FR-1129) `platform.archival`: when on, ranged reads over
 # archived windows answer 409 archived-range instead of a silent partial,
@@ -614,6 +616,16 @@ quota_per_connection_permits = 3
 fx_provider = "ecb"
 fx_ecb_url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
 fx_timeout_secs = 5
+
+[accounting]
+# All credentials are environment-only (SANVI__ACCOUNTING__*). Empty values
+# are valid while the release flag is off.
+freee_client_id = ""
+freee_client_secret = ""
+freee_redirect_uri = ""
+oauth_state_signing_secret = ""
+token_kek = ""
+token_kek_id = "kek-1"
 
 [media]
 # Both values are environment-only (SANVI__MEDIA__BASE_URL,

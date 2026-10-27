@@ -3479,7 +3479,9 @@ dependencies = [
 name = "sanvi-accounting"
 version = "0.10.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "reqwest 0.12.28",
  "sanvi-audit",
@@ -3488,6 +3490,7 @@ dependencies = [
  "sanvi-messaging",
  "sanvi-persistence",
  "sanvi-privacy",
+ "sanvi-telemetry",
  "sanvi-testsupport",
  "serde",
  "serde_json",
