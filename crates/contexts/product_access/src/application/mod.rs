@@ -11,6 +11,9 @@ use crate::domain::{
     RolePermissions, TenantEntitlements, TokenSigner,
 };
 
+pub mod imports;
+pub use imports::ProxyImportRequest;
+
 /// The verified caller as the platform resolved it for this request.
 #[derive(Debug, Clone, Copy)]
 pub struct Caller<'a> {
