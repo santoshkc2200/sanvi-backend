@@ -3479,6 +3479,7 @@ dependencies = [
 name = "sanvi-accounting"
 version = "0.10.0"
 dependencies = [
+ "actix-web",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -3486,6 +3487,7 @@ dependencies = [
  "reqwest 0.12.28",
  "sanvi-audit",
  "sanvi-crypto",
+ "sanvi-http",
  "sanvi-kernel",
  "sanvi-messaging",
  "sanvi-persistence",
@@ -3499,6 +3501,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "utoipa",
  "uuid",
 ]
 

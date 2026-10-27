@@ -163,6 +163,19 @@ pub enum ApiError {
     #[error("{detail}")]
     ServiceUnavailable { detail: String },
 
+    /// A problem whose `type` a bounded context owns (for example
+    /// `accounting/verification-failed`), so a client can branch on it
+    /// without parsing `detail`. Use the dedicated variants for the shared
+    /// classes; this is for context-specific types only.
+    #[error("{detail}")]
+    Problem {
+        #[schema(value_type = u16)]
+        status: StatusCode,
+        type_slug: &'static str,
+        title: &'static str,
+        detail: String,
+    },
+
     #[error("internal server error")]
     Internal { detail: String },
 }
@@ -185,6 +198,7 @@ impl ApiError {
             Self::Overloaded { .. } | Self::ServiceUnavailable { .. } => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
+            Self::Problem { status, .. } => *status,
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -205,6 +219,7 @@ impl ApiError {
             Self::RequestTimeout => "request-timeout",
             Self::Overloaded { .. } => "platform/overloaded",
             Self::ServiceUnavailable { .. } => "service-unavailable",
+            Self::Problem { type_slug, .. } => type_slug,
             Self::Internal { .. } => "internal-error",
         }
     }
@@ -224,6 +239,7 @@ impl ApiError {
             Self::RequestTimeout => "Gateway Timeout",
             Self::Overloaded { .. } => "Platform Overloaded",
             Self::ServiceUnavailable { .. } => "Service Unavailable",
+            Self::Problem { title, .. } => title,
             Self::Internal { .. } => "Internal Server Error",
         }
     }
@@ -282,6 +298,20 @@ impl ApiError {
 
     pub fn service_unavailable(detail: impl Into<String>) -> Self {
         Self::ServiceUnavailable {
+            detail: detail.into(),
+        }
+    }
+
+    pub fn problem_type(
+        status: StatusCode,
+        type_slug: &'static str,
+        title: &'static str,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::Problem {
+            status,
+            type_slug,
+            title,
             detail: detail.into(),
         }
     }

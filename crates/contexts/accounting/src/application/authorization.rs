@@ -94,7 +94,7 @@ impl CompleteAuthorization {
         request: RequestContext,
         state: &str,
         code: &str,
-    ) -> Result<(), AccountingError> {
+    ) -> Result<BookId, AccountingError> {
         let auth = &self.0;
         let user_id = auth.user(actor).await?;
         if code.is_empty() || code.len() > 1024 {
@@ -161,7 +161,8 @@ impl CompleteAuthorization {
                 Credential::authorized(claims.book_id, claims.connection_id, grant, now),
                 audit,
             )
-            .await
+            .await?;
+        Ok(claims.book_id)
     }
 }
 

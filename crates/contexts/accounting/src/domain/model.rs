@@ -22,7 +22,7 @@ pub type ConnectionId = Id<ConnectionTag>;
 pub enum PostingTag {}
 pub type PostingId = Id<PostingTag>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Freee,
@@ -41,7 +41,7 @@ impl Provider {
 }
 
 /// Provider account mappings are immutable once a destination is used.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccountMappings {
     pub revenue_account: String,

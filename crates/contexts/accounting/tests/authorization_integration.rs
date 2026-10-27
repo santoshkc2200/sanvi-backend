@@ -233,7 +233,8 @@ impl Harness {
         let state = self.start(book, connection).await;
         CompleteAuthorization(self.authorization.clone())
             .execute(self.user, RequestContext::default(), &state, "good-code")
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn start(&self, book: &Book, connection: ConnectionId) -> String {

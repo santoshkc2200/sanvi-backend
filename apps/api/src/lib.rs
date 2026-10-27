@@ -4017,6 +4017,15 @@ pub fn build_app(
     } else {
         tenant_scope
     };
+    let tenant_scope = if config.features.accounting {
+        match &accounting {
+            Some(_) => tenant_scope
+                .configure(sanvi_accounting::adapters::http::accounting_tenant_scope_routes),
+            None => tenant_scope,
+        }
+    } else {
+        tenant_scope
+    };
     // `media_tenant_scope_routes` registers `/v1/assets...` with no leading
     // context segment, so it needs the extra `web::scope("/media")` wrapper
     // here (contrast with advertising, whose routes carry `/ads/...`
@@ -4094,6 +4103,11 @@ pub fn build_app(
         Some(state) => app
             .app_data(web::Data::new(state))
             .configure(advertising_routes::advertising_platform_routes),
+        None => app,
+    };
+
+    let app = match accounting {
+        Some(state) => app.app_data(web::Data::new(state)),
         None => app,
     };
 
