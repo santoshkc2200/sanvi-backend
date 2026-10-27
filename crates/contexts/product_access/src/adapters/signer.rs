@@ -165,6 +165,42 @@ mod tests {
     }
 
     #[test]
+    fn connector_token_verifies_with_the_platform_dev_key() {
+        let signer = Ed25519Signer::from_seed_hex("dev-ed25519-1", SEED).unwrap();
+        let claims = ConnectorClaims {
+            tenant_id: 1001,
+            user_id: 3001,
+            destination_store_id: "42".into(),
+            aud: "ecommerce-connectors",
+            iat: 1_800_000_000,
+            exp: 1_800_000_060,
+            jti: "test-jti".into(),
+        };
+        let token = signer.sign_connector(&claims).unwrap();
+        let parts: Vec<_> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        let header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(header["alg"], "EdDSA");
+        assert_eq!(header["kid"], "dev-ed25519-1");
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(payload["aud"], "ecommerce-connectors");
+        assert_eq!(payload["tenant_id"], 1001);
+        assert!(payload["tenant_id"].is_number());
+
+        let public =
+            hex::decode("ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c")
+                .unwrap();
+        let signature = URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
+        UnparsedPublicKey::new(&ED25519, public)
+            .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
+            .expect("signature verifies with the platform dev key");
+    }
+
+    #[test]
     fn rejects_malformed_keys_without_echoing_them() {
         for (kid, seed) in [("k", "abcd"), ("k", "zz"), ("", SEED)] {
             let error = Ed25519Signer::from_seed_hex(kid, seed)

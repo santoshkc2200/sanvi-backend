@@ -101,6 +101,7 @@ async fn export_pages_until_next_after_is_null() {
             base_url: format!("http://{address}"),
             service_key: SERVICE_KEY.into(),
         },
+        connectors: UpstreamConfig::default(),
     };
     let provider = ProductAccessPrivacyProvider::from_config(&config).unwrap();
     let subject = SubjectRef::user(UserId::try_from(3001_i64).unwrap());
@@ -176,6 +177,7 @@ async fn erase_reports_the_anonymised_count() {
             base_url: format!("http://{address}"),
             service_key: SERVICE_KEY.into(),
         },
+        connectors: UpstreamConfig::default(),
     };
     let provider = ProductAccessPrivacyProvider::from_config(&config).unwrap();
     let subject = SubjectRef::user(UserId::try_from(3001_i64).unwrap());
@@ -223,6 +225,7 @@ async fn upstream_failure_is_an_upstream_error() {
             base_url: format!("http://{address}"),
             service_key: SERVICE_KEY.into(),
         },
+        connectors: UpstreamConfig::default(),
     };
     let provider = ProductAccessPrivacyProvider::from_config(&config).unwrap();
     let subject = SubjectRef::user(UserId::try_from(3001_i64).unwrap());
@@ -253,6 +256,7 @@ async fn unconfigured_or_non_user_subject_is_empty() {
             base_url: "http://127.0.0.1:59999".into(),
             service_key: SERVICE_KEY.into(),
         },
+        connectors: UpstreamConfig::default(),
     })
     .unwrap();
     let end_user_subject = SubjectRef::end_user(TenantId::try_from(1001_i64).unwrap(), "cust-1");

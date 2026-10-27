@@ -10,9 +10,9 @@ use sanvi_http::{ResolutionSource, Subject, TenantContext, TenantRuntimeStatus};
 use sanvi_kernel::{RoleId, TenantId, UserId};
 use sanvi_product_access::adapters::http::ProductAccessState;
 use sanvi_product_access::adapters::{Ed25519Signer, HttpProductUpstream};
-use sanvi_product_access::application::ProxyRequest;
+use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest};
 use sanvi_product_access::domain::{
-    ECOMMERCE, EntitlementView, ProductAccessError, RolePermissions, TenantEntitlements,
+    CONNECTORS, ECOMMERCE, EntitlementView, ProductAccessError, RolePermissions, TenantEntitlements,
 };
 use sanvi_product_access::routes::product_access_tenant_scope_routes;
 
@@ -133,12 +133,19 @@ fn subject() -> Subject {
 
 fn state(base_url: &str, grants: Grants) -> ProductAccessState {
     let grants = Arc::new(grants);
+    let signer = Arc::new(Ed25519Signer::from_seed_hex("test-kid", SEED).unwrap());
     ProductAccessState {
         ecommerce: Arc::new(ProxyRequest::new(
             grants.clone(),
-            grants,
-            Arc::new(Ed25519Signer::from_seed_hex("test-kid", SEED).unwrap()),
+            grants.clone(),
+            signer.clone(),
             Arc::new(HttpProductUpstream::new(&ECOMMERCE, base_url, SERVICE_KEY).unwrap()),
+        )),
+        imports: Arc::new(ProxyImportRequest::new(
+            grants.clone(),
+            grants,
+            signer,
+            Arc::new(HttpProductUpstream::new(&CONNECTORS, base_url, SERVICE_KEY).unwrap()),
         )),
     }
 }
