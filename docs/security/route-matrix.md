@@ -266,10 +266,10 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
-| apps/api/src/compliance.rs | `91330c67b309976f45324271f659948801640e92ef63c0be45a6b63f1b870b77` |
+| apps/api/src/compliance.rs | `de0f3349df2f168f84f436d2a08897422d8be4c87a3ed5738d3bb739d7184835` |
 | apps/api/src/config.rs | `5ccb2a7826a2a925ff064b1df2ec65ba17e4009458d3c126f22dd92c2a7cc22b` |
-| apps/api/src/lib.rs | `a51f8d5adef5b34f9e8036059316a9ae112b04cd25ef2caff31aa7c91a657326` |
-| apps/api/src/main.rs | `19c408109f18f2ddaa6da5d321cd28298447a221f97daf73fb77c68beac4f235` |
+| apps/api/src/lib.rs | `67dc989b94c068302ac1004872168577c15061be23354fe6679cd0a47148234e` |
+| apps/api/src/main.rs | `064ccdcc233306b401129d20a9b0d99cccfa19ae14f6fb9ee34898e7f1ff7a69` |
 | apps/api/src/openapi.rs | `d84e488dac91285591596da6a4ec046cea5aacccb76e9478003ed5ea34ee61dc` |
 | apps/api/src/product_access.rs | `3bface823c60bc81cd8cc7f718e7f978e1a25f3cb073905aa5c7cf7f399c32f9` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
@@ -333,8 +333,8 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/product_access/src/adapters/http/handlers.rs | `ee6ee76725979a0160f49b08bf83cf3e74d4f358104706fbd229deb339cfd7b6` |
 | crates/contexts/product_access/src/adapters/http/mod.rs | `750aff11924e9f4681127f91d31e179d17c2ffde818479bf54af6ef24a6633b2` |
 | crates/contexts/product_access/src/adapters/http/routes.rs | `20c2148f0a71781638fdc88762f6697bcb2df666f29803de07fd967bfb108126` |
-| crates/contexts/product_access/src/application/mod.rs | `3a7959583746687f54cad0d22b9ca5f41102ac73f7d05c75589c9803ed2965e9` |
-| crates/contexts/product_access/src/domain/delegation.rs | `d2de9177a93f97ba6f425c601a0185e62009cbaef37a431a6da472bc0f31b474` |
+| crates/contexts/product_access/src/application/mod.rs | `6eacb8d3dd3ecdeefa1f42d2d7543fd74a259ede69887c020db4b963a846d2a0` |
+| crates/contexts/product_access/src/domain/delegation.rs | `e34e2501e7d6928e78789d240e63f72702c29e20b2be48574b2de5021828b128` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `e960b2e416f59193f64a5dcdf9838e5dd518dcd0b0e086829c2d925ecb5ec8f7` |
 | crates/contexts/system/src/adapters/http/mod.rs | `c7451cf2f661b8ab7dbd686218fb0d25b6875aa2cc3dce21970630c2e46016f0` |
 | crates/contexts/system/src/adapters/http/routes.rs | `fe6b66da6a7728ec4490dcb503ae1b4be92d3529003b49e21bec965af69e67da` |

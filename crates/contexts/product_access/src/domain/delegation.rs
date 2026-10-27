@@ -16,6 +16,9 @@ use super::product::{ISSUER, Product};
 /// How long a delegation token is valid. Services accept at most 120 s.
 pub const TOKEN_LIFETIME_SECS: i64 = 60;
 
+/// Audience for privacy-scoped requests.
+pub const PRIVACY_AUDIENCE: &str = "ecommerce-service/privacy";
+
 /// A quota entitlement that is enabled but has no limit is unlimited;
 /// services compare counts against this ceiling.
 pub const UNLIMITED: i64 = i64::MAX;
@@ -103,6 +106,37 @@ impl DelegationClaims {
             iat,
             exp: iat + TOKEN_LIFETIME_SECS,
         })
+    }
+}
+
+/// Claims on a privacy delegation token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrivacyClaims {
+    pub iss: &'static str,
+    pub aud: String,
+    pub sub: String,
+    pub jti: String,
+    pub iat: i64,
+    pub exp: i64,
+}
+
+impl PrivacyClaims {
+    /// Builds claims addressing the product's privacy audience for `user_id`.
+    pub fn for_subject(
+        product: &Product,
+        user_id: UserId,
+        jti: String,
+        now: DateTime<Utc>,
+    ) -> Self {
+        let iat = now.timestamp();
+        Self {
+            iss: ISSUER,
+            aud: format!("{}/privacy", product.audience),
+            sub: user_id.to_string(),
+            jti,
+            iat,
+            exp: iat + TOKEN_LIFETIME_SECS,
+        }
     }
 }
 
@@ -215,5 +249,17 @@ mod tests {
                 product: "ecommerce"
             })
         );
+    }
+
+    #[test]
+    fn privacy_claims_address_the_privacy_audience() {
+        let claims = PrivacyClaims::for_subject(
+            &ECOMMERCE,
+            UserId::try_from(3001_i64).unwrap(),
+            "018f0000000070008000000000000000".to_owned(),
+            DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        );
+        assert_eq!(claims.aud, "ecommerce-service/privacy");
+        assert_eq!(claims.exp - claims.iat, 60);
     }
 }

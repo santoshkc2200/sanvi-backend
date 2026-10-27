@@ -117,6 +117,13 @@ mod tests {
         fn sign(&self, claims: &DelegationClaims) -> Result<String, ProductAccessError> {
             Ok(serde_json::to_string(claims).unwrap())
         }
+
+        fn sign_privacy(
+            &self,
+            claims: &crate::domain::PrivacyClaims,
+        ) -> Result<String, ProductAccessError> {
+            Ok(serde_json::to_string(claims).unwrap())
+        }
     }
 
     #[derive(Default)]
@@ -193,7 +200,12 @@ mod tests {
         proxy.execute(caller(&[role()]), &request()).await.unwrap();
         proxy.execute(caller(&[role()]), &request()).await.unwrap();
         let tokens = upstream.0.lock().unwrap().clone();
-        let jti = |t: &str| serde_json::from_str::<serde_json::Value>(t).unwrap()["jti"].as_str().unwrap().to_owned();
+        let jti = |t: &str| {
+            serde_json::from_str::<serde_json::Value>(t).unwrap()["jti"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
         assert_eq!(jti(&tokens[0]).len(), 32);
         assert_ne!(jti(&tokens[0]), jti(&tokens[1]));
     }

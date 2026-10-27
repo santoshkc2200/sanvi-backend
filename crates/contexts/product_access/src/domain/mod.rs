@@ -7,7 +7,10 @@ pub mod forwarding;
 pub mod ports;
 pub mod product;
 
-pub use delegation::{DelegationClaims, EntitlementView, TOKEN_LIFETIME_SECS, UNLIMITED};
+pub use delegation::{
+    DelegationClaims, EntitlementView, PRIVACY_AUDIENCE, PrivacyClaims, TOKEN_LIFETIME_SECS,
+    UNLIMITED,
+};
 pub use error::ProductAccessError;
 pub use forwarding::{ForwardRequest, ForwardResponse, ProductPath};
 pub use ports::{ProductUpstream, RolePermissions, TenantEntitlements, TokenSigner};

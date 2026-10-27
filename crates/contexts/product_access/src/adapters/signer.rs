@@ -5,7 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
-use crate::domain::{DelegationClaims, ProductAccessError, TokenSigner};
+use crate::domain::{DelegationClaims, PrivacyClaims, ProductAccessError, TokenSigner};
 
 pub struct Ed25519Signer {
     kid: String,
@@ -47,10 +47,8 @@ impl Ed25519Signer {
             hex::encode(self.key.public_key().as_ref())
         )
     }
-}
 
-impl TokenSigner for Ed25519Signer {
-    fn sign(&self, claims: &DelegationClaims) -> Result<String, ProductAccessError> {
+    fn sign_json<T: serde::Serialize>(&self, claims: &T) -> Result<String, ProductAccessError> {
         let header = serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": self.kid });
         let encode = |value: &serde_json::Value| -> Result<String, ProductAccessError> {
             serde_json::to_vec(value)
@@ -68,11 +66,27 @@ impl TokenSigner for Ed25519Signer {
     }
 }
 
+impl TokenSigner for Ed25519Signer {
+    fn sign(&self, claims: &DelegationClaims) -> Result<String, ProductAccessError> {
+        self.sign_json(claims)
+    }
+
+    fn sign_privacy(&self, claims: &PrivacyClaims) -> Result<String, ProductAccessError> {
+        self.sign_json(claims)
+    }
+}
+
 /// Stands in when no signing key is configured: nothing is ever forwarded.
 pub struct DisabledSigner;
 
 impl TokenSigner for DisabledSigner {
     fn sign(&self, _: &DelegationClaims) -> Result<String, ProductAccessError> {
+        Err(ProductAccessError::Unavailable(
+            "no delegation signing key is configured".to_owned(),
+        ))
+    }
+
+    fn sign_privacy(&self, _: &PrivacyClaims) -> Result<String, ProductAccessError> {
         Err(ProductAccessError::Unavailable(
             "no delegation signing key is configured".to_owned(),
         ))

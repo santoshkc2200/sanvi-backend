@@ -863,6 +863,8 @@ pub struct WorkerConfig {
     #[serde(default)]
     pub notification: sanvi_notifications::NotificationConfig,
     #[serde(default)]
+    pub product_access: sanvi_product_access::ProductAccessConfig,
+    #[serde(default)]
     pub features: FeaturesConfig,
 }
 
@@ -891,6 +893,7 @@ impl WorkerConfig {
         self.payments.validate()?;
         self.advertising.validate()?;
         self.notification.validate()?;
+        self.product_access.validate()?;
         if self.outbox.batch_size == 0 {
             anyhow::bail!("outbox.batch_size must be >= 1");
         }
@@ -1671,7 +1674,12 @@ async fn main() -> ExitCode {
     // The worker rebuilds it (providers are stateless ZSTs + repos).
     let privacy_providers: ProviderRegistry = vec![
         std::sync::Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
-        std::sync::Arc::new(sanvi_product_access::adapters::ProductAccessPrivacyProvider::new()),
+        std::sync::Arc::new(
+            sanvi_product_access::adapters::ProductAccessPrivacyProvider::from_config(
+                &config.product_access,
+            )
+            .expect("product_access privacy provider construction"),
+        ),
         std::sync::Arc::new(
             sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
                 privacy_tx.clone(),

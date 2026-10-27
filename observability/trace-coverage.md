@@ -28,6 +28,7 @@ Rules:
 | access | roles.rs | 3 | 3 | yes | covered
 | access | seed_features.rs | 1 | 1 | no | covered
 | access | seed_roles.rs | 1 | 1 | yes | covered
+| accounting | ports.rs | 0 | 0 | yes | n/a
 | advertising | access_tokens.rs | 0 | 0 | yes | n/a
 | advertising | budget/alerts.rs | 2 | 2 | yes | covered
 | advertising | budget/caps.rs | 3 | 3 | yes | covered
@@ -112,7 +113,7 @@ Rules:
 | payments | lifecycle.rs | 0 | 0 | yes | n/a
 | payments | list_payments.rs | 2 | 2 | yes | covered
 | payments | list_payouts.rs | 1 | 1 | yes | covered
-| payments | refund.rs | 1 | 1 | yes | covered
+| payments | refund.rs | 2 | 2 | yes | covered
 | payments | registry.rs | 0 | 0 | no | n/a
 | payments | sync_connection.rs | 1 | 1 | no | covered
 | payments | tax_settings.rs | 1 | 1 | yes | covered

@@ -98,6 +98,16 @@ Rotation: deploy the new public key to ecommerce-service as the second
 `ECOMMERCE_IDENTITY_PUBLIC_KEYS` entry, switch the platform's seed and key id,
 then drop the old public key after the token lifetime has passed.
 
+## Personal data
+
+The platform's data-subject request pipelines (export and erasure) reach
+ecommerce-service through `ProductAccessPrivacyProvider`. Requests call the
+service's internal privacy routes (`/internal/v1/privacy/users/{id}/records` and
+`/internal/v1/privacy/users/{id}/erasure`) authenticated with the service key
+and a privacy-scoped delegation token (`aud: ecommerce-service/privacy`,
+`sub: user_id`, fresh `jti`). User-created records are exported under the
+`EcommerceAttribution` data class and anonymised across all tenants on erasure.
+
 ## Not done
 
 - Plans that include ecommerce (`ecommerce-starter`, bundle) and their

@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 use sanvi_kernel::{RoleId, TenantId};
 
-use super::delegation::{DelegationClaims, EntitlementView};
+use super::delegation::{DelegationClaims, EntitlementView, PrivacyClaims};
 use super::error::ProductAccessError;
 use super::forwarding::{ForwardRequest, ForwardResponse};
 use super::product::Product;
@@ -32,6 +32,7 @@ pub trait RolePermissions: Send + Sync {
 /// Signs delegation claims as a compact JWT.
 pub trait TokenSigner: Send + Sync {
     fn sign(&self, claims: &DelegationClaims) -> Result<String, ProductAccessError>;
+    fn sign_privacy(&self, claims: &PrivacyClaims) -> Result<String, ProductAccessError>;
 }
 
 /// Sends a request to a product service with the platform's credentials.

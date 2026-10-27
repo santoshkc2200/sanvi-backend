@@ -355,6 +355,7 @@ async fn main() -> ExitCode {
         let privacy_providers =
             sanvi_api::privacy_provider_registry(&sanvi_api::PrivacyProviderDeps {
                 media: config.media.clone(),
+                product_access: config.product_access.clone(),
                 tx: privacy_tx.clone(),
                 kratos_public_url: config.ory.kratos_public_url.clone(),
                 kratos_admin_url: config.ory.kratos_admin_url.clone(),

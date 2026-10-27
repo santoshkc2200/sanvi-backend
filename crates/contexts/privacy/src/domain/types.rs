@@ -564,6 +564,8 @@ pub enum DataClass {
     /// owner reference stored alongside them. The bytes live in
     /// `hitox-media-service`, not in this database.
     MediaAsset,
+    /// Store or product attribution created by a user in ecommerce-service.
+    EcommerceAttribution,
 }
 
 impl DataClass {
@@ -588,6 +590,7 @@ impl DataClass {
             "advertising_budget_cap" => Ok(Self::AdvertisingBudgetCap),
             "advertising_budget_alert" => Ok(Self::AdvertisingBudgetAlert),
             "media_asset" => Ok(Self::MediaAsset),
+            "ecommerce_attribution" => Ok(Self::EcommerceAttribution),
             other => Err(PrivacyError::InvalidDataClass(other.to_string())),
         }
     }
@@ -613,6 +616,7 @@ impl DataClass {
             Self::AdvertisingBudgetCap => "advertising_budget_cap",
             Self::AdvertisingBudgetAlert => "advertising_budget_alert",
             Self::MediaAsset => "media_asset",
+            Self::EcommerceAttribution => "ecommerce_attribution",
         }
     }
 }

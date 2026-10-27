@@ -1734,6 +1734,7 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
 /// drill subject with data only in the privacy ledger never touches them.
 pub struct PrivacyProviderDeps {
     pub media: sanvi_media::MediaConfig,
+    pub product_access: sanvi_product_access::ProductAccessConfig,
     pub tx: sanvi_persistence::TxManager,
     pub kratos_public_url: String,
     pub kratos_admin_url: String,
@@ -1755,7 +1756,12 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
     let tx = &deps.tx;
     vec![
         Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
-        Arc::new(sanvi_product_access::adapters::ProductAccessPrivacyProvider::new()),
+        Arc::new(
+            sanvi_product_access::adapters::ProductAccessPrivacyProvider::from_config(
+                &deps.product_access,
+            )
+            .expect("product_access privacy provider construction"),
+        ),
         Arc::new(
             sanvi_accounting::adapters::privacy_provider::AccountingPrivacyProvider::new(
                 tx.clone(),
