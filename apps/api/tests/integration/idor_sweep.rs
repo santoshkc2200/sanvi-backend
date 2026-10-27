@@ -1686,6 +1686,26 @@ const SHAPE_A_EXCLUSIONS: &[(&str, &str, &str)] = &[
         "/api/v1/tenant/ecommerce/{tail}",
         "the {tail} slot is a path into ecommerce-service, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
     ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce-imports/stores/{store_id}/connections/{provider}/callback",
+        "{store_id} names an ecommerce-service store, not a platform entity; the tenant comes from the session and ecommerce-connectors isolates connections and jobs by the token's tenant",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}",
+        "{store_id} names an ecommerce-service store, not a platform entity; the tenant comes from the session and ecommerce-connectors isolates connections and jobs by the token's tenant",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}",
+        "{store_id} names an ecommerce-service store, not a platform entity; the tenant comes from the session and ecommerce-connectors isolates connections and jobs by the token's tenant",
+    ),
+    (
+        "DELETE",
+        "/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}",
+        "{store_id} names an ecommerce-service store, not a platform entity; the tenant comes from the session and ecommerce-connectors isolates connections and jobs by the token's tenant",
+    ),
 ];
 
 #[test]
