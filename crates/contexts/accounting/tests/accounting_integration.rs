@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use sanvi_accounting::{
-    adapters::{PostgresAccountingStore, UnavailableVerifier},
+    adapters::{AuditDelivery, PostgresAccountingStore, UnavailableVerifier},
     application::{
         AccountingAccess, ActivateBook, Actor, AssignCommand, AssignPosting, CancelSwitch,
         CreateBook, GetBook, ListBooks, MarkSubmitted, Permission, ProviderVerifier,
@@ -1223,4 +1223,176 @@ async fn read_requires_read_permission() {
         .execute(harness.user)
         .await;
     assert_eq!(result.unwrap_err(), AccountingError::Forbidden);
+}
+
+#[tokio::test]
+async fn delivery_appends_each_command_once() {
+    let harness = Harness::new().await;
+    let request = RequestContext {
+        request_id: Some("req-1".into()),
+        ip: Some("127.0.0.1".parse().unwrap()),
+        user_agent: Some("test".into()),
+    };
+    let book = CreateBook(harness.services.clone())
+        .execute(harness.user, request.clone(), "main".into())
+        .await
+        .unwrap();
+    let book = RegisterConnection(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            register_cmd(3001, Provider::Freee),
+        )
+        .await
+        .unwrap();
+    let conn_id = book.connections()[0].id();
+    let starts_at = "2026-10-26T00:00:00Z".parse().unwrap();
+    let _book = ActivateBook(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            conn_id,
+            starts_at,
+        )
+        .await
+        .unwrap();
+
+    let writer = Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(test_ids()));
+    let transactions = TxManager::new(harness.db.app_pool(), test_ids());
+    let delivery = AuditDelivery::new(transactions.clone(), writer);
+
+    let delivered = delivery.deliver(100).await.unwrap();
+    assert_eq!(delivered, 3);
+
+    let delivered_again = delivery.deliver(100).await.unwrap();
+    assert_eq!(delivered_again, 0);
+
+    let verify = sanvi_audit::application::VerifyAuditChain::new(
+        transactions,
+        Arc::new(sanvi_audit::adapters::SqlxAuditReader::new()),
+        100,
+    );
+    let report = verify.execute().await.unwrap();
+    assert!(report.verified, "chain must verify: {:?}", report.first_mismatch);
+    assert_eq!(report.entries_checked, 3);
+}
+
+#[tokio::test]
+async fn concurrent_deliveries_do_not_duplicate() {
+    let harness = Harness::new().await;
+    let request = RequestContext {
+        request_id: Some("req-1".into()),
+        ip: Some("127.0.0.1".parse().unwrap()),
+        user_agent: Some("test".into()),
+    };
+    let book = CreateBook(harness.services.clone())
+        .execute(harness.user, request.clone(), "main".into())
+        .await
+        .unwrap();
+    let book = RegisterConnection(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            register_cmd(3001, Provider::Freee),
+        )
+        .await
+        .unwrap();
+    let conn1_id = book.connections()[0].id();
+    let starts_at = "2026-10-26T00:00:00Z".parse().unwrap();
+    let book = ActivateBook(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            conn1_id,
+            starts_at,
+        )
+        .await
+        .unwrap();
+    let book = RegisterConnection(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            register_cmd(3002, Provider::Freee),
+        )
+        .await
+        .unwrap();
+    let conn2_id = book.connections()[1].id();
+    let cutover_at = "2026-11-01T00:00:00Z".parse().unwrap();
+    let _book = ScheduleSwitch(harness.services.clone())
+        .execute(
+            harness.user,
+            request.clone(),
+            book.id(),
+            book.revision(),
+            conn2_id,
+            cutover_at,
+        )
+        .await
+        .unwrap();
+
+    let writer = Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(test_ids()));
+    let transactions = TxManager::new(harness.db.app_pool(), test_ids());
+    let delivery1 = Arc::new(AuditDelivery::new(transactions.clone(), writer.clone()));
+    let delivery2 = Arc::new(AuditDelivery::new(transactions.clone(), writer));
+
+    let d1 = delivery1.clone();
+    let d2 = delivery2.clone();
+    let (res1, res2) = tokio::join!(
+        d1.deliver(100),
+        d2.deliver(100),
+    );
+    let count1 = res1.unwrap();
+    let count2 = res2.unwrap();
+    assert_eq!(count1 + count2, 5);
+
+    let verify = sanvi_audit::application::VerifyAuditChain::new(
+        transactions,
+        Arc::new(sanvi_audit::adapters::SqlxAuditReader::new()),
+        100,
+    );
+    let report = verify.execute().await.unwrap();
+    assert!(report.verified, "chain must verify: {:?}", report.first_mismatch);
+    assert_eq!(report.entries_checked, 5);
+}
+
+#[tokio::test]
+async fn privacy_review_covers_audited_users() {
+    use sanvi_accounting::adapters::privacy_provider::AccountingPrivacyProvider;
+    use sanvi_privacy::domain::{EraseMode, PersonalDataProvider, PrivacyError, SubjectRef};
+
+    let harness = Harness::new().await;
+    let request = RequestContext::default();
+    let user_u = UserId::try_from(2001).unwrap();
+    let tenant_a = TenantId::try_from(1001).unwrap();
+    let actor_u = Actor::User {
+        tenant_id: tenant_a,
+        user_id: user_u,
+    };
+    let _book = CreateBook(harness.services.clone())
+        .execute(actor_u, request, "main".into())
+        .await
+        .unwrap();
+
+    let provider = AccountingPrivacyProvider::new(TxManager::new(harness.db.app_pool(), test_ids()));
+    let mut subject = SubjectRef::user(user_u);
+    subject.tenant_id = Some(tenant_a);
+
+    assert!(matches!(
+        provider.collect(&subject).await,
+        Err(PrivacyError::ProcessingPending(_))
+    ));
+    assert!(matches!(
+        provider.erase(&subject, EraseMode::Full).await,
+        Err(PrivacyError::ProcessingPending(_))
+    ));
 }

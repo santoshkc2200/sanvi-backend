@@ -1,11 +1,65 @@
-use sanvi_audit::{ActorType, AuditEntryData};
+use std::sync::Arc;
+
+use sanvi_audit::{ActorType, AuditEntryData, domain::AuditWriter};
 use sanvi_kernel::RawIdGenerator;
-use sanvi_persistence::ScopedTx;
+use sanvi_persistence::{ScopedTx, TxManager};
 
 use crate::{application::ports::AuditRecord, domain::AccountingError};
 
 fn storage(error: impl std::fmt::Display) -> AccountingError {
     AccountingError::Storage(error.to_string())
+}
+
+pub struct AuditDelivery {
+    transactions: TxManager,
+    writer: Arc<dyn AuditWriter>,
+}
+
+impl AuditDelivery {
+    pub fn new(transactions: TxManager, writer: Arc<dyn AuditWriter>) -> Self {
+        Self {
+            transactions,
+            writer,
+        }
+    }
+
+    pub async fn deliver(&self, limit: i64) -> Result<usize, AccountingError> {
+        let mut scope = self
+            .transactions
+            .begin_unscoped("deliver_accounting_audits", "accounting-worker")
+            .await
+            .map_err(storage)?;
+
+        struct PendingRow {
+            id: i64,
+            entry: serde_json::Value,
+        }
+
+        let pending = sqlx::query_as!(
+            PendingRow,
+            "SELECT id, entry FROM accounting.audit_commands WHERE delivered_at IS NULL ORDER BY created_at, id LIMIT $1 FOR UPDATE SKIP LOCKED",
+            limit
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+
+        let count = pending.len();
+        for row in pending {
+            let entry: AuditEntryData = serde_json::from_value(row.entry).map_err(storage)?;
+            self.writer.append(&mut scope, &entry).await.map_err(storage)?;
+            sqlx::query!(
+                "UPDATE accounting.audit_commands SET delivered_at = now() WHERE id = $1",
+                row.id
+            )
+            .execute(&mut **scope.tx_mut().as_inner())
+            .await
+            .map_err(storage)?;
+        }
+
+        scope.commit().await.map_err(storage)?;
+        Ok(count)
+    }
 }
 
 pub async fn record(

@@ -4271,6 +4271,7 @@ dependencies = [
  "prometheus",
  "redis",
  "sanvi-access",
+ "sanvi-accounting",
  "sanvi-advertising",
  "sanvi-archival",
  "sanvi-audit",
