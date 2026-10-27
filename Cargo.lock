@@ -3482,6 +3482,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "reqwest 0.12.28",
+ "sanvi-audit",
  "sanvi-crypto",
  "sanvi-kernel",
  "sanvi-messaging",

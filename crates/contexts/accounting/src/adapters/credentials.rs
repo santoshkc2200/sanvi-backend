@@ -13,7 +13,7 @@ use sanvi_persistence::{ScopedTx, TxManager};
 use serde::Serialize;
 
 use crate::{
-    application::ports::{CredentialChange, CredentialStore},
+    application::ports::{AuditRecord, CredentialChange, CredentialStore},
     domain::{
         AccountingError, BookId, ConnectionId, Credential, CredentialStatus, OAuthStateClaims,
         Secret, Tokens,
@@ -252,10 +252,12 @@ impl CredentialStore for PostgresCredentialStore {
         &self,
         tenant_id: TenantId,
         credential: Credential,
+        audit: AuditRecord,
     ) -> Result<(), AccountingError> {
         let mut scope = self.begin(tenant_id).await?;
         let dek = self.write(&mut scope, tenant_id, &credential).await?;
         self.append(&mut scope, tenant_id, &credential).await?;
+        crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
         scope.commit().await.map_err(storage)?;
         if let Ok(mut cache) = self.deks.lock() {
             cache.insert(tenant_id, dek);
@@ -268,6 +270,7 @@ impl CredentialStore for PostgresCredentialStore {
         tenant_id: TenantId,
         connection_id: ConnectionId,
         change: CredentialChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Credential, AccountingError> {
         let mut scope = self.begin(tenant_id).await?;
         let current = self.lock(&mut scope, tenant_id, connection_id).await?;
@@ -282,6 +285,9 @@ impl CredentialStore for PostgresCredentialStore {
             self.write(&mut scope, tenant_id, &next).await?;
             if next.status != previous.status {
                 self.append(&mut scope, tenant_id, &next).await?;
+                if let Some(audit) = audit {
+                    crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
+                }
             }
         }
         scope.commit().await.map_err(storage)?;

@@ -1,3 +1,4 @@
+pub mod audit;
 mod credentials;
 pub mod freee;
 mod postgres;

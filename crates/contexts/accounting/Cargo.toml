@@ -11,6 +11,7 @@ publish.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
+sanvi-audit.workspace = true
 sanvi-crypto.workspace = true
 sanvi-kernel.workspace = true
 sanvi-messaging.workspace = true

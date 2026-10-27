@@ -9,7 +9,7 @@ use sanvi_persistence::{ScopedTx, TxManager};
 use crate::{
     application::{
         AccountingStore, AssignCommand,
-        ports::{BookChange, PostingChange},
+        ports::{AuditRecord, BookChange, PostingChange},
     },
     domain::{
         AccountingError, AccountingEvent, Book, BookId, ConnectionId, Posting, PostingId,
@@ -45,6 +45,9 @@ impl PostgresAccountingStore {
     }
 
     /// Lock the book row; every mutation and assignment serializes on it.
+    /// `FOR NO KEY UPDATE` still excludes other lockers but admits the
+    /// `FOR KEY SHARE` that a foreign-key check takes, so a nested credential
+    /// transaction can insert rows referencing this book while it is held.
     async fn load(
         scope: &mut ScopedTx<'_>,
         tenant: TenantId,
@@ -52,7 +55,7 @@ impl PostgresAccountingStore {
     ) -> Result<Book, AccountingError> {
         let row = sqlx::query_as!(
             BookRow,
-            "SELECT document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+            "SELECT document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 AND id = $2 FOR NO KEY UPDATE",
             tenant.as_i64(), id.as_i64()
         ).fetch_optional(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?.ok_or(AccountingError::NotFound)?;
         Self::decode(row, tenant, id)
@@ -295,7 +298,12 @@ impl PostgresAccountingStore {
 
 #[async_trait]
 impl AccountingStore for PostgresAccountingStore {
-    async fn create(&self, book: Book, event: AccountingEvent) -> Result<Book, AccountingError> {
+    async fn create(
+        &self,
+        book: Book,
+        event: AccountingEvent,
+        audit: AuditRecord,
+    ) -> Result<Book, AccountingError> {
         let mut scope = self.begin(book.tenant_id()).await?;
         let document = serde_json::to_value(&book).map_err(storage)?;
         let inserted = sqlx::query!(
@@ -308,6 +316,7 @@ impl AccountingStore for PostgresAccountingStore {
             ));
         }
         self.append(&mut scope, book.tenant_id(), event).await?;
+        crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
         scope.commit().await.map_err(storage)?;
         Ok(book)
     }
@@ -325,6 +334,7 @@ impl AccountingStore for PostgresAccountingStore {
         book_id: BookId,
         revision: i64,
         change: BookChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Book, AccountingError> {
         let mut scope = self.begin(tenant_id).await?;
         let mut book = Self::load(&mut scope, tenant_id, book_id).await?;
@@ -340,6 +350,9 @@ impl AccountingStore for PostgresAccountingStore {
             tenant_id.as_i64(), book_id.as_i64(), book.revision(), document
         ).execute(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?;
         self.append(&mut scope, tenant_id, event).await?;
+        if let Some(audit) = audit {
+            crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
+        }
         scope.commit().await.map_err(storage)?;
         Ok(book)
     }
@@ -406,6 +419,7 @@ impl AccountingStore for PostgresAccountingStore {
         tenant_id: TenantId,
         posting_id: PostingId,
         change: PostingChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Posting, AccountingError> {
         let mut scope = self.begin(tenant_id).await?;
         let parent = sqlx::query!(
@@ -423,6 +437,12 @@ impl AccountingStore for PostgresAccountingStore {
             BookId::try_from(parent.book_id).map_err(storage)?,
         )
         .await?;
+        if audit
+            .as_ref()
+            .is_some_and(|audit| audit.book_id != book.id())
+        {
+            return Err(AccountingError::NotFound);
+        }
         let mut posting = Self::lock_posting(&mut scope, tenant_id, posting_id).await?;
         let applied = change(&mut posting)?;
         if applied {
@@ -468,6 +488,10 @@ impl AccountingStore for PostgresAccountingStore {
                 },
             )
             .await?;
+
+            if let Some(audit) = audit {
+                crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
+            }
         }
         scope.commit().await.map_err(storage)?;
         Ok(posting)

@@ -69,5 +69,6 @@
   "20261026000100_platform_postgres_jobs.sql": "maintenance",
   "20261026000200_accounting_destinations.sql": "rolling",
   "20261026000300_accounting_provider_credentials.sql": "rolling",
-  "20261027000100_ecommerce_retention_rule.sql": "rolling"
+  "20261027000100_ecommerce_retention_rule.sql": "rolling",
+  "20261027010000_accounting_audit_commands.sql": "rolling"
 }

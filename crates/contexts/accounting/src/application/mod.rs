@@ -16,8 +16,8 @@ pub use authorization::{
     StartAuthorization,
 };
 pub use ports::{
-    AccountingAccess, AccountingStore, Actor, AssignCommand, CredentialStore, Permission,
-    ProviderDirectory, ProviderOAuth, ProviderVerifier,
+    AccountingAccess, AccountingStore, Actor, AssignCommand, AuditRecord, CredentialStore,
+    Permission, ProviderDirectory, ProviderOAuth, ProviderVerifier, RequestContext,
 };
 
 pub struct Services {
@@ -59,12 +59,35 @@ fn to_micros(at: DateTime<Utc>) -> Result<DateTime<Utc>, AccountingError> {
         .ok_or(AccountingError::Invalid("timestamp is out of range"))
 }
 
+pub(crate) fn audit_record(
+    actor: Actor,
+    request: RequestContext,
+    book_id: BookId,
+    action: &'static str,
+    after: serde_json::Value,
+    now: DateTime<Utc>,
+) -> Result<AuditRecord, AccountingError> {
+    match actor {
+        Actor::User { tenant_id, user_id } => Ok(AuditRecord {
+            tenant_id,
+            user_id,
+            book_id,
+            action,
+            occurred_at: now,
+            after,
+            request,
+        }),
+        Actor::System { .. } => Err(AccountingError::Forbidden),
+    }
+}
+
 /// HTTP callers must obtain this actor from authenticated request context.
 pub struct CreateBook(pub Arc<Services>);
 impl CreateBook {
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         legal_entity_key: String,
     ) -> Result<Book, AccountingError> {
         self.0.authorize(actor, Permission::Manage).await?;
@@ -75,8 +98,20 @@ impl CreateBook {
             .map(BookId::from_snowflake)
             .map_err(|error| AccountingError::Storage(error.to_string()))?;
         let book = Book::new(id, actor.tenant_id(), legal_entity_key)?;
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book.id(),
+            "accounting.book.created",
+            serde_json::json!({
+                "book_id": book.id().to_string(),
+                "legal_entity_key": book.legal_entity_key(),
+            }),
+            now,
+        )?;
         let created = event(&book, "book_created");
-        self.0.store.create(book, created).await
+        self.0.store.create(book, created, audit).await
     }
 }
 
@@ -94,11 +129,27 @@ impl RegisterConnection {
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
         connection: Connection,
     ) -> Result<Book, AccountingError> {
         self.0.authorize(actor, Permission::Manage).await?;
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.connection.registered",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+                "connection_id": connection.id().to_string(),
+                "provider": connection.provider().as_str(),
+                "organization_id": connection.organization_id(),
+                "mappings": connection.mappings(),
+            }),
+            now,
+        )?;
         self.0
             .store
             .change(
@@ -111,6 +162,7 @@ impl RegisterConnection {
                         Ok(Some(event(book, "connection_registered")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -121,6 +173,7 @@ impl ActivateBook {
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
         connection_id: ConnectionId,
@@ -132,6 +185,19 @@ impl ActivateBook {
         if book.revision() != revision {
             return Err(AccountingError::StaleRevision);
         }
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.destination.activated",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+                "connection_id": connection_id.to_string(),
+                "starts_at": starts_at,
+            }),
+            now,
+        )?;
         let services = self.0.clone();
         self.0
             .store
@@ -150,6 +216,7 @@ impl ActivateBook {
                         Ok(Some(event(book, "destination_activated")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -160,6 +227,7 @@ impl ScheduleSwitch {
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
         connection_id: ConnectionId,
@@ -171,6 +239,19 @@ impl ScheduleSwitch {
         if book.revision() != revision {
             return Err(AccountingError::StaleRevision);
         }
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.switch.scheduled",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+                "connection_id": connection_id.to_string(),
+                "cutover_at": cutover_at,
+            }),
+            now,
+        )?;
         let services = self.0.clone();
         self.0
             .store
@@ -189,6 +270,7 @@ impl ScheduleSwitch {
                         Ok(Some(event(book, "switch_scheduled")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -199,11 +281,22 @@ impl CancelSwitch {
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
     ) -> Result<Book, AccountingError> {
         self.0.authorize(actor, Permission::Manage).await?;
         let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.switch.canceled",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+            }),
+            now,
+        )?;
         self.0
             .store
             .change(
@@ -216,6 +309,7 @@ impl CancelSwitch {
                         Ok(Some(event(book, "switch_canceled")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -262,6 +356,7 @@ impl MarkSubmitted {
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.submit(now)),
+                None,
             )
             .await
     }
@@ -284,6 +379,7 @@ impl RecordDelivery {
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.deliver(ext, now)),
+                None,
             )
             .await
     }
@@ -306,6 +402,7 @@ impl RecordFailure {
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.fail(reason, now)),
+                None,
             )
             .await
     }
@@ -316,6 +413,8 @@ impl ResolvePosting {
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
+        book_id: BookId,
         posting_id: PostingId,
         note: &str,
         external_record_id: Option<&str>,
@@ -328,12 +427,25 @@ impl ResolvePosting {
         let note = note.to_string();
         let ext = external_record_id.map(str::to_string);
         let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.posting.resolved",
+            serde_json::json!({
+                "posting_id": posting_id.to_string(),
+                "resolution_note": note,
+                "external_record_id": ext,
+            }),
+            now,
+        )?;
         self.0
             .store
             .transition(
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.resolve(note, ext, user_id, now)),
+                Some(audit),
             )
             .await
     }

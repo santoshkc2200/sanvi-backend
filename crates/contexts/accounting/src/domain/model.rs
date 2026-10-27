@@ -30,6 +30,16 @@ pub enum Provider {
     Xero,
 }
 
+impl Provider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Freee => "freee",
+            Self::MoneyForward => "money_forward",
+            Self::Xero => "xero",
+        }
+    }
+}
+
 /// Provider account mappings are immutable once a destination is used.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

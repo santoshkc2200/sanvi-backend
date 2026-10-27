@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+  "query": "SELECT document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 AND id = $2 FOR NO KEY UPDATE",
   "describe": {
     "columns": [
       {
@@ -49,5 +49,5 @@
       false
     ]
   },
-  "hash": "2bfe048f0785422f1c64056a7de12f3433f42e93161c6169fa759c9dfd4137b7"
+  "hash": "df9ae9449888462f876386e67dec3f1f9718dd859d67ee8d1706814b8ea584a1"
 }
