@@ -16,6 +16,7 @@ use sanvi_payments::PaymentsConfig;
 use sanvi_persistence::DatabaseConfig;
 use sanvi_platform_admin::PlatformAdminConfig;
 use sanvi_privacy::PrivacyConfig;
+use sanvi_product_access::ProductAccessConfig;
 use sanvi_telemetry::TelemetryConfig;
 use sanvi_tenancy::TenancyConfig;
 use sanvi_theming::ThemingConfig;
@@ -141,6 +142,8 @@ pub struct AppConfig {
     pub payments: PaymentsConfig,
     pub advertising: AdvertisingConfig,
     pub media: MediaConfig,
+    /// Product services behind the platform proxy (ecommerce first).
+    pub product_access: ProductAccessConfig,
     pub notification: NotificationConfig,
     /// Budget for each readiness probe.
     pub readiness_probe_secs: u64,
@@ -170,6 +173,7 @@ impl Default for AppConfig {
             payments: PaymentsConfig::default(),
             advertising: AdvertisingConfig::default(),
             media: MediaConfig::default(),
+            product_access: ProductAccessConfig::default(),
             notification: NotificationConfig::default(),
             readiness_probe_secs: 2,
         }
@@ -229,6 +233,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.media.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.product_access.validate() {
             problems.push(err.to_string());
         }
         if let Err(err) = self.notification.validate() {

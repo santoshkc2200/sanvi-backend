@@ -8,6 +8,7 @@
 pub mod compliance;
 pub mod config;
 pub mod openapi;
+pub mod product_access;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -1733,6 +1734,7 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
 /// drill subject with data only in the privacy ledger never touches them.
 pub struct PrivacyProviderDeps {
     pub media: sanvi_media::MediaConfig,
+    pub product_access: sanvi_product_access::ProductAccessConfig,
     pub tx: sanvi_persistence::TxManager,
     pub kratos_public_url: String,
     pub kratos_admin_url: String,
@@ -1754,6 +1756,12 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
     let tx = &deps.tx;
     vec![
         Arc::new(sanvi_system::adapters::SystemPrivacyProvider::new()),
+        Arc::new(
+            sanvi_product_access::adapters::ProductAccessPrivacyProvider::from_config(
+                &deps.product_access,
+            )
+            .expect("product_access privacy provider construction"),
+        ),
         Arc::new(
             sanvi_accounting::adapters::privacy_provider::AccountingPrivacyProvider::new(
                 tx.clone(),
@@ -3954,6 +3962,8 @@ pub fn build_app(
         degradation.clone(),
         access.tx_manager.clone(),
     );
+    let product_access_state =
+        product_access::build_product_access_state(&config.product_access, &access);
 
     // The billing context mounts its tenant routes inside the shared tenant
     // scope (a second scope on the same prefix would shadow the first).
@@ -4009,7 +4019,11 @@ pub fn build_app(
     // here (contrast with advertising, whose routes carry `/ads/...`
     // themselves and are `.configure()`'d directly).
     let tenant_scope = tenant_scope
-        .service(web::scope("/media").configure(media_routes::media_tenant_scope_routes));
+        .service(web::scope("/media").configure(media_routes::media_tenant_scope_routes))
+        // `/ecommerce/{tail}` forwards to ecommerce-service; unconfigured,
+        // every request answers 503 after the entitlement and permission
+        // checks.
+        .configure(sanvi_product_access::routes::product_access_tenant_scope_routes);
 
     let app = App::new()
         .app_data(web::Data::new(state))
@@ -4026,6 +4040,7 @@ pub fn build_app(
         .app_data(web::Data::new(audit.state.clone()))
         .app_data(web::Data::new(platform_admin.state.clone()))
         .app_data(web::Data::new(media_state))
+        .app_data(web::Data::new(product_access_state))
         .app_data(web::JsonConfig::default().limit(server_config.max_body_bytes))
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)

@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 230 (222 OpenAPI operations).
+Routes: 232 (224 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -194,6 +194,8 @@ Routes: 230 (222 OpenAPI operations).
 | GET | /api/v1/tenant/domains/{id}/instructions | crates/contexts/domains/src/adapters/http/handlers.rs::get_domain_instructions | tenant.domains.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/domains/{id}/promote | crates/contexts/domains/src/adapters/http/handlers.rs::promote_primary_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/domains/{id}/verify | crates/contexts/domains/src/adapters/http/handlers.rs::request_domain_verification | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/ecommerce/{tail} | crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get | exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/ecommerce/{tail} | crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post | exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/entitlements | crates/contexts/access/src/adapters/http/handlers.rs::list_tenant_entitlements | tenant.entitlement.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/invitations | crates/contexts/identity/src/adapters/http/handlers.rs::list_invitations | identity.member.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/invitations | crates/contexts/identity/src/adapters/http/handlers.rs::invite_member | identity.member.invite | CurrentTenant | global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.invitation) | OpenAPI |
@@ -264,11 +266,12 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
-| apps/api/src/compliance.rs | `91330c67b309976f45324271f659948801640e92ef63c0be45a6b63f1b870b77` |
-| apps/api/src/config.rs | `bc520742a7f19b3955ca7dc5d28dcf30e67d3fd26d169a649d37c6a6a5fb80f5` |
-| apps/api/src/lib.rs | `6e54fbbed859ab0c2aaaeb340f0b3fd55b53b1819b7072202365471db5d8508c` |
-| apps/api/src/main.rs | `19c408109f18f2ddaa6da5d321cd28298447a221f97daf73fb77c68beac4f235` |
-| apps/api/src/openapi.rs | `26482b049c09028292d618d0f855b92b21df05f4f48364d061a01e22702dbde3` |
+| apps/api/src/compliance.rs | `de0f3349df2f168f84f436d2a08897422d8be4c87a3ed5738d3bb739d7184835` |
+| apps/api/src/config.rs | `5ccb2a7826a2a925ff064b1df2ec65ba17e4009458d3c126f22dd92c2a7cc22b` |
+| apps/api/src/lib.rs | `67dc989b94c068302ac1004872168577c15061be23354fe6679cd0a47148234e` |
+| apps/api/src/main.rs | `064ccdcc233306b401129d20a9b0d99cccfa19ae14f6fb9ee34898e7f1ff7a69` |
+| apps/api/src/openapi.rs | `d84e488dac91285591596da6a4ec046cea5aacccb76e9478003ed5ea34ee61dc` |
+| apps/api/src/product_access.rs | `3bface823c60bc81cd8cc7f718e7f978e1a25f3cb073905aa5c7cf7f399c32f9` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
 | crates/contexts/access/src/adapters/http/mod.rs | `b9718a471597d11f5cb3af76a91715c20de69b6126a9073e23d5463c201bd007` |
@@ -327,6 +330,11 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/privacy/src/adapters/http/mod.rs | `6fe9359c7e703a10bce690b16a93bc317e74bf812827592e6aa55e404724a641` |
 | crates/contexts/privacy/src/adapters/http/routes.rs | `3d883aa6513bbb09591e421d0301bda9eb3728c09953dfa6a9d97bf37e7e5f1f` |
 | crates/contexts/privacy/src/adapters/http/validation.rs | `fb3aeb342e2e6c0ce70c94006132337f17a1a26b292f26d6c7e3c1fe0bbfd94a` |
+| crates/contexts/product_access/src/adapters/http/handlers.rs | `ee6ee76725979a0160f49b08bf83cf3e74d4f358104706fbd229deb339cfd7b6` |
+| crates/contexts/product_access/src/adapters/http/mod.rs | `750aff11924e9f4681127f91d31e179d17c2ffde818479bf54af6ef24a6633b2` |
+| crates/contexts/product_access/src/adapters/http/routes.rs | `20c2148f0a71781638fdc88762f6697bcb2df666f29803de07fd967bfb108126` |
+| crates/contexts/product_access/src/application/mod.rs | `6eacb8d3dd3ecdeefa1f42d2d7543fd74a259ede69887c020db4b963a846d2a0` |
+| crates/contexts/product_access/src/domain/delegation.rs | `e34e2501e7d6928e78789d240e63f72702c29e20b2be48574b2de5021828b128` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `e960b2e416f59193f64a5dcdf9838e5dd518dcd0b0e086829c2d925ecb5ec8f7` |
 | crates/contexts/system/src/adapters/http/mod.rs | `c7451cf2f661b8ab7dbd686218fb0d25b6875aa2cc3dce21970630c2e46016f0` |
 | crates/contexts/system/src/adapters/http/routes.rs | `fe6b66da6a7728ec4490dcb503ae1b4be92d3529003b49e21bec965af69e67da` |

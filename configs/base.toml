@@ -623,6 +623,21 @@ fx_timeout_secs = 5
 base_url = ""
 service_api_key = ""
 
+[product_access]
+# Delegation signing key for product services: a 32-byte Ed25519 seed in hex
+# (SANVI__PRODUCT_ACCESS__SIGNING_KEY_SEED) and its key id. Product services
+# trust the matching public key (`kid:hex`). Environment-only, never committed.
+signing_key_id = ""
+signing_key_seed = ""
+
+[product_access.ecommerce]
+# ecommerce-service root (`/v1/...` is appended) and the bearer key it
+# accepts from the platform (SANVI__PRODUCT_ACCESS__ECOMMERCE__SERVICE_KEY).
+# Empty is valid: every /api/v1/tenant/ecommerce/* request then answers 503
+# after the entitlement and permission checks.
+base_url = ""
+service_key = ""
+
 [notification]
 # All values are environment-only (SANVI__NOTIFICATION__BASE_URL,
 # SANVI__NOTIFICATION__SEND_API_KEY, SANVI__NOTIFICATION__READ_API_KEY),

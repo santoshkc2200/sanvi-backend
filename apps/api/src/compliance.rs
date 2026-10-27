@@ -103,6 +103,7 @@ impl ComplianceHarness {
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(ids.clone()));
         let registry = privacy_provider_registry(&PrivacyProviderDeps {
             media: sanvi_media::MediaConfig::default(),
+            product_access: sanvi_product_access::ProductAccessConfig::default(),
             tx: tx.clone(),
             kratos_public_url: "http://127.0.0.1:4433".to_string(),
             kratos_admin_url: "http://127.0.0.1:4434".to_string(),

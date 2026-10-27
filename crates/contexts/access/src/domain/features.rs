@@ -369,6 +369,27 @@ pub const FEATURE_SEEDS: &[FeatureSeed] = &[
         default_limit: None,
         visibility: Visibility::Public,
     },
+    // --- products -------------------------------------------------------------
+    // Sold separately: off until a plan or an operator override grants it.
+    // The proxy refuses every ecommerce request without it.
+    FeatureSeed {
+        key: "products.ecommerce.enabled",
+        name: "Sanvi Ecommerce",
+        kind: FeatureKind::Boolean,
+        default_enabled: false,
+        default_limit: None,
+        visibility: Visibility::Public,
+    },
+    // A cap, not a per-period meter: ecommerce-service counts active stores
+    // against the limit delegated in each request.
+    FeatureSeed {
+        key: "ecommerce.stores.max",
+        name: "Ecommerce Stores",
+        kind: FeatureKind::Quota,
+        default_enabled: true,
+        default_limit: Some(1),
+        visibility: Visibility::Public,
+    },
 ];
 
 /// Validate the seeds: unique keys, parseable keys, and kind-consistent

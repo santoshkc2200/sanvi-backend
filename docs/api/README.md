@@ -15,6 +15,7 @@ Generated from the Rust OpenAPI contract. Journey examples show en-US/USD and ja
 - [Payments](generated/payments.md)
 - [Platform Admin](generated/platform_admin.md)
 - [Privacy](generated/privacy.md)
+- [Product Access](generated/product_access.md)
 - [System](generated/system.md)
 - [Tenancy](generated/tenancy.md)
 - [Theming](generated/theming.md)

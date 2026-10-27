@@ -613,6 +613,7 @@ impl DrainRefundAudits {
         }
     }
 
+    #[tracing::instrument(name = "payments.drain_refund_audits", skip_all)]
     pub async fn execute(&self, limit: u32) -> Result<usize, PaymentsError> {
         let mut scope = self
             .tx_manager

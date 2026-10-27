@@ -418,6 +418,7 @@ components:
       - advertising_budget_cap
       - advertising_budget_alert
       - media_asset
+      - ecommerce_attribution
       type: string
     DecideAppealOutput:
       properties:

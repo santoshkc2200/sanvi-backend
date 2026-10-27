@@ -23,7 +23,7 @@ cd "$(dirname "$0")/.."
 
 FORBIDDEN=(sqlx actix_web actix-web reqwest hyper tokio_postgres diesel redis aws_sdk stripe sanvi_persistence sanvi-persistence)
 
-CONTEXTS="access accounting advertising audit billing domains identity localization media notifications payments platform_admin privacy system tenancy theming"
+CONTEXTS="access accounting advertising audit billing domains identity localization media notifications payments platform_admin privacy product_access system tenancy theming"
 
 is_context() {
     local needle="$1"
@@ -164,6 +164,7 @@ is_accepted_context_ownership_exception() {
         crates/contexts/notifications/src/adapters/privacy_provider.rs|\
         crates/contexts/payments/src/adapters/privacy_provider.rs|\
         crates/contexts/platform_admin/src/adapters/privacy_provider.rs|\
+        crates/contexts/product_access/src/adapters/privacy_provider.rs|\
         crates/contexts/system/src/adapters/privacy_provider.rs|\
         crates/contexts/tenancy/src/adapters/privacy_provider.rs|\
         crates/contexts/theming/src/adapters/privacy_provider.rs)

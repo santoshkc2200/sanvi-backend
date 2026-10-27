@@ -3565,6 +3565,7 @@ dependencies = [
  "sanvi-persistence",
  "sanvi-platform-admin",
  "sanvi-privacy",
+ "sanvi-product-access",
  "sanvi-resilience",
  "sanvi-system",
  "sanvi-telemetry",
@@ -4094,6 +4095,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "sanvi-product-access"
+version = "0.10.0"
+dependencies = [
+ "actix-web",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "reqwest 0.12.28",
+ "ring",
+ "sanvi-http",
+ "sanvi-kernel",
+ "sanvi-privacy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
 name = "sanvi-resilience"
 version = "0.10.0"
 dependencies = [
@@ -4262,6 +4287,7 @@ dependencies = [
  "sanvi-persistence",
  "sanvi-platform-admin",
  "sanvi-privacy",
+ "sanvi-product-access",
  "sanvi-system",
  "sanvi-telemetry",
  "sanvi-tenancy",
