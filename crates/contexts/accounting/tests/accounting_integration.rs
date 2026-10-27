@@ -9,8 +9,7 @@ use sanvi_accounting::{
         AccountingAccess, ActivateBook, Actor, AssignCommand, AssignPosting, CancelSwitch,
         CreateBook, GetBook, ListBooks, MarkSubmitted, Permission, ProviderVerifier,
         RecordDelivery, RecordFailure, RegisterConnection, RegisterConnectionCommand,
-        ResolvePosting, ScheduleSwitch, Services,
-        ports::RequestContext,
+        ResolvePosting, ScheduleSwitch, Services, ports::RequestContext,
     },
     domain::{
         AccountMappings, AccountingError, Book, Connection, CredentialStatus, PostingStatus,
@@ -235,10 +234,7 @@ async fn late_event_after_cutover_routes_to_previous_binding() {
         .execute(system, cmd_4002)
         .await
         .unwrap();
-    assert_eq!(
-        post_4002.connection_id,
-        conn1_id
-    );
+    assert_eq!(post_4002.connection_id, conn1_id);
 
     let mut cmd_4003 = harness.command(&book, 4003);
     cmd_4003.accounting_at = now + TimeDelta::minutes(90);
@@ -246,10 +242,7 @@ async fn late_event_after_cutover_routes_to_previous_binding() {
         .execute(system, cmd_4003)
         .await
         .unwrap();
-    assert_eq!(
-        post_4003.connection_id,
-        conn2_id
-    );
+    assert_eq!(post_4003.connection_id, conn2_id);
 
     let replay = AssignPosting(service.clone())
         .execute(system, original.clone())
@@ -422,7 +415,12 @@ async fn provider_verification_and_authorization_fail_closed() {
         .execute(harness.user, book.id())
         .await
         .unwrap();
-    assert!(unchanged.book.active_connection(harness.clock.now()).is_none());
+    assert!(
+        unchanged
+            .book
+            .active_connection(harness.clock.now())
+            .is_none()
+    );
     let denied = Arc::new(Services {
         store: harness.services.store.clone(),
         access: Arc::new(TestAccess(false)),
@@ -720,14 +718,8 @@ async fn concurrent_assignments_at_cutover_route_by_date() {
         assign1.execute(harness.system, cmd1),
         assign2.execute(harness.system, cmd2)
     );
-    assert_eq!(
-        res1.unwrap().connection_id,
-        conn1_id
-    );
-    assert_eq!(
-        res2.unwrap().connection_id,
-        conn2_id
-    );
+    assert_eq!(res1.unwrap().connection_id, conn1_id);
+    assert_eq!(res2.unwrap().connection_id, conn2_id);
 }
 
 #[tokio::test]
@@ -1219,9 +1211,7 @@ async fn read_requires_read_permission() {
         ids: harness.services.ids.clone(),
     });
 
-    let result = ListBooks(restricted)
-        .execute(harness.user)
-        .await;
+    let result = ListBooks(restricted).execute(harness.user).await;
     assert_eq!(result.unwrap_err(), AccountingError::Forbidden);
 }
 
@@ -1277,7 +1267,11 @@ async fn delivery_appends_each_command_once() {
         100,
     );
     let report = verify.execute().await.unwrap();
-    assert!(report.verified, "chain must verify: {:?}", report.first_mismatch);
+    assert!(
+        report.verified,
+        "chain must verify: {:?}",
+        report.first_mismatch
+    );
     assert_eq!(report.entries_checked, 3);
 }
 
@@ -1347,10 +1341,7 @@ async fn concurrent_deliveries_do_not_duplicate() {
 
     let d1 = delivery1.clone();
     let d2 = delivery2.clone();
-    let (res1, res2) = tokio::join!(
-        d1.deliver(100),
-        d2.deliver(100),
-    );
+    let (res1, res2) = tokio::join!(d1.deliver(100), d2.deliver(100),);
     let count1 = res1.unwrap();
     let count2 = res2.unwrap();
     assert_eq!(count1 + count2, 5);
@@ -1361,7 +1352,11 @@ async fn concurrent_deliveries_do_not_duplicate() {
         100,
     );
     let report = verify.execute().await.unwrap();
-    assert!(report.verified, "chain must verify: {:?}", report.first_mismatch);
+    assert!(
+        report.verified,
+        "chain must verify: {:?}",
+        report.first_mismatch
+    );
     assert_eq!(report.entries_checked, 5);
 }
 
@@ -1383,7 +1378,8 @@ async fn privacy_review_covers_audited_users() {
         .await
         .unwrap();
 
-    let provider = AccountingPrivacyProvider::new(TxManager::new(harness.db.app_pool(), test_ids()));
+    let provider =
+        AccountingPrivacyProvider::new(TxManager::new(harness.db.app_pool(), test_ids()));
     let mut subject = SubjectRef::user(user_u);
     subject.tenant_id = Some(tenant_a);
 

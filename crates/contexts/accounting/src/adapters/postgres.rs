@@ -383,8 +383,9 @@ impl AccountingStore for PostgresAccountingStore {
         let mut statuses = Vec::with_capacity(rows.len());
         for row in rows {
             let connection_id = ConnectionId::try_from(row.connection_id).map_err(storage)?;
-            let status = CredentialStatus::parse(&row.status)
-                .ok_or_else(|| AccountingError::Storage(format!("unknown credential status: {}", row.status)))?;
+            let status = CredentialStatus::parse(&row.status).ok_or_else(|| {
+                AccountingError::Storage(format!("unknown credential status: {}", row.status))
+            })?;
             statuses.push((connection_id, status));
         }
         scope.commit().await.map_err(storage)?;

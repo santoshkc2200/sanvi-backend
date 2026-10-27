@@ -47,7 +47,10 @@ impl AuditDelivery {
         let count = pending.len();
         for row in pending {
             let entry: AuditEntryData = serde_json::from_value(row.entry).map_err(storage)?;
-            self.writer.append(&mut scope, &entry).await.map_err(storage)?;
+            self.writer
+                .append(&mut scope, &entry)
+                .await
+                .map_err(storage)?;
             sqlx::query!(
                 "UPDATE accounting.audit_commands SET delivered_at = now() WHERE id = $1",
                 row.id

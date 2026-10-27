@@ -16,8 +16,7 @@ use sanvi_accounting::{
         AccessTokens, AccountingAccess, ActivateBook, Actor, Authorization, CompleteAuthorization,
         CreateBook, CredentialVerifier, Permission, ProviderDirectory, ProviderOAuth,
         RegisterConnection, RegisterConnectionCommand, RevokeAuthorization, ScheduleSwitch,
-        Services, StartAuthorization,
-        ports::RequestContext,
+        Services, StartAuthorization, ports::RequestContext,
     },
     domain::{
         AccountMappings, AccountingError, Book, ConnectionId, Provider, ProviderCatalog, Secret,
@@ -239,12 +238,7 @@ impl Harness {
 
     async fn start(&self, book: &Book, connection: ConnectionId) -> String {
         let url = StartAuthorization(self.authorization.clone())
-            .execute(
-                self.user,
-                RequestContext::default(),
-                book.id(),
-                connection,
-            )
+            .execute(self.user, RequestContext::default(), book.id(), connection)
             .await
             .unwrap();
         url.split_once("state=").unwrap().1.to_string()
@@ -528,17 +522,14 @@ async fn only_connections_that_no_longer_route_can_be_revoked() {
         Err(AccountingError::Conflict(_))
     ));
     revoke
-        .execute(
-            harness.user,
-            RequestContext::default(),
-            book.id(),
-            second,
-        )
+        .execute(harness.user, RequestContext::default(), book.id(), second)
         .await
         .unwrap();
     assert_eq!(harness.status(second).await.as_deref(), Some("revoked"));
     assert_eq!(
-        harness.events("accounting.credential_revoked", second).await,
+        harness
+            .events("accounting.credential_revoked", second)
+            .await,
         1
     );
     let cleared: bool = sqlx::query_scalar(
@@ -667,10 +658,7 @@ async fn routing_change_serializes_with_revocation(schedule: bool) {
         revoke.await.unwrap(),
         Err(AccountingError::Conflict(_) | AccountingError::StaleRevision)
     ));
-    assert_eq!(
-        harness.status(target).await.as_deref(),
-        Some("active")
-    );
+    assert_eq!(harness.status(target).await.as_deref(), Some("active"));
     assert!(harness.freee.revoked.lock().unwrap().is_empty());
 }
 
