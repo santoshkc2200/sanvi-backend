@@ -479,7 +479,8 @@ async fn malformed_store_ids_are_refused_before_forwarding() {
     grants.permissions.push("ecommerce.import.read".into());
     let app = app!(state(&format!("http://{address}"), grants));
 
-    for bad_id in ["0", "007", "-1", "%31"] {
+    // `%30` is decoded by actix before validation and then refused as `0`.
+    for bad_id in ["0", "007", "-1", "%30"] {
         let response = test::call_service(
             &app,
             test::TestRequest::get()

@@ -272,15 +272,7 @@ async fn proxy_import(
     tail: String,
     body: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let raw_store_id = request
-        .uri()
-        .path()
-        .split("/ecommerce-imports/stores/")
-        .nth(1)
-        .and_then(|s| s.split('/').next())
-        .unwrap_or(&store_id);
-    let store = DestinationStoreId::parse(raw_store_id).map_err(problem)?;
-    let _ = DestinationStoreId::parse(&store_id).map_err(problem)?;
+    let store = DestinationStoreId::parse(&store_id).map_err(problem)?;
     let path = ProductPath::parse(&tail).map_err(problem)?;
     let headers = request.headers().iter().filter_map(|(name, value)| {
         value
