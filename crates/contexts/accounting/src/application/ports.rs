@@ -10,7 +10,7 @@ use crate::domain::{
     TokenGrant,
 };
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RequestContext {
     pub request_id: Option<String>,
     pub ip: Option<IpAddr>,

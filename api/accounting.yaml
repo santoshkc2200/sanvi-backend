@@ -324,6 +324,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing tenant.accounting.manage permission or accounting.freee entitlement
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
         '503':
           content:
             application/problem+json:
@@ -350,6 +356,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Missing tenant.accounting.read permission or accounting.freee entitlement
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service or provider temporarily unavailable
       tags:
       - accounting
     post:
@@ -390,6 +408,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Legal entity key already exists for this tenant
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service or provider temporarily unavailable
       tags:
       - accounting
   /api/v1/tenant/accounting/books/{book_id}:
@@ -426,6 +456,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Book not found
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service or provider temporarily unavailable
       tags:
       - accounting
   /api/v1/tenant/accounting/books/{book_id}/activation:
@@ -492,6 +534,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: provider verification failed
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
         '503':
           content:
             application/problem+json:
@@ -558,6 +606,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale If-Match revision, or conflicting provider connection
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service or provider temporarily unavailable
       tags:
       - accounting
   /api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization:
@@ -601,6 +661,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The connection is an active, scheduled or draining destination
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
         '503':
           content:
             application/problem+json:
@@ -647,6 +713,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Book or connection not found
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
         '503':
           content:
             application/problem+json:
@@ -707,6 +779,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Stale If-Match revision, or no switch is scheduled
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service or provider temporarily unavailable
       tags:
       - accounting
     put:
@@ -772,11 +856,94 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: provider verification failed
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Accounting service rejected platform credentials or returned an invalid response
         '503':
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: freee is not configured
+      tags:
+      - accounting
+  /internal/accounting/audit:
+    post:
+      operationId: ingest_accounting_audit
+      parameters:
+      - description: Request-bound HMAC delegation; audience sanvi-platform-accounting-audit, purpose audit
+        in: header
+        name: x-accounting-delegation
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+        required: true
+      responses:
+        '204':
+          description: Audit command durably appended or already received
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid service delegation
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid Accounting audit scope
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Audit command ID reused with different content
+      tags:
+      - accounting
+  /internal/accounting/events:
+    post:
+      operationId: ingest_accounting_event
+      parameters:
+      - description: Request-bound HMAC delegation; audience sanvi-platform-accounting-audit, purpose event
+        in: header
+        name: x-accounting-delegation
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+        required: true
+      responses:
+        '204':
+          description: Event durably accepted or already received
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid service delegation
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid Accounting event scope
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Event ID conflicts with an existing event
+      summary: Receive service-owned outbox events without a distributed transaction.
       tags:
       - accounting

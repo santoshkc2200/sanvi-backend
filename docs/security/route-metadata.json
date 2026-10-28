@@ -3300,12 +3300,13 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/accounting/books",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::list_accounting_books",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::list_accounting_books",
    "permission": "tenant.accounting.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3316,12 +3317,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/accounting/books",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::create_accounting_book",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::create_accounting_book",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3332,12 +3334,13 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/accounting/books/{book_id}",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::get_accounting_book",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::get_accounting_book",
    "permission": "tenant.accounting.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3348,12 +3351,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/accounting/books/{book_id}/connections",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::register_accounting_connection",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::register_accounting_connection",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3364,12 +3368,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::start_accounting_authorization",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::start_accounting_authorization",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3380,12 +3385,13 @@
   {
    "method": "DELETE",
    "path": "/api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::revoke_accounting_authorization",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::revoke_accounting_authorization",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3396,12 +3402,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/accounting/authorization/callback",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::complete_accounting_authorization",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::complete_accounting_authorization",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3412,12 +3419,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/accounting/books/{book_id}/activation",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::activate_accounting_book",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::activate_accounting_book",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3428,12 +3436,13 @@
   {
    "method": "PUT",
    "path": "/api/v1/tenant/accounting/books/{book_id}/switch",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::schedule_accounting_switch",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::schedule_accounting_switch",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3444,12 +3453,13 @@
   {
    "method": "DELETE",
    "path": "/api/v1/tenant/accounting/books/{book_id}/switch",
-   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::cancel_accounting_switch",
+   "handler": "crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::cancel_accounting_switch",
    "permission": "tenant.accounting.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/accounting/src/adapters/http/routes.rs"
+    "crates/contexts/accounting/src/adapters/http/routes.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3520,6 +3530,32 @@
     "source": "apps/api/src/lib.rs",
     "expression": "web::scope(\"/api/v1/tenant\")"
    }
+  },
+  {
+   "method": "POST",
+   "path": "/internal/accounting/audit",
+   "handler": "apps/api/src/accounting.rs::ingest_audit",
+   "permission": "exempt:request-bound-accounting-service-delegation",
+   "tenant": "signed Accounting scope; platform transaction",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "apps/api/src/accounting.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs",
+    "apps/api/src/lib.rs"
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/internal/accounting/events",
+   "handler": "apps/api/src/accounting.rs::ingest_event",
+   "permission": "exempt:request-bound-accounting-service-delegation",
+   "tenant": "signed Accounting scope; platform transaction",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "apps/api/src/accounting.rs",
+    "crates/contexts/accounting/src/adapters/remote.rs",
+    "apps/api/src/lib.rs"
+   ]
   }
  ]
 }

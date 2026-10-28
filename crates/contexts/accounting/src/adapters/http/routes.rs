@@ -1,7 +1,7 @@
 use actix_web::{http::Method, web};
 use sanvi_http::{PermissionMap, require_permission};
 
-use super::handlers::{
+use super::gateway_handlers::{
     activate_accounting_book, cancel_accounting_switch, complete_accounting_authorization,
     create_accounting_book, get_accounting_book, list_accounting_books,
     register_accounting_connection, revoke_accounting_authorization, schedule_accounting_switch,

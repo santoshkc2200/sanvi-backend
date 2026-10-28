@@ -353,3 +353,21 @@ phase that touches the payment path.
 ---
 *Refresh history: v0 phase 02 (T1–T21), extended phase 05 (T31–T37), phase 09 (T38–T45); v1
 2026-10-02 restructured per trust boundary with resolvable evidence (TASK-024 11.5g, T46–T62).*
+
+### Accounting service boundary (2026-10-28)
+
+The Accounting gateway signs verified tenant/session identity, granted Accounting
+permissions and original audit context. Delegations expire after thirty seconds and
+bind audience, purpose, method, exact path/query, body, Content-Type and If-Match.
+The service accepts no browser credentials or unsigned tenant headers. Fresh MFA is
+checked on both sides. Separate OAuth/delegation keys prevent purpose confusion,
+and each link direction has its own key, so neither side can mint the other's
+tokens. Every delegation carries a unique ID the service accepts once, so a
+captured request cannot be replayed inside its lifetime; up to five seconds of
+clock drift is tolerated.
+Transport requires TLS or a private authenticated network; redirects are disabled.
+Audit/event retries use transactional receipts at the platform, keyed by audit
+command ID and event ID. Accounting owns
+credentials and encrypted tenant keys in its own database. Privacy review failures
+block completion. Cutover freezes old writers; no simultaneous embedded and remote
+writers are supported. See docs/accounting-service-extraction.md.

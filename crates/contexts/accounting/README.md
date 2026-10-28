@@ -1,5 +1,9 @@
 # Accounting integration foundation
 
+Runtime ownership has moved to the separate `accounting-service` repository and
+its own PostgreSQL database. This platform copy supplies transport contracts and
+legacy regression fixtures. See [the extraction guide](../../../docs/accounting-service-extraction.md).
+
 This bounded context stores tenant accounting destinations, controlled
 provider cutovers, and freee OAuth consent, and serves them through an
 authenticated tenant API. It does not implement accounting books, stock
@@ -88,16 +92,17 @@ and every one requires the `accounting.freee` entitlement. The contract is
 Book responses carry the revision as `ETag`; mutations of an existing book
 require `If-Match` (missing or malformed is 400, stale is 409). Every `Manage`
 mutation writes an `accounting.audit_commands` row in its transaction; the
-worker job `accounting.audit_commands` appends them to the audit chain.
+Accounting service scheduler delivers them to the platform audit chain through
+the signed internal endpoint, with transactional receipts for retry deduplication.
 
 ## Composition boundary
 
-`apps/api/src/accounting.rs` composes the context: an `Authorizer`-backed
-`AccountingAccess` and, when the freee client ID and secret, state secret and
-token KEK are all deployed, `FreeeClient`, `PostgresCredentialStore` and
-`CredentialVerifier`. With any of them empty, reads and book/connection
-registration work, consent routes answer 503 and verification stays
-`UnavailableVerifier`, so activation and switching fail closed.
+The production platform API mounts gateway handlers and forwards verified identity
+and permissions through request-bound delegations. It never constructs embedded
+Accounting state. The service's `apps/accounting/src/wiring.rs` owns provider clients,
+credentials and persistence. With provider secrets absent, consent and verification
+remain unavailable. `apps/api/src/accounting.rs` retains the old builder only for
+regression fixtures and pre-cutover rollback; no configuration selects it at runtime.
 
 `application::Services` requires an `AccountingAccess`, `ProviderVerifier`, store,
 clock, and ID generator. Every use case checks authorization via `Services::authorize`

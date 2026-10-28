@@ -34,3 +34,14 @@ Required consumers depend on retained PostgreSQL events and inbox history for
 recovery. Configure and scrape the worker's private management endpoint and
 follow [event recovery](../docs/runbooks/event-recovery.md) before introducing
 outbox/stream retention or manual archival.
+
+## Accounting service
+
+Accounting deploys independently from the sibling accounting-service repository.
+Apply the platform Accounting audit/event receipt migrations before starting its
+delivery scheduler. Configure SANVI__ACCOUNTING_SERVICE__BASE_URL and the dedicated
+SANVI__ACCOUNTING_SERVICE__SIGNING_SECRET and the distinct
+SANVI__ACCOUNTING_SERVICE__INBOUND_SECRET through the secret manager, then enable
+features.accounting after the data cutover. Do not put provider credentials in the
+platform environment. Follow docs/accounting-service-extraction.md and the service's
+docs/cutover.md; no data copy or routing change is automatic.
