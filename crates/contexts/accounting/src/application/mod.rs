@@ -101,6 +101,7 @@ pub(crate) fn audit_record(
 /// HTTP callers must obtain this actor from authenticated request context.
 pub struct CreateBook(pub Arc<Services>);
 impl CreateBook {
+    #[tracing::instrument(name = "accounting.create_book", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -134,6 +135,7 @@ impl CreateBook {
 
 pub struct ListBooks(pub Arc<Services>);
 impl ListBooks {
+    #[tracing::instrument(name = "accounting.list_books", skip_all)]
     pub async fn execute(&self, actor: Actor) -> Result<Vec<BookSummary>, AccountingError> {
         self.0.authorize(actor, Permission::Read).await?;
         let books = self.0.store.list(actor.tenant_id()).await?;
@@ -152,6 +154,7 @@ impl ListBooks {
 
 pub struct GetBook(pub Arc<Services>);
 impl GetBook {
+    #[tracing::instrument(name = "accounting.get_book", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -171,6 +174,7 @@ impl GetBook {
 /// Register metadata only. This does not assert that OAuth succeeded.
 pub struct RegisterConnection(pub Arc<Services>);
 impl RegisterConnection {
+    #[tracing::instrument(name = "accounting.register_connection", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -227,6 +231,7 @@ impl RegisterConnection {
 
 pub struct ActivateBook(pub Arc<Services>);
 impl ActivateBook {
+    #[tracing::instrument(name = "accounting.activate_book", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -281,6 +286,7 @@ impl ActivateBook {
 
 pub struct ScheduleSwitch(pub Arc<Services>);
 impl ScheduleSwitch {
+    #[tracing::instrument(name = "accounting.schedule_switch", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -335,6 +341,7 @@ impl ScheduleSwitch {
 
 pub struct CancelSwitch(pub Arc<Services>);
 impl CancelSwitch {
+    #[tracing::instrument(name = "accounting.cancel_switch", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -374,6 +381,7 @@ impl CancelSwitch {
 
 pub struct AssignPosting(pub Arc<Services>);
 impl AssignPosting {
+    #[tracing::instrument(name = "accounting.assign_posting", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -400,6 +408,7 @@ impl AssignPosting {
 
 pub struct MarkSubmitted(pub Arc<Services>);
 impl MarkSubmitted {
+    #[tracing::instrument(name = "accounting.mark_submitted", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -421,6 +430,7 @@ impl MarkSubmitted {
 
 pub struct RecordDelivery(pub Arc<Services>);
 impl RecordDelivery {
+    #[tracing::instrument(name = "accounting.record_delivery", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -444,6 +454,7 @@ impl RecordDelivery {
 
 pub struct RecordFailure(pub Arc<Services>);
 impl RecordFailure {
+    #[tracing::instrument(name = "accounting.record_failure", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -467,6 +478,7 @@ impl RecordFailure {
 
 pub struct ResolvePosting(pub Arc<Services>);
 impl ResolvePosting {
+    #[tracing::instrument(name = "accounting.resolve_posting", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
