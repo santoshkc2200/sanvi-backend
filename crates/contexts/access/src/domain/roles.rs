@@ -259,6 +259,9 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.product.manage",
             "ecommerce.import.read",
             "ecommerce.import.manage",
+            "ecommerce.inventory.read",
+            "ecommerce.inventory.manage",
+            "ecommerce.stock.reserve",
         ],
     },
     RoleSeed {
@@ -301,6 +304,9 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.product.manage",
             "ecommerce.import.read",
             "ecommerce.import.manage",
+            "ecommerce.inventory.read",
+            "ecommerce.inventory.manage",
+            "ecommerce.stock.reserve",
         ],
     },
     RoleSeed {
@@ -451,6 +457,29 @@ mod tests {
         let admin = seed_by_key("tenant_admin").unwrap().permissions;
         let member = seed_by_key("tenant_member").unwrap().permissions;
         for permission in ["ecommerce.import.read", "ecommerce.import.manage"] {
+            assert!(owner.contains(&permission), "owner needs {permission}");
+            assert!(admin.contains(&permission), "admin needs {permission}");
+            assert!(
+                !member.contains(&permission),
+                "member must not have {permission}"
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_permissions_are_reachable_from_admin_and_owner_roles_only() {
+        let owner = seed_by_key("tenant_owner").unwrap().permissions;
+        let admin = seed_by_key("tenant_admin").unwrap().permissions;
+        let member = seed_by_key("tenant_member").unwrap().permissions;
+        for permission in [
+            "ecommerce.inventory.read",
+            "ecommerce.inventory.manage",
+            "ecommerce.stock.reserve",
+        ] {
+            assert!(
+                crate::domain::permissions::lookup(permission).is_some(),
+                "{permission} must be registered"
+            );
             assert!(owner.contains(&permission), "owner needs {permission}");
             assert!(admin.contains(&permission), "admin needs {permission}");
             assert!(

@@ -555,6 +555,21 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Connect Shopify or Amazon accounts and run, confirm, cancel or retry catalog imports",
     },
+    PermissionDef {
+        key: "ecommerce.inventory.read",
+        scope: PermissionScope::Tenant,
+        description: "List stock locations and read stock levels in the tenant's ecommerce stores",
+    },
+    PermissionDef {
+        key: "ecommerce.inventory.manage",
+        scope: PermissionScope::Tenant,
+        description: "Create stock locations and set on-hand and safety stock in the tenant's ecommerce stores",
+    },
+    PermissionDef {
+        key: "ecommerce.stock.reserve",
+        scope: PermissionScope::Tenant,
+        description: "Reserve, read, commit and release stock reservations in the tenant's ecommerce stores",
+    },
 ];
 
 /// Registry lookup.
