@@ -102,6 +102,7 @@ impl ComplianceHarness {
         let audit: Arc<dyn sanvi_audit::domain::AuditWriter> =
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(ids.clone()));
         let registry = privacy_provider_registry(&PrivacyProviderDeps {
+            accounting_service: Default::default(),
             media: sanvi_media::MediaConfig::default(),
             product_access: sanvi_product_access::ProductAccessConfig::default(),
             tx: tx.clone(),

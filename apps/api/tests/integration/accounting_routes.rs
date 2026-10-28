@@ -190,6 +190,8 @@ impl ProviderOAuth for FakeFreee {
 enum Composition {
     /// `features.accounting` off: no state, no routes.
     Off,
+    Remote,
+    RemoteUnavailable,
     /// Flag on, freee secrets empty: the production fail-closed wiring.
     WithoutSecrets,
     /// Flag on, consent backed by [`FakeFreee`]; verification still
@@ -221,7 +223,7 @@ fn accounting_state(
     let transactions = TxManager::new(pool.clone(), ids.clone());
     let clock: Arc<dyn sanvi_kernel::Clock> = Arc::new(sanvi_kernel::SystemClock);
     match composition {
-        Composition::Off => None,
+        Composition::Off | Composition::Remote | Composition::RemoteUnavailable => None,
         Composition::WithoutSecrets => Some(
             build_accounting_state(
                 &AccountingConfig::default(),
@@ -288,7 +290,38 @@ async fn build(
 > {
     let kratos = spawn_stub(kratos_stub).await;
     let keto = spawn_stub(keto_stub).await;
-    let config = config(kratos, keto, composition);
+    let mut config = config(kratos, keto, composition);
+    if matches!(
+        composition,
+        Composition::Remote | Composition::RemoteUnavailable
+    ) {
+        const KEY: &str = "accounting-gateway-integration-key-0123456789";
+        config.accounting_service.signing_secret = sanvi_telemetry::Redacted::new(KEY.into());
+        config.accounting_service.inbound_secret =
+            sanvi_telemetry::Redacted::new("accounting-gateway-delivery-key-9876543210".into());
+        config.accounting_service.base_url = if composition == Composition::RemoteUnavailable {
+            "http://127.0.0.1:1".into()
+        } else {
+            spawn_stub(|method, target, headers| async move {
+                use sanvi_accounting::adapters::remote::{Delegation, RequestBinding, TENANT_AUDIENCE};
+                let token = headers.get("x-accounting-delegation").map(String::as_str).unwrap_or_default();
+                let claims = Delegation::verify(KEY, token, TENANT_AUDIENCE, "tenant", &RequestBinding {
+                    method: &method, target: &target, body: b"",
+                    content_type: headers.get("content-type").map(String::as_str).unwrap_or_default(),
+                    if_match: headers.get("if-match").map(String::as_str).unwrap_or_default(),
+                });
+                match claims {
+                    Ok(claims) => (200, "application/json", serde_json::to_vec(&json!({
+                        "tenant": claims.tenant.unwrap().tenant_id.to_string(),
+                        "user": claims.subject.unwrap().user_id.to_string(), "permission": claims.permission,
+                        "target": target, "cookie_forwarded": headers.contains_key("cookie"),
+                        "authorization_forwarded": headers.contains_key("authorization"),
+                    })).unwrap()),
+                    Err(_) => (401, "application/json", b"{}".to_vec()),
+                }
+            }).await
+        };
+    }
     let metrics = MetricsRegistry::prometheus_only();
     let build_info = BuildInfo::new(
         "0.1.0-test".into(),
@@ -1011,4 +1044,195 @@ async fn responses_never_contain_tokens() {
             );
         }
     }
+}
+
+#[actix_web::test]
+async fn remote_gateway_preserves_platform_security_and_delegates_only_verified_identity() {
+    let (_db, app) = app!(Composition::Remote);
+    let reply = Request::new("GET", format!("{BOOKS}?limit=10"))
+        .send(&app)
+        .await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(reply.json()["tenant"], TENANT.to_string());
+    assert_eq!(reply.json()["user"], OWNER.to_string());
+    assert_eq!(reply.json()["permission"], "tenant.accounting.read");
+    assert_eq!(reply.json()["target"], format!("{BOOKS}?limit=10"));
+    assert_eq!(reply.json()["cookie_forwarded"], false);
+    assert_eq!(reply.json()["authorization_forwarded"], false);
+    let reply = Request::new("GET", BOOKS)
+        .persona(&MEMBER_FRESH)
+        .send(&app)
+        .await;
+    assert_eq!(reply.status, 403);
+    let reply = Request::new("GET", BOOKS)
+        .host(UNENTITLED_HOST)
+        .send(&app)
+        .await;
+    assert_eq!(reply.status, 403);
+    let reply = Request::new("POST", format!("{BOOKS}/1/connections/2/authorization"))
+        .persona(&OWNER_STALE)
+        .send(&app)
+        .await;
+    assert_eq!(reply.status, 403);
+}
+
+#[actix_web::test]
+async fn remote_outage_fails_closed_after_platform_checks() {
+    let (_db, app) = app!(Composition::RemoteUnavailable);
+    let reply = Request::new("GET", BOOKS).send(&app).await;
+    assert_eq!(reply.status, 503);
+    let reply = Request::new("GET", BOOKS)
+        .persona(&MEMBER_FRESH)
+        .send(&app)
+        .await;
+    assert_eq!(reply.status, 403);
+}
+
+#[actix_web::test]
+async fn remote_audit_and_event_retries_commit_one_platform_effect() {
+    use sanvi_accounting::adapters::remote::{
+        AUDIT_AUDIENCE, AuditCommand, DELEGATION_HEADER, Delegation, RequestBinding,
+    };
+    const SECRET: &str = "accounting-ingestion-secret-0123456789";
+    let db = sanvi_testsupport::test_db().await;
+    let ids = sanvi_testsupport::test_ids();
+    let state = sanvi_api::accounting::AuditIngestState {
+        secret: sanvi_telemetry::Redacted::new(SECRET.into()),
+        transactions: TxManager::new(db.app_pool(), ids.clone()),
+        writer: Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(ids)),
+    };
+    let app = aw_test::init_service(
+        actix_web::App::new()
+            .app_data(actix_web::web::Data::new(state))
+            .route(
+                "/internal/accounting/audit",
+                actix_web::web::post().to(sanvi_api::accounting::ingest_audit),
+            )
+            .route(
+                "/internal/accounting/events",
+                actix_web::web::post().to(sanvi_api::accounting::ingest_event),
+            ),
+    )
+    .await;
+    let entry = sanvi_audit::AuditEntryData {
+        occurred_at: Utc::now(),
+        actor_type: sanvi_audit::ActorType::User,
+        actor_id: Some(sanvi_kernel::UserId::try_from(OWNER).unwrap()),
+        on_behalf_of: None,
+        tenant_id: Some(sanvi_kernel::TenantId::try_from(TENANT).unwrap()),
+        action: "accounting.test".into(),
+        resource_type: Some("accounting_book".into()),
+        resource_id: Some("123".into()),
+        before: None,
+        after: Some(json!({"revision":1})),
+        request_id: Some("remote-request".into()),
+        ip: None,
+        user_agent: None,
+    };
+    for (path, purpose, body) in [
+        (
+            "/internal/accounting/audit",
+            "audit",
+            serde_json::to_vec(&AuditCommand {
+                id: 919_100_001,
+                entry: entry.clone(),
+            })
+            .unwrap(),
+        ),
+        (
+            "/internal/accounting/events",
+            "event",
+            serde_json::to_vec(&sanvi_messaging::OutboxRecord {
+                id: sanvi_kernel::EventId::try_from(919_000_001).unwrap(),
+                aggregate: "accounting.book".into(),
+                aggregate_id: sanvi_kernel::SnowflakeId::try_from(123).unwrap(),
+                event_type: "accounting.created".into(),
+                payload: json!({"book_id":"123"}),
+                metadata: json!({}),
+                occurred_at: Utc::now(),
+                published_at: None,
+                attempts: 0,
+            })
+            .unwrap(),
+        ),
+    ] {
+        let claims = Delegation::new(
+            AUDIT_AUDIENCE,
+            purpose,
+            &RequestBinding::json("POST", path, &body),
+        );
+        let token = sanvi_crypto::sign(SECRET.as_bytes(), &claims);
+        for _ in 0..2 {
+            let request = aw_test::TestRequest::post()
+                .uri(path)
+                .insert_header(("content-type", "application/json"))
+                .insert_header((DELEGATION_HEADER, token.clone()))
+                .set_payload(body.clone())
+                .to_request();
+            let response = aw_test::call_service(&app, request).await;
+            let status = response.status().as_u16();
+            let body = aw_test::read_body(response).await;
+            assert_eq!(status, 204, "{path}: {}", String::from_utf8_lossy(&body));
+        }
+        let request = aw_test::TestRequest::post()
+            .uri(path)
+            .insert_header(("content-type", "application/json"))
+            .insert_header((DELEGATION_HEADER, "invalid"))
+            .set_payload(body)
+            .to_request();
+        assert_eq!(
+            aw_test::call_service(&app, request).await.status().as_u16(),
+            401
+        );
+    }
+    // Receipts key on the command ID: an identical entry under a new ID is a new
+    // audit record, and a reused ID with different content is refused.
+    let send_audit = |command: AuditCommand| {
+        let body = serde_json::to_vec(&command).unwrap();
+        let claims = Delegation::new(
+            AUDIT_AUDIENCE,
+            "audit",
+            &RequestBinding::json("POST", "/internal/accounting/audit", &body),
+        );
+        aw_test::TestRequest::post()
+            .uri("/internal/accounting/audit")
+            .insert_header(("content-type", "application/json"))
+            .insert_header((
+                DELEGATION_HEADER,
+                sanvi_crypto::sign(SECRET.as_bytes(), &claims),
+            ))
+            .set_payload(body)
+            .to_request()
+    };
+    let twin = send_audit(AuditCommand {
+        id: 919_100_002,
+        entry: entry.clone(),
+    });
+    assert_eq!(
+        aw_test::call_service(&app, twin).await.status().as_u16(),
+        204
+    );
+    let mut altered = entry;
+    altered.request_id = Some("other-request".into());
+    let reused = send_audit(AuditCommand {
+        id: 919_100_001,
+        entry: altered,
+    });
+    assert_eq!(
+        aw_test::call_service(&app, reused).await.status().as_u16(),
+        409
+    );
+    let admin = db.admin_pool().await;
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit.entries WHERE action = 'accounting.test'")
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM platform.outbox WHERE id = 919000001")
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    assert_eq!(audits, 2);
+    assert_eq!(events, 1);
 }

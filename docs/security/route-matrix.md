@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 246 (238 OpenAPI operations).
+Routes: 248 (240 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -129,16 +129,16 @@ Routes: 246 (238 OpenAPI operations).
 | GET | /api/v1/system/health | crates/contexts/system/src/adapters/http/handlers.rs::health | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | GET | /api/v1/system/ready | crates/contexts/system/src/adapters/http/handlers.rs::ready | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | GET | /api/v1/system/version | crates/contexts/system/src/adapters/http/handlers.rs::version | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
-| POST | /api/v1/tenant/accounting/authorization/callback | crates/contexts/accounting/src/adapters/http/handlers.rs::complete_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/accounting/books | crates/contexts/accounting/src/adapters/http/handlers.rs::list_accounting_books | tenant.accounting.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/accounting/books | crates/contexts/accounting/src/adapters/http/handlers.rs::create_accounting_book | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/accounting/books/{book_id} | crates/contexts/accounting/src/adapters/http/handlers.rs::get_accounting_book | tenant.accounting.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/accounting/books/{book_id}/activation | crates/contexts/accounting/src/adapters/http/handlers.rs::activate_accounting_book | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/accounting/books/{book_id}/connections | crates/contexts/accounting/src/adapters/http/handlers.rs::register_accounting_connection | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| DELETE | /api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization | crates/contexts/accounting/src/adapters/http/handlers.rs::revoke_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization | crates/contexts/accounting/src/adapters/http/handlers.rs::start_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| DELETE | /api/v1/tenant/accounting/books/{book_id}/switch | crates/contexts/accounting/src/adapters/http/handlers.rs::cancel_accounting_switch | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| PUT | /api/v1/tenant/accounting/books/{book_id}/switch | crates/contexts/accounting/src/adapters/http/handlers.rs::schedule_accounting_switch | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/authorization/callback | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::complete_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/accounting/books | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::list_accounting_books | tenant.accounting.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::create_accounting_book | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/accounting/books/{book_id} | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::get_accounting_book | tenant.accounting.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books/{book_id}/activation | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::activate_accounting_book | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books/{book_id}/connections | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::register_accounting_connection | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| DELETE | /api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::revoke_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::start_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| DELETE | /api/v1/tenant/accounting/books/{book_id}/switch | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::cancel_accounting_switch | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| PUT | /api/v1/tenant/accounting/books/{book_id}/switch | crates/contexts/accounting/src/adapters/http/gateway_handlers.rs::schedule_accounting_switch | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/ads/audiences | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::list_audiences | advertising.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/ads/audiences | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::create_audience | advertising.campaign.write | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/ads/audiences/{id}/refresh | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::refresh_audience | advertising.campaign.write | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -263,6 +263,8 @@ Routes: 246 (238 OpenAPI operations).
 | GET | /api/v1/tenant/themes/available | crates/contexts/theming/src/adapters/http/handlers.rs::list_available_themes | tenant.theming.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/usage | crates/contexts/tenancy/src/adapters/http/handlers.rs::get_usage | tenancy.settings.read | CurrentTenant | global-config-dependent+tenant-optional + commercial tenant/credential counting | OpenAPI |
 | GET | /healthz | crates/contexts/system/src/adapters/http/handlers.rs::healthz | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
+| POST | /internal/accounting/audit | apps/api/src/accounting.rs::ingest_audit | exempt:request-bound-accounting-service-delegation | signed Accounting scope; platform transaction | global-config-dependent | OpenAPI |
+| POST | /internal/accounting/events | apps/api/src/accounting.rs::ingest_event | exempt:request-bound-accounting-service-delegation | signed Accounting scope; platform transaction | global-config-dependent | OpenAPI |
 | POST | /internal/kratos/login | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_login | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
 | POST | /internal/kratos/logout | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_logout | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
 | POST | /internal/kratos/registration | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent + shadow per-IP abuse quota (server.abuse.signup) | internal webhook |
@@ -280,22 +282,24 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
-| apps/api/src/accounting.rs | `3ef1a6b87b6692aa9abe03f473dd88c3d5d48e36aeaf2e9a4f3635061be4d172` |
-| apps/api/src/compliance.rs | `de0f3349df2f168f84f436d2a08897422d8be4c87a3ed5738d3bb739d7184835` |
-| apps/api/src/config.rs | `1866ef983dfd9ce413eea8b7f52151359dd3c2b688daaf2b8e35fb9db42a82e5` |
-| apps/api/src/lib.rs | `aef6de129a31122063bfb29a29db75a6098f36ccb850a74476a79b3a9ef3129a` |
-| apps/api/src/main.rs | `05373c887a3675238c2410a62db628509e5b4f24c9ad8a93651395a170281c8b` |
-| apps/api/src/openapi.rs | `48a9930a1ab901b07525f901590641e6eca796d33d854316b57df89a80b1b8bf` |
+| apps/api/src/accounting.rs | `e0c2bc7492884400eb4779b6228229d433f9829068cd993477d6bcdbbe83312c` |
+| apps/api/src/compliance.rs | `fd223847e35429d4cb2985fbdfb3c9271e87dbe4ef4affd5326c7a30dd3efa05` |
+| apps/api/src/config.rs | `42c00efaea9759f26f7eee1926eeabdb0285fc829367944a8f9bc59e7c47f079` |
+| apps/api/src/lib.rs | `ca04124a48520783f3e7060fa4a1e91bda32400e2c7915ba6e0204bde290691a` |
+| apps/api/src/main.rs | `233016abb97975e5dac4e70a9e81a72dd1bca23a23be344e9f1ef625207efce8` |
+| apps/api/src/openapi.rs | `d216aece9bbe43b6d98734f7443cd39e373f9561e847dd57418804bd3ffe89d5` |
 | apps/api/src/product_access.rs | `b680883b3bae7b8e4fefa24419fd7445cb86417d4378243ded6b9f4d93f7121a` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
 | crates/contexts/access/src/adapters/http/mod.rs | `b9718a471597d11f5cb3af76a91715c20de69b6126a9073e23d5463c201bd007` |
 | crates/contexts/access/src/adapters/http/routes.rs | `80ed3de5efb15df047a8f16782cee9773db4d8be3f35da5bdff9e783aa19505c` |
 | crates/contexts/access/src/adapters/http/validation.rs | `2f1d49c29d3667ab7066afbad3767c838ea358187a3a012f8024bf577ca7d0a8` |
-| crates/contexts/accounting/src/adapters/http/handlers.rs | `ce5eb64dbd11df132d608fdcd3f39d279a31f56c244105d13b7bc61f1d33aec2` |
-| crates/contexts/accounting/src/adapters/http/mod.rs | `9e3a7bf53068548f2117947cac4d2519541fdf9d66acca79c95f9cf7bb678372` |
-| crates/contexts/accounting/src/adapters/http/routes.rs | `8b6bcfbc99212cb93b2ca56a8f4e3b670ff0b7b2d219718c8cf13240fb185dde` |
+| crates/contexts/accounting/src/adapters/http/gateway_handlers.rs | `8d7c6eebb30192b11f2eb9a5a1588216d7f53b7a6ba73df2a3918c20700a4458` |
+| crates/contexts/accounting/src/adapters/http/handlers.rs | `f2a254d9b338fbd63bb7786361bb2050857dc51bc43489abd92731494b982267` |
+| crates/contexts/accounting/src/adapters/http/mod.rs | `c7f584dea9e753aec9bc2681957cc041a3ec5f9d3ff3ecf6900fae04b71b5205` |
+| crates/contexts/accounting/src/adapters/http/routes.rs | `7397075d67953820deca884f8380337155cc107629b536660cef9dccded238f1` |
 | crates/contexts/accounting/src/adapters/http/state.rs | `c52ff12463250c3458fcaba1e948ebafb3153a1e73c1207b503cdced7dc1c7cc` |
+| crates/contexts/accounting/src/adapters/remote.rs | `22e2c6727464367ffe8ff244a5a9f5c1aaeb9073f3d6ada4655f5b1db961b9f1` |
 | crates/contexts/advertising/src/adapters/http/handlers.rs | `cd54f596bb2fdcf97615e61af5a31293306d18911f13a66fadc8bdb46e26f374` |
 | crates/contexts/advertising/src/adapters/http/mod.rs | `ffede5d48c9c71cb0210209c6561d8e9caa69e7b3d079948bb4882eb1709e8d0` |
 | crates/contexts/advertising/src/adapters/http/routes.rs | `3452d1f14ce42e698112c0889872484aa72b7b30905a204dc3a9eb4d5379d225` |

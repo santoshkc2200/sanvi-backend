@@ -679,3 +679,10 @@ send_quota_window_secs = 3600
 # TASK-026 counts continuously; enforcement rolls out separately.
 rate_limits = false
 quotas = false
+
+# Accounting is independently deployed and owns provider credentials.
+# Set the two keys only through SANVI__ACCOUNTING_SERVICE__SIGNING_SECRET (signs
+# requests to the service) and SANVI__ACCOUNTING_SERVICE__INBOUND_SECRET (verifies
+# the service's audit/event deliveries). They must differ.
+[accounting_service]
+base_url = ""

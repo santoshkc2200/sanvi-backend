@@ -1734,6 +1734,7 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
 /// Stripe when the erased subject actually has rows in its context, so a
 /// drill subject with data only in the privacy ledger never touches them.
 pub struct PrivacyProviderDeps {
+    pub accounting_service: sanvi_accounting::adapters::remote::ServiceConfig,
     pub media: sanvi_media::MediaConfig,
     pub product_access: sanvi_product_access::ProductAccessConfig,
     pub tx: sanvi_persistence::TxManager,
@@ -1764,9 +1765,10 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
             .expect("product_access privacy provider construction"),
         ),
         Arc::new(
-            sanvi_accounting::adapters::privacy_provider::AccountingPrivacyProvider::new(
-                tx.clone(),
-            ),
+            sanvi_accounting::adapters::privacy_provider::RemoteAccountingPrivacyProvider::new(
+                &deps.accounting_service,
+            )
+            .expect("validated Accounting service configuration"),
         ),
         Arc::new(
             sanvi_tenancy::adapters::privacy_provider::TenancyPrivacyProvider::new(
@@ -4018,11 +4020,7 @@ pub fn build_app(
         tenant_scope
     };
     let tenant_scope = if config.features.accounting {
-        match &accounting {
-            Some(_) => tenant_scope
-                .configure(sanvi_accounting::adapters::http::accounting_tenant_scope_routes),
-            None => tenant_scope,
-        }
+        tenant_scope.configure(sanvi_accounting::adapters::http::accounting_tenant_scope_routes)
     } else {
         tenant_scope
     };
@@ -4053,6 +4051,17 @@ pub fn build_app(
         .app_data(web::Data::new(platform_admin.state.clone()))
         .app_data(web::Data::new(media_state))
         .app_data(web::Data::new(product_access_state))
+        .app_data(web::Data::new(sanvi_accounting::adapters::remote::GatewayState {
+            remote: sanvi_accounting::adapters::remote::RemoteClient::new(&config.accounting_service)
+                .expect("validated Accounting service configuration"),
+            access: Arc::new(accounting::AuthorizerAccess(access.authorizer.clone())),
+        }))
+        .app_data(web::Data::new(accounting::AuditIngestState {
+            secret: config.accounting_service.inbound_secret.clone(),
+            transactions: access.tx_manager.clone(),
+            writer: audit.writer.clone(),
+        }))
+        .configure(accounting::internal_routes)
         .app_data(web::JsonConfig::default().limit(server_config.max_body_bytes))
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)

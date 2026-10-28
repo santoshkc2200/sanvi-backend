@@ -22,3 +22,5 @@ impl crate::application::ProviderVerifier for UnavailableVerifier {
         Err(crate::domain::AccountingError::VerificationUnavailable)
     }
 }
+
+pub mod remote;
