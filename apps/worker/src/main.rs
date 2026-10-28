@@ -738,6 +738,10 @@ pub struct FeaturesConfig {
     /// `advertising`.
     #[serde(default)]
     pub archival: bool,
+    /// Accounting integration: gates the audit delivery job and provider integrations.
+    /// Default-off until staged rollout.
+    #[serde(default)]
+    pub accounting: bool,
 }
 
 /// Why this process is not sending notifications, if it is not.
@@ -761,6 +765,7 @@ impl Default for FeaturesConfig {
             notifications: default_true(),
             advertising: false,
             archival: false,
+            accounting: false,
         }
     }
 }
@@ -2208,7 +2213,7 @@ async fn main() -> ExitCode {
             None
         };
 
-    let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
+    let mut jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
         Arc::new(FnJob::new(
             "payments.refund_audits",
             Duration::from_secs(5),
@@ -3352,6 +3357,25 @@ async fn main() -> ExitCode {
             },
         )),
     ];
+
+    if config.features.accounting {
+        let drain = Arc::new(sanvi_accounting::adapters::AuditDelivery::new(
+            tx_manager.clone(),
+            audit_writer.clone(),
+        ));
+        jobs.push(Arc::new(FnJob::new(
+            "accounting.audit_commands",
+            Duration::from_secs(5),
+            move || {
+                let drain = drain.clone();
+                Box::pin(async move {
+                    drain.deliver(100).await?;
+                    Ok(())
+                })
+            },
+        )));
+    }
+
     let scheduler = Scheduler::new(
         tx_manager.clone(),
         format!("worker-{}", uuid::Uuid::now_v7()),
@@ -3670,6 +3694,7 @@ mod config_tests {
             archival: false,
             notifications: false,
             advertising: false,
+            accounting: false,
         };
         // Both the Lane A consumers and the Lane B export mail read this one
         // decision, so the flag is a real rollback switch for the worker and

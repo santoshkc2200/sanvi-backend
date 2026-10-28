@@ -5,6 +5,7 @@
 //! `main.rs` is a thin binary: read config → init telemetry → connect
 //! infrastructure → inject adapters into use cases → serve.
 
+pub mod accounting;
 pub mod compliance;
 pub mod config;
 pub mod openapi;
@@ -3928,6 +3929,7 @@ pub fn build_app(
     domains: Option<DomainsWiring>,
     payments: Option<sanvi_payments::adapters::http::PaymentsState>,
     advertising: Option<sanvi_advertising::adapters::http::AdvertisingState>,
+    accounting: Option<sanvi_accounting::adapters::http::AccountingState>,
     redis: Option<redis::aio::ConnectionManager>,
     ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
     degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
@@ -3945,6 +3947,7 @@ pub fn build_app(
     > + 'static,
 > {
     let server_config = config.server.clone();
+    let _ = accounting;
 
     let state = AppState {
         build_info: system.build_info.execute(),
@@ -4009,6 +4012,15 @@ pub fn build_app(
             Some(_) => tenant_scope
                 .configure(advertising_routes::advertising_tenant_scope_routes)
                 .configure(advertising_routes::tracking_tenant_routes),
+            None => tenant_scope,
+        }
+    } else {
+        tenant_scope
+    };
+    let tenant_scope = if config.features.accounting {
+        match &accounting {
+            Some(_) => tenant_scope
+                .configure(sanvi_accounting::adapters::http::accounting_tenant_scope_routes),
             None => tenant_scope,
         }
     } else {
@@ -4091,6 +4103,11 @@ pub fn build_app(
         Some(state) => app
             .app_data(web::Data::new(state))
             .configure(advertising_routes::advertising_platform_routes),
+        None => app,
+    };
+
+    let app = match accounting {
+        Some(state) => app.app_data(web::Data::new(state)),
         None => app,
     };
 

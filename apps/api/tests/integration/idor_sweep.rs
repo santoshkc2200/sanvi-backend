@@ -51,6 +51,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
 
+use sanvi_accounting::domain::{AccountMappings, Book, BookId, Connection, ConnectionId, Provider};
+use sanvi_api::accounting::build_accounting_state;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsTenantLookupAdapter, FallbackGuideTranslator,
     IdentityDependencies, PlatformAdminDependencies, TenantCatalogAdapter, build_access_state,
@@ -65,6 +67,8 @@ use sanvi_privacy::domain::{
 };
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
+
+use super::support::{StubReply, query_param, spawn_stub};
 
 // ---------------------------------------------------------------------------
 // Fixed identities. The 910_231_xxx range is owned by this suite; nothing
@@ -92,6 +96,8 @@ const PAYMENT: i64 = 910_231_112;
 const DOMAIN: i64 = 910_231_120;
 const ORDER: i64 = 910_231_121;
 const INVITATION: i64 = 910_231_122;
+const BOOK: i64 = 910_231_130;
+const BOOK_CONNECTION: i64 = 910_231_131;
 
 /// Substituted for every entity-id slot in the twin probe of sweep 2: an
 /// id that exists nowhere.
@@ -192,6 +198,8 @@ struct Seeded {
     order: i64,
     invitation: i64,
     member_b: i64,
+    book: i64,
+    book_connection: i64,
     media_asset: &'static str,
 }
 
@@ -213,6 +221,8 @@ impl Default for Seeded {
             order: ORDER,
             invitation: INVITATION,
             member_b: MEMBER_B,
+            book: BOOK,
+            book_connection: BOOK_CONNECTION,
             media_asset: "idor-asset-b",
         }
     }
@@ -238,6 +248,8 @@ impl Seeded {
             order: UNKNOWN_ID_ID,
             invitation: UNKNOWN_ID_ID,
             member_b: UNKNOWN_ID_ID,
+            book: UNKNOWN_ID_ID,
+            book_connection: UNKNOWN_ID_ID,
             media_asset: "idor-unknown-asset",
         }
     }
@@ -268,6 +280,8 @@ fn entity_id(path: &str, slot: &str, seeded: &Seeded) -> Option<String> {
         (p, "ad_group_id") if p.contains("/ads/") => seeded.ad_group,
         (p, "ad_id") if p.contains("/ads/") => seeded.ad,
         (p, "connection_id") if p.contains("/ads/connections") => seeded.ad_connection,
+        (p, "book_id") if p.contains("/accounting/") => seeded.book,
+        (p, "connection_id") if p.contains("/accounting/") => seeded.book_connection,
         (p, "creative_id") if p.contains("/ads/creatives") => seeded.creative,
         (p, "id") if p.contains("/ads/audiences") => seeded.audience,
         (p, "id") if p.contains("/ads/conversions") => seeded.conversion,
@@ -452,6 +466,28 @@ fn body_for(method: &str, pattern: &str) -> Option<Value> {
         "/api/v1/tenant/localization/overrides" => {
             Some(json!([{"key": "idor.sweep", "locale": "en", "value": "sweep"}]))
         }
+        "/api/v1/tenant/accounting/books" => Some(json!({"legal_entity_key": "sweep"})),
+        "/api/v1/tenant/accounting/books/{book_id}/connections" => Some(json!({
+            "provider": "freee",
+            "organization_id": "1",
+            "mappings": {
+                "revenue_account": "sales",
+                "refund_account": "refunds",
+                "clearing_account": "clearing",
+                "tax_codes": {"standard": "21"}
+            }
+        })),
+        "/api/v1/tenant/accounting/authorization/callback" => {
+            Some(json!({"state": "idor-sweep", "code": "idor-sweep"}))
+        }
+        "/api/v1/tenant/accounting/books/{book_id}/activation" => Some(json!({
+            "connection_id": BOOK_CONNECTION.to_string(),
+            "starts_at": "2030-01-01T00:00:00Z"
+        })),
+        "/api/v1/tenant/accounting/books/{book_id}/switch" => Some(json!({
+            "connection_id": BOOK_CONNECTION.to_string(),
+            "cutover_at": "2030-01-01T00:00:00Z"
+        })),
         "/api/v1/tenant/settings" => Some(json!({"settings": {}})),
         "/api/v1/tenant/theme/assets" => Some(json!({"kind": "logo", "data_base64": "aGVsbG8="})),
         "/api/v1/tenant/theme/draft" => Some(json!({})),
@@ -499,89 +535,8 @@ fn body_for(method: &str, pattern: &str) -> Option<Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Stub backends: Kratos (authn), Keto (authz), hitox (media upstream).
-//
-// Small hand-rolled HTTP/1.1 responders on ephemeral ports: the stubs
-// answer from the request head alone, so a full HTTP stack would buy
-// nothing (and `actix-test` is not a workspace dependency).
-
-type StubReply = (u16, &'static str, Vec<u8>);
-
-async fn spawn_stub<F, Fut>(handler: F) -> String
-where
-    F: Fn(String, String, BTreeMap<String, String>) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = StubReply> + Send,
-{
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
-            // One request per connection (`connection: close` below): read
-            // the head, drain any body so it cannot trigger a reset before
-            // the response lands, answer, close.
-            let mut head_end = None;
-            let mut buf = Vec::with_capacity(2048);
-            let mut chunk = [0u8; 2048];
-            loop {
-                match socket.read(&mut chunk).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        buf.extend_from_slice(&chunk[..n]);
-                        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                            head_end = Some(pos);
-                            break;
-                        }
-                    }
-                }
-            }
-            let Some(head_end) = head_end else { continue };
-            let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
-            let mut lines = head.lines();
-            let request_line = lines.next().unwrap_or_default();
-            let mut parts = request_line.split_whitespace();
-            let method = parts.next().unwrap_or("GET").to_string();
-            let target = parts.next().unwrap_or("/").to_string();
-            let mut headers = BTreeMap::new();
-            for line in lines {
-                if let Some((name, value)) = line.split_once(':') {
-                    headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
-                }
-            }
-            let body_buffered = buf.len().saturating_sub(head_end + 4);
-            let content_length = headers
-                .get("content-length")
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(0);
-            let mut remaining = content_length.saturating_sub(body_buffered);
-            while remaining > 0 {
-                match socket.read(&mut chunk).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => remaining = remaining.saturating_sub(n),
-                }
-            }
-
-            let (status, content_type, body) = handler(method, target, headers).await;
-            let reason = match status {
-                200 => "OK",
-                204 => "No Content",
-                401 => "Unauthorized",
-                403 => "Forbidden",
-                404 => "Not Found",
-                _ => "Error",
-            };
-            let response = format!(
-                "HTTP/1.1 {status} {reason}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                body.len()
-            );
-            let _ = socket.write_all(response.as_bytes()).await;
-            let _ = socket.write_all(&body).await;
-            let _ = socket.shutdown().await;
-        }
-    });
-    format!("http://{addr}")
-}
+// Stub backends: Kratos (authn), Keto (authz), hitox (media upstream),
+// served by the shared responder in `support`.
 
 async fn kratos_stub(
     method: String,
@@ -687,47 +642,6 @@ async fn media_stub(
     )
 }
 
-fn query_param(target: &str, name: &str) -> Option<String> {
-    let query = target.split_once('?')?.1;
-    for pair in query.split('&') {
-        let (key, value) = pair.split_once('=')?;
-        if percent_decode(key) == name {
-            return Some(percent_decode(value));
-        }
-    }
-    None
-}
-
-fn percent_decode(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' if index + 2 < bytes.len() => {
-                match std::str::from_utf8(&bytes[index + 1..index + 3])
-                    .ok()
-                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-                {
-                    Some(byte) => {
-                        out.push(byte);
-                        index += 3;
-                    }
-                    None => {
-                        out.push(b'%');
-                        index += 1;
-                    }
-                }
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 async fn start_stubs() -> (String, String, String) {
     let kratos = spawn_stub(kratos_stub).await;
     let keto = spawn_stub(keto_stub).await;
@@ -750,6 +664,7 @@ fn sweep_config(kratos_url: String, keto_url: String, media_url: String) -> AppC
     config.features.domains = true;
     config.features.payments = true;
     config.features.advertising = true;
+    config.features.accounting = true;
     config.features.billing = false;
     config.features.privacy = false;
     config.features.notifications = false;
@@ -766,6 +681,17 @@ fn sweep_config(kratos_url: String, keto_url: String, media_url: String) -> AppC
     // 32 decoded bytes; the KEK never protects anything real here.
     config.advertising.token_kek =
         sanvi_telemetry::Redacted::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
+    // Consent is composed so its routes reach their lookups instead of
+    // answering 503; no sweep request gets far enough to call freee.
+    config.accounting.freee_client_id = "idor-sweep-client".to_string();
+    config.accounting.freee_client_secret =
+        sanvi_telemetry::Redacted::new("idor-sweep-client-secret".to_string());
+    config.accounting.freee_redirect_uri = "https://tenant-a.itest/accounting/callback".to_string();
+    config.accounting.oauth_state_signing_secret =
+        sanvi_telemetry::Redacted::new("idor-sweep-accounting-state-0123456".to_string());
+    config.accounting.token_kek =
+        sanvi_telemetry::Redacted::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
+    config.accounting.token_kek_id = "idor-sweep".to_string();
     config.media.base_url = media_url;
     config.media.service_api_key = "idor-sweep-media-key".into();
     config
@@ -834,6 +760,7 @@ async fn seeded_world(pool: &sanvi_persistence::PgPool) -> Seeded {
         ("domains.purchase", "Domain purchase"),
         ("theming.custom_css", "Custom CSS"),
         ("theming.custom_templates", "Custom templates"),
+        ("accounting.freee", "freee accounting"),
     ];
     let features_manager = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut scope = features_manager
@@ -1112,6 +1039,39 @@ async fn seeded_world(pool: &sanvi_persistence::PgPool) -> Seeded {
     .execute(&mut **tx)
     .await
     .unwrap();
+    let mut book = Book::new(
+        BookId::try_from(BOOK).unwrap(),
+        sanvi_kernel::TenantId::try_from(TENANT_B).unwrap(),
+        format!("{MARKER}-entity"),
+    )
+    .unwrap();
+    book.add_connection(
+        Connection::new(
+            ConnectionId::try_from(BOOK_CONNECTION).unwrap(),
+            Provider::Freee,
+            format!("{MARKER}-org"),
+            AccountMappings {
+                revenue_account: format!("{MARKER}-revenue"),
+                refund_account: "refunds".to_string(),
+                clearing_account: "clearing".to_string(),
+                tax_codes: [("standard".to_string(), "21".to_string())].into(),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO accounting.books (id, tenant_id, legal_entity_key, revision, document)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(BOOK)
+    .bind(TENANT_B)
+    .bind(book.legal_entity_key())
+    .bind(book.revision())
+    .bind(serde_json::to_value(&book).unwrap())
+    .execute(&mut **tx)
+    .await
+    .unwrap();
     scope.commit().await.unwrap();
 
     Seeded::default()
@@ -1270,6 +1230,17 @@ async fn build_sweep_app(
         .expect("advertising state is valid"),
     );
 
+    let accounting = Some(
+        build_accounting_state(
+            &config.accounting,
+            TxManager::new(pool.clone(), ids.clone()),
+            ids.clone(),
+            access.authorizer.clone(),
+            Arc::new(sanvi_kernel::SystemClock),
+        )
+        .expect("accounting state is valid"),
+    );
+
     build_app(
         config,
         metrics,
@@ -1286,6 +1257,7 @@ async fn build_sweep_app(
         domains,
         payments,
         advertising,
+        accounting,
         None,                                                                  // redis
         None,                                                                  // ssr_cache
         std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()), // degradation
@@ -1331,6 +1303,13 @@ where
         // satisfies every handler that only requires presence.
         actix_web::http::header::HeaderValue::from_static("01990f0d-0000-7000-8000-0000000aa001"),
     ));
+    // Accounting book mutations reject a missing If-Match (400) before
+    // any lookup; a syntactically valid revision lets the lookup decide.
+    let builder = if uri.contains("/accounting/books/") && method != "GET" {
+        builder.insert_header((actix_web::http::header::IF_MATCH, "\"1\""))
+    } else {
+        builder
+    };
     let builder = match body {
         Some(body) => builder.set_json(body),
         None => builder,

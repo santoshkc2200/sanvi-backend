@@ -466,6 +466,24 @@ async fn main() -> ExitCode {
         None
     };
 
+    let accounting = if config.features.accounting {
+        match sanvi_api::accounting::build_accounting_state(
+            &config.accounting,
+            sanvi_persistence::TxManager::new(pool.clone(), ids.clone()),
+            ids.clone(),
+            access.authorizer.clone(),
+            Arc::new(sanvi_kernel::SystemClock),
+        ) {
+            Ok(state) => Some(state),
+            Err(err) => {
+                eprintln!("failed to configure accounting: {err}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        None
+    };
+
     // TASK-022 (FR-1111): one SSR cache per process — see build_app's note.
     // Registered counters land here, once, before the workers fork.
     let ssr_cache = config.server.ssr_cache.enabled.then(|| {
@@ -492,6 +510,7 @@ async fn main() -> ExitCode {
             domains.clone(),
             payments.clone(),
             advertising.clone(),
+            accounting.clone(),
             redis.clone(),
             ssr_cache.clone(),
             degradation.clone(),

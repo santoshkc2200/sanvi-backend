@@ -1,15 +1,15 @@
 # Accounting integration foundation
 
 This bounded context stores tenant accounting destinations, controlled
-provider cutovers, and freee OAuth consent. It does not implement accounting
-books, stock management, provider posting, a public HTTP API, or tenant-admin
-screens yet.
+provider cutovers, and freee OAuth consent, and serves them through an
+authenticated tenant API. It does not implement accounting books, stock
+management, provider posting, or tenant-admin screens yet.
 
 ## Implemented
 
-- One integration book per `(tenant_id, legal_entity_key)`. The key is a stable
-  tenant-local reference supplied by a trusted legal-entity registry/composition;
-  it is not a legal name and does not verify that a real-world company exists.
+- One integration book per `(tenant_id, legal_entity_key)`. The key is supplied
+  by a tenant admin as a stable label; it is not a legal name and does not
+  verify that a real-world company exists.
 - Candidate destination bindings for freee, Money Forward, and Xero. Registration
   is metadata only and never represents completed OAuth or verified access.
 - Required revenue/refund/clearing account mappings and a map of source tax
@@ -66,13 +66,44 @@ Returning to an old provider creates a fresh binding; old mappings and posting
 references are retained. No destination binding is reused across active periods.
 There is no delete/rewrite-history API or automatic migration of external books.
 
+## Tenant API
+
+Routes sit under `/api/v1/tenant`, mount only when `features.accounting` is on,
+and every one requires the `accounting.freee` entitlement. The contract is
+`api/accounting.yaml`.
+
+| Method and path | Permission | Fresh MFA |
+| --- | --- | --- |
+| `GET /accounting/books` | `tenant.accounting.read` | |
+| `POST /accounting/books` | `tenant.accounting.manage` | |
+| `GET /accounting/books/{book_id}` | `tenant.accounting.read` | |
+| `POST /accounting/books/{book_id}/connections` | `tenant.accounting.manage` | |
+| `POST /accounting/books/{book_id}/connections/{connection_id}/authorization` | `tenant.accounting.manage` | yes |
+| `DELETE /accounting/books/{book_id}/connections/{connection_id}/authorization` | `tenant.accounting.manage` | yes |
+| `POST /accounting/authorization/callback` | `tenant.accounting.manage` | |
+| `POST /accounting/books/{book_id}/activation` | `tenant.accounting.manage` | yes |
+| `PUT /accounting/books/{book_id}/switch` | `tenant.accounting.manage` | yes |
+| `DELETE /accounting/books/{book_id}/switch` | `tenant.accounting.manage` | |
+
+Book responses carry the revision as `ETag`; mutations of an existing book
+require `If-Match` (missing or malformed is 400, stale is 409). Every `Manage`
+mutation writes an `accounting.audit_commands` row in its transaction; the
+worker job `accounting.audit_commands` appends them to the audit chain.
+
 ## Composition boundary
+
+`apps/api/src/accounting.rs` composes the context: an `Authorizer`-backed
+`AccountingAccess` and, when the freee client ID and secret, state secret and
+token KEK are all deployed, `FreeeClient`, `PostgresCredentialStore` and
+`CredentialVerifier`. With any of them empty, reads and book/connection
+registration work, consent routes answer 503 and verification stays
+`UnavailableVerifier`, so activation and switching fail closed.
 
 `application::Services` requires an `AccountingAccess`, `ProviderVerifier`, store,
 clock, and ID generator. Every use case checks authorization via `Services::authorize`
 before reading or mutating state. HTTP actors must come from authenticated request
-context, and system actors represent trusted background services. Connection IDs must
-come from the platform Snowflake generator when an enrollment adapter is added.
+context, and system actors represent trusted background services. `RegisterConnection`
+draws connection IDs from the platform Snowflake generator.
 
 `PostgresAccountingStore` implements atomic persistence. Authorization and
 provider verification have no permissive production defaults. Compose
@@ -104,6 +135,6 @@ migration creates only the `accounting` schema and grants no delete permission o
 posting-destination update permission to the runtime role.
 
 See [delivery plan](../../../docs/superpowers/plans/2026-10-26-accounting-connections.md)
-for the remaining OAuth, API/UI, exporter, and recovery work.
+for the remaining admin screens, exporter, and recovery work.
 See [verification results](../../../docs/superpowers/plans/2026-10-26-accounting-verification.md)
 for tested behavior and the pre-existing deployment-policy gate failure.

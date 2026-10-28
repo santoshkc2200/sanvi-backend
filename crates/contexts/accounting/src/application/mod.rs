@@ -9,16 +9,33 @@ use chrono::{DateTime, Utc};
 use sanvi_kernel::{Clock, RawIdGenerator};
 
 use crate::domain::{
-    AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId, Posting, PostingId,
+    AccountMappings, AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId,
+    CredentialStatus, Posting, PostingId, Provider,
 };
 pub use authorization::{
     AccessTokens, Authorization, CompleteAuthorization, CredentialVerifier, RevokeAuthorization,
     StartAuthorization,
 };
 pub use ports::{
-    AccountingAccess, AccountingStore, Actor, AssignCommand, CredentialStore, Permission,
-    ProviderDirectory, ProviderOAuth, ProviderVerifier,
+    AccountingAccess, AccountingStore, Actor, AssignCommand, AuditRecord, CredentialStore,
+    Permission, ProviderDirectory, ProviderOAuth, ProviderVerifier, RequestContext,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BookSummary {
+    pub book: Book,
+    /// Connections with no credential row are absent.
+    pub credentials: Vec<(ConnectionId, CredentialStatus)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegisterConnectionCommand {
+    pub provider: Provider,
+    pub organization_id: String,
+    pub mappings: AccountMappings,
+}
+
+pub const LIST_BOOKS_LIMIT: i64 = 100;
 
 pub struct Services {
     pub store: Arc<dyn AccountingStore>,
@@ -59,12 +76,36 @@ fn to_micros(at: DateTime<Utc>) -> Result<DateTime<Utc>, AccountingError> {
         .ok_or(AccountingError::Invalid("timestamp is out of range"))
 }
 
+pub(crate) fn audit_record(
+    actor: Actor,
+    request: RequestContext,
+    book_id: BookId,
+    action: &'static str,
+    after: serde_json::Value,
+    now: DateTime<Utc>,
+) -> Result<AuditRecord, AccountingError> {
+    match actor {
+        Actor::User { tenant_id, user_id } => Ok(AuditRecord {
+            tenant_id,
+            user_id,
+            book_id,
+            action,
+            occurred_at: now,
+            after,
+            request,
+        }),
+        Actor::System { .. } => Err(AccountingError::Forbidden),
+    }
+}
+
 /// HTTP callers must obtain this actor from authenticated request context.
 pub struct CreateBook(pub Arc<Services>);
 impl CreateBook {
+    #[tracing::instrument(name = "accounting.create_book", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         legal_entity_key: String,
     ) -> Result<Book, AccountingError> {
         self.0.authorize(actor, Permission::Manage).await?;
@@ -75,30 +116,101 @@ impl CreateBook {
             .map(BookId::from_snowflake)
             .map_err(|error| AccountingError::Storage(error.to_string()))?;
         let book = Book::new(id, actor.tenant_id(), legal_entity_key)?;
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book.id(),
+            "accounting.book.created",
+            serde_json::json!({
+                "book_id": book.id().to_string(),
+                "legal_entity_key": book.legal_entity_key(),
+            }),
+            now,
+        )?;
         let created = event(&book, "book_created");
-        self.0.store.create(book, created).await
+        self.0.store.create(book, created, audit).await
+    }
+}
+
+pub struct ListBooks(pub Arc<Services>);
+impl ListBooks {
+    #[tracing::instrument(name = "accounting.list_books", skip_all)]
+    pub async fn execute(&self, actor: Actor) -> Result<Vec<BookSummary>, AccountingError> {
+        self.0.authorize(actor, Permission::Read).await?;
+        let books = self.0.store.list(actor.tenant_id()).await?;
+        let mut summaries = Vec::with_capacity(books.len());
+        for book in books {
+            let credentials = self
+                .0
+                .store
+                .credential_statuses(actor.tenant_id(), book.id())
+                .await?;
+            summaries.push(BookSummary { book, credentials });
+        }
+        Ok(summaries)
     }
 }
 
 pub struct GetBook(pub Arc<Services>);
 impl GetBook {
-    pub async fn execute(&self, actor: Actor, book_id: BookId) -> Result<Book, AccountingError> {
+    #[tracing::instrument(name = "accounting.get_book", skip_all)]
+    pub async fn execute(
+        &self,
+        actor: Actor,
+        book_id: BookId,
+    ) -> Result<BookSummary, AccountingError> {
         self.0.authorize(actor, Permission::Read).await?;
-        self.0.store.get(actor.tenant_id(), book_id).await
+        let book = self.0.store.get(actor.tenant_id(), book_id).await?;
+        let credentials = self
+            .0
+            .store
+            .credential_statuses(actor.tenant_id(), book_id)
+            .await?;
+        Ok(BookSummary { book, credentials })
     }
 }
 
 /// Register metadata only. This does not assert that OAuth succeeded.
 pub struct RegisterConnection(pub Arc<Services>);
 impl RegisterConnection {
+    #[tracing::instrument(name = "accounting.register_connection", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
-        connection: Connection,
+        command: RegisterConnectionCommand,
     ) -> Result<Book, AccountingError> {
         self.0.authorize(actor, Permission::Manage).await?;
+        let connection_id = self
+            .0
+            .ids
+            .next_id()
+            .map(ConnectionId::from_snowflake)
+            .map_err(|error| AccountingError::Storage(error.to_string()))?;
+        let connection = Connection::new(
+            connection_id,
+            command.provider,
+            command.organization_id,
+            command.mappings,
+        )?;
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.connection.registered",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+                "connection_id": connection.id().to_string(),
+                "provider": connection.provider().as_str(),
+                "organization_id": connection.organization_id(),
+                "mappings": connection.mappings(),
+            }),
+            now,
+        )?;
         self.0
             .store
             .change(
@@ -111,6 +223,7 @@ impl RegisterConnection {
                         Ok(Some(event(book, "connection_registered")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -118,9 +231,11 @@ impl RegisterConnection {
 
 pub struct ActivateBook(pub Arc<Services>);
 impl ActivateBook {
+    #[tracing::instrument(name = "accounting.activate_book", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
         connection_id: ConnectionId,
@@ -132,6 +247,19 @@ impl ActivateBook {
         if book.revision() != revision {
             return Err(AccountingError::StaleRevision);
         }
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.destination.activated",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+                "connection_id": connection_id.to_string(),
+                "starts_at": starts_at,
+            }),
+            now,
+        )?;
         let services = self.0.clone();
         self.0
             .store
@@ -150,6 +278,7 @@ impl ActivateBook {
                         Ok(Some(event(book, "destination_activated")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -157,9 +286,11 @@ impl ActivateBook {
 
 pub struct ScheduleSwitch(pub Arc<Services>);
 impl ScheduleSwitch {
+    #[tracing::instrument(name = "accounting.schedule_switch", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
         connection_id: ConnectionId,
@@ -171,6 +302,19 @@ impl ScheduleSwitch {
         if book.revision() != revision {
             return Err(AccountingError::StaleRevision);
         }
+        let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.switch.scheduled",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+                "connection_id": connection_id.to_string(),
+                "cutover_at": cutover_at,
+            }),
+            now,
+        )?;
         let services = self.0.clone();
         self.0
             .store
@@ -189,6 +333,7 @@ impl ScheduleSwitch {
                         Ok(Some(event(book, "switch_scheduled")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -196,14 +341,26 @@ impl ScheduleSwitch {
 
 pub struct CancelSwitch(pub Arc<Services>);
 impl CancelSwitch {
+    #[tracing::instrument(name = "accounting.cancel_switch", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         revision: i64,
     ) -> Result<Book, AccountingError> {
         self.0.authorize(actor, Permission::Manage).await?;
         let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.switch.canceled",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+            }),
+            now,
+        )?;
         self.0
             .store
             .change(
@@ -216,6 +373,7 @@ impl CancelSwitch {
                         Ok(Some(event(book, "switch_canceled")))
                     })
                 }),
+                Some(audit),
             )
             .await
     }
@@ -223,6 +381,7 @@ impl CancelSwitch {
 
 pub struct AssignPosting(pub Arc<Services>);
 impl AssignPosting {
+    #[tracing::instrument(name = "accounting.assign_posting", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -249,6 +408,7 @@ impl AssignPosting {
 
 pub struct MarkSubmitted(pub Arc<Services>);
 impl MarkSubmitted {
+    #[tracing::instrument(name = "accounting.mark_submitted", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -262,6 +422,7 @@ impl MarkSubmitted {
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.submit(now)),
+                None,
             )
             .await
     }
@@ -269,6 +430,7 @@ impl MarkSubmitted {
 
 pub struct RecordDelivery(pub Arc<Services>);
 impl RecordDelivery {
+    #[tracing::instrument(name = "accounting.record_delivery", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -284,6 +446,7 @@ impl RecordDelivery {
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.deliver(ext, now)),
+                None,
             )
             .await
     }
@@ -291,6 +454,7 @@ impl RecordDelivery {
 
 pub struct RecordFailure(pub Arc<Services>);
 impl RecordFailure {
+    #[tracing::instrument(name = "accounting.record_failure", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -306,6 +470,7 @@ impl RecordFailure {
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.fail(reason, now)),
+                None,
             )
             .await
     }
@@ -313,9 +478,12 @@ impl RecordFailure {
 
 pub struct ResolvePosting(pub Arc<Services>);
 impl ResolvePosting {
+    #[tracing::instrument(name = "accounting.resolve_posting", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
+        book_id: BookId,
         posting_id: PostingId,
         note: &str,
         external_record_id: Option<&str>,
@@ -328,12 +496,25 @@ impl ResolvePosting {
         let note = note.to_string();
         let ext = external_record_id.map(str::to_string);
         let now = self.0.clock.now();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.posting.resolved",
+            serde_json::json!({
+                "posting_id": posting_id.to_string(),
+                "resolution_note": note,
+                "external_record_id": ext,
+            }),
+            now,
+        )?;
         self.0
             .store
             .transition(
                 actor.tenant_id(),
                 posting_id,
                 Box::new(move |posting| posting.resolve(note, ext, user_id, now)),
+                Some(audit),
             )
             .await
     }

@@ -1,10 +1,11 @@
 //! Privacy participation for organization-level integration metadata.
 //!
-//! No user/customer identifiers or provider credentials are stored in these
-//! tables. Organization references may still identify a sole proprietor. When
-//! tenant-user requests touch existing metadata, require explicit subject/entity
-//! review instead of exporting another member's company settings, claiming
-//! blanket statutory retention, or silently deleting reconciliation history.
+//! `oauth_states` and `audit_commands` hold acting user IDs and are covered by
+//! the review requirement. No customer identifiers or provider credentials are
+//! stored in these tables. Organization references may still identify a sole
+//! proprietor. When tenant-user requests touch existing metadata, require explicit
+//! subject/entity review instead of exporting another member's company settings,
+//! claiming blanket statutory retention, or silently deleting reconciliation history.
 
 use async_trait::async_trait;
 use sanvi_persistence::TxManager;

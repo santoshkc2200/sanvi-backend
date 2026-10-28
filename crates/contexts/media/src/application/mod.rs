@@ -25,6 +25,7 @@ impl CreateAssetUpload {
         self
     }
 
+    #[tracing::instrument(name = "media.create_asset_upload", skip_all)]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -50,6 +51,7 @@ impl PresignAssetParts {
         Self { gateway }
     }
 
+    #[tracing::instrument(name = "media.presign_asset_parts", skip_all)]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -71,6 +73,7 @@ impl CompleteAssetUpload {
         Self { gateway }
     }
 
+    #[tracing::instrument(name = "media.complete_asset_upload", skip_all)]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -99,6 +102,7 @@ impl GetMediaAsset {
     /// `degraded`, so the marker is never mistaken for live metadata.
     /// Mutations never take this path: they propagate `Unavailable` and
     /// the handler renders the honest `503 media_unavailable`.
+    #[tracing::instrument(name = "media.get_media_asset", skip_all)]
     pub async fn execute(
         &self,
         tenant_id: TenantId,
@@ -138,6 +142,7 @@ impl DeleteMediaAsset {
         Self { gateway }
     }
 
+    #[tracing::instrument(name = "media.delete_media_asset", skip_all)]
     pub async fn execute(&self, tenant_id: TenantId, asset_id: String) -> Result<(), MediaError> {
         self.gateway.delete_asset(tenant_id, &asset_id).await
     }
@@ -152,6 +157,7 @@ impl CreateAssetDelivery {
         Self { gateway }
     }
 
+    #[tracing::instrument(name = "media.create_asset_delivery", skip_all)]
     pub async fn execute(
         &self,
         tenant_id: TenantId,

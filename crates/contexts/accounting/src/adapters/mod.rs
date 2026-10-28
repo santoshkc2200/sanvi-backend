@@ -1,7 +1,10 @@
+pub mod audit;
 mod credentials;
 pub mod freee;
+pub mod http;
 mod postgres;
 pub mod privacy_provider;
+pub use audit::AuditDelivery;
 pub use credentials::PostgresCredentialStore;
 pub use freee::{FreeeClient, FreeeSettings};
 pub use postgres::PostgresAccountingStore;

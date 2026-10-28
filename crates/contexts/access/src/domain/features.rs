@@ -369,6 +369,15 @@ pub const FEATURE_SEEDS: &[FeatureSeed] = &[
         default_limit: None,
         visibility: Visibility::Public,
     },
+    // --- accounting -----------------------------------------------------------
+    FeatureSeed {
+        key: "accounting.freee",
+        name: "freee accounting",
+        kind: FeatureKind::Boolean,
+        default_enabled: false,
+        default_limit: None,
+        visibility: Visibility::Public,
+    },
     // --- products -------------------------------------------------------------
     // Sold separately: off until a plan or an operator override grants it.
     // The proxy refuses every ecommerce request without it.
@@ -530,5 +539,16 @@ mod tests {
                 )
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn accounting_freee_is_off_by_default() {
+        let seed = FEATURE_SEEDS
+            .iter()
+            .find(|f| f.key == "accounting.freee")
+            .unwrap();
+        assert_eq!(seed.kind, FeatureKind::Boolean);
+        assert!(!seed.default_enabled);
+        assert_eq!(seed.visibility, Visibility::Public);
     }
 }

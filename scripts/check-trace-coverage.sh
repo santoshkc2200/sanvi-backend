@@ -131,7 +131,7 @@ scan_tree() {
         if [[ "$state" != "n/a" ]]; then
             TOTAL_USE_CASES=$((TOTAL_USE_CASES + 1))
         fi
-    done < <(find "$search" -path '*/src/application/*' -name '*.rs' ! -name 'mod.rs' | LC_ALL=C sort)
+    done < <(find "$search" -path '*/src/application/*' -name '*.rs' | LC_ALL=C sort)
 }
 
 write_matrix() {
@@ -180,6 +180,13 @@ impl Sweep {
     pub async fn sweep_the_thing(&self) {}
 }
 EOF
+    # Use cases declared in a module root are scanned like any other file.
+    cat > "$app/mod.rs" <<'EOF'
+pub struct Rooted;
+impl Rooted {
+    pub async fn execute(&self) {}
+}
+EOF
     printf '%s %s\n' 'crates/contexts/fake/src/application/registry_entry.rs' 'sweep_the_thing' \
         > "$tree/observability/use-case-entries.txt"
 
@@ -187,14 +194,16 @@ EOF
     local out
     out="$(cat "$tmp/out.md" "$tmp/err.md")"
 
-    if [[ "$VIOLATIONS" -ne 2 ]]; then
-        echo "self-test failed: expected 2 violations (gapped, unnamed), got $VIOLATIONS" >&2
+    if [[ "$VIOLATIONS" -ne 3 ]]; then
+        echo "self-test failed: expected 3 violations (gapped, unnamed, mod), got $VIOLATIONS" >&2
         exit 1
     fi
     grep -q 'gapped.rs — missing span (0/1)' <<<"$out" ||
         { echo "self-test failed: the spanless use case was not named" >&2; exit 1; }
     grep -q 'unnamed.rs — span name lacks "fake\." prefix' <<<"$out" ||
         { echo "self-test failed: a span without the context prefix was accepted" >&2; exit 1; }
+    grep -q 'mod.rs — missing span (0/1)' <<<"$out" ||
+        { echo "self-test failed: a use case in mod.rs was skipped" >&2; exit 1; }
     grep -q '| fake | dto.rs | 0 | 0 | no | n/a' <<<"$out" ||
         { echo "self-test failed: an entry-less file was not reported n/a" >&2; exit 1; }
     grep -q '| fake | registry_entry.rs | 1 | 1 | no | covered' <<<"$out" ||
@@ -209,7 +218,7 @@ EOF
     grep -q 'registry_entry.rs — stale-registry' "$tmp/err2.md" ||
         { echo "self-test failed: a stale registry entry was accepted" >&2; exit 1; }
 
-    echo "trace-coverage self-test: OK (spanless, misnamed, stale-registry and n/a rows all behave; every violation names its file)"
+    echo "trace-coverage self-test: OK (spanless, misnamed, mod.rs, stale-registry and n/a rows all behave; every violation names its file)"
     exit 0
 }
 

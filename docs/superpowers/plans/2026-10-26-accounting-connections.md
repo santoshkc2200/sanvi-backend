@@ -70,6 +70,11 @@ administrator-submitted names. This context currently stores no credentials.
 
 ### Authenticated API and admin screens
 
+**Status (2026-10-27):** the backend half is done — tenant routes, generated
+`api/accounting.yaml`, permissions and entitlement, audit commands drained by
+the worker, all behind `features.accounting` (see
+`2026-10-27-accounting-api.md`). The Svelte tenant-admin screens remain open.
+
 Add generated accounting OpenAPI and tenant-scoped routes under the existing
 identity/access stack. Proposed permissions are `tenant.accounting.read`,
 `tenant.accounting.manage`, and a distinct internal exporter capability.

@@ -1,4 +1,5 @@
 mod abuse_quotas;
+mod accounting_routes;
 mod cache_headers_snapshot;
 mod collection_ordering;
 mod error_addressability;
@@ -11,5 +12,6 @@ mod partition_registry;
 mod permission_catalog;
 mod privacy_providers;
 mod rls_matrix;
+mod support;
 mod task026_replay;
 mod task026_usage;

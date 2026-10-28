@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use sanvi_access::AccessConfig;
+use sanvi_accounting::AccountingConfig;
 use sanvi_advertising::AdvertisingConfig;
 use sanvi_audit::AuditConfig;
 use sanvi_billing::BillingConfig;
@@ -101,6 +102,9 @@ pub struct FeaturesConfig {
     /// Phase-10 gate: advertising stays off until its staged rollout.
     #[serde(default)]
     pub advertising: bool,
+    /// Accounting integration: gates accounting routes and freee provider integrations.
+    #[serde(default)]
+    pub accounting: bool,
     /// Mounts the notification service integration when enabled.
     #[serde(default = "default_true")]
     pub notifications: bool,
@@ -141,6 +145,7 @@ pub struct AppConfig {
     pub domains: DomainsConfig,
     pub payments: PaymentsConfig,
     pub advertising: AdvertisingConfig,
+    pub accounting: AccountingConfig,
     pub media: MediaConfig,
     /// Product services behind the platform proxy (ecommerce first).
     pub product_access: ProductAccessConfig,
@@ -172,6 +177,7 @@ impl Default for AppConfig {
             domains: DomainsConfig::default(),
             payments: PaymentsConfig::default(),
             advertising: AdvertisingConfig::default(),
+            accounting: AccountingConfig::default(),
             media: MediaConfig::default(),
             product_access: ProductAccessConfig::default(),
             notification: NotificationConfig::default(),
@@ -232,6 +238,9 @@ impl AppConfig {
         if let Err(err) = self.advertising.validate() {
             problems.push(err.to_string());
         }
+        if let Err(err) = self.accounting.validate() {
+            problems.push(err.to_string());
+        }
         if let Err(err) = self.media.validate() {
             problems.push(err.to_string());
         }
@@ -252,6 +261,21 @@ impl AppConfig {
             problems.push(
                 "billing.stripe_webhook_secret and payments.connect_webhook_secret must differ \
                  (the Connect and platform webhook endpoints are separate trust domains)"
+                    .to_string(),
+            );
+        }
+        if !self.accounting.oauth_state_signing_secret.is_empty()
+            && (self.accounting.oauth_state_signing_secret.expose_secret()
+                == self.advertising.oauth_state_signing_secret.expose_secret()
+                || (!self.billing.stripe_webhook_secret.is_empty()
+                    && self.accounting.oauth_state_signing_secret.expose_secret()
+                        == self.billing.stripe_webhook_secret.expose_secret())
+                || (!self.payments.connect_webhook_secret.is_empty()
+                    && self.accounting.oauth_state_signing_secret.expose_secret()
+                        == self.payments.connect_webhook_secret.expose_secret()))
+        {
+            problems.push(
+                "accounting.oauth_state_signing_secret must differ from other contexts' signing and webhook secrets"
                     .to_string(),
             );
         }
@@ -353,6 +377,49 @@ mod tests {
             payments: PaymentsConfig {
                 connect_webhook_secret: Redacted::new("whsec_connect".to_string()),
                 ..PaymentsConfig::default()
+            },
+            ..AppConfig::default()
+        };
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn accounting_is_off_by_default() {
+        assert!(!AppConfig::default().features.accounting);
+        #[derive(Deserialize)]
+        struct Minimal {
+            features: FeaturesConfig,
+        }
+        let minimal: Minimal = serde_json::from_value(serde_json::json!({ "features": {} }))
+            .expect("empty features object is a valid config");
+        assert!(!minimal.features.accounting);
+    }
+
+    #[test]
+    fn accounting_state_secret_must_differ_from_advertising() {
+        use sanvi_telemetry::Redacted;
+        let config = AppConfig {
+            advertising: AdvertisingConfig {
+                oauth_state_signing_secret: Redacted::new("shared_secret".to_string()),
+                ..AdvertisingConfig::default()
+            },
+            accounting: AccountingConfig {
+                oauth_state_signing_secret: Redacted::new("shared_secret".to_string()),
+                ..AccountingConfig::default()
+            },
+            ..AppConfig::default()
+        };
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("must differ"));
+
+        let config = AppConfig {
+            advertising: AdvertisingConfig {
+                oauth_state_signing_secret: Redacted::new("adv_secret".to_string()),
+                ..AdvertisingConfig::default()
+            },
+            accounting: AccountingConfig {
+                oauth_state_signing_secret: Redacted::new("acc_secret".to_string()),
+                ..AccountingConfig::default()
             },
             ..AppConfig::default()
         };

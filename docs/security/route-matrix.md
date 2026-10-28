@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 236 (228 OpenAPI operations).
+Routes: 246 (238 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -129,6 +129,16 @@ Routes: 236 (228 OpenAPI operations).
 | GET | /api/v1/system/health | crates/contexts/system/src/adapters/http/handlers.rs::health | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | GET | /api/v1/system/ready | crates/contexts/system/src/adapters/http/handlers.rs::ready | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | GET | /api/v1/system/version | crates/contexts/system/src/adapters/http/handlers.rs::version | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
+| POST | /api/v1/tenant/accounting/authorization/callback | crates/contexts/accounting/src/adapters/http/handlers.rs::complete_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/accounting/books | crates/contexts/accounting/src/adapters/http/handlers.rs::list_accounting_books | tenant.accounting.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books | crates/contexts/accounting/src/adapters/http/handlers.rs::create_accounting_book | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/accounting/books/{book_id} | crates/contexts/accounting/src/adapters/http/handlers.rs::get_accounting_book | tenant.accounting.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books/{book_id}/activation | crates/contexts/accounting/src/adapters/http/handlers.rs::activate_accounting_book | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books/{book_id}/connections | crates/contexts/accounting/src/adapters/http/handlers.rs::register_accounting_connection | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| DELETE | /api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization | crates/contexts/accounting/src/adapters/http/handlers.rs::revoke_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization | crates/contexts/accounting/src/adapters/http/handlers.rs::start_accounting_authorization | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| DELETE | /api/v1/tenant/accounting/books/{book_id}/switch | crates/contexts/accounting/src/adapters/http/handlers.rs::cancel_accounting_switch | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| PUT | /api/v1/tenant/accounting/books/{book_id}/switch | crates/contexts/accounting/src/adapters/http/handlers.rs::schedule_accounting_switch | tenant.accounting.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/ads/audiences | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::list_audiences | advertising.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/ads/audiences | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::create_audience | advertising.campaign.write | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/ads/audiences/{id}/refresh | crates/contexts/advertising/src/adapters/http/tracking_handlers.rs::refresh_audience | advertising.campaign.write | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -270,17 +280,22 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
+| apps/api/src/accounting.rs | `3ef1a6b87b6692aa9abe03f473dd88c3d5d48e36aeaf2e9a4f3635061be4d172` |
 | apps/api/src/compliance.rs | `de0f3349df2f168f84f436d2a08897422d8be4c87a3ed5738d3bb739d7184835` |
-| apps/api/src/config.rs | `5ccb2a7826a2a925ff064b1df2ec65ba17e4009458d3c126f22dd92c2a7cc22b` |
-| apps/api/src/lib.rs | `67dc989b94c068302ac1004872168577c15061be23354fe6679cd0a47148234e` |
-| apps/api/src/main.rs | `064ccdcc233306b401129d20a9b0d99cccfa19ae14f6fb9ee34898e7f1ff7a69` |
-| apps/api/src/openapi.rs | `ddbafa4a36b359bdf2bebaa2af3797302a387c7504f2f786ce61d7c6bba7ff40` |
+| apps/api/src/config.rs | `1866ef983dfd9ce413eea8b7f52151359dd3c2b688daaf2b8e35fb9db42a82e5` |
+| apps/api/src/lib.rs | `aef6de129a31122063bfb29a29db75a6098f36ccb850a74476a79b3a9ef3129a` |
+| apps/api/src/main.rs | `05373c887a3675238c2410a62db628509e5b4f24c9ad8a93651395a170281c8b` |
+| apps/api/src/openapi.rs | `48a9930a1ab901b07525f901590641e6eca796d33d854316b57df89a80b1b8bf` |
 | apps/api/src/product_access.rs | `b680883b3bae7b8e4fefa24419fd7445cb86417d4378243ded6b9f4d93f7121a` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
 | crates/contexts/access/src/adapters/http/mod.rs | `b9718a471597d11f5cb3af76a91715c20de69b6126a9073e23d5463c201bd007` |
 | crates/contexts/access/src/adapters/http/routes.rs | `80ed3de5efb15df047a8f16782cee9773db4d8be3f35da5bdff9e783aa19505c` |
 | crates/contexts/access/src/adapters/http/validation.rs | `2f1d49c29d3667ab7066afbad3767c838ea358187a3a012f8024bf577ca7d0a8` |
+| crates/contexts/accounting/src/adapters/http/handlers.rs | `ce5eb64dbd11df132d608fdcd3f39d279a31f56c244105d13b7bc61f1d33aec2` |
+| crates/contexts/accounting/src/adapters/http/mod.rs | `9e3a7bf53068548f2117947cac4d2519541fdf9d66acca79c95f9cf7bb678372` |
+| crates/contexts/accounting/src/adapters/http/routes.rs | `8b6bcfbc99212cb93b2ca56a8f4e3b670ff0b7b2d219718c8cf13240fb185dde` |
+| crates/contexts/accounting/src/adapters/http/state.rs | `c52ff12463250c3458fcaba1e948ebafb3153a1e73c1207b503cdced7dc1c7cc` |
 | crates/contexts/advertising/src/adapters/http/handlers.rs | `cd54f596bb2fdcf97615e61af5a31293306d18911f13a66fadc8bdb46e26f374` |
 | crates/contexts/advertising/src/adapters/http/mod.rs | `ffede5d48c9c71cb0210209c6561d8e9caa69e7b3d079948bb4882eb1709e8d0` |
 | crates/contexts/advertising/src/adapters/http/routes.rs | `3452d1f14ce42e698112c0889872484aa72b7b30905a204dc3a9eb4d5379d225` |
@@ -334,7 +349,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/privacy/src/adapters/http/mod.rs | `6fe9359c7e703a10bce690b16a93bc317e74bf812827592e6aa55e404724a641` |
 | crates/contexts/privacy/src/adapters/http/routes.rs | `3d883aa6513bbb09591e421d0301bda9eb3728c09953dfa6a9d97bf37e7e5f1f` |
 | crates/contexts/privacy/src/adapters/http/validation.rs | `fb3aeb342e2e6c0ce70c94006132337f17a1a26b292f26d6c7e3c1fe0bbfd94a` |
-| crates/contexts/product_access/src/adapters/http/handlers.rs | `bc50998063ef6b8b831ac69015467272fcf6020619ee321c7e68cb8533ae739f` |
+| crates/contexts/product_access/src/adapters/http/handlers.rs | `f473c438b7e3925e6a438c0ec3da5cf8e9a018c6a063e27e58a8c79785e59f16` |
 | crates/contexts/product_access/src/adapters/http/mod.rs | `f197806399c00451af517b5ecc958b5cb4fd097b64de4f647208306c3e1b0af3` |
 | crates/contexts/product_access/src/adapters/http/routes.rs | `f4fac4cbec817c08a43a54d7fda6a7e7b54e4488f54a6a251d6d4c06b101b3bd` |
 | crates/contexts/product_access/src/application/mod.rs | `4066ff8a66e895cbe76e17304f1bcc198dd3c6cfb2867bf5c2cf361447f0ab79` |
@@ -361,7 +376,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/platform/http/src/config.rs | `8bbbf56dcfc4def952c12f41fd49a2016b62fbaf831b9fc8772429bdfbe6caac` |
 | crates/platform/http/src/degraded.rs | `a15d6cbba1457c3762ae2e32d52794518a856d172975cbae87539e682026290b` |
 | crates/platform/http/src/deprecation.rs | `fa7534ad511123f814afe9f85b142932106b387d4c1ba7cc374c5982a0eea6b4` |
-| crates/platform/http/src/error.rs | `4cf7891a00fa012e2d7edeb0f4eb57b3e05d592b55e1520d3c5b7d86763d3905` |
+| crates/platform/http/src/error.rs | `a9b321c3134162fd496029a7d3b1e2bb6cff2fb867d7ffb2d4d86fb9741dacca` |
 | crates/platform/http/src/etag.rs | `e695e600bf9f5c7227524f459dece6b3ba52b87e0388f76e17af9bfbba32e162` |
 | crates/platform/http/src/external_quotas.rs | `949659a2a5793561b341350338605480d31797b3717e6e53906913fe04a50ae0` |
 | crates/platform/http/src/features.rs | `fc8d560cac864dff057446f468a3514f443ba5f46344d5885becec32e93c9109` |

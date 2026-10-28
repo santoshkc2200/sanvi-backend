@@ -3299,6 +3299,166 @@
   },
   {
    "method": "GET",
+   "path": "/api/v1/tenant/accounting/books",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::list_accounting_books",
+   "permission": "tenant.accounting.read",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/tenant/accounting/books",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::create_accounting_book",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/tenant/accounting/books/{book_id}",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::get_accounting_book",
+   "permission": "tenant.accounting.read",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/tenant/accounting/books/{book_id}/connections",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::register_accounting_connection",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::start_accounting_authorization",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::revoke_accounting_authorization",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/tenant/accounting/authorization/callback",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::complete_accounting_authorization",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/tenant/accounting/books/{book_id}/activation",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::activate_accounting_book",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/tenant/accounting/books/{book_id}/switch",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::schedule_accounting_switch",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/tenant/accounting/books/{book_id}/switch",
+   "handler": "crates/contexts/accounting/src/adapters/http/handlers.rs::cancel_accounting_switch",
+   "permission": "tenant.accounting.manage",
+   "tenant": "CurrentTenant",
+   "rate_limit": "global-config-dependent+tenant-optional",
+   "evidence": [
+    "crates/contexts/accounting/src/adapters/http/routes.rs"
+   ],
+   "mount_prefix": "/api/v1/tenant",
+   "mount_evidence": {
+    "source": "apps/api/src/lib.rs",
+    "expression": "web::scope(\"/api/v1/tenant\")"
+   }
+  },
+  {
+   "method": "GET",
    "path": "/api/v1/tenant/ecommerce-imports/stores/{store_id}/connections/{provider}/callback",
    "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_import_callback",
    "permission": "ecommerce.import.manage",

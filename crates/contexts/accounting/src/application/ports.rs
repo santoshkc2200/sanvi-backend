@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, net::IpAddr, pin::Pin};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -6,8 +6,27 @@ use sanvi_kernel::{EventId, TenantId, UserId};
 
 use crate::domain::{
     AccountingError, AccountingEvent, Book, BookId, Connection, ConnectionId, Credential,
-    OAuthStateClaims, Posting, PostingId, Provider, ProviderCatalog, Secret, TokenGrant,
+    CredentialStatus, OAuthStateClaims, Posting, PostingId, Provider, ProviderCatalog, Secret,
+    TokenGrant,
 };
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestContext {
+    pub request_id: Option<String>,
+    pub ip: Option<IpAddr>,
+    pub user_agent: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuditRecord {
+    pub tenant_id: TenantId,
+    pub user_id: UserId,
+    pub book_id: BookId,
+    pub action: &'static str,
+    pub occurred_at: DateTime<Utc>,
+    pub after: serde_json::Value,
+    pub request: RequestContext,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Actor {
@@ -66,9 +85,20 @@ pub type PostingChange = Box<dyn FnOnce(&mut Posting) -> Result<bool, Accounting
 /// `assign` serialize on the same book row; pending includes uncertain exports.
 #[async_trait]
 pub trait AccountingStore: Send + Sync {
-    async fn create(&self, book: Book, event: AccountingEvent) -> Result<Book, AccountingError>;
+    async fn create(
+        &self,
+        book: Book,
+        event: AccountingEvent,
+        audit: AuditRecord,
+    ) -> Result<Book, AccountingError>;
     /// Unlocked snapshot; mutations must pass its revision back to `change`.
     async fn get(&self, tenant_id: TenantId, book_id: BookId) -> Result<Book, AccountingError>;
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<Book>, AccountingError>;
+    async fn credential_statuses(
+        &self,
+        tenant_id: TenantId,
+        book_id: BookId,
+    ) -> Result<Vec<(ConnectionId, CredentialStatus)>, AccountingError>;
     /// Hold the book lock through the asynchronous change. `None` leaves the
     /// book unchanged, for operations coordinating credentials with routing.
     /// Acquire this lock before credential locks, and hold it through provider
@@ -79,6 +109,7 @@ pub trait AccountingStore: Send + Sync {
         book_id: BookId,
         revision: i64,
         change: BookChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Book, AccountingError>;
     async fn assign(
         &self,
@@ -91,6 +122,7 @@ pub trait AccountingStore: Send + Sync {
         tenant_id: TenantId,
         posting_id: PostingId,
         change: PostingChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Posting, AccountingError>;
 }
 
@@ -146,6 +178,7 @@ pub trait CredentialStore: Send + Sync {
         &self,
         tenant_id: TenantId,
         credential: Credential,
+        audit: AuditRecord,
     ) -> Result<(), AccountingError>;
     /// Lock the credential row for the whole of `change`, which may call the
     /// provider, then persist its result in the same transaction. A status
@@ -155,5 +188,6 @@ pub trait CredentialStore: Send + Sync {
         tenant_id: TenantId,
         connection_id: ConnectionId,
         change: CredentialChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Credential, AccountingError>;
 }

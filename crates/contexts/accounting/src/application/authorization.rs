@@ -13,8 +13,8 @@ use sanvi_kernel::{Clock, TenantId};
 use uuid::Uuid;
 
 use super::{
-    Actor, Permission, ProviderVerifier, Services,
-    ports::{CredentialStore, ProviderDirectory, ProviderOAuth},
+    Actor, Permission, ProviderVerifier, Services, audit_record,
+    ports::{CredentialStore, ProviderDirectory, ProviderOAuth, RequestContext},
 };
 use crate::domain::{
     AccountMappings, AccountingError, BookId, Connection, ConnectionId, Credential,
@@ -58,9 +58,11 @@ impl Authorization {
 /// Returns the provider consent URL for one registered connection.
 pub struct StartAuthorization(pub Arc<Authorization>);
 impl StartAuthorization {
+    #[tracing::instrument(name = "accounting.start_authorization", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        _request: RequestContext,
         book_id: BookId,
         connection_id: ConnectionId,
     ) -> Result<String, AccountingError> {
@@ -87,12 +89,14 @@ impl StartAuthorization {
 /// exchanged, so a replayed redirect never reaches the provider.
 pub struct CompleteAuthorization(pub Arc<Authorization>);
 impl CompleteAuthorization {
+    #[tracing::instrument(name = "accounting.complete_authorization", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         state: &str,
         code: &str,
-    ) -> Result<(), AccountingError> {
+    ) -> Result<BookId, AccountingError> {
         let auth = &self.0;
         let user_id = auth.user(actor).await?;
         if code.is_empty() || code.len() > 1024 {
@@ -140,12 +144,27 @@ impl CompleteAuthorization {
                 "consent was granted for a different organization",
             ));
         }
+        let audit = audit_record(
+            actor,
+            request,
+            claims.book_id,
+            "accounting.connection.authorized",
+            serde_json::json!({
+                "book_id": claims.book_id.to_string(),
+                "connection_id": claims.connection_id.to_string(),
+                "provider": connection.provider().as_str(),
+                "organization_id": connection.organization_id(),
+            }),
+            now,
+        )?;
         auth.credentials
             .authorize(
                 actor.tenant_id(),
                 Credential::authorized(claims.book_id, claims.connection_id, grant, now),
+                audit,
             )
-            .await
+            .await?;
+        Ok(claims.book_id)
     }
 }
 
@@ -153,9 +172,11 @@ impl CompleteAuthorization {
 /// is authoritative; the provider call is best-effort.
 pub struct RevokeAuthorization(pub Arc<Authorization>);
 impl RevokeAuthorization {
+    #[tracing::instrument(name = "accounting.revoke_authorization", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
+        request: RequestContext,
         book_id: BookId,
         connection_id: ConnectionId,
     ) -> Result<(), AccountingError> {
@@ -163,6 +184,17 @@ impl RevokeAuthorization {
         auth.user(actor).await?;
         let book = auth.services.store.get(actor.tenant_id(), book_id).await?;
         let services = auth.services.clone();
+        let audit = audit_record(
+            actor,
+            request,
+            book_id,
+            "accounting.connection.revoked",
+            serde_json::json!({
+                "book_id": book_id.to_string(),
+                "connection_id": connection_id.to_string(),
+            }),
+            auth.services.clock.now(),
+        )?;
         services
             .store
             .change(
@@ -191,7 +223,7 @@ impl RevokeAuthorization {
                                 Box::new(move |credential| {
                                     Box::pin(async move {
                                         if credential.book_id != book_id {
-                                            return Err(AccountingError::NotFound);
+                                             return Err(AccountingError::NotFound);
                                         }
                                         if let (Some(oauth), Some(tokens)) = (oauth, &credential.tokens)
                                             && let Err(error) = oauth.revoke(&tokens.refresh_token).await
@@ -201,11 +233,13 @@ impl RevokeAuthorization {
                                         Ok(credential.revoked())
                                     })
                                 }),
+                                Some(audit),
                             )
                             .await?;
                         Ok(None)
                     })
                 }),
+                None,
             )
             .await
             .map(|_| ())
@@ -254,6 +288,7 @@ impl AccessTokens {
                         }
                     })
                 }),
+                None,
             )
             .await?;
         credential

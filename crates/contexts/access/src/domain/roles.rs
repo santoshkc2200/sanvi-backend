@@ -223,6 +223,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "tenant.domains.read",
             "tenant.domains.manage",
             "tenant.domains.purchase",
+            "tenant.accounting.read",
+            "tenant.accounting.manage",
             "identity.member.read",
             "identity.member.grant",
             "identity.member.remove",
@@ -264,6 +266,8 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
         key: "tenant_admin",
         name: "Tenant Admin",
         permissions: &[
+            "tenant.accounting.read",
+            "tenant.accounting.manage",
             "identity.member.read",
             "identity.member.grant",
             "identity.member.remove",
@@ -553,5 +557,19 @@ mod tests {
             Utc::now(),
         );
         assert_eq!(tenant.tuple_object(), format!("{tenant_id}:tenant_owner"));
+    }
+
+    #[test]
+    fn owner_and_admin_manage_accounting_member_does_not() {
+        for (role, expected) in [
+            ("tenant_owner", true),
+            ("tenant_admin", true),
+            ("tenant_member", false),
+        ] {
+            let seed = SYSTEM_ROLE_SEEDS.iter().find(|r| r.key == role).unwrap();
+            for key in ["tenant.accounting.read", "tenant.accounting.manage"] {
+                assert_eq!(seed.permissions.contains(&key), expected, "{role} {key}");
+            }
+        }
     }
 }

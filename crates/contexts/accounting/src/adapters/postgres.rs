@@ -9,11 +9,11 @@ use sanvi_persistence::{ScopedTx, TxManager};
 use crate::{
     application::{
         AccountingStore, AssignCommand,
-        ports::{BookChange, PostingChange},
+        ports::{AuditRecord, BookChange, PostingChange},
     },
     domain::{
-        AccountingError, AccountingEvent, Book, BookId, ConnectionId, Posting, PostingId,
-        PostingStatus,
+        AccountingError, AccountingEvent, Book, BookId, ConnectionId, CredentialStatus, Posting,
+        PostingId, PostingStatus,
     },
 };
 
@@ -25,6 +25,18 @@ struct BookRow {
     document: serde_json::Value,
     revision: i64,
     legal_entity_key: String,
+}
+
+struct BookListRow {
+    id: i64,
+    document: serde_json::Value,
+    revision: i64,
+    legal_entity_key: String,
+}
+
+struct CredentialStatusRow {
+    connection_id: i64,
+    status: String,
 }
 
 pub struct PostgresAccountingStore {
@@ -45,6 +57,9 @@ impl PostgresAccountingStore {
     }
 
     /// Lock the book row; every mutation and assignment serializes on it.
+    /// `FOR NO KEY UPDATE` still excludes other lockers but admits the
+    /// `FOR KEY SHARE` that a foreign-key check takes, so a nested credential
+    /// transaction can insert rows referencing this book while it is held.
     async fn load(
         scope: &mut ScopedTx<'_>,
         tenant: TenantId,
@@ -52,7 +67,7 @@ impl PostgresAccountingStore {
     ) -> Result<Book, AccountingError> {
         let row = sqlx::query_as!(
             BookRow,
-            "SELECT document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+            "SELECT document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 AND id = $2 FOR NO KEY UPDATE",
             tenant.as_i64(), id.as_i64()
         ).fetch_optional(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?.ok_or(AccountingError::NotFound)?;
         Self::decode(row, tenant, id)
@@ -295,7 +310,12 @@ impl PostgresAccountingStore {
 
 #[async_trait]
 impl AccountingStore for PostgresAccountingStore {
-    async fn create(&self, book: Book, event: AccountingEvent) -> Result<Book, AccountingError> {
+    async fn create(
+        &self,
+        book: Book,
+        event: AccountingEvent,
+        audit: AuditRecord,
+    ) -> Result<Book, AccountingError> {
         let mut scope = self.begin(book.tenant_id()).await?;
         let document = serde_json::to_value(&book).map_err(storage)?;
         let inserted = sqlx::query!(
@@ -308,6 +328,7 @@ impl AccountingStore for PostgresAccountingStore {
             ));
         }
         self.append(&mut scope, book.tenant_id(), event).await?;
+        crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
         scope.commit().await.map_err(storage)?;
         Ok(book)
     }
@@ -319,12 +340,65 @@ impl AccountingStore for PostgresAccountingStore {
         Ok(book)
     }
 
+    async fn list(&self, tenant: TenantId) -> Result<Vec<Book>, AccountingError> {
+        let mut scope = self.begin(tenant).await?;
+        let rows = sqlx::query_as!(
+            BookListRow,
+            "SELECT id, document, revision, legal_entity_key FROM accounting.books WHERE tenant_id = $1 ORDER BY id ASC LIMIT $2",
+            tenant.as_i64(),
+            crate::application::LIST_BOOKS_LIMIT
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        let mut books = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id = BookId::try_from(row.id).map_err(storage)?;
+            let book_row = BookRow {
+                document: row.document,
+                revision: row.revision,
+                legal_entity_key: row.legal_entity_key,
+            };
+            books.push(Self::decode(book_row, tenant, id)?);
+        }
+        scope.commit().await.map_err(storage)?;
+        Ok(books)
+    }
+
+    async fn credential_statuses(
+        &self,
+        tenant: TenantId,
+        book_id: BookId,
+    ) -> Result<Vec<(ConnectionId, CredentialStatus)>, AccountingError> {
+        let mut scope = self.begin(tenant).await?;
+        let rows = sqlx::query_as!(
+            CredentialStatusRow,
+            "SELECT connection_id, status FROM accounting.provider_credentials WHERE tenant_id = $1 AND book_id = $2 ORDER BY connection_id ASC",
+            tenant.as_i64(),
+            book_id.as_i64()
+        )
+        .fetch_all(&mut **scope.tx_mut().as_inner())
+        .await
+        .map_err(storage)?;
+        let mut statuses = Vec::with_capacity(rows.len());
+        for row in rows {
+            let connection_id = ConnectionId::try_from(row.connection_id).map_err(storage)?;
+            let status = CredentialStatus::parse(&row.status).ok_or_else(|| {
+                AccountingError::Storage(format!("unknown credential status: {}", row.status))
+            })?;
+            statuses.push((connection_id, status));
+        }
+        scope.commit().await.map_err(storage)?;
+        Ok(statuses)
+    }
+
     async fn change(
         &self,
         tenant_id: TenantId,
         book_id: BookId,
         revision: i64,
         change: BookChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Book, AccountingError> {
         let mut scope = self.begin(tenant_id).await?;
         let mut book = Self::load(&mut scope, tenant_id, book_id).await?;
@@ -340,6 +414,9 @@ impl AccountingStore for PostgresAccountingStore {
             tenant_id.as_i64(), book_id.as_i64(), book.revision(), document
         ).execute(&mut **scope.tx_mut().as_inner()).await.map_err(storage)?;
         self.append(&mut scope, tenant_id, event).await?;
+        if let Some(audit) = audit {
+            crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
+        }
         scope.commit().await.map_err(storage)?;
         Ok(book)
     }
@@ -406,6 +483,7 @@ impl AccountingStore for PostgresAccountingStore {
         tenant_id: TenantId,
         posting_id: PostingId,
         change: PostingChange,
+        audit: Option<AuditRecord>,
     ) -> Result<Posting, AccountingError> {
         let mut scope = self.begin(tenant_id).await?;
         let parent = sqlx::query!(
@@ -423,6 +501,12 @@ impl AccountingStore for PostgresAccountingStore {
             BookId::try_from(parent.book_id).map_err(storage)?,
         )
         .await?;
+        if audit
+            .as_ref()
+            .is_some_and(|audit| audit.book_id != book.id())
+        {
+            return Err(AccountingError::NotFound);
+        }
         let mut posting = Self::lock_posting(&mut scope, tenant_id, posting_id).await?;
         let applied = change(&mut posting)?;
         if applied {
@@ -468,6 +552,10 @@ impl AccountingStore for PostgresAccountingStore {
                 },
             )
             .await?;
+
+            if let Some(audit) = audit {
+                crate::adapters::audit::record(&mut scope, &*self.ids, &audit).await?;
+            }
         }
         scope.commit().await.map_err(storage)?;
         Ok(posting)
