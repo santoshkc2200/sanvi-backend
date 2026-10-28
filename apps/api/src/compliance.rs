@@ -88,6 +88,19 @@ impl ComplianceHarness {
     /// the privacy ledger, so no provider ever dials them — but the paths
     /// are the real ones.
     pub fn build(pool: sanvi_persistence::PgPool, ids: Arc<dyn RawIdGenerator>) -> Self {
+        Self::build_with_domains_service(pool, ids, Default::default())
+    }
+
+    /// As [`Self::build`], with the Domains provider pointed at `domains_service`.
+    /// Domains personal data lives in the standalone service, so its provider
+    /// always dials out; with the default (unconfigured) link every Domains step
+    /// stays pending, which is what the operational drill must report when no
+    /// service is reachable. The compliance suite passes a local stand-in.
+    pub fn build_with_domains_service(
+        pool: sanvi_persistence::PgPool,
+        ids: Arc<dyn RawIdGenerator>,
+        domains_service: sanvi_domains::adapters::remote::ServiceConfig,
+    ) -> Self {
         let export_dir =
             std::env::temp_dir().join(format!("sanvi-compliance-drill-{}", uuid::Uuid::now_v7()));
         let config = PrivacyConfig {
@@ -103,6 +116,7 @@ impl ComplianceHarness {
             Arc::new(sanvi_audit::adapters::SqlxAuditWriter::new(ids.clone()));
         let registry = privacy_provider_registry(&PrivacyProviderDeps {
             accounting_service: Default::default(),
+            domains_service,
             media: sanvi_media::MediaConfig::default(),
             product_access: sanvi_product_access::ProductAccessConfig::default(),
             tx: tx.clone(),

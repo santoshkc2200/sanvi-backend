@@ -119,12 +119,13 @@
   {
    "method": "DELETE",
    "path": "/api/v1/tenant/domains/{id}",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::remove_custom_domain",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::remove_custom_domain",
    "permission": "tenant.domains.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -329,12 +330,13 @@
   {
    "method": "GET",
    "path": "/api/v1/platform/domains",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::list_platform_domains",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::list_platform_domains",
    "permission": "platform.domain.read",
    "tenant": "platform cross-tenant administration; no tenant resolver scope",
    "rate_limit": "global-config-dependent",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ]
   },
   {
@@ -1254,12 +1256,13 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/domains",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::list_custom_domains",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::list_custom_domains",
    "permission": "tenant.domains.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -1270,12 +1273,13 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/domains/orders",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::list_domain_orders",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::list_domain_orders",
    "permission": "tenant.domains.purchase",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -1286,12 +1290,13 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/domains/search",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::search_domains",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::search_domains",
    "permission": "tenant.domains.purchase",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -1302,12 +1307,13 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/domains/{id}/instructions",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::get_domain_instructions",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::get_domain_instructions",
    "permission": "tenant.domains.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -1682,13 +1688,13 @@
   {
    "method": "GET",
    "path": "/internal/tls/authorize",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::tls_authorize",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::tls_authorize",
    "permission": "exempt: internal shared secret and optional IP allow-list",
    "tenant": "domain hostname lookup after internal guard",
    "rate_limit": "global-config-dependent",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/handlers.rs",
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ]
   },
   {
@@ -1909,12 +1915,13 @@
   {
    "method": "POST",
    "path": "/api/v1/platform/domains/{id}/release",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::release_platform_domain",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::release_platform_domain",
    "permission": "platform.domain.write",
    "tenant": "platform cross-tenant administration; no tenant resolver scope",
    "rate_limit": "global-config-dependent",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ]
   },
   {
@@ -2607,12 +2614,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/domains",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::claim_custom_domain",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::claim_custom_domain",
    "permission": "tenant.domains.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -2623,12 +2631,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/domains/orders",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::place_domain_order",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::place_domain_order",
    "permission": "tenant.domains.purchase",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.domain_purchase)",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -2639,12 +2648,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/domains/orders/{id}/auto-renew",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::set_order_auto_renew",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::set_order_auto_renew",
    "permission": "tenant.domains.purchase",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -2655,12 +2665,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/domains/{id}/promote",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::promote_primary_domain",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::promote_primary_domain",
    "permission": "tenant.domains.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -2671,12 +2682,13 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/domains/{id}/verify",
-   "handler": "crates/contexts/domains/src/adapters/http/handlers.rs::request_domain_verification",
+   "handler": "crates/contexts/domains/src/adapters/http/gateway_handlers.rs::request_domain_verification",
    "permission": "tenant.domains.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
    "evidence": [
-    "crates/contexts/domains/src/adapters/http/routes.rs"
+    "crates/contexts/domains/src/adapters/http/routes.rs",
+    "crates/contexts/domains/src/adapters/remote.rs"
    ],
    "mount_prefix": "/api/v1/tenant",
    "mount_evidence": {
@@ -3554,6 +3566,45 @@
    "evidence": [
     "apps/api/src/accounting.rs",
     "crates/contexts/accounting/src/adapters/remote.rs",
+    "apps/api/src/lib.rs"
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/internal/domains/audit",
+   "handler": "apps/api/src/domains.rs::ingest_domains_audit",
+   "permission": "exempt:request-bound-domains-service-delegation",
+   "tenant": "signed Domains scope; platform transaction",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "apps/api/src/domains.rs",
+    "crates/contexts/domains/src/adapters/remote.rs",
+    "apps/api/src/lib.rs"
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/internal/domains/events",
+   "handler": "apps/api/src/domains.rs::ingest_domains_event",
+   "permission": "exempt:request-bound-domains-service-delegation",
+   "tenant": "signed Domains scope; platform transaction",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "apps/api/src/domains.rs",
+    "crates/contexts/domains/src/adapters/remote.rs",
+    "apps/api/src/lib.rs"
+   ]
+  },
+  {
+   "method": "POST",
+   "path": "/internal/domains/tenant-state",
+   "handler": "apps/api/src/domains.rs::tenant_state",
+   "permission": "exempt:request-bound-domains-service-delegation",
+   "tenant": "signed Domains scope; platform lookup",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "apps/api/src/domains.rs",
+    "crates/contexts/domains/src/adapters/remote.rs",
     "apps/api/src/lib.rs"
    ]
   }

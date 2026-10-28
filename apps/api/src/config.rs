@@ -149,6 +149,9 @@ pub struct AppConfig {
     /// Independently deployed Accounting service. Provider secrets live there.
     #[serde(default)]
     pub accounting_service: sanvi_accounting::adapters::remote::ServiceConfig,
+    /// Independently deployed Domains service.
+    #[serde(default)]
+    pub domains_service: sanvi_domains::adapters::remote::ServiceConfig,
     pub media: MediaConfig,
     /// Product services behind the platform proxy (ecommerce first).
     pub product_access: ProductAccessConfig,
@@ -182,6 +185,7 @@ impl Default for AppConfig {
             advertising: AdvertisingConfig::default(),
             accounting: AccountingConfig::default(),
             accounting_service: Default::default(),
+            domains_service: Default::default(),
             media: MediaConfig::default(),
             product_access: ProductAccessConfig::default(),
             notification: NotificationConfig::default(),
@@ -243,6 +247,9 @@ impl AppConfig {
             problems.push(err.to_string());
         }
         if let Err(err) = self.accounting_service.validate() {
+            problems.push(err.to_string());
+        }
+        if let Err(err) = self.domains_service.validate() {
             problems.push(err.to_string());
         }
         if let Err(err) = self.accounting.validate() {

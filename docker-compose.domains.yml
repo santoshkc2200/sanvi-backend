@@ -23,7 +23,7 @@ services:
       ACME_DIRECTORY: ${ACME_DIRECTORY:-https://acme-v02.api.letsencrypt.org/directory}
       SANVI_DOMAIN_INTERNAL_SECRET: ${SANVI_DOMAIN_INTERNAL_SECRET:?Set the domain gate secret}
       STOREFRONT_UPSTREAM: ${STOREFRONT_UPSTREAM:?Set the reachable storefront host and port}
-      API_UPSTREAM: api_proxy:8080
+      DOMAINS_UPSTREAM: ${DOMAINS_UPSTREAM:-domains_service:8083}
     ports: ["80:80", "443:443", "443:443/udp"]
     volumes:
       - ./deployment/Caddyfile.domains:/etc/caddy/Caddyfile:ro

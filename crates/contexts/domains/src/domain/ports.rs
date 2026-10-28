@@ -514,6 +514,12 @@ pub trait TenantState: Send + Sync {
     async fn is_active(&self, tenant_id: TenantId) -> Result<bool, DomainsError>;
 }
 
+/// Source of live hostname to tenant mappings for storefront resolution.
+#[async_trait]
+pub trait LiveHostnameSource: Send + Sync {
+    async fn tenant_for(&self, hostname: &str) -> Result<Option<TenantId>, DomainsError>;
+}
+
 /// Publishes domain events into the transactional outbox.
 #[async_trait]
 pub trait EventPublisher: Send + Sync {

@@ -5,15 +5,11 @@ use chrono::Utc;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use sanvi_http::{
-    ApiError, CurrentLocale, CurrentSubject, CurrentTenant, ProblemDetail, RequiredPermission,
-};
+use sanvi_http::{ApiError, CurrentLocale, CurrentSubject, CurrentTenant, RequiredPermission};
 use sanvi_kernel::TenantId;
 use sanvi_persistence::ScopedTx;
 
-use crate::application::{
-    ClaimCustomDomainCommand, InstructionsView, OrderView, PlaceDomainOrderCommand,
-};
+use crate::application::{ClaimCustomDomainCommand, PlaceDomainOrderCommand};
 use crate::domain::{CustomDomainId, DomainOrderId, DomainsError};
 
 use super::validation;
@@ -134,21 +130,7 @@ async fn commit_scope(scope: ScopedTx<'_>) -> Result<(), ApiError> {
 // Tenant: claim / list / delete / promote / verify / instructions.
 // ---------------------------------------------------------------------------
 
-/// `POST /api/v1/tenant/domains`.
-#[utoipa::path(
-    post,
-    path = "/api/v1/tenant/domains",
-    tag = "domains",
-    operation_id = "claim_custom_domain",
-    request_body = ClaimCustomDomainCommand,
-    responses(
-        (status = 201, description = "The claim and its verification challenge", body = crate::application::CustomDomainView),
-        (status = 400, description = "Invalid hostname", body = ProblemDetail),
-        (status = 403, description = "Permission denied, or entitlement missing (reason: domain_entitlement_required)", body = ProblemDetail),
-        (status = 409, description = "Hostname already claimed", body = ProblemDetail)
-    )
-)]
-pub async fn claim_custom_domain(
+pub async fn claim_custom_domain_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     _subject: CurrentSubject,
@@ -191,21 +173,7 @@ fn domain_limit_schema() -> utoipa::openapi::schema::Object {
     sanvi_http::openapi::page_limit_schema(200, 200).build()
 }
 
-/// `GET /api/v1/tenant/domains`.
-/// Ordered by id DESC.
-#[utoipa::path(
-    get,
-    path = "/api/v1/tenant/domains",
-    tag = "domains",
-    operation_id = "list_custom_domains",
-    params(DomainListQuery),
-    responses(
-        (status = 200, description = "The tenant's domains", body = Vec<crate::application::CustomDomainView>),
-        (status = 400, description = "Malformed cursor", body = ProblemDetail),
-        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
-    )
-)]
-pub async fn list_custom_domains(
+pub async fn list_custom_domains_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     query: web::Query<DomainListQuery>,
@@ -230,22 +198,7 @@ pub async fn list_custom_domains(
     Ok(HttpResponse::Ok().json(view))
 }
 
-/// `GET /api/v1/tenant/domains/{id}/instructions`.
-#[utoipa::path(
-    get,
-    path = "/api/v1/tenant/domains/{id}/instructions",
-    tag = "domains",
-    operation_id = "get_domain_instructions",
-    params(
-        ("id" = String, Path, description = "The domain claim id"),
-        ("locale" = Option<String>, Query, description = "Requested locale (defaults to the negotiated one)")
-    ),
-    responses(
-        (status = 200, description = "The exact records and the registrar walkthrough", body = InstructionsView),
-        (status = 404, description = "Unknown domain", body = ProblemDetail)
-    )
-)]
-pub async fn get_domain_instructions(
+pub async fn get_domain_instructions_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     locale: CurrentLocale,
@@ -275,20 +228,7 @@ pub struct InstructionsQuery {
     pub locale: Option<String>,
 }
 
-/// `POST /api/v1/tenant/domains/{id}/verify`.
-#[utoipa::path(
-    post,
-    path = "/api/v1/tenant/domains/{id}/verify",
-    tag = "domains",
-    operation_id = "request_domain_verification",
-    params(("id" = String, Path, description = "The domain claim id")),
-    responses(
-        (status = 200, description = "The domain, now queued for verification", body = crate::application::CustomDomainView),
-        (status = 404, description = "Unknown domain", body = ProblemDetail),
-        (status = 429, description = "Throttled by the backoff schedule", body = ProblemDetail)
-    )
-)]
-pub async fn request_domain_verification(
+pub async fn request_domain_verification_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     path: web::Path<CustomDomainId>,
@@ -308,19 +248,7 @@ pub async fn request_domain_verification(
     Ok(HttpResponse::Ok().json(view))
 }
 
-/// `POST /api/v1/tenant/domains/{id}/promote`.
-#[utoipa::path(
-    post,
-    path = "/api/v1/tenant/domains/{id}/promote",
-    tag = "domains",
-    operation_id = "promote_primary_domain",
-    params(("id" = String, Path, description = "The domain claim id")),
-    responses(
-        (status = 200, description = "The domain is now primary", body = crate::application::CustomDomainView),
-        (status = 404, description = "Unknown domain", body = ProblemDetail)
-    )
-)]
-pub async fn promote_primary_domain(
+pub async fn promote_primary_domain_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     path: web::Path<CustomDomainId>,
@@ -340,19 +268,7 @@ pub async fn promote_primary_domain(
     Ok(HttpResponse::Ok().json(view))
 }
 
-/// `DELETE /api/v1/tenant/domains/{id}`.
-#[utoipa::path(
-    delete,
-    path = "/api/v1/tenant/domains/{id}",
-    tag = "domains",
-    operation_id = "remove_custom_domain",
-    params(("id" = String, Path, description = "The domain claim id")),
-    responses(
-        (status = 200, description = "The removed domain", body = crate::application::CustomDomainView),
-        (status = 404, description = "Unknown domain", body = ProblemDetail)
-    )
-)]
-pub async fn remove_custom_domain(
+pub async fn remove_custom_domain_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     path: web::Path<CustomDomainId>,
@@ -386,19 +302,7 @@ pub struct SearchQuery {
     pub q: String,
 }
 
-/// `GET /api/v1/tenant/domains/search`.
-#[utoipa::path(
-    get,
-    path = "/api/v1/tenant/domains/search",
-    tag = "domains",
-    operation_id = "search_domains",
-    params(("q" = String, Query, description = "Bare term (`acme`) or hostname (`acme.com`)")),
-    responses(
-        (status = 200, description = "Availability and normalized pricing", body = crate::application::DomainSearchView),
-        (status = 403, description = "Permission denied, or entitlement missing (reason: domain_entitlement_required)", body = ProblemDetail)
-    )
-)]
-pub async fn search_domains(
+pub async fn search_domains_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     query: web::Query<SearchQuery>,
@@ -412,20 +316,7 @@ pub async fn search_domains(
     Ok(HttpResponse::Ok().json(view))
 }
 
-/// `POST /api/v1/tenant/domains/orders`.
-#[utoipa::path(
-    post,
-    path = "/api/v1/tenant/domains/orders",
-    tag = "domains",
-    operation_id = "place_domain_order",
-    request_body = PlaceDomainOrderCommand,
-    responses(
-        (status = 201, description = "The order (the saga may still be in flight; see status)", body = OrderView),
-        (status = 400, description = "Invalid hostname or unsupported TLD", body = ProblemDetail),
-        (status = 403, description = "Permission denied, or entitlement missing (reason: domain_entitlement_required)", body = ProblemDetail)
-    )
-)]
-pub async fn place_domain_order(
+pub async fn place_domain_order_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
@@ -444,21 +335,7 @@ pub async fn place_domain_order(
     Ok(HttpResponse::Created().json(view))
 }
 
-/// `GET /api/v1/tenant/domains/orders`.
-/// Ordered by id DESC.
-#[utoipa::path(
-    get,
-    path = "/api/v1/tenant/domains/orders",
-    tag = "domains",
-    operation_id = "list_domain_orders",
-    params(DomainListQuery),
-    responses(
-        (status = 200, description = "The tenant's domain orders", body = Vec<OrderView>),
-        (status = 400, description = "Malformed cursor", body = ProblemDetail),
-        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
-    )
-)]
-pub async fn list_domain_orders(
+pub async fn list_domain_orders_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     query: web::Query<DomainListQuery>,
@@ -488,20 +365,7 @@ pub struct AutoRenewCommand {
     pub enabled: bool,
 }
 
-/// `POST /api/v1/tenant/domains/orders/{id}/auto-renew`.
-#[utoipa::path(
-    post,
-    path = "/api/v1/tenant/domains/orders/{id}/auto-renew",
-    tag = "domains",
-    operation_id = "set_order_auto_renew",
-    params(("id" = String, Path, description = "The order id")),
-    request_body = AutoRenewCommand,
-    responses(
-        (status = 200, description = "The updated order", body = OrderView),
-        (status = 404, description = "Unknown order", body = ProblemDetail)
-    )
-)]
-pub async fn set_order_auto_renew(
+pub async fn set_order_auto_renew_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     tenant: CurrentTenant,
     path: web::Path<DomainOrderId>,
@@ -541,23 +405,7 @@ pub struct TlsAuthorizeResponse {
     pub reason: String,
 }
 
-/// `GET /internal/tls/authorize` — the edge asks before issuing a
-/// certificate. Self-authenticated: `x-sanvi-internal` shared secret plus
-/// an optional client-IP allow-list; `/internal` sits outside the authn
-/// middleware.
-#[utoipa::path(
-    get,
-    path = "/internal/tls/authorize",
-    tag = "domains",
-    operation_id = "tls_authorize",
-    params(("host" = String, Query, description = "The hostname the edge wants a certificate for")),
-    responses(
-        (status = 200, description = "Issuance authorized", body = TlsAuthorizeResponse),
-        (status = 403, description = "Issuance denied", body = TlsAuthorizeResponse),
-        (status = 503, description = "The gate is not configured", body = ProblemDetail)
-    )
-)]
-pub async fn tls_authorize(
+pub async fn tls_authorize_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     request: HttpRequest,
     query: web::Query<TlsAuthorizeQuery>,
@@ -694,21 +542,7 @@ fn platform_domain_limit_schema() -> utoipa::openapi::schema::Object {
     sanvi_http::openapi::page_limit_schema(100, 50).build()
 }
 
-/// `GET /api/v1/platform/domains`.
-/// Ordered by id DESC.
-#[utoipa::path(
-    get,
-    path = "/api/v1/platform/domains",
-    tag = "domains",
-    operation_id = "list_platform_domains",
-    params(PlatformDomainsQuery),
-    responses(
-        (status = 200, description = "Domains across tenants", body = Vec<crate::application::CustomDomainView>),
-        (status = 400, description = "Malformed cursor", body = ProblemDetail),
-        (status = 504, description = "Statement timeout - the request exceeded its budget", body = ProblemDetail)
-    )
-)]
-pub async fn list_platform_domains(
+pub async fn list_platform_domains_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     query: web::Query<PlatformDomainsQuery>,
     _guard: RequiredPermission,
@@ -727,20 +561,7 @@ pub async fn list_platform_domains(
     Ok(HttpResponse::Ok().json(view))
 }
 
-/// `POST /api/v1/platform/domains/{id}/release`.
-#[utoipa::path(
-    post,
-    path = "/api/v1/platform/domains/{id}/release",
-    tag = "domains",
-    operation_id = "release_platform_domain",
-    params(("id" = String, Path, description = "The domain id")),
-    request_body = ReleaseDomainCommand,
-    responses(
-        (status = 200, description = "The released domain", body = crate::application::CustomDomainView),
-        (status = 404, description = "Unknown domain", body = ProblemDetail)
-    )
-)]
-pub async fn release_platform_domain(
+pub async fn release_platform_domain_embedded(
     state: web::Data<crate::adapters::http::DomainsState>,
     path: web::Path<CustomDomainId>,
     body: web::Json<ReleaseDomainCommand>,

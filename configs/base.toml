@@ -686,3 +686,10 @@ quotas = false
 # the service's audit/event deliveries). They must differ.
 [accounting_service]
 base_url = ""
+
+# Domains is independently deployed in standalone domains-service.
+# Set the two keys only through SANVI__DOMAINS_SERVICE__SIGNING_SECRET (signs
+# requests to the service) and SANVI__DOMAINS_SERVICE__INBOUND_SECRET (verifies
+# the service's audit/event deliveries and tenant-state requests). They must differ.
+[domains_service]
+base_url = ""

@@ -6,7 +6,9 @@
 //! beside the assembled HTTP app (`apps/api` integration, gpc_storefront);
 //! everything else runs here, per jurisdiction, against its own clock.
 
-use sanvi_api::compliance::{ComplianceHarness, DrillKind, run_dsr_drill};
+mod common;
+
+use sanvi_api::compliance::{DrillKind, run_dsr_drill};
 use sanvi_kernel::{NodeId, RawIdGenerator, SnowflakeGenerator};
 use std::sync::Arc;
 
@@ -20,7 +22,7 @@ fn ids() -> Arc<dyn RawIdGenerator> {
 #[tokio::test]
 async fn every_dsr_path_completes_inside_each_jurisdictions_statutory_deadline() {
     let db = sanvi_testsupport::test_db().await;
-    let harness = ComplianceHarness::build(db.app_pool().clone(), ids());
+    let harness = common::harness(db.app_pool().clone(), ids()).await.0;
 
     let profiles = harness.profiles().await.expect("live profiles");
     assert!(

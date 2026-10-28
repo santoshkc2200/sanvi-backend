@@ -52,6 +52,7 @@ http://:9082 {
             "run", "-d", "-p", "127.0.0.1::443",
             "-e", "ACME_EMAIL=domains@example.com",
             "-e", "API_UPSTREAM=127.0.0.1:9081",
+            "-e", "DOMAINS_UPSTREAM=127.0.0.1:9081",
             "-e", "STOREFRONT_UPSTREAM=127.0.0.1:9082",
             "-e", "SANVI_DOMAIN_INTERNAL_SECRET=edge-test",
             "-v", f"{fixtures}:/fixtures:ro", IMAGE,

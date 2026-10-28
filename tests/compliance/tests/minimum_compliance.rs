@@ -1,4 +1,6 @@
 //! Regression proofs for the minimum-compliance fixes, using the real provider registry.
+mod common;
+
 use sanvi_api::compliance::ComplianceHarness;
 use sanvi_privacy::{
     PrivacyConfig,
@@ -34,7 +36,7 @@ async fn setup() -> (
 ) {
     let db = sanvi_testsupport::test_db().await;
     let ids = sanvi_testsupport::test_ids();
-    let harness = ComplianceHarness::build(db.app_pool(), ids.clone());
+    let harness = common::harness(db.app_pool(), ids.clone()).await.0;
     (db, harness, ids)
 }
 #[tokio::test]

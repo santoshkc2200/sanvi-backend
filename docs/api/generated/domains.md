@@ -11,7 +11,7 @@ Operation: `list_platform_domains`
 `GET /api/v1/platform/domains`.
 Ordered by id DESC.
 
-Responses: 200, 400, 504
+Responses: 200, 400, 502, 503, 504
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -65,9 +65,9 @@ Responses: 200, 400, 504
 
 Operation: `release_platform_domain`
 
-`POST /api/v1/platform/domains/{id}/release`.
 
-Responses: 200, 404
+
+Responses: 200, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ Operation: `list_custom_domains`
 `GET /api/v1/tenant/domains`.
 Ordered by id DESC.
 
-Responses: 200, 400, 504
+Responses: 200, 400, 502, 503, 504
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -195,9 +195,9 @@ Responses: 200, 400, 504
 
 Operation: `claim_custom_domain`
 
-`POST /api/v1/tenant/domains`.
 
-Responses: 201, 400, 403, 409
+
+Responses: 201, 400, 403, 409, 502, 503
 
 ### Request journey (en-US / USD, cents)
 
@@ -270,7 +270,7 @@ Operation: `list_domain_orders`
 `GET /api/v1/tenant/domains/orders`.
 Ordered by id DESC.
 
-Responses: 200, 400, 504
+Responses: 200, 400, 403, 502, 503, 504
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -321,9 +321,9 @@ Responses: 200, 400, 504
 
 Operation: `place_domain_order`
 
-`POST /api/v1/tenant/domains/orders`.
 
-Responses: 201, 400, 403
+
+Responses: 201, 400, 403, 502, 503
 
 ### Request journey (en-US / USD, cents)
 
@@ -411,9 +411,9 @@ Content-Type: application/json
 
 Operation: `set_order_auto_renew`
 
-`POST /api/v1/tenant/domains/orders/{id}/auto-renew`.
 
-Responses: 200, 404
+
+Responses: 200, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -483,9 +483,9 @@ Content-Type: application/json
 
 Operation: `search_domains`
 
-`GET /api/v1/tenant/domains/search`.
 
-Responses: 200, 403
+
+Responses: 200, 403, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -547,9 +547,9 @@ Responses: 200, 403
 
 Operation: `remove_custom_domain`
 
-`DELETE /api/v1/tenant/domains/{id}`.
 
-Responses: 200, 404
+
+Responses: 200, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -597,9 +597,9 @@ Responses: 200, 404
 
 Operation: `get_domain_instructions`
 
-`GET /api/v1/tenant/domains/{id}/instructions`.
 
-Responses: 200, 404
+
+Responses: 200, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -666,9 +666,9 @@ Responses: 200, 404
 
 Operation: `promote_primary_domain`
 
-`POST /api/v1/tenant/domains/{id}/promote`.
 
-Responses: 200, 404
+
+Responses: 200, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -716,9 +716,9 @@ Responses: 200, 404
 
 Operation: `request_domain_verification`
 
-`POST /api/v1/tenant/domains/{id}/verify`.
 
-Responses: 200, 404, 429
+
+Responses: 200, 404, 429, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -762,16 +762,93 @@ Responses: 200, 404, 429
 }
 ```
 
+## POST /internal/domains/audit
+
+Operation: `ingest_domains_audit`
+
+
+
+Responses: 204, 401, 403, 409
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `x-domains-delegation` | header | yes | type="string" |
+
+## POST /internal/domains/events
+
+Operation: `ingest_domains_event`
+
+
+
+Responses: 204, 401, 403, 409
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `x-domains-delegation` | header | yes | type="string" |
+
+## POST /internal/domains/tenant-state
+
+Operation: `check_domains_tenant_state`
+
+
+
+Responses: 200, 400, 401
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `x-domains-delegation` | header | yes | type="string" |
+
+### Request journey (en-US / USD, cents)
+
+```http
+POST /internal/domains/tenant-state
+Accept-Language: en-US
+Content-Type: application/json
+x-domains-delegation: example
+
+{
+  "tenant_id": "873698342314721281"
+}
+```
+
+### Request journey (ja-JP / JPY, zero-decimal yen)
+
+```http
+POST /internal/domains/tenant-state
+Accept-Language: ja-JP
+Content-Type: application/json
+x-domains-delegation: example
+
+{
+  "tenant_id": "873698342314721281"
+}
+```
+
+### Response 200 (en-US / USD, cents)
+
+```json
+{
+  "active": true,
+  "status": "example"
+}
+```
+
+### Response 200 (ja-JP / JPY, zero-decimal yen)
+
+```json
+{
+  "active": true,
+  "status": "example"
+}
+```
+
 ## GET /internal/tls/authorize
 
 Operation: `tls_authorize`
 
-`GET /internal/tls/authorize` — the edge asks before issuing a
-certificate. Self-authenticated: `x-sanvi-internal` shared secret plus
-an optional client-IP allow-list; `/internal` sits outside the authn
-middleware.
 
-Responses: 200, 403, 503
+
+Responses: 200, 403, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |

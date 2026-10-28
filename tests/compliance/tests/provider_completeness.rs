@@ -16,11 +16,13 @@
 //!    when every context reaches a terminal participant state on *that*
 //!    path — a provider missing from either path is a failed drill.
 
+mod common;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sanvi_api::compliance::{ComplianceHarness, DrillKind, run_dsr_drill};
+use sanvi_api::compliance::{DrillKind, run_dsr_drill};
 use sanvi_kernel::{NodeId, RawIdGenerator, SnowflakeGenerator};
 use sanvi_privacy::domain::{
     CONTEXT_NAMES, DATA_CLASSES, DataBundle, DataClassDef, EraseMode, EraseReport,
@@ -176,7 +178,7 @@ impl sanvi_audit::domain::ports::AuditWriter for NoopAudit {
 #[tokio::test]
 async fn every_registered_context_joins_both_the_access_and_erasure_paths() {
     let db = sanvi_testsupport::test_db().await;
-    let harness = ComplianceHarness::build(db.app_pool().clone(), ids());
+    let (harness, domains_calls) = common::harness(db.app_pool().clone(), ids()).await;
     for kind in [DrillKind::Access, DrillKind::Erasure] {
         let timing = run_dsr_drill(&harness, "eu", kind)
             .await
@@ -184,6 +186,14 @@ async fn every_registered_context_joins_both_the_access_and_erasure_paths() {
         assert!(
             timing.within_deadline,
             "{kind:?} drill outside its statutory window: {timing:?}"
+        );
+    }
+    // Domains joins by calling its service, not by a local no-op.
+    let calls = domains_calls.lock().unwrap().clone();
+    for path in ["/internal/privacy/collect", "/internal/privacy/erase"] {
+        assert!(
+            calls.iter().any(|call| call == path),
+            "the Domains provider never reached {path}; calls: {calls:?}"
         );
     }
 }
