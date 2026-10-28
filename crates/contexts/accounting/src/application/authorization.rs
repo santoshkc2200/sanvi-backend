@@ -58,6 +58,7 @@ impl Authorization {
 /// Returns the provider consent URL for one registered connection.
 pub struct StartAuthorization(pub Arc<Authorization>);
 impl StartAuthorization {
+    #[tracing::instrument(name = "accounting.start_authorization", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -88,6 +89,7 @@ impl StartAuthorization {
 /// exchanged, so a replayed redirect never reaches the provider.
 pub struct CompleteAuthorization(pub Arc<Authorization>);
 impl CompleteAuthorization {
+    #[tracing::instrument(name = "accounting.complete_authorization", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,
@@ -170,6 +172,7 @@ impl CompleteAuthorization {
 /// is authoritative; the provider call is best-effort.
 pub struct RevokeAuthorization(pub Arc<Authorization>);
 impl RevokeAuthorization {
+    #[tracing::instrument(name = "accounting.revoke_authorization", skip_all)]
     pub async fn execute(
         &self,
         actor: Actor,

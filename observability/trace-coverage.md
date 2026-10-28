@@ -28,6 +28,7 @@ Rules:
 | access | roles.rs | 3 | 3 | yes | covered
 | access | seed_features.rs | 1 | 1 | no | covered
 | access | seed_roles.rs | 1 | 1 | yes | covered
+| accounting | authorization.rs | 3 | 3 | yes | covered
 | accounting | ports.rs | 0 | 0 | yes | n/a
 | advertising | access_tokens.rs | 0 | 0 | yes | n/a
 | advertising | budget/alerts.rs | 2 | 2 | yes | covered
