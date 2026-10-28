@@ -235,6 +235,7 @@ What crosses: code and configuration on their way to a tagged, deployed image.
 | billing | TB6 | `crates/contexts/billing/tests/billing_integration.rs` |
 | payments | TB6, TB7 | `crates/contexts/payments/tests/payments_integration.rs`, `scripts/check-connect-invariants.sh` |
 | advertising | TB8, TB9 | `crates/contexts/advertising/tests/integration/{advertising,tracking,budget}_integration.rs`, `scripts/check-ads-invariants.sh` |
+| accounting | TB4, TB5, Accounting section | `crates/contexts/accounting/tests/{accounting,authorization}_integration.rs`, `apps/api/tests/integration/{accounting_routes,idor_sweep}.rs` |
 | domains | TB2, TB14 | `crates/contexts/domains/tests/domains_integration.rs` |
 | privacy | TB11 | `crates/contexts/privacy/tests/integration/{privacy_integration,jurisdiction_matrix}.rs`, `apps/api/tests/integration/privacy_providers.rs` |
 | platform_admin | TB10 | `crates/contexts/platform_admin/tests/impersonation.rs` |
@@ -329,6 +330,17 @@ credential revocation and its outbox event commit together.
 Regression evidence: `crates/contexts/accounting/tests/authorization_integration.rs`
 (`failed_first_authorization_does_not_cache_a_rolled_back_key`,
 `activation_serializes_with_revocation`, `scheduled_switch_serializes_with_revocation`).
+
+The tenant API (`/api/v1/tenant/accounting/...`, behind `features.accounting` and
+the `accounting.freee` entitlement) adds two boundaries of its own:
+
+| # | Threat | STRIDE | L/I | Mitigation — verified by |
+|---|--------|--------|-----|--------------------------|
+| T65 | Consent callback abuse: replaying a `state`, completing another user's or tenant's consent, binding a different freee company, or leaking the code or tokens | Spoofing / Information disclosure | M/H | The callback is a `POST` with a JSON body, so the code stays out of URLs and access logs. `state` is HMAC-signed, bound to tenant, user, book and connection, single-use and burned before the code exchange; the grant is kept only when freee's `company_id` equals the registered organization. `tenant.accounting.manage` is checked before the state is touched, so a user who lost the role cannot burn it. Responses carry the book view only, never token, code or state material — `apps/api/tests/integration/accounting_routes.rs` (`callback_after_losing_manage_is_403_and_keeps_state`, `responses_never_contain_tokens`), `crates/contexts/accounting/tests/authorization_integration.rs` |
+| T66 | Audit command integrity: a management change lands without its audit record, a record is rewritten before delivery, or it is delivered twice | Repudiation / Tampering | L/H | Every `Manage` mutation inserts its `accounting.audit_commands` row in the same tenant transaction as the change and its outbox event; the runtime role may only insert and set `delivered_at`. The worker drains rows under `FOR UPDATE SKIP LOCKED` into the hash-chained audit trail, so two workers deliver each row once. Entries hold IDs, provider, organization, dates and mapping codes, never credential material — `crates/contexts/accounting/tests/accounting_integration.rs`, migration `20261027010000_accounting_audit_commands` |
+
+Cross-tenant book and connection IDs answer 404 on every accounting route, identical to unknown
+IDs — `apps/api/tests/integration/idor_sweep.rs`.
 
 ## PCI DSS scope confirmation (re-confirmed at this refresh)
 

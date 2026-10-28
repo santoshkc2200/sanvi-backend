@@ -23,6 +23,7 @@ pub enum PostingTag {}
 pub type PostingId = Id<PostingTag>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = AccountingProvider)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Freee,

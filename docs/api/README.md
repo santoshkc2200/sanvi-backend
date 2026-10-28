@@ -5,6 +5,7 @@
 Generated from the Rust OpenAPI contract. Journey examples show en-US/USD and ja-JP/JPY; amounts are integer minor units and JPY has zero decimals.
 
 - [Access](generated/access.md)
+- [Accounting](generated/accounting.md)
 - [Advertising](generated/advertising.md)
 - [Audit](generated/audit.md)
 - [Billing](generated/billing.md)

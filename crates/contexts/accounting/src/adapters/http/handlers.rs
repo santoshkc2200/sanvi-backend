@@ -84,6 +84,7 @@ pub struct BookView {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[schema(as = AccountingConnectionView)]
 pub struct ConnectionView {
     #[schema(value_type = String)]
     pub id: ConnectionId,

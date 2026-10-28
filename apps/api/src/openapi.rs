@@ -1,3 +1,10 @@
+use sanvi_accounting::adapters::http::{
+    AccountingProblemType, ActivateBookRequest, BookView, CompleteAuthorizationRequest,
+    ConnectionView as AccountingConnectionView, CreateBookRequest, CredentialStatusView,
+    PeriodStateView, PeriodView, RegisterConnectionRequest, ScheduleSwitchRequest,
+    StartAuthorizationResponse,
+};
+use sanvi_accounting::domain::{AccountMappings, Provider as AccountingProvider};
 use sanvi_advertising::adapters::http::handlers::{
     AccountView, AdvertisingProblemType, BudgetAlertsView, BudgetCapsView, CampaignChangesView,
     CampaignReviewStatusView, CampaignView, CampaignsView, ConnectionFreshnessView,
@@ -251,6 +258,16 @@ use utoipa::OpenApi;
         sanvi_advertising::adapters::http::tracking_handlers::list_audiences,
         sanvi_advertising::adapters::http::tracking_handlers::create_audience,
         sanvi_advertising::adapters::http::tracking_handlers::refresh_audience,
+        sanvi_accounting::adapters::http::list_accounting_books,
+        sanvi_accounting::adapters::http::create_accounting_book,
+        sanvi_accounting::adapters::http::get_accounting_book,
+        sanvi_accounting::adapters::http::register_accounting_connection,
+        sanvi_accounting::adapters::http::start_accounting_authorization,
+        sanvi_accounting::adapters::http::revoke_accounting_authorization,
+        sanvi_accounting::adapters::http::complete_accounting_authorization,
+        sanvi_accounting::adapters::http::activate_accounting_book,
+        sanvi_accounting::adapters::http::schedule_accounting_switch,
+        sanvi_accounting::adapters::http::cancel_accounting_switch,
         sanvi_media::adapters::http::handlers::create_media_asset,
         sanvi_media::adapters::http::handlers::presign_media_asset_parts,
         sanvi_media::adapters::http::handlers::complete_media_asset_upload,
@@ -284,7 +301,11 @@ use utoipa::OpenApi;
         BudgetCap, BudgetAlert, BudgetPeriod, AlertCondition, DataFreshness,
         SpendStatusItem, SpendStatusReport, BudgetActionsConfigured, DryRunEvaluationResult,
         PlatformAdsHealthReport, PlatformConnectionCountView, ConnectionAttentionView, AdsFreshnessSummaryView,
-        AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput, UploadPartView
+        AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput, UploadPartView,
+        AccountingProblemType, BookView, AccountingConnectionView, PeriodView, PeriodStateView,
+        CredentialStatusView, CreateBookRequest, RegisterConnectionRequest,
+        CompleteAuthorizationRequest, ActivateBookRequest, ScheduleSwitchRequest,
+        StartAuthorizationResponse, AccountMappings, AccountingProvider
     )),
     tags(
         (name = "system", description = "System, health and build information"),
@@ -300,6 +321,7 @@ use utoipa::OpenApi;
         (name = "domains", description = "Custom domains: claims, verification, registrar search/purchase, TLS authorization and health"),
         (name = "payments", description = "Tenant payment providers (Stripe Connect, direct charges — Sanvi is never the merchant of record). Money is minor units + ISO-4217 (JPY is zero-decimal). Problem types: payments/provider-unavailable, payments/provider-auth, payments/provider-rate-limited, payments/invalid-country, payments/country-unsupported, payments/connection-exists, payments/connection-not-active, payments/capability-missing, payments/currency-unsupported, payments/idempotency-conflict. Every mutating endpoint requires an Idempotency-Key header; connection creation keys the provider-side idempotency chain, so retries adopt instead of duplicate. Account Session secrets are never persisted or logged."),
         (name = "advertising", description = "Tenant advertising. Money is integer minor units paired with ISO-4217 account currency; rendered FX values carry their rate date. Problem types: advertising/platform-unavailable, advertising/connection-not-active, advertising/capability-unsupported, advertising/token-expired, advertising/directive-suppressed, advertising/budget-cap-reached. Every mutating endpoint requires Idempotency-Key."),
+        (name = "accounting", description = "Tenant accounting destinations and freee consent. Problem types: accounting/authorization-rejected, accounting/reauthorization-required, accounting/verification-failed, accounting/provider-unavailable. Book mutations require If-Match with the book revision. Nothing is posted to a provider yet."),
         (name = "media", description = "Tenant media assets: multipart upload (presign/complete), asset reads/deletes and delivery URLs via hitox-media-service. Upstream failures surface as problems carrying a `code` extension member."),
         (name = "product_access", description = "Platform proxy to separately deployed product services. `/api/v1/tenant/ecommerce/{tail}` forwards to ecommerce-service `/v1/{tail}` with a signed delegation (tenant, user, the user's ecommerce.* permissions, plan limits) after checking the tenant's products.ecommerce.enabled entitlement. The product service's own contract documents each route; its responses pass through.")
     ),
@@ -474,6 +496,14 @@ mod tests {
         assert!(json.contains("payments/currency-unsupported"));
         assert!(json.contains("payments/idempotency-conflict"));
         assert!(json.contains("Idempotency-Key"));
+    }
+
+    #[test]
+    fn doc_contains_the_accounting_contract() {
+        let json = ApiDoc::openapi().to_json().unwrap();
+        assert!(json.contains("/api/v1/tenant/accounting/books"));
+        assert!(json.contains("/api/v1/tenant/accounting/authorization/callback"));
+        assert!(json.contains("\"accounting\""));
     }
 
     #[test]

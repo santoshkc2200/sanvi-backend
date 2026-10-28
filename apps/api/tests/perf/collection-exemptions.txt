@@ -9,6 +9,10 @@
 # The gate fails on stale lines: an operation that has gained a bounded
 # `limit`, or no longer exists, must be removed from this file.
 
+# accounting — tenant books, one per legal entity, admin-authored
+list_accounting_books | one book per tenant legal entity, admin-created; server caps the list at LIST_BOOKS_LIMIT (100) by design call in the accounting API spec
+get_accounting_book | single book document; its connections and periods grow only through audited admin switches
+
 # access — curated RBAC and entitlement catalogs
 list_permissions | fixed permission catalog seeded by the access context
 list_features | platform feature catalog, admin-authored and slowly growing by design
