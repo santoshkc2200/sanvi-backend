@@ -852,6 +852,8 @@ pub struct WorkerConfig {
     pub theming: ThemingConfig,
     #[serde(default)]
     pub domains: DomainsConfig,
+    #[serde(default)]
+    pub domains_service: sanvi_domains::adapters::remote::ServiceConfig,
     /// Phase 09: payments configuration (per-environment secrets and the
     /// application-fee switch). No worker job consumes it until 09.3's
     /// webhook dispatcher and sync job land; declaring it now keeps the
@@ -890,6 +892,7 @@ impl WorkerConfig {
         self.localization.validate()?;
         self.theming.validate()?;
         self.domains.validate()?;
+        self.domains_service.validate()?;
         self.payments.validate()?;
         self.advertising.validate()?;
         self.notification.validate()?;
@@ -1415,136 +1418,9 @@ async fn main() -> ExitCode {
     let billing_event_handler =
         sanvi_billing::adapters::billing_event_handler(entitlement_cache.clone());
 
-    // --- domains context (phase 08): verification, issuance, renewal,
-    // health and order-advancement sweeps + the resolution-cache consumer.
-    let domains_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
-    let domains_repo: std::sync::Arc<dyn sanvi_domains::domain::CustomDomainRepository> =
-        std::sync::Arc::new(sanvi_domains::adapters::SqlxCustomDomainRepository::new());
-    let domains_orders: std::sync::Arc<dyn sanvi_domains::domain::DomainOrderRepository> =
-        std::sync::Arc::new(sanvi_domains::adapters::SqlxDomainOrderRepository::new());
-    let domains_certs: std::sync::Arc<dyn sanvi_domains::domain::CertificateRepository> =
-        std::sync::Arc::new(sanvi_domains::adapters::SqlxCertificateRepository::new());
-    let domains_records: std::sync::Arc<dyn sanvi_domains::domain::DnsRecordRepository> =
-        std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsRecordRepository::new(
-            ids.clone(),
-        ));
-    let domains_provider: std::sync::Arc<dyn sanvi_domains::domain::DnsProviderPort> =
-        std::sync::Arc::new(sanvi_domains::adapters::SqlxDnsProvider::new(
-            domains_records.clone(),
-        ));
-    let (domains_registrar, domains_registrar_mode) =
-        sanvi_domains::adapters::build_domain_registrar(&config.domains)
-            .expect("domains registrar must initialize cleanly");
-    let (domains_ca, domains_ca_mode) =
-        sanvi_domains::adapters::build_certificate_authority(&config.domains, ids.clone())
-            .expect("domains certificate authority must initialize cleanly");
-    let domains_verifier: std::sync::Arc<dyn sanvi_domains::domain::DnsVerifierPort> =
-        std::sync::Arc::new(sanvi_domains::adapters::DohDnsVerifier::new(
-            config.domains.doh_resolvers.clone(),
-            config.domains.doh_min_agreement,
-            config.domains.doh_timeout_secs,
-        ));
-    let domains_prober: std::sync::Arc<dyn sanvi_domains::domain::StorefrontProbePort> =
-        std::sync::Arc::new(sanvi_domains::adapters::HttpProbeAdapter::new(
-            config.domains.prober_timeout_secs,
-            config.domains.prober_user_agent.clone(),
-        ));
-    let domains_events: std::sync::Arc<dyn sanvi_domains::domain::EventPublisher> =
-        std::sync::Arc::new(sanvi_domains::adapters::OutboxEventPublisher::new(
-            ids.clone(),
-        ));
-    let domains_clock: std::sync::Arc<dyn sanvi_domains::domain::Clock> =
-        std::sync::Arc::new(sanvi_domains::adapters::SystemClock);
-    let domains_metrics = std::sync::Arc::new(sanvi_domains::adapters::DomainsMetrics::new(
-        metrics.prometheus_registry(),
-    ));
-
-    // The worker's charger is the same charger the API uses.
-    let (domains_charger, domains_charger_mode) =
-        sanvi_domains::adapters::build_purchase_charger(&config.domains)
-            .expect("domains purchase charger must initialize cleanly");
-    tracing::info!(
-        registrar_mode = %domains_registrar_mode,
-        ca_mode = %domains_ca_mode,
-        charger_mode = %domains_charger_mode,
-        "domains capabilities initialized"
-    );
-
-    let domains_place_order =
-        std::sync::Arc::new(sanvi_domains::application::PlaceDomainOrder::new(
-            domains_orders.clone(),
-            domains_repo.clone(),
-            domains_registrar.clone(),
-            domains_provider.clone(),
-            domains_charger.clone(),
-            std::sync::Arc::new(sanvi_domains::adapters::AlwaysDisabledGate),
-            domains_events.clone(),
-            domains_clock.clone(),
-            ids.clone(),
-            domains_tx.clone(),
-            config.domains.platform_domain.clone(),
-            config.domains.edge_hostname.clone(),
-            config.domains.anycast_ips.clone(),
-            config.domains.purchase_entitlement_key.clone(),
-            config.domains.verification_timeout_hours,
-            config.domains.verification_backoff_base_secs,
-        ));
-    let domains_verification_sweep =
-        std::sync::Arc::new(sanvi_domains::application::RunVerificationSweep::new(
-            domains_repo.clone(),
-            domains_verifier.clone(),
-            domains_provider.clone(),
-            domains_events.clone(),
-            domains_tx.clone(),
-            config.domains.edge_hostname.clone(),
-            config.domains.anycast_ips.clone(),
-            config.domains.verification_backoff_base_secs,
-            config.domains.verification_backoff_max_secs,
-        ));
-    let domains_cert_sweep =
-        std::sync::Arc::new(sanvi_domains::application::RunCertIssuanceSweep::new(
-            domains_repo.clone(),
-            domains_certs.clone(),
-            domains_ca.clone(),
-            domains_events.clone(),
-            domains_clock.clone(),
-            domains_tx.clone(),
-        ));
-    let domains_renewal_sweep =
-        std::sync::Arc::new(sanvi_domains::application::RunRenewalSweep::new(
-            domains_repo.clone(),
-            domains_certs.clone(),
-            domains_orders.clone(),
-            domains_ca.clone(),
-            domains_registrar.clone(),
-            domains_charger.clone(),
-            domains_events.clone(),
-            domains_tx.clone(),
-            config.domains.cert_renewal_before_days,
-            config.domains.cert_expiry_warning_days.clone(),
-            config.domains.order_renewal_lead_days,
-            config.domains.order_renewal_retry_secs,
-            config.domains.order_renewal_max_attempts,
-        ));
-    let domains_health_sweep =
-        std::sync::Arc::new(sanvi_domains::application::RunHealthSweep::new(
-            domains_repo.clone(),
-            domains_certs.clone(),
-            domains_verifier.clone(),
-            domains_prober.clone(),
-            domains_events.clone(),
-            domains_clock.clone(),
-            domains_tx.clone(),
-            config.domains.edge_hostname.clone(),
-            config.domains.anycast_ips.clone(),
-        ));
-    let domains_order_sweep = std::sync::Arc::new(sanvi_domains::application::RunOrderSweep::new(
-        domains_orders.clone(),
-        domains_registrar.clone(),
-        domains_charger.clone(),
-        domains_place_order.clone(),
-        domains_tx.clone(),
-    ));
+    // --- domains context (phase 08): resolution-cache consumer.
+    // Verification, issuance, renewal, health and order sweeps run in the
+    // standalone domains-service.
     let domains_cache = std::sync::Arc::new(sanvi_domains::adapters::LiveDomainCache::new(
         Some(redis.clone()),
         config.domains.host_cache_ttl_secs,
@@ -1765,9 +1641,10 @@ async fn main() -> ExitCode {
             ),
         ),
         std::sync::Arc::new(
-            sanvi_domains::adapters::privacy_provider::DomainsPrivacyProvider::new(
-                privacy_tx.clone(),
-            ),
+            sanvi_domains::adapters::privacy_provider::RemoteDomainsPrivacyProvider::new(
+                &config.domains_service,
+            )
+            .expect("validated domains service configuration for privacy provider"),
         ),
         std::sync::Arc::new(PrivacyContextProvider::new(
             privacy_tx.clone(),
@@ -3054,151 +2931,6 @@ async fn main() -> ExitCode {
                                 warned = report.warned,
                                 errors = report.errors,
                                 "tax compliance re-check pass",
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        // --- phase 08: domains -------------------------------------------------
-        Arc::new(FnJob::new(
-            "domains.verification_poll",
-            Duration::from_secs(config.scheduler.domains_verification_interval_secs),
-            {
-                let sweep = domains_verification_sweep.clone();
-                let clock = domains_clock.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    let clock = clock.clone();
-                    Box::pin(async move {
-                        let now = clock.now();
-                        let report = sweep
-                            .execute(now, 200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                verified = report.verified,
-                                failed = report.failed,
-                                expired = report.expired,
-                                superseded = report.superseded,
-                                "domains verification pass",
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "domains.cert_issue",
-            Duration::from_secs(config.scheduler.domains_cert_issue_interval_secs),
-            {
-                let sweep = domains_cert_sweep.clone();
-                let metrics = domains_metrics.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    let metrics = metrics.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(100)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        for _ in 0..report.issued {
-                            metrics.acme_issue_total.with_label_values(&["ok"]).inc();
-                        }
-                        for _ in 0..report.failures {
-                            metrics.acme_issue_total.with_label_values(&["error"]).inc();
-                        }
-                        if report.issued > 0 || report.failures > 0 {
-                            tracing::info!(
-                                issued = report.issued,
-                                failures = report.failures,
-                                "domains certificate issuance pass",
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "domains.renewal_sweep",
-            Duration::from_secs(config.scheduler.domains_renewal_interval_secs),
-            {
-                let sweep = domains_renewal_sweep.clone();
-                let clock = domains_clock.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    let clock = clock.clone();
-                    Box::pin(async move {
-                        let now = clock.now();
-                        let report = sweep
-                            .execute(now, 500)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.cert_renewal_failures > 0 || report.order_renewals_escalated > 0 {
-                            tracing::error!(
-                                cert_renewal_failures = report.cert_renewal_failures,
-                                order_renewals_escalated = report.order_renewals_escalated,
-                                "domains renewal escalation",
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "domains.health_check",
-            Duration::from_secs(config.scheduler.domains_health_interval_secs),
-            {
-                let sweep = domains_health_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(500)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                degraded = report.degraded,
-                                recovered = report.recovered,
-                                "domains health pass",
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "domains.order_sweep",
-            Duration::from_secs(config.scheduler.domains_orders_interval_secs),
-            {
-                let sweep = domains_order_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(100)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.resumed > 0
-                            || report.configured > 0
-                            || report.refunded > 0
-                            || report.failed > 0
-                        {
-                            tracing::info!(
-                                resumed = report.resumed,
-                                configured = report.configured,
-                                refunded = report.refunded,
-                                failed = report.failed,
-                                "domains order sweep",
                             );
                         }
                         Ok(())

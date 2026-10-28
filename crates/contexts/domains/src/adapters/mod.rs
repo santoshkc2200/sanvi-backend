@@ -15,7 +15,9 @@ pub mod notification_intent;
 pub mod privacy_provider;
 pub mod prober;
 pub mod registrar;
+pub mod remote;
 pub mod repos;
+pub mod repository_hostname_source;
 pub mod stubs;
 
 pub use builders::{build_certificate_authority, build_domain_registrar, build_purchase_charger};
@@ -28,10 +30,12 @@ pub use metrics::DomainsMetrics;
 pub use notification_intent::notification_intent;
 pub use prober::HttpProbeAdapter;
 pub use registrar::SandboxRegistrar;
+pub use remote::RemoteHostnameSource;
 pub use repos::{
     SqlxCertificateRepository, SqlxCustomDomainRepository, SqlxDnsRecordRepository,
     SqlxDomainOrderRepository,
 };
+pub use repository_hostname_source::RepositoryHostnameSource;
 pub use stubs::{
     AlwaysDisabledGate, DisabledCertificateAuthority, DisabledPurchaseCharger, DisabledRegistrar,
     SandboxPurchaseCharger,

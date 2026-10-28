@@ -15,12 +15,12 @@ use figment::{
 };
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
-    AccessEntitlementAdmin, AppConfig, DomainsGuideTranslatorAdapter, DomainsTenantLookupAdapter,
-    FallbackGuideTranslator, IdentityDependencies, PlatformAdminDependencies, TenantCatalogAdapter,
-    build_access_state, build_advertising_state, build_app, build_audit_state, build_billing_state,
-    build_domains_lookup, build_domains_state, build_identity_state, build_localization_state,
-    build_payments_state, build_platform_admin_state, build_privacy_state, build_system_state,
-    build_tenancy_state, build_theming_state,
+    AccessEntitlementAdmin, AppConfig, DomainsTenantLookupAdapter, IdentityDependencies,
+    PlatformAdminDependencies, TenantCatalogAdapter, build_access_state, build_advertising_state,
+    build_app, build_audit_state, build_billing_state, build_identity_state,
+    build_localization_state, build_payments_state, build_platform_admin_state,
+    build_privacy_state, build_remote_domains_lookup, build_system_state, build_tenancy_state,
+    build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
@@ -163,7 +163,9 @@ async fn main() -> ExitCode {
     // Phase 08: the custom-domain lookup hook is installed before tenancy
     // builds its resolver (resolution order: signed header → custom domain
     // → subdomain).
-    let domains_lookup = build_domains_lookup(pool.clone(), redis.clone(), &config.domains);
+    let domains_lookup =
+        build_remote_domains_lookup(redis.clone(), &config.domains, &config.domains_service)
+            .expect("validated domains service configuration for host lookup");
     let custom_domain_lookup: Option<
         std::sync::Arc<dyn sanvi_tenancy::adapters::resolution::CustomDomainLookup>,
     > = config.features.domains.then(|| {
@@ -355,6 +357,7 @@ async fn main() -> ExitCode {
         let privacy_providers =
             sanvi_api::privacy_provider_registry(&sanvi_api::PrivacyProviderDeps {
                 accounting_service: config.accounting_service.clone(),
+                domains_service: config.domains_service.clone(),
                 media: config.media.clone(),
                 product_access: config.product_access.clone(),
                 tx: privacy_tx.clone(),
@@ -400,31 +403,8 @@ async fn main() -> ExitCode {
         None
     };
 
-    // Phase 08: custom domains. The guide translator rides on the
-    // localization context (off → raw keys); the entitlement gate rides on
-    // the access context; tenant activity rides on tenancy's resolver.
-    let domains = if config.features.domains {
-        let translator: std::sync::Arc<dyn sanvi_domains::domain::GuideTranslator> =
-            match &localization {
-                Some(wiring) => std::sync::Arc::new(DomainsGuideTranslatorAdapter::new(
-                    wiring.translator.clone(),
-                )),
-                None => std::sync::Arc::new(FallbackGuideTranslator),
-            };
-        Some(build_domains_state(
-            pool.clone(),
-            ids.clone(),
-            &config.domains,
-            metrics.prometheus_registry(),
-            redis.clone(),
-            access.domain_feature_gate.clone(),
-            translator,
-            domains_lookup.clone(),
-            tenancy.resolve.clone(),
-        ))
-    } else {
-        None
-    };
+    // Standalone Domains service handles domains processing; no in-process state.
+    let domains: Option<sanvi_api::DomainsWiring> = None;
 
     // Phase 09: build the webhook receiver even when the tenant-facing
     // surface is rolled back. Stripe can still complete a session created

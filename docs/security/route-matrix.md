@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 248 (240 OpenAPI operations).
+Routes: 251 (243 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -40,8 +40,8 @@ Routes: 248 (240 OpenAPI operations).
 | POST | /api/v1/platform/approvals/{id}/approve | crates/contexts/platform_admin/src/adapters/http/handlers.rs::approve_request | platform.approval.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | POST | /api/v1/platform/approvals/{id}/reject | crates/contexts/platform_admin/src/adapters/http/handlers.rs::reject_request | platform.approval.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | GET | /api/v1/platform/audit | crates/contexts/audit/src/adapters/http/handlers.rs::list_audit | platform.audit.read | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
-| GET | /api/v1/platform/domains | crates/contexts/domains/src/adapters/http/handlers.rs::list_platform_domains | platform.domain.read | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
-| POST | /api/v1/platform/domains/{id}/release | crates/contexts/domains/src/adapters/http/handlers.rs::release_platform_domain | platform.domain.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
+| GET | /api/v1/platform/domains | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::list_platform_domains | platform.domain.read | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
+| POST | /api/v1/platform/domains/{id}/release | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::release_platform_domain | platform.domain.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | GET | /api/v1/platform/features | crates/contexts/access/src/adapters/http/handlers.rs::list_features | platform.feature.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | POST | /api/v1/platform/features | crates/contexts/access/src/adapters/http/handlers.rs::define_feature | platform.feature.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
 | DELETE | /api/v1/platform/features/{key} | crates/contexts/access/src/adapters/http/handlers.rs::deprecate_feature | platform.feature.write | platform cross-tenant administration; no tenant resolver scope | global-config-dependent | OpenAPI |
@@ -194,16 +194,16 @@ Routes: 248 (240 OpenAPI operations).
 | GET | /api/v1/tenant/checkout/config | crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout_config | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/checkout/{id} | crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/context | crates/contexts/tenancy/src/adapters/http/handlers.rs::get_context | exempt: public bootstrap/disclosure endpoint (no permission key) | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/handlers.rs::list_custom_domains | tenant.domains.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/handlers.rs::claim_custom_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/domains/orders | crates/contexts/domains/src/adapters/http/handlers.rs::list_domain_orders | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/domains/orders | crates/contexts/domains/src/adapters/http/handlers.rs::place_domain_order | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.domain_purchase) | OpenAPI |
-| POST | /api/v1/tenant/domains/orders/{id}/auto-renew | crates/contexts/domains/src/adapters/http/handlers.rs::set_order_auto_renew | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/domains/search | crates/contexts/domains/src/adapters/http/handlers.rs::search_domains | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| DELETE | /api/v1/tenant/domains/{id} | crates/contexts/domains/src/adapters/http/handlers.rs::remove_custom_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/domains/{id}/instructions | crates/contexts/domains/src/adapters/http/handlers.rs::get_domain_instructions | tenant.domains.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/domains/{id}/promote | crates/contexts/domains/src/adapters/http/handlers.rs::promote_primary_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/domains/{id}/verify | crates/contexts/domains/src/adapters/http/handlers.rs::request_domain_verification | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::list_custom_domains | tenant.domains.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::claim_custom_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/domains/orders | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::list_domain_orders | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/domains/orders | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::place_domain_order | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional + shadow per-IP/per-tenant abuse quota (server.abuse.domain_purchase) | OpenAPI |
+| POST | /api/v1/tenant/domains/orders/{id}/auto-renew | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::set_order_auto_renew | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/domains/search | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::search_domains | tenant.domains.purchase | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| DELETE | /api/v1/tenant/domains/{id} | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::remove_custom_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/domains/{id}/instructions | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::get_domain_instructions | tenant.domains.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/domains/{id}/promote | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::promote_primary_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/domains/{id}/verify | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::request_domain_verification | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/ecommerce-imports/stores/{store_id}/connections/{provider}/callback | crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_import_callback | ecommerce.import.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | DELETE | /api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail} | crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_import_delete | ecommerce.import.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail} | crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_import_get | ecommerce.import.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -265,11 +265,14 @@ Routes: 248 (240 OpenAPI operations).
 | GET | /healthz | crates/contexts/system/src/adapters/http/handlers.rs::healthz | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | POST | /internal/accounting/audit | apps/api/src/accounting.rs::ingest_audit | exempt:request-bound-accounting-service-delegation | signed Accounting scope; platform transaction | global-config-dependent | OpenAPI |
 | POST | /internal/accounting/events | apps/api/src/accounting.rs::ingest_event | exempt:request-bound-accounting-service-delegation | signed Accounting scope; platform transaction | global-config-dependent | OpenAPI |
+| POST | /internal/domains/audit | apps/api/src/domains.rs::ingest_domains_audit | exempt:request-bound-domains-service-delegation | signed Domains scope; platform transaction | global-config-dependent | OpenAPI |
+| POST | /internal/domains/events | apps/api/src/domains.rs::ingest_domains_event | exempt:request-bound-domains-service-delegation | signed Domains scope; platform transaction | global-config-dependent | OpenAPI |
+| POST | /internal/domains/tenant-state | apps/api/src/domains.rs::tenant_state | exempt:request-bound-domains-service-delegation | signed Domains scope; platform lookup | global-config-dependent | OpenAPI |
 | POST | /internal/kratos/login | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_login | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
 | POST | /internal/kratos/logout | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_logout | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
 | POST | /internal/kratos/registration | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent + shadow per-IP abuse quota (server.abuse.signup) | internal webhook |
 | POST | /internal/kratos/settings | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_settings | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
-| GET | /internal/tls/authorize | crates/contexts/domains/src/adapters/http/handlers.rs::tls_authorize | exempt: internal shared secret and optional IP allow-list | domain hostname lookup after internal guard | global-config-dependent | OpenAPI |
+| GET | /internal/tls/authorize | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::tls_authorize | exempt: internal shared secret and optional IP allow-list | domain hostname lookup after internal guard | global-config-dependent | OpenAPI |
 | POST | /internal/webhooks/stripe/connect | crates/contexts/payments/src/adapters/http/webhooks.rs::stripe_connect_webhook | exempt: Connect Stripe signature and IP allow-list | connected account from verified webhook processing | global-config-dependent | internal webhook |
 | POST | /internal/webhooks/stripe/platform | crates/contexts/billing/src/adapters/http/handlers.rs::stripe_platform_webhook | exempt: Stripe signature and IP allow-list | tenant selected from verified webhook processing | global-config-dependent | internal webhook |
 | GET | /metrics | apps/api/src/lib.rs::metrics | exempt: public metrics; deployment perimeter required | not tenant-scoped: aggregate metrics | global-config-dependent | operational endpoint |
@@ -282,12 +285,13 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 
 | Source | SHA-256 |
 | --- | --- |
-| apps/api/src/accounting.rs | `e0c2bc7492884400eb4779b6228229d433f9829068cd993477d6bcdbbe83312c` |
-| apps/api/src/compliance.rs | `fd223847e35429d4cb2985fbdfb3c9271e87dbe4ef4affd5326c7a30dd3efa05` |
-| apps/api/src/config.rs | `42c00efaea9759f26f7eee1926eeabdb0285fc829367944a8f9bc59e7c47f079` |
-| apps/api/src/lib.rs | `ca04124a48520783f3e7060fa4a1e91bda32400e2c7915ba6e0204bde290691a` |
-| apps/api/src/main.rs | `233016abb97975e5dac4e70a9e81a72dd1bca23a23be344e9f1ef625207efce8` |
-| apps/api/src/openapi.rs | `d216aece9bbe43b6d98734f7443cd39e373f9561e847dd57418804bd3ffe89d5` |
+| apps/api/src/accounting.rs | `50893a8b06bd563d099a73867799eecab8cb9d0d08aad012cbd563029c48ff5c` |
+| apps/api/src/compliance.rs | `d18781874fbdcfd0b09b369175ed13f2929c904549cbf466cbfd5c11d8f6daf2` |
+| apps/api/src/config.rs | `ac06750e07e77f91c522b78984da6e4f34292e136ddf58a2a6b1b853be19ec2a` |
+| apps/api/src/domains.rs | `12c067de12ceea752c9549a1f4697378427a463cc5ce48bf2fbed22bd740f504` |
+| apps/api/src/lib.rs | `2ef150f6c63a3e5b86032b55de9a885e63f4896ae7cb019617ce51d683ea5207` |
+| apps/api/src/main.rs | `fd3904ea49383ddf1839e45e52c06dc69f7daa5b1b6e65c5b758e930b02b5aec` |
+| apps/api/src/openapi.rs | `1dcbc9396aef3bec5fadc5c5943150d2b10ba7970a1bf6b35eb2fa16480656eb` |
 | apps/api/src/product_access.rs | `b680883b3bae7b8e4fefa24419fd7445cb86417d4378243ded6b9f4d93f7121a` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
@@ -299,7 +303,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/accounting/src/adapters/http/mod.rs | `c7f584dea9e753aec9bc2681957cc041a3ec5f9d3ff3ecf6900fae04b71b5205` |
 | crates/contexts/accounting/src/adapters/http/routes.rs | `7397075d67953820deca884f8380337155cc107629b536660cef9dccded238f1` |
 | crates/contexts/accounting/src/adapters/http/state.rs | `c52ff12463250c3458fcaba1e948ebafb3153a1e73c1207b503cdced7dc1c7cc` |
-| crates/contexts/accounting/src/adapters/remote.rs | `22e2c6727464367ffe8ff244a5a9f5c1aaeb9073f3d6ada4655f5b1db961b9f1` |
+| crates/contexts/accounting/src/adapters/remote.rs | `02a87e6621b22f54c909e3bda443c4517a3e996d10e22d378d34d3de51955da3` |
 | crates/contexts/advertising/src/adapters/http/handlers.rs | `cd54f596bb2fdcf97615e61af5a31293306d18911f13a66fadc8bdb46e26f374` |
 | crates/contexts/advertising/src/adapters/http/mod.rs | `ffede5d48c9c71cb0210209c6561d8e9caa69e7b3d079948bb4882eb1709e8d0` |
 | crates/contexts/advertising/src/adapters/http/routes.rs | `3452d1f14ce42e698112c0889872484aa72b7b30905a204dc3a9eb4d5379d225` |
@@ -316,11 +320,13 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/billing/src/adapters/http/mod.rs | `e113225f16241e4106d577523d79c188ba1be6566cb03e74cf9bcca32dc42e11` |
 | crates/contexts/billing/src/adapters/http/routes.rs | `2079c9d01db138285102ed334b4051f62614f003998c877c16768dbb35d27afa` |
 | crates/contexts/billing/src/adapters/http/validation.rs | `bda3f191fa1b6767d603fdaf1c9f2e7e93057be6a83be6391e72f46073a751b6` |
-| crates/contexts/domains/src/adapters/http/handlers.rs | `ad6abcffb41f838d043abfb045ec61c59833feb72bc8a68b08a10c347de8e4cd` |
-| crates/contexts/domains/src/adapters/http/mod.rs | `594e7160aba72d2eadc5da5b55a295fde2736f4fee982938d14479b1ec3b529b` |
-| crates/contexts/domains/src/adapters/http/routes.rs | `a5a84a557fac8f0bcf40e8c3cf4afe20a99443c2564f7b6e93ed37b0900c013f` |
+| crates/contexts/domains/src/adapters/http/gateway_handlers.rs | `2464d61ae0ec84331dd20ceff30b806e67ea4774de0aa4d99c8f1758af6917ea` |
+| crates/contexts/domains/src/adapters/http/handlers.rs | `7420fb489042913bb611e9b8c58699afebafa6c27523281f236b493202a6a228` |
+| crates/contexts/domains/src/adapters/http/mod.rs | `af7d5f998679c266bd78e34aba598c4421e66d392f7f165eec5ccd5bdb95c216` |
+| crates/contexts/domains/src/adapters/http/routes.rs | `ddea16a76e9d66d233db7a8a0fb2de91709c8b7386f2270521f24b46aaf8fec4` |
 | crates/contexts/domains/src/adapters/http/state.rs | `fcbfb2c4707fe637956075784540272e48ef12a48c15833a3e36a9d9a3bcfed2` |
 | crates/contexts/domains/src/adapters/http/validation.rs | `13ef12def6936b092c58627e09d9df1169ebab9ad5096272f5b77fd995a94b5c` |
+| crates/contexts/domains/src/adapters/remote.rs | `6fc4a0dca144164a2debfce3fe7ce3ac467a6aa8d7f8011a81b4eb01b259f424` |
 | crates/contexts/identity/src/adapters/http/catalog.rs | `0fd4d03d2dc36f03a63dbe15b94d5838a4f9549319b1d5aa091c412dcfc26274` |
 | crates/contexts/identity/src/adapters/http/handlers.rs | `7c486580e4757638e1183411a65fffb6c5a0529e73c0169704610d7a0310fa61` |
 | crates/contexts/identity/src/adapters/http/mod.rs | `11e8e7e74805f68fa17f08fc37939bdd996bf7e63b04f4c452d836a77f94aa06` |

@@ -8,6 +8,7 @@
 pub mod accounting;
 pub mod compliance;
 pub mod config;
+pub mod domains;
 pub mod openapi;
 pub mod product_access;
 
@@ -1735,6 +1736,7 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
 /// drill subject with data only in the privacy ledger never touches them.
 pub struct PrivacyProviderDeps {
     pub accounting_service: sanvi_accounting::adapters::remote::ServiceConfig,
+    pub domains_service: sanvi_domains::adapters::remote::ServiceConfig,
     pub media: sanvi_media::MediaConfig,
     pub product_access: sanvi_product_access::ProductAccessConfig,
     pub tx: sanvi_persistence::TxManager,
@@ -1845,7 +1847,10 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
             sanvi_theming::adapters::privacy_provider::ThemingPrivacyProvider::new(tx.clone()),
         ),
         Arc::new(
-            sanvi_domains::adapters::privacy_provider::DomainsPrivacyProvider::new(tx.clone()),
+            sanvi_domains::adapters::privacy_provider::RemoteDomainsPrivacyProvider::new(
+                &deps.domains_service,
+            )
+            .expect("validated Domains service configuration"),
         ),
         Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
             tx.clone(),
@@ -2942,7 +2947,22 @@ pub fn build_domains_lookup(
 ) -> Arc<LiveDomainLookupService> {
     let cache = Arc::new(LiveDomainCache::new(redis, config.host_cache_ttl_secs));
     let domains: Arc<dyn CustomDomainRepository> = Arc::new(SqlxCustomDomainRepository::new());
-    Arc::new(LiveDomainLookupService::new(cache, domains, pool))
+    let source = Arc::new(sanvi_domains::adapters::RepositoryHostnameSource::new(
+        domains, pool,
+    ));
+    Arc::new(LiveDomainLookupService::new(cache, source))
+}
+
+/// Build the remote host → tenant lookup service backed by the standalone Domains service.
+pub fn build_remote_domains_lookup(
+    redis: Option<redis::aio::ConnectionManager>,
+    config: &DomainsConfig,
+    service_config: &sanvi_domains::adapters::remote::ServiceConfig,
+) -> anyhow::Result<Arc<LiveDomainLookupService>> {
+    let cache = Arc::new(LiveDomainCache::new(redis, config.host_cache_ttl_secs));
+    let client = sanvi_domains::adapters::remote::RemoteClient::new(service_config)?;
+    let source = Arc::new(sanvi_domains::adapters::RemoteHostnameSource::new(client));
+    Ok(Arc::new(LiveDomainLookupService::new(cache, source)))
 }
 
 // ---------------------------------------------------------------------------
@@ -3997,9 +4017,10 @@ pub fn build_app(
         }
         None => tenant_scope,
     };
-    let tenant_scope = match &domains {
-        Some(_) => tenant_scope.configure(domains_routes::domains_tenant_scope_routes),
-        None => tenant_scope,
+    let tenant_scope = if config.features.domains {
+        tenant_scope.configure(domains_routes::domains_tenant_scope_routes)
+    } else {
+        tenant_scope
     };
     let tenant_scope = if config.features.payments {
         match &payments {
@@ -4062,6 +4083,21 @@ pub fn build_app(
             writer: audit.writer.clone(),
         }))
         .configure(accounting::internal_routes)
+        .app_data(web::Data::new(sanvi_domains::adapters::remote::GatewayState {
+            remote: sanvi_domains::adapters::remote::RemoteClient::new(&config.domains_service)
+                .expect("validated Domains service configuration"),
+            authorizer: Arc::new(domains::AuthorizerDomainsAccess(access.authorizer.clone())),
+            feature_gate: Arc::new(DomainsAccessGate::new(access.domain_feature_gate.clone())),
+            connect_entitlement_key: config.domains.connect_entitlement_key.clone(),
+            purchase_entitlement_key: config.domains.purchase_entitlement_key.clone(),
+        }))
+        .app_data(web::Data::new(domains::DomainsIngestState {
+            secret: config.domains_service.inbound_secret.clone(),
+            transactions: access.tx_manager.clone(),
+            writer: audit.writer.clone(),
+            resolve_tenant: tenancy.resolve.clone(),
+        }))
+        .configure(domains::internal_routes)
         .app_data(web::JsonConfig::default().limit(server_config.max_body_bytes))
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)
@@ -4191,7 +4227,14 @@ pub fn build_app(
             .app_data(web::Data::new(wiring.state))
             .configure(domains_routes::domains_platform_routes)
             .configure(domains_routes::domains_internal_routes),
-        None => app,
+        None => {
+            if config.features.domains {
+                app.configure(domains_routes::domains_platform_routes)
+                    .configure(domains_routes::domains_internal_routes)
+            } else {
+                app
+            }
+        }
     };
 
     // Phase-09: tenant routes remain behind `features.payments`, while the

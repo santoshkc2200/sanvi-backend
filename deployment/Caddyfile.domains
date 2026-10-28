@@ -15,7 +15,7 @@ http://:9080 {
 	bind 127.0.0.1
 	route /ask {
 		rewrite * /internal/tls/authorize?host={query.domain}
-		reverse_proxy {$API_UPSTREAM:api_proxy:8080} {
+		reverse_proxy {$DOMAINS_UPSTREAM:domains_service:8083} {
 			header_up x-sanvi-internal {$SANVI_DOMAIN_INTERNAL_SECRET}
 			header_up -Cookie
 			header_up -Authorization
@@ -31,7 +31,7 @@ https:// {
 	route {
 		# Gate requests too: cached certificates must not keep removed or
 		# suspended tenants accessible. API failure denies access.
-		forward_auth {$API_UPSTREAM:api_proxy:8080} {
+		forward_auth {$DOMAINS_UPSTREAM:domains_service:8083} {
 			uri /internal/tls/authorize?host={host}
 			header_up x-sanvi-internal {$SANVI_DOMAIN_INTERNAL_SECRET}
 			header_up -Cookie

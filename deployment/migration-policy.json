@@ -72,5 +72,7 @@
   "20261027000100_ecommerce_retention_rule.sql": "rolling",
   "20261027010000_accounting_audit_commands.sql": "rolling",
   "20261028000100_audit_accounting_receipts.sql": "rolling",
-  "20261028000200_platform_accounting_event_receipts.sql": "rolling"
+  "20261028000200_platform_accounting_event_receipts.sql": "rolling",
+  "20261028000300_audit_domains_receipts.sql": "rolling",
+  "20261028000400_platform_domains_event_receipts.sql": "rolling"
 }

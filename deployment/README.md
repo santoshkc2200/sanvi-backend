@@ -45,3 +45,17 @@ SANVI__ACCOUNTING_SERVICE__INBOUND_SECRET through the secret manager, then enabl
 features.accounting after the data cutover. Do not put provider credentials in the
 platform environment. Follow docs/accounting-service-extraction.md and the service's
 docs/cutover.md; no data copy or routing change is automatic.
+
+## Domains service
+
+Domains deploys independently from the sibling domains-service repository.
+Apply the platform Domains audit/event receipt migrations before starting its
+delivery scheduler. Configure SANVI__DOMAINS_SERVICE__BASE_URL and the dedicated
+SANVI__DOMAINS_SERVICE__SIGNING_SECRET and the distinct
+SANVI__DOMAINS_SERVICE__INBOUND_SECRET through the secret manager, then enable
+features.domains after the data cutover. Set DOMAINS_UPSTREAM (e.g. `domains_service:8083`)
+for the edge reverse proxy (Caddy / docker-compose.domains.yml) to route `/internal/domains/edge/ask`
+and `/internal/domains/edge/authorize` directly to the Domains service.
+Follow docs/domains-service-extraction.md and domains-service/docs/cutover.md;
+no data copy or routing change is automatic.
+

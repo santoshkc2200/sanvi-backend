@@ -9,10 +9,11 @@
 //! entry is purged for real, the consent ledger is pseudonymised, and the
 //! retained classes are enumerated with their justification.
 
+mod common;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sanvi_api::compliance::ComplianceHarness;
 use sanvi_cache::SsrCache;
 use sanvi_kernel::{NodeId, RawIdGenerator, SnowflakeGenerator, TenantId};
 use sanvi_privacy::adapters::{
@@ -74,7 +75,7 @@ async fn seed_tenant(pool: &sqlx::PgPool, tenant_id: i64, slug: &str) {
 async fn a_seeded_subject_is_verifiably_gone_from_every_destination() {
     let db = sanvi_testsupport::test_db().await;
     let pool = db.app_pool().clone();
-    let harness = ComplianceHarness::build(pool.clone(), ids());
+    let harness = common::harness(pool.clone(), ids()).await.0;
 
     let tenant_id = TenantId::try_from(901_000_001_i64).expect("tenant id");
     seed_tenant(&pool, tenant_id.as_i64(), "erasure-drill").await;

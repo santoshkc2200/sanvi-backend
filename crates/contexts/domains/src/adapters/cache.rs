@@ -24,9 +24,17 @@ use crate::domain::DomainsError;
 /// keeps serving the hot path).
 const LOCAL_CACHE_CAP: usize = 8192;
 
+/// Outcome of a hostname lookup in the live domain cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheLookup {
+    Hit(Option<TenantId>),
+    Miss,
+}
+
 pub struct LiveDomainCache {
     redis: Option<redis::aio::ConnectionManager>,
     local: Mutex<HashMap<String, (TenantId, tokio::time::Instant)>>,
+    local_negative: Mutex<HashMap<String, tokio::time::Instant>>,
     ttl_secs: u64,
 }
 
@@ -35,16 +43,24 @@ impl LiveDomainCache {
         Self {
             redis,
             local: Mutex::new(HashMap::new()),
+            local_negative: Mutex::new(HashMap::new()),
             ttl_secs,
         }
     }
 
     pub async fn get(&self, normalized_hostname: &str) -> Option<TenantId> {
+        match self.lookup(normalized_hostname).await {
+            CacheLookup::Hit(Some(tenant)) => Some(tenant),
+            _ => None,
+        }
+    }
+
+    pub async fn lookup(&self, normalized_hostname: &str) -> CacheLookup {
         {
             let mut local = self.local.lock().await;
             match local.get(normalized_hostname) {
                 Some((tenant, at)) if at.elapsed().as_secs() < self.ttl_secs => {
-                    return Some(*tenant);
+                    return CacheLookup::Hit(Some(*tenant));
                 }
                 Some(_) => {
                     local.remove(normalized_hostname);
@@ -65,18 +81,37 @@ impl LiveDomainCache {
                 if let Ok(tenant) = raw.parse::<TenantId>() {
                     self.remember_local(normalized_hostname.to_string(), tenant)
                         .await;
-                    return Some(tenant);
+                    return CacheLookup::Hit(Some(tenant));
                 }
-                return None;
+                return CacheLookup::Hit(None);
+            }
+        } else {
+            let mut negative = self.local_negative.lock().await;
+            match negative.get(normalized_hostname) {
+                Some(at) if at.elapsed().as_secs() < self.ttl_secs => {
+                    return CacheLookup::Hit(None);
+                }
+                Some(_) => {
+                    negative.remove(normalized_hostname);
+                }
+                None => {}
             }
         }
-        None
+        CacheLookup::Miss
     }
 
     pub async fn put(&self, normalized_hostname: String, tenant: Option<TenantId>) {
         if let Some(tenant) = tenant {
             self.remember_local(normalized_hostname.clone(), tenant)
                 .await;
+        } else if self.redis.is_none() {
+            let mut negative = self.local_negative.lock().await;
+            if negative.len() >= LOCAL_CACHE_CAP {
+                negative.retain(|_, at| at.elapsed().as_secs() < self.ttl_secs);
+            }
+            if negative.len() < LOCAL_CACHE_CAP {
+                negative.insert(normalized_hostname.clone(), tokio::time::Instant::now());
+            }
         }
         if let Some(redis) = &self.redis {
             let key = cache_key(&normalized_hostname);
@@ -95,6 +130,7 @@ impl LiveDomainCache {
     /// Drop both layers (called by the worker consumer and in-process).
     pub async fn invalidate(&self, normalized_hostname: &str) -> Result<(), DomainsError> {
         self.local.lock().await.remove(normalized_hostname);
+        self.local_negative.lock().await.remove(normalized_hostname);
         if let Some(redis) = &self.redis {
             let key = cache_key(normalized_hostname);
             let mut connection = redis.clone();

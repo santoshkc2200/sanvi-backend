@@ -2,6 +2,7 @@ mod abuse_quotas;
 mod accounting_routes;
 mod cache_headers_snapshot;
 mod collection_ordering;
+mod domains_routes;
 mod error_addressability;
 mod feature_catalog;
 mod gpc_storefront;

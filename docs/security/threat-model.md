@@ -371,3 +371,27 @@ command ID and event ID. Accounting owns
 credentials and encrypted tenant keys in its own database. Privacy review failures
 block completion. Cutover freezes old writers; no simultaneous embedded and remote
 writers are supported. See docs/accounting-service-extraction.md.
+
+### Domains service boundary (2026-10-28)
+
+The Domains gateway signs verified tenant/session identity, granted Domains
+permissions and original audit context. Delegations expire after thirty seconds and
+bind audience, purpose, method, exact path/query, body, Content-Type and If-Match.
+Entitlements (`connect` for domain claiming, `domains.purchase` for search and orders)
+are strictly enforced at the platform gateway before signing delegation tokens;
+unentitled requests are rejected immediately without calling the service.
+The service accepts no browser credentials or unsigned tenant headers. Fresh MFA is
+checked for privileged operations. Separate delegation keys prevent purpose confusion,
+and each link direction has its own key (`signing_secret` vs `inbound_secret`),
+so neither side can mint the other's tokens. Every delegation carries a unique ID
+the service accepts once, so a captured request cannot be replayed inside its lifetime;
+up to five seconds of clock drift is tolerated.
+Transport requires TLS or a private authenticated network; redirects are disabled.
+Audit/event retries use transactional receipts at the platform, keyed by audit
+command ID and event ID. Tenant state inquiries from the service verify the inbound
+HMAC signature before disclosing tenancy status. Storefront custom domain resolution
+queries the service over signed internal channels, caches responses in Redis, and
+fails closed (unknown host) on transport errors without caching failures.
+Cutover freezes old writers; no simultaneous embedded and remote writers are supported.
+See docs/domains-service-extraction.md.
+

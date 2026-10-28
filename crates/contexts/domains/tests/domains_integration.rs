@@ -485,8 +485,10 @@ async fn connect_journey_claims_verifies_issues_and_goes_live() {
     // The resolution lookup + TLS authorize gate agree.
     let lookup = sanvi_domains::application::LiveDomainLookupService::new(
         Arc::new(LiveDomainCache::new(None, 300)),
-        harness.domains.clone(),
-        pool.clone(),
+        Arc::new(sanvi_domains::adapters::RepositoryHostnameSource::new(
+            harness.domains.clone(),
+            pool.clone(),
+        )),
     );
     assert_eq!(lookup.resolve("www.acme.com").await, Some(tenant_id));
     assert_eq!(lookup.resolve("other.example.com").await, None);
@@ -1090,8 +1092,10 @@ async fn removal_revokes_the_certificate_and_closes_the_zone() {
     // The lookup no longer resolves the hostname.
     let lookup = sanvi_domains::application::LiveDomainLookupService::new(
         Arc::new(LiveDomainCache::new(None, 300)),
-        harness.domains.clone(),
-        pool.clone(),
+        Arc::new(sanvi_domains::adapters::RepositoryHostnameSource::new(
+            harness.domains.clone(),
+            pool.clone(),
+        )),
     );
     assert_eq!(lookup.resolve("removable.com").await, None);
 }

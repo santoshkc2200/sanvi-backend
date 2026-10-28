@@ -7,7 +7,7 @@ use actix_web::web;
 
 use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
-use super::handlers::{
+use super::gateway_handlers::{
     claim_custom_domain, get_domain_instructions, list_custom_domains, list_domain_orders,
     list_platform_domains, place_domain_order, promote_primary_domain, release_platform_domain,
     remove_custom_domain, request_domain_verification, search_domains, set_order_auto_renew,

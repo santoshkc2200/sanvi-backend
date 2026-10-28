@@ -450,6 +450,28 @@ components:
       required:
       - reason
       type: object
+    TenantStateRequest:
+      properties:
+        tenant_id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+      required:
+      - tenant_id
+      type: object
+    TenantStateResponse:
+      properties:
+        active:
+          type: boolean
+        status:
+          type:
+          - string
+          - 'null'
+      required:
+      - active
+      type: object
     TlsAuthorizeResponse:
       properties:
         allowed:
@@ -514,6 +536,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
         '504':
           content:
             application/problem+json:
@@ -558,7 +592,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown domain
-      summary: '`POST /api/v1/platform/domains/{id}/release`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains:
@@ -600,6 +645,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
         '504':
           content:
             application/problem+json:
@@ -644,7 +701,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Hostname already claimed
-      summary: '`POST /api/v1/tenant/domains`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains/orders:
@@ -686,6 +754,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Malformed cursor
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: 'Permission denied, or entitlement missing (reason: domain_entitlement_required)'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
         '504':
           content:
             application/problem+json:
@@ -724,7 +810,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: 'Permission denied, or entitlement missing (reason: domain_entitlement_required)'
-      summary: '`POST /api/v1/tenant/domains/orders`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains/orders/{id}/auto-renew:
@@ -754,13 +851,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/OrderView'
           description: The updated order
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: 'Permission denied, or entitlement missing (reason: domain_entitlement_required)'
         '404':
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown order
-      summary: '`POST /api/v1/tenant/domains/orders/{id}/auto-renew`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains/search:
@@ -786,7 +900,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: 'Permission denied, or entitlement missing (reason: domain_entitlement_required)'
-      summary: '`GET /api/v1/tenant/domains/search`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains/{id}:
@@ -816,7 +941,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown domain
-      summary: '`DELETE /api/v1/tenant/domains/{id}`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains/{id}/instructions:
@@ -852,7 +988,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown domain
-      summary: '`GET /api/v1/tenant/domains/{id}/instructions`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains/{id}/promote:
@@ -882,7 +1029,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Unknown domain
-      summary: '`POST /api/v1/tenant/domains/{id}/promote`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
       tags:
       - domains
   /api/v1/tenant/domains/{id}/verify:
@@ -918,7 +1076,131 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: Throttled by the backoff schedule
-      summary: '`POST /api/v1/tenant/domains/{id}/verify`.'
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service temporarily unavailable
+      tags:
+      - domains
+  /internal/domains/audit:
+    post:
+      operationId: ingest_domains_audit
+      parameters:
+      - description: Request-bound HMAC delegation; audience sanvi-platform-domains-audit, purpose audit
+        in: header
+        name: x-domains-delegation
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+        required: true
+      responses:
+        '204':
+          description: Audit command durably appended or already received
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid service delegation
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid Domains audit scope
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Audit command ID reused with different content
+      tags:
+      - domains
+  /internal/domains/events:
+    post:
+      operationId: ingest_domains_event
+      parameters:
+      - description: Request-bound HMAC delegation; audience sanvi-platform-domains-audit, purpose event
+        in: header
+        name: x-domains-delegation
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+        required: true
+      responses:
+        '204':
+          description: Event durably accepted or already received
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid service delegation
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid Domains event scope
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Event ID conflicts with an existing event
+      tags:
+      - domains
+  /internal/domains/tenant-state:
+    post:
+      operationId: check_domains_tenant_state
+      parameters:
+      - description: Request-bound HMAC delegation; audience sanvi-platform-domains-audit, purpose tenant-state
+        in: header
+        name: x-domains-delegation
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantStateRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantStateResponse'
+          description: Tenancy status for the tenant
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid request payload
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid service delegation
       tags:
       - domains
   /internal/tls/authorize:
@@ -944,16 +1226,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/TlsAuthorizeResponse'
           description: Issuance denied
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Domains service rejected platform credentials or returned an invalid response
         '503':
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
           description: The gate is not configured
-      summary: |-
-        `GET /internal/tls/authorize` — the edge asks before issuing a
-        certificate. Self-authenticated: `x-sanvi-internal` shared secret plus
-        an optional client-IP allow-list; `/internal` sits outside the authn
-        middleware.
       tags:
       - domains
