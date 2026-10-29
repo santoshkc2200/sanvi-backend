@@ -35,7 +35,7 @@ pub use metrics::AdvertisingMetrics;
 pub use metrics_repo::SqlxMetricsRepository;
 pub use notification_intent::notification_intent;
 pub use oauth_state_store::SqlxOAuthStateStore;
-pub use payment_lookup::CheckoutPaymentLookup;
+pub use payment_lookup::RemotePaymentLookup;
 pub use platform_registry::{
     build_access_token_providers, build_audience_sinks, build_conversion_sinks,
     build_platform_registry,

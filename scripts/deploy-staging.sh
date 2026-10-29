@@ -19,6 +19,10 @@ for image in "${API_IMAGE:-}" "${WORKER_IMAGE:-}"; do
 done
 [[ "$API_IMAGE" == "$WORKER_IMAGE" ]] || { echo 'API and worker must use the same image digest and compatibility contract' >&2; exit 2; }
 [[ -f "$SANVI_RUNTIME_ENV_FILE" ]] || { echo 'private runtime environment file is missing' >&2; exit 2; }
+# Stripe Connect webhooks go straight to the standalone Payments service once
+# it is deployed; the API no longer mounts that receiver.
+payments_upstream="${PAYMENTS_UPSTREAM:-}"
+[[ -z "$payments_upstream" || "$payments_upstream" =~ ^[A-Za-z0-9._-]+:[0-9]{1,5}$ ]] || { echo 'PAYMENTS_UPSTREAM must be host:port' >&2; exit 2; }
 # Secret files are provisioned by the host, never copied from CI. Linux is
 # the deployment platform; Windows is supported only by the command tests.
 if [[ "$(uname -s)" == Linux ]]; then
@@ -96,6 +100,28 @@ write_config() {
 upstream sanvi_api { server $slot:8080; }
 server {
     listen 8080;
+EOF
+    if [[ -n "$payments_upstream" ]]; then
+        cat >> "$target" <<EOF
+    location = /internal/webhooks/stripe/connect {
+        proxy_pass http://$payments_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Forwarded-Port "";
+        proxy_set_header X-Real-IP "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 35s;
+        proxy_send_timeout 35s;
+        proxy_next_upstream off;
+    }
+EOF
+    fi
+    cat >> "$target" <<EOF
     location / {
         proxy_pass http://sanvi_api;
         proxy_http_version 1.1;

@@ -18,11 +18,10 @@ use chrono::Utc;
 use sanvi_advertising::AdvertisingConfig;
 use sanvi_advertising::adapters::SystemIdGenerator;
 use sanvi_advertising::adapters::{
-    AdvertisingMetrics, CheckoutPaymentLookup, FakeAdPlatform, FakeAudienceSync,
-    FakeConversionSink, OutboxEventPublisher, QuotaLimiter, SqlxAdvertisingConnectionRepository,
-    SqlxCampaignRepository, SqlxConnectionTokenRepository, SqlxCreativeRepository,
-    SqlxMetricsRepository, SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository,
-    http::AdvertisingState,
+    AdvertisingMetrics, FakeAdPlatform, FakeAudienceSync, FakeConversionSink, OutboxEventPublisher,
+    QuotaLimiter, SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
+    SqlxConnectionTokenRepository, SqlxCreativeRepository, SqlxMetricsRepository,
+    SqlxTenantEnvelopeCrypto, SqlxTrackingSettingsRepository, http::AdvertisingState,
 };
 use sanvi_advertising::application::tracking::{
     CreateAudience, ListAudiences, RefreshAudience, RetractWithdrawnConversions, SyncAudiences,
@@ -181,7 +180,6 @@ struct FixedPaymentLookup(Option<PaymentLookup>);
 impl PaymentLookupPort for FixedPaymentLookup {
     async fn lookup_payment_value(
         &self,
-        _scope: &mut ScopedTx<'_>,
         _tenant_id: TenantId,
         _order_ref: &str,
     ) -> Result<Option<PaymentLookup>, sanvi_advertising::domain::AdvertisingError> {
@@ -828,84 +826,6 @@ async fn click_ids_present_partial_and_absent_are_distinguishable() {
     let absent = fetch_row(&pool, tenant_id, "evt-absent").await;
     assert!(absent["click_ids"]["gclid"].is_null());
     assert!(absent["click_ids"]["fbp"].is_null());
-}
-
-/// Verifies the real cross-context join: `CheckoutPaymentLookup` reads the
-/// actual `payments.payments` row even before the asynchronously-updated
-/// checkout status reaches `complete`. Its conversion id must therefore use
-/// `PaymentRecord.id`, never the distinct checkout id.
-#[tokio::test]
-async fn checkout_payment_lookup_joins_the_real_payments_schema() {
-    let db = sanvi_testsupport::test_db().await;
-    let pool = db.app_pool();
-    let tenant_id = seed_tenant(&pool, "checkout-join").await;
-
-    let seed_tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
-    let mut seed_scope = seed_tx.begin_for(tenant_id.as_i64()).await.unwrap();
-
-    let connection_id = sanvi_payments::domain::connection::ConnectionId::from_snowflake(
-        sanvi_testsupport::test_ids().next_id().unwrap(),
-    );
-    sqlx::query(
-        "INSERT INTO payments.provider_connections
-           (id, tenant_id, provider, external_account_id, status)
-         VALUES ($1, $2, 'stripe_connect', 'acct_1', 'active')",
-    )
-    .bind(connection_id.as_i64())
-    .bind(tenant_id.as_i64())
-    .execute(&mut **seed_scope.tx_mut().as_inner())
-    .await
-    .unwrap();
-
-    let checkout_id = sanvi_payments::domain::checkout::CheckoutId::from_snowflake(
-        sanvi_testsupport::test_ids().next_id().unwrap(),
-    );
-    sqlx::query(
-        "INSERT INTO payments.checkouts
-           (id, tenant_id, connection_id, reference, amount_minor, currency, status, created_at)
-         VALUES ($1, $2, $3, 'order-jpy-1', 4980, 'JPY', 'open', now())",
-    )
-    .bind(checkout_id.as_i64())
-    .bind(tenant_id.as_i64())
-    .bind(connection_id.as_i64())
-    .execute(&mut **seed_scope.tx_mut().as_inner())
-    .await
-    .unwrap();
-
-    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
-        sanvi_testsupport::test_ids().next_id().unwrap(),
-    );
-    sqlx::query(
-        "INSERT INTO payments.payments
-           (id, tenant_id, checkout_id, external_payment_id, status, amount_minor, currency)
-         VALUES ($1, $2, $3, 'pi_jpy_1', 'processing', 4980, 'JPY')",
-    )
-    .bind(payment_id.as_i64())
-    .bind(tenant_id.as_i64())
-    .bind(checkout_id.as_i64())
-    .execute(&mut **seed_scope.tx_mut().as_inner())
-    .await
-    .unwrap();
-    seed_scope.commit().await.unwrap();
-
-    let checkouts: Arc<dyn sanvi_payments::domain::CheckoutRepository> =
-        Arc::new(sanvi_payments::adapters::SqlxCheckoutRepository::new());
-    let lookup = CheckoutPaymentLookup::new(checkouts);
-
-    let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
-    let mut scope = tx.begin_for(tenant_id.as_i64()).await.unwrap();
-    let payment = lookup
-        .lookup_payment_value(&mut scope, tenant_id, "order-jpy-1")
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(
-        payment.conversion_event_id,
-        sanvi_payments::application::conversion_event_id(tenant_id, payment_id).to_string()
-    );
-    assert_eq!(payment.value.amount_minor, 4_980);
-    assert_eq!(payment.value.currency, "JPY");
 }
 
 /// Capture must resolve the gate *before* opening its own transaction. If

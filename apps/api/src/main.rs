@@ -18,9 +18,8 @@ use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsTenantLookupAdapter, IdentityDependencies,
     PlatformAdminDependencies, TenantCatalogAdapter, build_access_state, build_advertising_state,
     build_app, build_audit_state, build_billing_state, build_identity_state,
-    build_localization_state, build_payments_state, build_platform_admin_state,
-    build_privacy_state, build_remote_domains_lookup, build_system_state, build_tenancy_state,
-    build_theming_state,
+    build_localization_state, build_platform_admin_state, build_privacy_state,
+    build_remote_domains_lookup, build_system_state, build_tenancy_state, build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
@@ -358,6 +357,7 @@ async fn main() -> ExitCode {
             sanvi_api::privacy_provider_registry(&sanvi_api::PrivacyProviderDeps {
                 accounting_service: config.accounting_service.clone(),
                 domains_service: config.domains_service.clone(),
+                payments_service: config.payments_service.clone(),
                 media: config.media.clone(),
                 product_access: config.product_access.clone(),
                 tx: privacy_tx.clone(),
@@ -407,16 +407,8 @@ async fn main() -> ExitCode {
     let domains: Option<sanvi_api::DomainsWiring> = None;
 
     // Phase 09: build the webhook receiver even when the tenant-facing
-    // surface is rolled back. Stripe can still complete a session created
-    // before the switch; that money must retain a local record.
-    let payments = Some(build_payments_state(
-        pool.clone(),
-        ids.clone(),
-        &config.payments,
-        metrics.prometheus_registry(),
-        &config.telemetry.environment,
-        audit.writer.clone(),
-    ));
+    // Standalone Payments service handles payments processing; no in-process state.
+    let payments: Option<sanvi_payments::adapters::http::PaymentsState> = None;
     let advertising = if config.features.advertising {
         // The directive gate (TASK-014) is advertising's core invariant —
         // there is no meaningful way to run this context without the
@@ -432,6 +424,7 @@ async fn main() -> ExitCode {
             pool.clone(),
             ids.clone(),
             &config.advertising,
+            &config.payments_service,
             directive_resolver,
             subprocessors,
         )

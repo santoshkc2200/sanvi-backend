@@ -22,20 +22,115 @@ use sanvi_telemetry::Redacted;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const SECRET: &str = "compliance-domains-stand-in-secret-0123456789";
+const PAYMENTS_SECRET: &str = "compliance-payments-stand-in-secret-0123456789";
 
 /// Privacy paths the stand-in answered with a verified delegation, in order.
 pub type DomainsCalls = Arc<Mutex<Vec<String>>>;
+pub type PaymentsCalls = Arc<Mutex<Vec<String>>>;
 
-/// Build the harness over a fresh Domains stand-in.
+/// Build the harness over fresh Domains and Payments stand-ins.
 pub async fn harness(
     pool: sanvi_persistence::PgPool,
     ids: Arc<dyn RawIdGenerator>,
-) -> (ComplianceHarness, DomainsCalls) {
-    let (config, calls) = spawn_domains_service().await;
+) -> (ComplianceHarness, DomainsCalls, PaymentsCalls) {
+    let (domains_config, domains_calls) = spawn_domains_service().await;
+    let (payments_config, payments_calls) = spawn_payments_service().await;
     (
-        ComplianceHarness::build_with_domains_service(pool, ids, config),
-        calls,
+        ComplianceHarness::build_with_services(pool, ids, domains_config, payments_config),
+        domains_calls,
+        payments_calls,
     )
+}
+
+async fn spawn_payments_service() -> (
+    sanvi_payments::adapters::remote::ServiceConfig,
+    PaymentsCalls,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let calls = PaymentsCalls::default();
+    let recorded = calls.clone();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let Some((method, target, headers, body)) = read_request(&mut socket).await else {
+                continue;
+            };
+            let (status, body) = answer_payments(&method, &target, &headers, &body, &recorded);
+            let reason = match status {
+                200 => "OK",
+                204 => "No Content",
+                401 => "Unauthorized",
+                _ => "Not Found",
+            };
+            let head = format!(
+                "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(&body).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    let config = sanvi_payments::adapters::remote::ServiceConfig {
+        base_url: format!("http://{addr}"),
+        signing_secret: Redacted::new(PAYMENTS_SECRET.to_string()),
+        inbound_secret: Redacted::new("compliance-payments-inbound-secret-0123456789".to_string()),
+    };
+    (config, calls)
+}
+
+fn answer_payments(
+    method: &str,
+    target: &str,
+    headers: &BTreeMap<String, String>,
+    body: &[u8],
+    calls: &PaymentsCalls,
+) -> (u16, Vec<u8>) {
+    use sanvi_payments::adapters::remote::{
+        DELEGATION_HEADER as P_DELEGATION_HEADER, Delegation as PDelegation,
+        RequestBinding as PRequestBinding, TENANT_AUDIENCE as P_TENANT_AUDIENCE,
+    };
+    let header = |name: &str| headers.get(name).map(String::as_str).unwrap_or("");
+    let binding = PRequestBinding {
+        method,
+        target,
+        body,
+        content_type: header("content-type"),
+        if_match: header("if-match"),
+    };
+    if PDelegation::verify(
+        PAYMENTS_SECRET,
+        header(P_DELEGATION_HEADER),
+        P_TENANT_AUDIENCE,
+        "privacy",
+        &binding,
+    )
+    .is_err()
+    {
+        return (401, Vec::new());
+    }
+    let reply = match target {
+        "/internal/privacy/collect" => (
+            200,
+            serde_json::to_vec(&DataBundle {
+                context: "payments".into(),
+                entries: Vec::new(),
+            })
+            .unwrap(),
+        ),
+        "/internal/privacy/erase" => (
+            200,
+            serde_json::to_vec(&EraseReport {
+                context: "payments".into(),
+                ..EraseReport::default()
+            })
+            .unwrap(),
+        ),
+        "/internal/privacy/rectify" => (204, Vec::new()),
+        _ => return (404, Vec::new()),
+    };
+    calls.lock().unwrap().push(target.to_string());
+    reply
 }
 
 async fn spawn_domains_service() -> (ServiceConfig, DomainsCalls) {

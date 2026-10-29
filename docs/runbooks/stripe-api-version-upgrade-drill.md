@@ -74,8 +74,8 @@ WHERE error IS NULL AND processed_at IS NOT NULL;
 Then drain:
 
 ```bash
-cargo run -p sanvi-cli -- payments webhooks   # watch depth go to zero
-cargo run -p sanvi-cli -- payments sync       # provider-side reconciliation too
+cargo run -p sanvi-payments-service -- webhooks   # watch depth go to zero
+cargo run -p sanvi-payments-service -- sync       # provider-side reconciliation too
 ```
 
 ### 4. Judge the result

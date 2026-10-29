@@ -9,7 +9,7 @@ use actix_web::web;
 
 use sanvi_http::{PermissionMap, ResourceSpec, require_permission};
 
-use super::handlers::{
+use super::gateway_handlers::{
     create_payment_connection, create_payment_connection_session, create_tenant_checkout,
     delete_payment_connection, export_payments, get_current_payment_connection, get_payment,
     get_payment_connection, get_tax_settings, get_tenant_checkout, get_tenant_checkout_config,

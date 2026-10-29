@@ -5,14 +5,15 @@
 
 The Connect transport is store-first: `/internal/webhooks/stripe/connect`
 verifies and stores each event (dedupe on the provider event id), answers 2xx,
-and the worker's dispatcher drains unprocessed rows one transaction each. An
+and the Payments service's scheduler drains unprocessed rows one transaction each. An
 event that exhausts 5 attempts is **dead-lettered** — it stops being fetched
-so a poison event never blocks the queue.
+so a poison event never blocks the queue. Both the receiver and the commands below
+live in the separate `payments-service` repository; run them from there.
 
 ## 1. Assess
 
 ```bash
-cargo run -p sanvi-cli -- payments webhooks
+cargo run -p sanvi-payments-service -- webhooks
 ```
 
 prints `unprocessed=<n> dead_letter=<n>` plus the DLQ head (id, account,
@@ -44,7 +45,7 @@ version bump** is exactly the drill in
 
 ```bash
 # One event:
-cargo run -p sanvi-cli -- payments replay evt_1AbC...
+cargo run -p sanvi-payments-service -- replay evt_1AbC...
 ```
 
 `replay` clears the attempt budget so the dispatcher picks the row up again.
@@ -54,7 +55,7 @@ replaying an already-applied event is safe.
 
 ## 4. Verify
 
-- `payments webhooks` shows the event gone from the DLQ head.
+- `sanvi-payments-service webhooks` shows the event gone from the DLQ head.
 - No new `payments.webhook_dead_letter_gauge` increase.
 - For money events, confirm the projection: the payment/refund/dispute/payout
   row exists and `platform.outbox` carries its event exactly once

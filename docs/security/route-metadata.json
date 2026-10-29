@@ -186,7 +186,7 @@
   {
    "method": "DELETE",
    "path": "/api/v1/tenant/payments/connections/{id}",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::delete_payment_connection",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::delete_payment_connection",
    "permission": "payments.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1206,7 +1206,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/checkout/config",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout_config",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_tenant_checkout_config",
    "permission": "payments.checkout",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1223,7 +1223,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/checkout/{id}",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_tenant_checkout",
    "permission": "payments.checkout",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1423,7 +1423,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_payments",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_payments",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1439,7 +1439,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/connections/{id}",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_payment_connection",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_payment_connection",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1455,7 +1455,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/connections/current",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_current_payment_connection",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_current_payment_connection",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1471,7 +1471,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/disputes",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_disputes",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_disputes",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1487,7 +1487,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/export",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::export_payments",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::export_payments",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1503,7 +1503,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/payouts",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_payouts",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_payouts",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1519,7 +1519,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/providers",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::list_payment_providers",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_payment_providers",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1535,7 +1535,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/tax-settings",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_tax_settings",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_tax_settings",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -1551,7 +1551,7 @@
   {
    "method": "GET",
    "path": "/api/v1/tenant/payments/{id}",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::get_payment",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_payment",
    "permission": "payments.read",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -2598,7 +2598,7 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/checkout",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::create_tenant_checkout",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::create_tenant_checkout",
    "permission": "payments.checkout",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional + checkout tenant/client/customer-reference limiter",
@@ -2831,7 +2831,7 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/payments/connections",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::create_payment_connection",
    "permission": "payments.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -2847,7 +2847,7 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/payments/connections/{id}/session",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection_session",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::create_payment_connection_session",
    "permission": "payments.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -2863,7 +2863,7 @@
   {
    "method": "POST",
    "path": "/api/v1/tenant/payments/{id}/refund",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::refund_payment",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::refund_payment",
    "permission": "payments.refund",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -3124,7 +3124,7 @@
   {
    "method": "PUT",
    "path": "/api/v1/tenant/payments/tax-settings",
-   "handler": "crates/contexts/payments/src/adapters/http/handlers.rs::put_tax_settings",
+   "handler": "crates/contexts/payments/src/adapters/http/gateway_handlers.rs::put_tax_settings",
    "permission": "payments.manage",
    "tenant": "CurrentTenant",
    "rate_limit": "global-config-dependent+tenant-optional",
@@ -3607,6 +3607,34 @@
     "crates/contexts/domains/src/adapters/remote.rs",
     "apps/api/src/lib.rs"
    ]
+  },
+  {
+   "method": "POST",
+   "path": "/internal/payments/audit",
+   "handler": "apps/api/src/payments.rs::ingest_payments_audit",
+   "permission": "exempt:request-bound-payments-service-delegation",
+   "tenant": "signed Payments scope; platform transaction",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "apps/api/src/payments.rs",
+    "crates/contexts/payments/src/adapters/remote.rs",
+    "apps/api/src/lib.rs"
+   ],
+   "openapi_exemption": "internal service delivery"
+  },
+  {
+   "method": "POST",
+   "path": "/internal/payments/events",
+   "handler": "apps/api/src/payments.rs::ingest_payments_event",
+   "permission": "exempt:request-bound-payments-service-delegation",
+   "tenant": "signed Payments scope; platform transaction",
+   "rate_limit": "global-config-dependent",
+   "evidence": [
+    "apps/api/src/payments.rs",
+    "crates/contexts/payments/src/adapters/remote.rs",
+    "apps/api/src/lib.rs"
+   ],
+   "openapi_exemption": "internal service delivery"
   }
  ]
 }

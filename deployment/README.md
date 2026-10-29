@@ -59,3 +59,18 @@ and `/internal/domains/edge/authorize` directly to the Domains service.
 Follow docs/domains-service-extraction.md and domains-service/docs/cutover.md;
 no data copy or routing change is automatic.
 
+## Payments service
+
+Payments deploys independently from the sibling payments-service repository.
+Apply the platform Payments audit/event receipt migrations before starting its
+delivery scheduler. Configure SANVI__PAYMENTS_SERVICE__BASE_URL and the dedicated
+SANVI__PAYMENTS_SERVICE__SIGNING_SECRET and the distinct
+SANVI__PAYMENTS_SERVICE__INBOUND_SECRET through the secret manager, then enable
+features.payments after the data cutover. Set PAYMENTS_UPSTREAM (host:port, e.g.
+`payments_service:8084`) when running scripts/deploy-staging.sh: the ingress then
+routes `/internal/webhooks/stripe/connect` straight to the Payments service, because
+the API no longer mounts that receiver. Point the Stripe Connect webhook endpoint
+at the same public URL; nothing on the Stripe side changes.
+Follow docs/payments-service-extraction.md and payments-service/docs/cutover.md;
+no data copy or routing change is automatic.
+

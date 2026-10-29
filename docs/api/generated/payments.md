@@ -137,7 +137,7 @@ Operation: `get_tenant_checkout_config`
 Same permission and entitlement as the buy path it guards, because it
 answers the same question the buy path would refuse on.
 
-Responses: 200, 403, 503
+Responses: 200, 403, 502, 503
 
 ### Response 200 (en-US / USD, cents)
 
@@ -170,7 +170,7 @@ the confirmation page and trusted over any redirect: a customer who
 never returns still ends with a paid order here, a forged return URL
 yields nothing.
 
-Responses: 200, 403, 404, 503
+Responses: 200, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -220,7 +220,7 @@ Operation: `list_tenant_payments`
 cursor-paginated, tenant-scoped by RLS and indexed for the filter set.
 Ordered by created_at DESC, id DESC.
 
-Responses: 200, 400, 403, 504
+Responses: 200, 400, 403, 502, 503, 504
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -293,7 +293,7 @@ our connection id), persists the `Pending` connection, emits
 `ProviderConnectionStarted` and writes the audit entry — in that
 order, so a crashed response never orphans an account.
 
-Responses: 201, 400, 403, 409, 429, 502
+Responses: 201, 400, 403, 409, 429, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -425,7 +425,7 @@ loses it; this returns the tenant's most recent still-connected row
 has no current connection. Registered before `/{id}` so `current` is
 never parsed as an id.
 
-Responses: 200, 403, 404
+Responses: 200, 403, 404, 502, 503
 
 ### Response 200 (en-US / USD, cents)
 
@@ -521,7 +521,7 @@ marked `Disconnected`, new checkouts stop, every historical record
 stays. The provider account itself is never closed — it is the
 tenant's account to close in their own Dashboard.
 
-Responses: 200, 400, 403, 404, 409
+Responses: 200, 400, 403, 404, 409, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -622,7 +622,7 @@ and deadline), blockers, and the server-computed `can_accept_payments`
 (FR-903). Truthful because 09.3's webhooks and reconciliation job keep
 the row current.
 
-Responses: 200, 403, 404
+Responses: 200, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -719,7 +719,7 @@ Operation: `create_payment_connection_session`
 `POST /api/v1/tenant/payments/connections/{id}/session` — mint an
 Account Session client secret for the embedded onboarding component.
 
-Responses: 201, 400, 403, 404, 409, 502
+Responses: 201, 400, 403, 404, 409, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -762,7 +762,7 @@ Operation: `list_tenant_disputes`
 cursor-paginated.
 Ordered by created_at DESC, id DESC.
 
-Responses: 200, 403, 504
+Responses: 200, 403, 502, 503, 504
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -826,7 +826,7 @@ Operation: `export_tenant_payments`
 `GET /api/v1/tenant/payments/export` — server-side CSV export,
 tenant-scoped, audited.
 
-Responses: 200, 403
+Responses: 200, 403, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -845,7 +845,7 @@ Operation: `list_tenant_payouts`
 history (schedule, next payout, recent history), read live over the
 connected account.
 
-Responses: 200, 403, 502
+Responses: 200, 403, 502, 503
 
 ### Response 200 (en-US / USD, cents)
 
@@ -885,7 +885,7 @@ Operation: `list_payment_providers`
 
 `GET /api/v1/tenant/payments/providers`.
 
-Responses: 200, 403
+Responses: 200, 403, 502, 503
 
 ### Response 200 (en-US / USD, cents)
 
@@ -935,7 +935,7 @@ Operation: `get_tenant_tax_settings`
 
 `GET /api/v1/tenant/payments/tax-settings`.
 
-Responses: 200, 403
+Responses: 200, 403, 502, 503
 
 ### Response 200 (en-US / USD, cents)
 
@@ -978,7 +978,7 @@ are not `active`, or which holds no active registration, cannot enable
 nothing and returns no error, and that silence must never look like a
 working toggle.
 
-Responses: 200, 400, 403, 409, 502
+Responses: 200, 400, 403, 409, 502, 503
 
 ### Request journey (en-US / USD, cents)
 
@@ -1041,7 +1041,7 @@ Operation: `get_tenant_payment`
 `GET /api/v1/tenant/payments/{id}` — payment detail with timeline,
 refunds and dispute state.
 
-Responses: 200, 403, 404
+Responses: 200, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -1173,7 +1173,7 @@ Operation: `refund_tenant_payment`
 
 `POST /api/v1/tenant/payments/{id}/refund` — refund a payment.
 
-Responses: 200, 201, 400, 403, 404, 409, 502
+Responses: 200, 201, 400, 403, 404, 409, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |

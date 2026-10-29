@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod notification_intent;
 pub mod notify;
 pub mod privacy_provider;
+pub mod remote;
 pub mod repos;
 pub mod stripe_connect;
 pub mod stubs;
@@ -20,7 +21,7 @@ pub use fake_provider::{FAKE_WEBHOOK_SECRET, FakeProvider, FakeScript};
 pub use metrics::PaymentsMetrics;
 pub use notification_intent::notification_intent;
 pub use notify::DenyAllVerifier;
-pub use privacy_provider::PaymentsPrivacyProvider;
+pub use privacy_provider::{PaymentsPrivacyProvider, RemotePaymentsPrivacyProvider};
 pub use repos::{
     SqlxCheckoutRepository, SqlxDisputeRepository, SqlxPaymentRepository, SqlxPayoutRepository,
     SqlxProviderConnectionRepository, SqlxRefundRepository, SqlxTaxSettingsRepository,
