@@ -47,10 +47,14 @@ No production deployment, data transfer or destructive contraction is performed 
 this change. Apply platform receipt migrations before starting service delivery;
 freeze old writers before copying data.
 
-## Service changes required
+## Service-side contracts
 
-The standalone `domains-service` must implement and consume the following contracts
-to complete the platform extraction boundary:
+The standalone `domains-service` implements both contracts below (branch
+`feat/lookup-and-tenant-state`). It serves the hostname lookup, and its edge TLS gate asks the
+platform for tenant state through `RemoteTenantState`, which replaced the `AlwaysActiveTenantState`
+stub. Tenant-state lookups fail closed: a transport error, non-200 or unparseable answer denies TLS
+admission. The service also refuses to start without platform configuration. The wire formats below
+are the compatibility contract; change them in both repositories together.
 
 ### 1. Storefront Live Hostname Lookup (`GET /internal/domains/lookup`)
 
@@ -76,7 +80,7 @@ queries this endpoint to resolve custom domains to tenant IDs.
 ### 2. Edge TLS Active Tenant Verification (`POST /internal/domains/tenant-state`)
 
 The standalone Domains service edge TLS gate must verify whether a tenant is active before
-authorizing certificate issuance or traffic admission, replacing the embedded `AlwaysActiveTenantState` stub.
+authorizing certificate issuance or traffic admission (`RemoteTenantState` in the service).
 
 * **Method**: `POST`
 * **Path**: `/internal/domains/tenant-state`
