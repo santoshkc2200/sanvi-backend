@@ -47,5 +47,5 @@ balance) the guard clears. Never clear guards by hand.
 ## 4. Reconciliation backstop
 
 If `payout.paid` never arrives after a fix, force a sync pass
-(`cargo run -p sanvi-cli -- payments sync`) which re-fetches account state;
+(`cargo run -p sanvi-payments-service -- sync`) which re-fetches account state;
 the payment list's `payout_status` repairs from balance-transaction links.

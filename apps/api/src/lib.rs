@@ -3336,6 +3336,7 @@ pub async fn build_advertising_state(
     pool: sanvi_persistence::PgPool,
     ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
     config: &AdvertisingConfig,
+    payments_service: &sanvi_payments::adapters::remote::ServiceConfig,
     directive_resolver: Arc<dyn DirectiveResolver>,
     subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository>,
 ) -> anyhow::Result<sanvi_advertising::adapters::http::AdvertisingState> {
@@ -3409,12 +3410,10 @@ pub async fn build_advertising_state(
             .await?,
         )
     };
-    let checkouts: std::sync::Arc<dyn sanvi_payments::domain::CheckoutRepository> =
-        std::sync::Arc::new(sanvi_payments::adapters::SqlxCheckoutRepository::new());
     let payment_lookup: std::sync::Arc<dyn sanvi_advertising::domain::PaymentLookupPort> =
-        std::sync::Arc::new(sanvi_advertising::adapters::CheckoutPaymentLookup::new(
-            checkouts,
-        ));
+        std::sync::Arc::new(sanvi_advertising::adapters::RemotePaymentLookup::new(
+            payments_service,
+        )?);
     let conversion_repo: std::sync::Arc<dyn sanvi_advertising::domain::ConversionEventRepository> =
         std::sync::Arc::new(SqlxCampaignRepository::new());
     let tracking_settings_repo: std::sync::Arc<

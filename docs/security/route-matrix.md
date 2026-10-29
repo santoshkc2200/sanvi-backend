@@ -291,8 +291,8 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | apps/api/src/compliance.rs | `4fe927082136688eee8d87ab1d2fa3f015ea04b9b1d0fe47d72fb32ca66e8071` |
 | apps/api/src/config.rs | `ad34c7b308149f69c87d4ee46ada5688d9ea3cc6dba0ea5bf1f83b958787642d` |
 | apps/api/src/domains.rs | `12c067de12ceea752c9549a1f4697378427a463cc5ce48bf2fbed22bd740f504` |
-| apps/api/src/lib.rs | `512effd0f90cf7937636fbb717484824f71ca77497deb97c8a0c4248267d269a` |
-| apps/api/src/main.rs | `955ab84dab826d4ba9d7dea66e0284e2ae647383a46a0888d500e00758e5a385` |
+| apps/api/src/lib.rs | `6714cfd25c895efc459d4ab05c16165743291430cca22dfa56974d8c448db7fd` |
+| apps/api/src/main.rs | `d691530e07aa6866c2d01509a30e942168de87dada13d530fd7474f3aa38332b` |
 | apps/api/src/openapi.rs | `7684f55419ae0c1bd62d510bb8a7f6d896512a34fedbc561f65651c235fc865b` |
 | apps/api/src/payments.rs | `224fa64ba7e3be9fad9f2c76ec0dcb8f646a9cf112cb420acb20aed4d3ef9c02` |
 | apps/api/src/product_access.rs | `b680883b3bae7b8e4fefa24419fd7445cb86417d4378243ded6b9f4d93f7121a` |
@@ -353,7 +353,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/payments/src/adapters/http/state.rs | `8c4a83ca6c2dd412b7b4a5d67d757a47527e0a4f1347e541bc87969a29c4f7fa` |
 | crates/contexts/payments/src/adapters/http/validation.rs | `dfe55a16f9be2417d9e4a0bf5a2de7d9733cc3cf46ca678133f9a372a9db3d02` |
 | crates/contexts/payments/src/adapters/http/webhooks.rs | `58cbf733f25d5039dc4e76954427ed7469b54be53da2d8c101520160950b2dc6` |
-| crates/contexts/payments/src/adapters/remote.rs | `b39666bf8dcc0a87adb3bbe5cd4712cdf8339e66d481f74b048dfa26845527e8` |
+| crates/contexts/payments/src/adapters/remote.rs | `9a55318c155fe4432156bb686923a6318e38ce3157c769394d3ccc9d9c6d95f9` |
 | crates/contexts/platform_admin/src/adapters/http/catalog.rs | `06fcf1f9de300a4ea57a0532f4e5576c07369aca1aee79f98311f15a29831587` |
 | crates/contexts/platform_admin/src/adapters/http/handlers.rs | `535b935ebcfc967aa7658bde4ef8b8b0e34eb71493b82b82b7c4ba47e6629f8f` |
 | crates/contexts/platform_admin/src/adapters/http/mod.rs | `4dbd8c2ce61074f2e805904774d4d57a7f76fb1167ab09ae8d9440213162a98d` |

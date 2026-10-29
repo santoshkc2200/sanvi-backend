@@ -10,7 +10,7 @@ logs (`payment provider unavailable`). See
 |---|---|
 | Checkout creation | The use case returns `502 payments/provider-unavailable` after its own backoff; the storefront shows "temporarily unavailable". Nothing is persisted for the failed attempt (the checkout row commits only with a session or as a recoverable pending row — retries adopt it by Idempotency-Key). |
 | Webhook processing | Events are stored first, then processed; a provider fetch failure fails the *attempt*, consuming one of 5 retry budgets. Processing resumes automatically when Stripe recovers. |
-| Mid-onboarding | A failed status fetch during connection create logs a warning and the row stays `Pending`; the reconciliation job (`payments sync`) fills truth in later. |
+| Mid-onboarding | A failed status fetch during connection create logs a warning and the row stays `Pending`; the reconciliation job (`sanvi-payments-service sync`) fills truth in later. |
 
 The design goal: Stripe being down delays truth, never loses money. Money
 taken at Stripe always has (or will have) a local record via the stored
@@ -21,7 +21,7 @@ webhook.
 - Check Stripe's status page / dashboard notices.
 - `increase(payments_webhook_events_total{result="failed"}[10m]) > 0` with
   provider-unavailable errors confirms degraded processing.
-- One manual probe: `cargo run -p sanvi-cli -- payments sync` — errors here
+- One manual probe: `cargo run -p sanvi-payments-service -- sync` — errors here
   are the adapter failing at Stripe.
 
 ## 2. During the incident

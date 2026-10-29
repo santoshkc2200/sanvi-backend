@@ -24,7 +24,7 @@ use sanvi_advertising::domain::{
     PlatformKey, SecretRef, VendorRole, VendorRolePort,
 };
 use sanvi_kernel::TenantId;
-use sanvi_persistence::{ScopedTx, TxManager};
+use sanvi_persistence::TxManager;
 use sanvi_privacy::domain::{
     DirectiveResolver, DirectiveSnapshot, DirectiveSource, DirectiveState, JurisdictionRef,
     PrivacyError, ProcessingPurpose, PurposeDirective, SubjectRef,
@@ -90,7 +90,6 @@ struct NoPaymentLookup;
 impl PaymentLookupPort for NoPaymentLookup {
     async fn lookup_payment_value(
         &self,
-        _scope: &mut ScopedTx<'_>,
         _tenant_id: TenantId,
         _order_ref: &str,
     ) -> Result<Option<PaymentLookup>, AdvertisingError> {

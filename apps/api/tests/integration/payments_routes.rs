@@ -1202,3 +1202,78 @@ async fn remote_privacy_provider_calls_service_and_fails_closed() {
         "erase against unreachable service must fail, got: {erase_err:?}"
     );
 }
+
+#[actix_web::test]
+async fn remote_payment_lookup_returns_the_service_payment_record() {
+    use sanvi_advertising::domain::PaymentLookupPort;
+
+    let tenant_id = sanvi_kernel::TenantId::try_from(TENANT).unwrap();
+    let stub_url = spawn_stub(move |method, target, headers| async move {
+        let token = headers
+            .get(DELEGATION_HEADER)
+            .map(String::as_str)
+            .unwrap_or_default();
+        if Delegation::verify(
+            SIGNING_KEY,
+            token,
+            TENANT_AUDIENCE,
+            "conversion",
+            &RequestBinding::json(&method, &target, b""),
+        )
+        .is_err()
+        {
+            return (401, "application/json", b"{}".to_vec());
+        }
+        let found = format!(
+            "/internal/payments/conversion-value?tenant_id={TENANT}&order_ref=order%20jpy%2F1"
+        );
+        if method == "GET" && target == found {
+            let body = json!({
+                "conversion_event_id": "873698342314721281",
+                "amount_minor": 4980,
+                "currency": "JPY",
+            });
+            (200, "application/json", serde_json::to_vec(&body).unwrap())
+        } else {
+            (404, "application/json", b"{}".to_vec())
+        }
+    })
+    .await;
+    let lookup = sanvi_advertising::adapters::RemotePaymentLookup::new(&ServiceConfig {
+        base_url: stub_url,
+        signing_secret: sanvi_telemetry::Redacted::new(SIGNING_KEY.into()),
+        inbound_secret: sanvi_telemetry::Redacted::new(INBOUND_KEY.into()),
+    })
+    .unwrap();
+
+    // The order reference is percent-encoded into the signed target.
+    let payment = lookup
+        .lookup_payment_value(tenant_id, "order jpy/1")
+        .await
+        .unwrap()
+        .expect("the service holds a payment for this order");
+    assert_eq!(payment.conversion_event_id, "873698342314721281");
+    assert_eq!(payment.value.amount_minor, 4_980);
+    assert_eq!(payment.value.currency, "JPY");
+    assert_eq!(
+        lookup
+            .lookup_payment_value(tenant_id, "order-missing")
+            .await
+            .unwrap(),
+        None
+    );
+
+    // An unreachable service is an error, never "no payment record".
+    let closed = sanvi_advertising::adapters::RemotePaymentLookup::new(&ServiceConfig {
+        base_url: "http://127.0.0.1:1".into(),
+        signing_secret: sanvi_telemetry::Redacted::new(SIGNING_KEY.into()),
+        inbound_secret: sanvi_telemetry::Redacted::new(INBOUND_KEY.into()),
+    })
+    .unwrap();
+    assert!(
+        closed
+            .lookup_payment_value(tenant_id, "order jpy/1")
+            .await
+            .is_err()
+    );
+}

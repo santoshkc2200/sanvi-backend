@@ -1223,6 +1223,7 @@ async fn build_sweep_app(
             pool.clone(),
             ids.clone(),
             &config.advertising,
+            &config.payments_service,
             directive_resolver,
             subprocessors,
         )

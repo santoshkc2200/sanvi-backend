@@ -424,6 +424,7 @@ async fn main() -> ExitCode {
             pool.clone(),
             ids.clone(),
             &config.advertising,
+            &config.payments_service,
             directive_resolver,
             subprocessors,
         )

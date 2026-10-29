@@ -512,9 +512,11 @@ pub struct PaymentLookup {
 
 #[async_trait]
 pub trait PaymentLookupPort: Send + Sync {
+    /// Called before capture opens its transaction: the payment record lives
+    /// in the standalone Payments service, and no pooled connection may be
+    /// held across that call.
     async fn lookup_payment_value(
         &self,
-        scope: &mut ScopedTx<'_>,
         tenant_id: TenantId,
         order_ref: &str,
     ) -> Result<Option<PaymentLookup>, AdvertisingError>;

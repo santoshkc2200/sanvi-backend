@@ -59,10 +59,15 @@ No production deployment, data transfer or destructive contraction is performed 
 change. Apply the platform receipt migrations before starting service delivery, and freeze
 old writers before copying data.
 
-## Not yet moved
+## Advertising and operator commands
 
-These still read the platform's `payments.*` tables directly and must move to the service
-before the old schema is frozen:
+Advertising capture joins a conversion's order reference to its payment record through
+`RemotePaymentLookup`, a signed `GET /internal/payments/conversion-value` (purpose
+`conversion`). The lookup runs before capture opens its transaction, like the consent gate,
+so no pooled connection is held across the call. A 404 means no payment is recorded and the
+client's value is used as a marked hint; any other failure fails the capture rather than
+trusting that hint.
 
-- `crates/contexts/advertising/src/adapters/payment_lookup.rs` (conversion attribution)
-- `apps/cli/src/payments.rs` and the Payments part of `apps/cli/src/rotate_credentials.rs`
+The Connect webhook status, dead-letter replay and manual sync commands moved from
+`sanvi-cli payments` to the service binary: `sanvi-payments-service webhooks`,
+`replay <event-id>` and `sync`.

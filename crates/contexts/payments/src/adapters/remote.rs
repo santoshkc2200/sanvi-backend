@@ -250,6 +250,23 @@ impl RemoteResponse {
     }
 }
 
+/// RFC 3986 percent-encoding for URI query parameter values.
+pub fn percent_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            b => {
+                use std::fmt::Write;
+                let _ = write!(encoded, "%{b:02X}");
+            }
+        }
+    }
+    encoded
+}
+
 impl RemoteClient {
     pub fn new(config: &ServiceConfig) -> anyhow::Result<Self> {
         Self::with_timeout(config, Duration::from_secs(10))

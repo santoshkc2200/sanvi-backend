@@ -33,7 +33,7 @@ WHERE disconnected_at IS NULL
   (`GET /api/v1/tenant/payments/connections/{id}`) shows the same truth to
   the tenant.
 - **Stuck > 7 days with no recent sync**: force one pass — `just payments-sync`
-  (`cargo run -p sanvi-cli -- payments sync`). If sync errors, follow
+  (`cargo run -p sanvi-payments-service -- sync`). If sync errors, follow
   [Stripe outage](./payments-stripe-outage.md).
 
 ## 3. Recovery

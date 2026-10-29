@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use sanvi_kernel::TenantId;
-use sanvi_persistence::{ScopedTx, TxManager};
+use sanvi_persistence::TxManager;
 use tracing::Instrument;
 
 use sanvi_privacy::domain::{
@@ -23,6 +23,9 @@ use crate::domain::{
     VendorRolePort,
     hashing::{hash_email, hash_phone},
 };
+
+/// The trusted value, its source, and the payment-derived event ID.
+type ResolvedValue = (Option<Money>, Option<ValueSource>, Option<String>);
 
 /// Extracts the non-PII key material a later withdrawal re-check needs to
 /// rebuild this exact `SubjectRef` — never the raw email a `Contact`
@@ -154,15 +157,16 @@ impl CaptureConversion {
         // waiting for a connection, and the pool deadlocks until acquire
         // timeouts unwind it.
         let (consent, suppressed) = self.resolve_gate(&command).await?;
+        // The payment record comes from the Payments service; like the gate,
+        // it is asked before a connection is taken.
+        let value = self.resolve_value(&command).await?;
 
+        let event = self.build_event(command, consent, suppressed, value)?;
         let mut scope = self
             .tx
-            .begin_for(command.tenant_id.as_i64())
+            .begin_for(event.tenant_id.as_i64())
             .await
             .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        let event = self
-            .build_event(&mut scope, command, consent, suppressed)
-            .await?;
         self.conversion_repo
             .insert_idempotent(&mut scope, &event)
             .await?;
@@ -175,28 +179,22 @@ impl CaptureConversion {
 
     /// Runs the same capture pipeline without persisting anything — the
     /// synthetic test-event endpoint, so a tenant can see what the gate
-    /// would decide without polluting real metrics. The transaction is
-    /// dropped, never committed.
+    /// would decide without polluting real metrics.
     pub async fn dry_run(
         &self,
         command: TrackConversionCommand,
     ) -> Result<ConversionEvent, AdvertisingError> {
         let (consent, suppressed) = self.resolve_gate(&command).await?;
-        let mut scope = self
-            .tx
-            .begin_for(command.tenant_id.as_i64())
-            .await
-            .map_err(|error| AdvertisingError::Storage(error.to_string()))?;
-        self.build_event(&mut scope, command, consent, suppressed)
-            .await
+        let value = self.resolve_value(&command).await?;
+        self.build_event(command, consent, suppressed, value)
     }
 
-    async fn build_event(
+    fn build_event(
         &self,
-        scope: &mut ScopedTx<'_>,
         command: TrackConversionCommand,
         consent: ConsentSnapshot,
         suppressed: bool,
+        (value, value_source, payment_event_id): ResolvedValue,
     ) -> Result<ConversionEvent, AdvertisingError> {
         let mut hashed_identifiers = BTreeMap::new();
         if let Some(ref email) = command.email {
@@ -207,7 +205,6 @@ impl CaptureConversion {
         }
 
         let subject_key = subject_key_ref(&command.subject);
-        let (value, value_source, payment_event_id) = self.resolve_value(scope, &command).await?;
         let event_id = payment_event_id.clone().unwrap_or(command.event_id.clone());
         let dedupe_key = conversion_dedupe_key(
             command.tenant_id,
@@ -249,19 +246,16 @@ impl CaptureConversion {
     /// as such (NFR-1010).
     async fn resolve_value(
         &self,
-        scope: &mut ScopedTx<'_>,
         command: &TrackConversionCommand,
-    ) -> Result<(Option<Money>, Option<ValueSource>, Option<String>), AdvertisingError> {
+    ) -> Result<ResolvedValue, AdvertisingError> {
         if let Some(order_ref) = command.order_ref.as_deref() {
             // A failed lookup is not "no payment record". Falling through
             // to the client's hint here would label an untrusted value as
-            // the event's value on a transient database error — exactly
-            // the substitution NFR-1010 forbids — and the failed statement
-            // has already aborted this transaction, so the insert that
-            // follows could not have succeeded anyway.
+            // the event's value on a transient lookup failure — exactly
+            // the substitution NFR-1010 forbids.
             if let Some(payment) = self
                 .payment_lookup
-                .lookup_payment_value(scope, command.tenant_id, order_ref)
+                .lookup_payment_value(command.tenant_id, order_ref)
                 .await?
             {
                 return Ok((

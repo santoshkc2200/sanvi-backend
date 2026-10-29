@@ -98,6 +98,7 @@ async fn drill_app(
         pool.clone(),
         ids.clone(),
         &adv_config,
+        &Default::default(),
         resolver.clone(),
         Arc::new(sanvi_privacy::adapters::SqlxSubProcessorRepository::new()),
     )
