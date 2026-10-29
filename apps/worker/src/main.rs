@@ -87,21 +87,6 @@ use sanvi_notifications::{
     NotificationGatewayPort, Recipient, RecipientDirectory, RenderedNotification,
     build_idempotency_key, secret_fingerprint,
 };
-use sanvi_payments::{
-    adapters::{
-        OutboxEventPublisher as PaymentsEvents, SqlxProviderConnectionRepository,
-        SqlxWebhookEventRepository as PaymentsWebhookEvents,
-    },
-    application::{
-        ProviderRegistry as PaymentsProviderRegistry,
-        RuntimeEnvironment as PaymentsRuntimeEnvironment, SyncConnections,
-        WebhookDispatcher as ConnectWebhookDispatcher,
-    },
-    domain::{
-        ConnectionLifecycleStore, EventPublisher as PaymentsEventPublisher,
-        WebhookEventRepository as PaymentsWebhookEventRepository,
-    },
-};
 use sanvi_persistence::{DatabaseConfig, build_pool};
 use sanvi_privacy::{
     PrivacyConfig,
@@ -593,17 +578,6 @@ pub struct SchedulerConfig {
     pub domains_health_interval_secs: u64,
     /// Purchase saga advancement + refund retries (phase 08).
     pub domains_orders_interval_secs: u64,
-    /// Connect webhook event dispatch (phase 09).
-    pub payments_webhook_dispatch_interval_secs: u64,
-    /// Connection status reconciliation (phase 09) — the safety net for
-    /// missed webhook deliveries.
-    pub payments_connection_sync_interval_secs: u64,
-    /// Payments gauges refresh (phase 09).
-    pub payments_metrics_interval_secs: u64,
-    /// Tax-compliance re-check for tenants with automatic tax enabled
-    /// (phase 09.6) — lapsed registrations warn instead of silently
-    /// under-collecting.
-    pub payments_tax_check_interval_secs: u64,
     /// Pre-create current and following partitions for every registry
     /// parent (TASK-028: one job, one registry — advertising, audit, outbox
     /// and the webhook histories). This starts before any conversion
@@ -663,10 +637,6 @@ impl Default for SchedulerConfig {
             domains_renewal_interval_secs: 3600,
             domains_health_interval_secs: 3600,
             domains_orders_interval_secs: 60,
-            payments_webhook_dispatch_interval_secs: 10,
-            payments_connection_sync_interval_secs: 3600,
-            payments_metrics_interval_secs: 60,
-            payments_tax_check_interval_secs: 86_400,
             partition_maintenance_interval_secs: 86_400,
             advertising_reconciliation_interval_secs: 86_400,
             advertising_conversion_upload_interval_secs: 60,
@@ -854,12 +824,9 @@ pub struct WorkerConfig {
     pub domains: DomainsConfig,
     #[serde(default)]
     pub domains_service: sanvi_domains::adapters::remote::ServiceConfig,
-    /// Phase 09: payments configuration (per-environment secrets and the
-    /// application-fee switch). No worker job consumes it until 09.3's
-    /// webhook dispatcher and sync job land; declaring it now keeps the
-    /// api and worker reading the same sections.
+    /// Independently deployed Payments service.
     #[serde(default)]
-    pub payments: sanvi_payments::PaymentsConfig,
+    pub payments_service: sanvi_payments::adapters::remote::ServiceConfig,
     #[serde(default)]
     pub advertising: sanvi_advertising::AdvertisingConfig,
     #[serde(default)]
@@ -893,7 +860,7 @@ impl WorkerConfig {
         self.theming.validate()?;
         self.domains.validate()?;
         self.domains_service.validate()?;
-        self.payments.validate()?;
+        self.payments_service.validate()?;
         self.advertising.validate()?;
         self.notification.validate()?;
         self.product_access.validate()?;
@@ -1309,103 +1276,6 @@ async fn main() -> ExitCode {
         config.billing.automatic_tax_enabled,
     ));
 
-    // --- payments context (phase 09): Connect webhook dispatch, connection
-    // reconciliation and gauges. The registry mirrors the API's: the fake
-    // provider joins in non-production environments, the Stripe Connect
-    // adapter when a restricted key is configured.
-    let payments_tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
-    let payments_connections_repo = std::sync::Arc::new(SqlxProviderConnectionRepository::new());
-    let payments_lifecycle: std::sync::Arc<dyn ConnectionLifecycleStore> =
-        payments_connections_repo.clone();
-    let payments_webhooks: std::sync::Arc<dyn PaymentsWebhookEventRepository> =
-        std::sync::Arc::new(PaymentsWebhookEvents::new());
-    let payments_events: std::sync::Arc<dyn PaymentsEventPublisher> =
-        std::sync::Arc::new(PaymentsEvents::new(ids.clone()));
-    let payment_ids: std::sync::Arc<dyn sanvi_payments::domain::IdGenerator> = std::sync::Arc::new(
-        sanvi_payments::adapters::SystemIdGenerator::new(ids.clone()),
-    );
-    let mut payments_providers = PaymentsProviderRegistry::new();
-    if PaymentsRuntimeEnvironment::from_config(&config.telemetry.environment)
-        == PaymentsRuntimeEnvironment::NonProduction
-    {
-        payments_providers
-            .register(std::sync::Arc::new(
-                sanvi_payments::adapters::FakeProvider::new(),
-            ))
-            .expect("the fake provider is the first registration");
-    }
-    if !config.payments.connect_api_key.is_empty() {
-        payments_providers
-            .register(std::sync::Arc::new(
-                sanvi_payments::adapters::StripeConnectProvider::new(
-                    config.payments.connect_api_base.clone(),
-                    config.payments.connect_api_key.expose_secret().clone(),
-                    config.payments.stripe_api_version.clone(),
-                    config
-                        .payments
-                        .connect_webhook_secret
-                        .expose_secret()
-                        .clone(),
-                    config.payments.webhook_tolerance_secs,
-                ),
-            ))
-            .expect("the stripe connect adapter registers");
-    }
-    let payments_registry = std::sync::Arc::new(payments_providers);
-    let payments_metrics = sanvi_payments::adapters::PaymentsMetrics::new(registry);
-    // 09.4: the payment-event handlers' persistence. Always wired, even
-    // while checkout creation is flag-off — money taken at Stripe must
-    // never land without a local record.
-    let payments_checkouts: std::sync::Arc<dyn sanvi_payments::domain::CheckoutLifecycleStore> =
-        std::sync::Arc::new(sanvi_payments::adapters::SqlxCheckoutRepository::new());
-    let payments_refunds: std::sync::Arc<dyn sanvi_payments::domain::RefundRepository> =
-        std::sync::Arc::new(sanvi_payments::adapters::SqlxRefundRepository::new());
-    let payments_disputes: std::sync::Arc<dyn sanvi_payments::domain::DisputeRepository> =
-        std::sync::Arc::new(sanvi_payments::adapters::SqlxDisputeRepository::new());
-    // 09.6: the scheduled (and webhook-triggered) tax-compliance re-check.
-    let payments_tax_settings: std::sync::Arc<dyn sanvi_payments::domain::TaxSettingsRepository> =
-        std::sync::Arc::new(sanvi_payments::adapters::SqlxTaxSettingsRepository::new());
-    let tax_recheck = std::sync::Arc::new(
-        sanvi_payments::application::CheckTenantTaxCompliance::new(
-            payments_tx.clone(),
-            payments_connections_repo.clone(),
-            payments_registry.clone(),
-            payments_tax_settings.clone(),
-            payments_events.clone(),
-        )
-        .with_metrics(payments_metrics.clone()),
-    );
-    let connect_dispatcher = std::sync::Arc::new(
-        ConnectWebhookDispatcher::new(
-            payments_tx.clone(),
-            payments_webhooks.clone(),
-            payments_lifecycle.clone(),
-            payments_registry.clone(),
-            payments_events.clone(),
-            payment_ids,
-        )
-        .with_checkout_store(payments_checkouts.clone())
-        .with_refund_store(payments_refunds.clone())
-        .with_dispute_store(payments_disputes.clone())
-        .with_payout_store(std::sync::Arc::new(
-            sanvi_payments::adapters::SqlxPayoutRepository::new(),
-        ))
-        .with_tax_checker(tax_recheck.clone())
-        .with_metrics(payments_metrics.clone()),
-    );
-    let connection_sync = std::sync::Arc::new(
-        SyncConnections::new(
-            payments_tx.clone(),
-            payments_lifecycle.clone(),
-            payments_registry.clone(),
-            payments_events.clone(),
-            chrono::Duration::seconds(
-                config.scheduler.payments_connection_sync_interval_secs as i64,
-            ),
-        )
-        .with_metrics(payments_metrics.clone()),
-    );
-
     // --- billing events consumer: entitlement cache invalidation ------------
     let billing_consumer = EventConsumer::postgres(tx_manager.clone());
     let billing_consumer_metrics = std::sync::Arc::new(ConsumerMetrics::new("billing"));
@@ -1653,9 +1523,10 @@ async fn main() -> ExitCode {
             privacy_signals.clone(),
             privacy_directives.clone(),
         )),
-        std::sync::Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
-            privacy_tx.clone(),
-        )),
+        std::sync::Arc::new(
+            sanvi_payments::adapters::RemotePaymentsPrivacyProvider::new(&config.payments_service)
+                .expect("validated payments service configuration for privacy provider"),
+        ),
         std::sync::Arc::new(
             sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
         ),
@@ -1767,8 +1638,6 @@ async fn main() -> ExitCode {
         Arc::new(sanvi_access::adapters::SystemClock),
     ));
     let audit_reader = Arc::new(SqlxAuditReader::new());
-    let audit_writer: Arc<dyn sanvi_audit::domain::AuditWriter> =
-        Arc::new(SqlxAuditWriter::new(ids.clone()));
     let verify_audit = Arc::new(VerifyAuditChain::new(
         tx_manager.clone(),
         audit_reader,
@@ -2086,24 +1955,6 @@ async fn main() -> ExitCode {
         };
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
-        Arc::new(FnJob::new(
-            "payments.refund_audits",
-            Duration::from_secs(5),
-            {
-                let drain = Arc::new(sanvi_payments::application::DrainRefundAudits::new(
-                    payments_tx.clone(),
-                    Arc::new(sanvi_payments::adapters::SqlxRefundRepository::new()),
-                    audit_writer.clone(),
-                ));
-                move || {
-                    let drain = drain.clone();
-                    Box::pin(async move {
-                        drain.execute(100).await?;
-                        Ok(())
-                    })
-                }
-            },
-        )),
         Arc::new(FnJob::new(
             "advertising.budget_guardrails",
             Duration::from_secs(config.scheduler.advertising_budget_guardrails_interval_secs),
@@ -2812,127 +2663,6 @@ async fn main() -> ExitCode {
                                 .set(count);
                         }
                         scope.commit().await.map_err(|err| anyhow::anyhow!(err))?;
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        // --- phase 09: payments -------------------------------------------------
-        Arc::new(FnJob::new(
-            "payments.webhook_dispatch",
-            Duration::from_secs(config.scheduler.payments_webhook_dispatch_interval_secs),
-            {
-                let dispatcher = connect_dispatcher.clone();
-                move || {
-                    let dispatcher = dispatcher.clone();
-                    Box::pin(async move {
-                        let report = dispatcher
-                            .dispatch(sanvi_payments::application::DISPATCH_BATCH)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.processed > 0 || report.skipped > 0 || report.failed > 0 {
-                            tracing::info!(
-                                processed = report.processed,
-                                skipped = report.skipped,
-                                failed = report.failed,
-                                "connect webhook dispatch pass",
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "payments.connection_sync",
-            Duration::from_secs(config.scheduler.payments_connection_sync_interval_secs),
-            {
-                let sync = connection_sync.clone();
-                move || {
-                    let sync = sync.clone();
-                    Box::pin(async move {
-                        // The safety net for missed webhooks: a lost
-                        // delivery becomes a delay (one sync interval),
-                        // never a stuck connection.
-                        let report = sync
-                            .execute(200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 || report.errors > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                updated = report.updated,
-                                errors = report.errors,
-                                "connection reconciliation pass",
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "payments.metrics",
-            Duration::from_secs(config.scheduler.payments_metrics_interval_secs),
-            {
-                let tx = payments_tx.clone();
-                let webhooks = payments_webhooks.clone();
-                let lifecycle = payments_lifecycle.clone();
-                let disputes = payments_disputes.clone();
-                let metrics = payments_metrics.clone();
-                move || {
-                    let tx = tx.clone();
-                    let webhooks = webhooks.clone();
-                    let lifecycle = lifecycle.clone();
-                    let disputes = disputes.clone();
-                    let metrics = metrics.clone();
-                    Box::pin(async move {
-                        let mut scope = tx
-                            .begin_unscoped("payments_metrics", "worker")
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        metrics
-                            .webhook_unprocessed
-                            .set(webhooks.unprocessed_count(&mut scope).await? as i64);
-                        metrics
-                            .webhook_dead_letter
-                            .set(webhooks.dead_letter_count(&mut scope).await? as i64);
-                        metrics
-                            .dispute_open
-                            .set(disputes.count_open(&mut scope).await?);
-                        metrics.connection_status.reset();
-                        for (status, count) in lifecycle.count_by_status(&mut scope).await? {
-                            metrics
-                                .connection_status
-                                .with_label_values(&[&status])
-                                .set(count);
-                        }
-                        scope.commit().await.map_err(|err| anyhow::anyhow!(err))?;
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "payments.tax_check",
-            Duration::from_secs(config.scheduler.payments_tax_check_interval_secs),
-            {
-                let recheck = tax_recheck.clone();
-                move || {
-                    let recheck = recheck.clone();
-                    Box::pin(async move {
-                        let report = recheck
-                            .execute(500)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 || report.warned > 0 || report.errors > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                warned = report.warned,
-                                errors = report.errors,
-                                "tax compliance re-check pass",
-                            );
-                        }
                         Ok(())
                     })
                 }

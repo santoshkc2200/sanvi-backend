@@ -693,3 +693,10 @@ base_url = ""
 # the service's audit/event deliveries and tenant-state requests). They must differ.
 [domains_service]
 base_url = ""
+
+# Payments is independently deployed in standalone payments-service.
+# Set the two keys only through SANVI__PAYMENTS_SERVICE__SIGNING_SECRET (signs
+# requests to the service) and SANVI__PAYMENTS_SERVICE__INBOUND_SECRET (verifies
+# the service's audit/event deliveries). They must differ.
+[payments_service]
+base_url = ""

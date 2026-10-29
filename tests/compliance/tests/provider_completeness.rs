@@ -178,7 +178,8 @@ impl sanvi_audit::domain::ports::AuditWriter for NoopAudit {
 #[tokio::test]
 async fn every_registered_context_joins_both_the_access_and_erasure_paths() {
     let db = sanvi_testsupport::test_db().await;
-    let (harness, domains_calls) = common::harness(db.app_pool().clone(), ids()).await;
+    let (harness, domains_calls, payments_calls) =
+        common::harness(db.app_pool().clone(), ids()).await;
     for kind in [DrillKind::Access, DrillKind::Erasure] {
         let timing = run_dsr_drill(&harness, "eu", kind)
             .await
@@ -194,6 +195,14 @@ async fn every_registered_context_joins_both_the_access_and_erasure_paths() {
         assert!(
             calls.iter().any(|call| call == path),
             "the Domains provider never reached {path}; calls: {calls:?}"
+        );
+    }
+    // Payments joins by calling its service, not by a local no-op.
+    let p_calls = payments_calls.lock().unwrap().clone();
+    for path in ["/internal/privacy/collect", "/internal/privacy/erase"] {
+        assert!(
+            p_calls.iter().any(|call| call == path),
+            "the Payments provider never reached {path}; calls: {p_calls:?}"
         );
     }
 }

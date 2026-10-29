@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT digest FROM platform.payments_event_receipts WHERE event_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "digest",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform.payments_event_receipts",
+            "name": "digest"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "94f1bfc90fb31ee0c09af4b7ae2180936f24651d8fe5db794acb823a26e3eed6"
+}

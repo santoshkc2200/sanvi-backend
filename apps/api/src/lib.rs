@@ -10,6 +10,7 @@ pub mod compliance;
 pub mod config;
 pub mod domains;
 pub mod openapi;
+pub mod payments;
 pub mod product_access;
 
 use std::future::Future;
@@ -1737,6 +1738,7 @@ impl sanvi_platform_admin::domain::PrivacyLock for DsrPrivacyLock {
 pub struct PrivacyProviderDeps {
     pub accounting_service: sanvi_accounting::adapters::remote::ServiceConfig,
     pub domains_service: sanvi_domains::adapters::remote::ServiceConfig,
+    pub payments_service: sanvi_payments::adapters::remote::ServiceConfig,
     pub media: sanvi_media::MediaConfig,
     pub product_access: sanvi_product_access::ProductAccessConfig,
     pub tx: sanvi_persistence::TxManager,
@@ -1852,9 +1854,10 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
             )
             .expect("validated Domains service configuration"),
         ),
-        Arc::new(sanvi_payments::adapters::PaymentsPrivacyProvider::new(
-            tx.clone(),
-        )),
+        Arc::new(
+            sanvi_payments::adapters::RemotePaymentsPrivacyProvider::new(&deps.payments_service)
+                .expect("validated Payments service configuration"),
+        ),
         Arc::new(sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(tx.clone())),
         Arc::new(sanvi_media::adapters::MediaPrivacyProvider::with_storage(
             tx.clone(),
@@ -4023,10 +4026,7 @@ pub fn build_app(
         tenant_scope
     };
     let tenant_scope = if config.features.payments {
-        match &payments {
-            Some(_) => tenant_scope.configure(payments_routes::payments_tenant_scope_routes),
-            None => tenant_scope,
-        }
+        tenant_scope.configure(payments_routes::payments_tenant_scope_routes)
     } else {
         tenant_scope
     };
@@ -4098,6 +4098,17 @@ pub fn build_app(
             resolve_tenant: tenancy.resolve.clone(),
         }))
         .configure(domains::internal_routes)
+        .app_data(web::Data::new(sanvi_payments::adapters::remote::GatewayState {
+            remote: sanvi_payments::adapters::remote::RemoteClient::new(&config.payments_service)
+                .expect("validated Payments service configuration"),
+            authorizer: Arc::new(payments::AuthorizerPaymentsAccess(access.authorizer.clone())),
+        }))
+        .app_data(web::Data::new(payments::PaymentsIngestState {
+            secret: config.payments_service.inbound_secret.clone(),
+            transactions: access.tx_manager.clone(),
+            writer: audit.writer.clone(),
+        }))
+        .configure(payments::internal_routes)
         .app_data(web::JsonConfig::default().limit(server_config.max_body_bytes))
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)

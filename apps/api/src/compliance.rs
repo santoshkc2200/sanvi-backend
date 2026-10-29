@@ -88,7 +88,7 @@ impl ComplianceHarness {
     /// the privacy ledger, so no provider ever dials them — but the paths
     /// are the real ones.
     pub fn build(pool: sanvi_persistence::PgPool, ids: Arc<dyn RawIdGenerator>) -> Self {
-        Self::build_with_domains_service(pool, ids, Default::default())
+        Self::build_with_services(pool, ids, Default::default(), Default::default())
     }
 
     /// As [`Self::build`], with the Domains provider pointed at `domains_service`.
@@ -100,6 +100,25 @@ impl ComplianceHarness {
         pool: sanvi_persistence::PgPool,
         ids: Arc<dyn RawIdGenerator>,
         domains_service: sanvi_domains::adapters::remote::ServiceConfig,
+    ) -> Self {
+        Self::build_with_services(pool, ids, domains_service, Default::default())
+    }
+
+    /// As [`Self::build`], with the Payments provider pointed at `payments_service`.
+    pub fn build_with_payments_service(
+        pool: sanvi_persistence::PgPool,
+        ids: Arc<dyn RawIdGenerator>,
+        payments_service: sanvi_payments::adapters::remote::ServiceConfig,
+    ) -> Self {
+        Self::build_with_services(pool, ids, Default::default(), payments_service)
+    }
+
+    /// Build the harness pointing at both standalone services.
+    pub fn build_with_services(
+        pool: sanvi_persistence::PgPool,
+        ids: Arc<dyn RawIdGenerator>,
+        domains_service: sanvi_domains::adapters::remote::ServiceConfig,
+        payments_service: sanvi_payments::adapters::remote::ServiceConfig,
     ) -> Self {
         let export_dir =
             std::env::temp_dir().join(format!("sanvi-compliance-drill-{}", uuid::Uuid::now_v7()));
@@ -117,6 +136,7 @@ impl ComplianceHarness {
         let registry = privacy_provider_registry(&PrivacyProviderDeps {
             accounting_service: Default::default(),
             domains_service,
+            payments_service,
             media: sanvi_media::MediaConfig::default(),
             product_access: sanvi_product_access::ProductAccessConfig::default(),
             tx: tx.clone(),

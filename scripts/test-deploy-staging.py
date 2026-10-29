@@ -162,6 +162,20 @@ exec "$TEST_PYTHON" "${args[@]}"
         self.assertIn('proxy_set_header X-Real-IP "";', config)
         self.assertNotIn("$proxy_add_x_forwarded_for", config)
 
+    def test_connect_webhook_routes_to_payments_service_only_when_configured(self):
+        result = self.run_deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("/internal/webhooks/stripe/connect", self.active.read_text())
+        result = self.run_deploy(PAYMENTS_UPSTREAM="payments_service:8084")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = self.active.read_text()
+        webhook = config.index("location = /internal/webhooks/stripe/connect {")
+        self.assertLess(webhook, config.index("location / {"))
+        self.assertIn("proxy_pass http://payments_service:8084;", config)
+        self.assertEqual(config.count("proxy_set_header X-Forwarded-For $remote_addr;"), 2)
+        result = self.run_deploy(PAYMENTS_UPSTREAM="payments_service:8084; evil")
+        self.assertEqual(result.returncode, 2)
+
     def test_rolling_deploy_rejects_pending_maintenance_before_mutating_services(self):
         (self.root / "migrations/policy.json").write_text('{"2_rewrite.sql":"maintenance"}')
         result = self.run_deploy()

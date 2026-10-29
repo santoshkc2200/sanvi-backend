@@ -74,5 +74,7 @@
   "20261028000100_audit_accounting_receipts.sql": "rolling",
   "20261028000200_platform_accounting_event_receipts.sql": "rolling",
   "20261028000300_audit_domains_receipts.sql": "rolling",
-  "20261028000400_platform_domains_event_receipts.sql": "rolling"
+  "20261028000400_platform_domains_event_receipts.sql": "rolling",
+  "20261028000500_audit_payments_receipts.sql": "rolling",
+  "20261028000600_platform_payments_event_receipts.sql": "rolling"
 }

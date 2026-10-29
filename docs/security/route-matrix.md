@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 251 (243 OpenAPI operations).
+Routes: 253 (243 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -190,9 +190,9 @@ Routes: 251 (243 OpenAPI operations).
 | GET | /api/v1/tenant/billing/invoices | crates/contexts/billing/src/adapters/http/handlers.rs::list_invoices | billing.invoice.read | TenantContext from HttpRequest extensions | global-config-dependent +tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/billing/portal-session | crates/contexts/billing/src/adapters/http/handlers.rs::create_portal_session | billing.subscription.update | TenantContext from HttpRequest extensions | global-config-dependent +tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/billing/subscription | crates/contexts/billing/src/adapters/http/handlers.rs::get_subscription | billing.subscription.read | TenantContext from HttpRequest extensions | global-config-dependent +tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/checkout | crates/contexts/payments/src/adapters/http/handlers.rs::create_tenant_checkout | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional + checkout tenant/client/customer-reference limiter | OpenAPI |
-| GET | /api/v1/tenant/checkout/config | crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout_config | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/checkout/{id} | crates/contexts/payments/src/adapters/http/handlers.rs::get_tenant_checkout | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/checkout | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::create_tenant_checkout | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional + checkout tenant/client/customer-reference limiter | OpenAPI |
+| GET | /api/v1/tenant/checkout/config | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_tenant_checkout_config | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/checkout/{id} | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_tenant_checkout | payments.checkout | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/context | crates/contexts/tenancy/src/adapters/http/handlers.rs::get_context | exempt: public bootstrap/disclosure endpoint (no permission key) | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::list_custom_domains | tenant.domains.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/domains | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::claim_custom_domain | tenant.domains.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -230,20 +230,20 @@ Routes: 251 (243 OpenAPI operations).
 | POST | /api/v1/tenant/members | crates/contexts/identity/src/adapters/http/handlers.rs::grant_member | identity.member.grant | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | DELETE | /api/v1/tenant/members/{user_id} | crates/contexts/identity/src/adapters/http/handlers.rs::remove_member | identity.member.remove | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | PATCH | /api/v1/tenant/members/{user_id}/roles | crates/contexts/identity/src/adapters/http/handlers.rs::update_member_roles | identity.member.grant | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments | crates/contexts/payments/src/adapters/http/handlers.rs::list_payments | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/payments/connections | crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/connections/current | crates/contexts/payments/src/adapters/http/handlers.rs::get_current_payment_connection | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| DELETE | /api/v1/tenant/payments/connections/{id} | crates/contexts/payments/src/adapters/http/handlers.rs::delete_payment_connection | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/connections/{id} | crates/contexts/payments/src/adapters/http/handlers.rs::get_payment_connection | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/payments/connections/{id}/session | crates/contexts/payments/src/adapters/http/handlers.rs::create_payment_connection_session | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/disputes | crates/contexts/payments/src/adapters/http/handlers.rs::list_disputes | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/export | crates/contexts/payments/src/adapters/http/handlers.rs::export_payments | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/payouts | crates/contexts/payments/src/adapters/http/handlers.rs::list_payouts | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/providers | crates/contexts/payments/src/adapters/http/handlers.rs::list_payment_providers | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/tax-settings | crates/contexts/payments/src/adapters/http/handlers.rs::get_tax_settings | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| PUT | /api/v1/tenant/payments/tax-settings | crates/contexts/payments/src/adapters/http/handlers.rs::put_tax_settings | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| GET | /api/v1/tenant/payments/{id} | crates/contexts/payments/src/adapters/http/handlers.rs::get_payment | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
-| POST | /api/v1/tenant/payments/{id}/refund | crates/contexts/payments/src/adapters/http/handlers.rs::refund_payment | payments.refund | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_payments | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/payments/connections | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::create_payment_connection | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/connections/current | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_current_payment_connection | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| DELETE | /api/v1/tenant/payments/connections/{id} | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::delete_payment_connection | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/connections/{id} | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_payment_connection | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/payments/connections/{id}/session | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::create_payment_connection_session | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/disputes | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_disputes | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/export | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::export_payments | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/payouts | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_payouts | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/providers | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::list_payment_providers | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/tax-settings | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_tax_settings | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| PUT | /api/v1/tenant/payments/tax-settings | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::put_tax_settings | payments.manage | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| GET | /api/v1/tenant/payments/{id} | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::get_payment | payments.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
+| POST | /api/v1/tenant/payments/{id}/refund | crates/contexts/payments/src/adapters/http/gateway_handlers.rs::refund_payment | payments.refund | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/privacy/requests | crates/contexts/privacy/src/adapters/http/handlers.rs::list_tenant_dsrs | tenant.privacy.request.read | TenantContext from HttpRequest extensions | global-config-dependent +tenant-optional | OpenAPI |
 | POST | /api/v1/tenant/privacy/requests | crates/contexts/privacy/src/adapters/http/handlers.rs::submit_tenant_dsr | tenant.privacy.request.write | TenantContext from HttpRequest extensions | global-config-dependent +tenant-optional | OpenAPI |
 | GET | /api/v1/tenant/roles | crates/contexts/access/src/adapters/http/handlers.rs::list_roles_tenant | access.role.read | CurrentTenant | global-config-dependent+tenant-optional | OpenAPI |
@@ -272,6 +272,8 @@ Routes: 251 (243 OpenAPI operations).
 | POST | /internal/kratos/logout | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_logout | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
 | POST | /internal/kratos/registration | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent + shadow per-IP abuse quota (server.abuse.signup) | internal webhook |
 | POST | /internal/kratos/settings | crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_settings | exempt: Kratos shared secret and IP allow-list | identity event; no tenant resolver scope | global-config-dependent | internal webhook |
+| POST | /internal/payments/audit | apps/api/src/payments.rs::ingest_payments_audit | exempt:request-bound-payments-service-delegation | signed Payments scope; platform transaction | global-config-dependent | internal service delivery |
+| POST | /internal/payments/events | apps/api/src/payments.rs::ingest_payments_event | exempt:request-bound-payments-service-delegation | signed Payments scope; platform transaction | global-config-dependent | internal service delivery |
 | GET | /internal/tls/authorize | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::tls_authorize | exempt: internal shared secret and optional IP allow-list | domain hostname lookup after internal guard | global-config-dependent | OpenAPI |
 | POST | /internal/webhooks/stripe/connect | crates/contexts/payments/src/adapters/http/webhooks.rs::stripe_connect_webhook | exempt: Connect Stripe signature and IP allow-list | connected account from verified webhook processing | global-config-dependent | internal webhook |
 | POST | /internal/webhooks/stripe/platform | crates/contexts/billing/src/adapters/http/handlers.rs::stripe_platform_webhook | exempt: Stripe signature and IP allow-list | tenant selected from verified webhook processing | global-config-dependent | internal webhook |
@@ -286,12 +288,13 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | Source | SHA-256 |
 | --- | --- |
 | apps/api/src/accounting.rs | `50893a8b06bd563d099a73867799eecab8cb9d0d08aad012cbd563029c48ff5c` |
-| apps/api/src/compliance.rs | `d18781874fbdcfd0b09b369175ed13f2929c904549cbf466cbfd5c11d8f6daf2` |
-| apps/api/src/config.rs | `ac06750e07e77f91c522b78984da6e4f34292e136ddf58a2a6b1b853be19ec2a` |
+| apps/api/src/compliance.rs | `4fe927082136688eee8d87ab1d2fa3f015ea04b9b1d0fe47d72fb32ca66e8071` |
+| apps/api/src/config.rs | `ad34c7b308149f69c87d4ee46ada5688d9ea3cc6dba0ea5bf1f83b958787642d` |
 | apps/api/src/domains.rs | `12c067de12ceea752c9549a1f4697378427a463cc5ce48bf2fbed22bd740f504` |
-| apps/api/src/lib.rs | `2ef150f6c63a3e5b86032b55de9a885e63f4896ae7cb019617ce51d683ea5207` |
-| apps/api/src/main.rs | `fd3904ea49383ddf1839e45e52c06dc69f7daa5b1b6e65c5b758e930b02b5aec` |
-| apps/api/src/openapi.rs | `1dcbc9396aef3bec5fadc5c5943150d2b10ba7970a1bf6b35eb2fa16480656eb` |
+| apps/api/src/lib.rs | `512effd0f90cf7937636fbb717484824f71ca77497deb97c8a0c4248267d269a` |
+| apps/api/src/main.rs | `955ab84dab826d4ba9d7dea66e0284e2ae647383a46a0888d500e00758e5a385` |
+| apps/api/src/openapi.rs | `7684f55419ae0c1bd62d510bb8a7f6d896512a34fedbc561f65651c235fc865b` |
+| apps/api/src/payments.rs | `224fa64ba7e3be9fad9f2c76ec0dcb8f646a9cf112cb420acb20aed4d3ef9c02` |
 | apps/api/src/product_access.rs | `b680883b3bae7b8e4fefa24419fd7445cb86417d4378243ded6b9f4d93f7121a` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
@@ -343,12 +346,14 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/media/src/adapters/http/routes.rs | `615841e15acd10e2ee8cc4bc23726b2d4d323f6b1e953e49576e81de79381ba1` |
 | crates/contexts/media/src/adapters/http/state.rs | `27f2b560e83d72edeb9efa752c006cc10644054e7eea663be140c33e425b3e0d` |
 | crates/contexts/media/src/adapters/http/validation.rs | `bcf7c50cdb73b4fa42522dcee81da674c4d6ca235e11ce4f8b21e6ec94131277` |
-| crates/contexts/payments/src/adapters/http/handlers.rs | `e00568d1f2612af551ba5f423e5e524fb5af9e21d98af4ca09dba1dcb5114b14` |
-| crates/contexts/payments/src/adapters/http/mod.rs | `125d6ad33f98dad769521782af52d50f1356755ce1fe4e1e4eff4125a118d7d7` |
-| crates/contexts/payments/src/adapters/http/routes.rs | `cdf4c4250666bc9e44ab82174bddab2644f0537fc6256b918a9747fe0c941b3f` |
+| crates/contexts/payments/src/adapters/http/gateway_handlers.rs | `45c86cc32740c3d9ba0e7e5df84aae278bb1e620358fbcc8bc25020e7ced14e8` |
+| crates/contexts/payments/src/adapters/http/handlers.rs | `cc027e771846f40fd5ffb0203881bb8fbbcaff77428208987c87f648df47d525` |
+| crates/contexts/payments/src/adapters/http/mod.rs | `541ce341e38caf4196d87aa8bd0eb5ab479cd46ff41b0d2b9c6682f6b45f145a` |
+| crates/contexts/payments/src/adapters/http/routes.rs | `adfa05307e5d16ff9449a7691cb9617d5b6addb6e053f99b286007b50aefc6cb` |
 | crates/contexts/payments/src/adapters/http/state.rs | `8c4a83ca6c2dd412b7b4a5d67d757a47527e0a4f1347e541bc87969a29c4f7fa` |
 | crates/contexts/payments/src/adapters/http/validation.rs | `dfe55a16f9be2417d9e4a0bf5a2de7d9733cc3cf46ca678133f9a372a9db3d02` |
 | crates/contexts/payments/src/adapters/http/webhooks.rs | `58cbf733f25d5039dc4e76954427ed7469b54be53da2d8c101520160950b2dc6` |
+| crates/contexts/payments/src/adapters/remote.rs | `b39666bf8dcc0a87adb3bbe5cd4712cdf8339e66d481f74b048dfa26845527e8` |
 | crates/contexts/platform_admin/src/adapters/http/catalog.rs | `06fcf1f9de300a4ea57a0532f4e5576c07369aca1aee79f98311f15a29831587` |
 | crates/contexts/platform_admin/src/adapters/http/handlers.rs | `535b935ebcfc967aa7658bde4ef8b8b0e34eb71493b82b82b7c4ba47e6629f8f` |
 | crates/contexts/platform_admin/src/adapters/http/mod.rs | `4dbd8c2ce61074f2e805904774d4d57a7f76fb1167ab09ae8d9440213162a98d` |
