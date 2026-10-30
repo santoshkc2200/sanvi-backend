@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 253 (243 OpenAPI operations).
+Routes: 252 (243 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -275,7 +275,6 @@ Routes: 253 (243 OpenAPI operations).
 | POST | /internal/payments/audit | apps/api/src/payments.rs::ingest_payments_audit | exempt:request-bound-payments-service-delegation | signed Payments scope; platform transaction | global-config-dependent | internal service delivery |
 | POST | /internal/payments/events | apps/api/src/payments.rs::ingest_payments_event | exempt:request-bound-payments-service-delegation | signed Payments scope; platform transaction | global-config-dependent | internal service delivery |
 | GET | /internal/tls/authorize | crates/contexts/domains/src/adapters/http/gateway_handlers.rs::tls_authorize | exempt: internal shared secret and optional IP allow-list | domain hostname lookup after internal guard | global-config-dependent | OpenAPI |
-| POST | /internal/webhooks/stripe/connect | crates/contexts/payments/src/adapters/http/webhooks.rs::stripe_connect_webhook | exempt: Connect Stripe signature and IP allow-list | connected account from verified webhook processing | global-config-dependent | internal webhook |
 | POST | /internal/webhooks/stripe/platform | crates/contexts/billing/src/adapters/http/handlers.rs::stripe_platform_webhook | exempt: Stripe signature and IP allow-list | tenant selected from verified webhook processing | global-config-dependent | internal webhook |
 | GET | /metrics | apps/api/src/lib.rs::metrics | exempt: public metrics; deployment perimeter required | not tenant-scoped: aggregate metrics | global-config-dependent | operational endpoint |
 | GET | /openapi.json | apps/api/src/lib.rs::openapi_json | exempt: public API contract | not tenant-scoped: contract | global-config-dependent | operational endpoint |
@@ -289,12 +288,12 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | --- | --- |
 | apps/api/src/accounting.rs | `50893a8b06bd563d099a73867799eecab8cb9d0d08aad012cbd563029c48ff5c` |
 | apps/api/src/compliance.rs | `4fe927082136688eee8d87ab1d2fa3f015ea04b9b1d0fe47d72fb32ca66e8071` |
-| apps/api/src/config.rs | `ad34c7b308149f69c87d4ee46ada5688d9ea3cc6dba0ea5bf1f83b958787642d` |
+| apps/api/src/config.rs | `dbcc3eb1c064ee556878c9f30d79f7d18b69a6c47970604b9456509911fe5f50` |
 | apps/api/src/domains.rs | `12c067de12ceea752c9549a1f4697378427a463cc5ce48bf2fbed22bd740f504` |
-| apps/api/src/lib.rs | `6714cfd25c895efc459d4ab05c16165743291430cca22dfa56974d8c448db7fd` |
-| apps/api/src/main.rs | `d691530e07aa6866c2d01509a30e942168de87dada13d530fd7474f3aa38332b` |
+| apps/api/src/lib.rs | `8e12af242e94c8b01aa624d33b0e2f874c30a73077fc2a20a20e7b30d8377a4e` |
+| apps/api/src/main.rs | `3b0b0543066889964937e594625671443bb030bdbdeba51ca0438fffd114bc5f` |
 | apps/api/src/openapi.rs | `7684f55419ae0c1bd62d510bb8a7f6d896512a34fedbc561f65651c235fc865b` |
-| apps/api/src/payments.rs | `224fa64ba7e3be9fad9f2c76ec0dcb8f646a9cf112cb420acb20aed4d3ef9c02` |
+| apps/api/src/payments.rs | `645348eb6ae43ac181325b82891867dc684ea1f546340c83eb1bdfb1d3b3287f` |
 | apps/api/src/product_access.rs | `b680883b3bae7b8e4fefa24419fd7445cb86417d4378243ded6b9f4d93f7121a` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
 | crates/contexts/access/src/adapters/http/handlers.rs | `6e260a78e1cbcb8ea4dd1b1fe793c86c95fced384ea62732ecde3a1e65a53419` |
@@ -346,14 +345,11 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/media/src/adapters/http/routes.rs | `615841e15acd10e2ee8cc4bc23726b2d4d323f6b1e953e49576e81de79381ba1` |
 | crates/contexts/media/src/adapters/http/state.rs | `27f2b560e83d72edeb9efa752c006cc10644054e7eea663be140c33e425b3e0d` |
 | crates/contexts/media/src/adapters/http/validation.rs | `bcf7c50cdb73b4fa42522dcee81da674c4d6ca235e11ce4f8b21e6ec94131277` |
-| crates/contexts/payments/src/adapters/http/gateway_handlers.rs | `45c86cc32740c3d9ba0e7e5df84aae278bb1e620358fbcc8bc25020e7ced14e8` |
-| crates/contexts/payments/src/adapters/http/handlers.rs | `cc027e771846f40fd5ffb0203881bb8fbbcaff77428208987c87f648df47d525` |
-| crates/contexts/payments/src/adapters/http/mod.rs | `541ce341e38caf4196d87aa8bd0eb5ab479cd46ff41b0d2b9c6682f6b45f145a` |
+| crates/contexts/payments/src/adapters/http/contract.rs | `146276ce768b96a169e6380e63f8dabf87662fafcad565f85f9838b4fba605ad` |
+| crates/contexts/payments/src/adapters/http/gateway_handlers.rs | `20fe9619172cbf66bbdde8d55cd02264d5c008f7d3a86d309dca95fe8477914f` |
+| crates/contexts/payments/src/adapters/http/mod.rs | `57a363cae52b8d345143c5597c8c3dd17920d0de6aa5e76d71def1e8e92a40fc` |
 | crates/contexts/payments/src/adapters/http/routes.rs | `adfa05307e5d16ff9449a7691cb9617d5b6addb6e053f99b286007b50aefc6cb` |
-| crates/contexts/payments/src/adapters/http/state.rs | `8c4a83ca6c2dd412b7b4a5d67d757a47527e0a4f1347e541bc87969a29c4f7fa` |
-| crates/contexts/payments/src/adapters/http/validation.rs | `dfe55a16f9be2417d9e4a0bf5a2de7d9733cc3cf46ca678133f9a372a9db3d02` |
-| crates/contexts/payments/src/adapters/http/webhooks.rs | `58cbf733f25d5039dc4e76954427ed7469b54be53da2d8c101520160950b2dc6` |
-| crates/contexts/payments/src/adapters/remote.rs | `9a55318c155fe4432156bb686923a6318e38ce3157c769394d3ccc9d9c6d95f9` |
+| crates/contexts/payments/src/adapters/remote.rs | `d82cd2723950b8979afdb4cc2ddb127a7aee7e08a255f9aa6b8d1f591ded40bf` |
 | crates/contexts/platform_admin/src/adapters/http/catalog.rs | `06fcf1f9de300a4ea57a0532f4e5576c07369aca1aee79f98311f15a29831587` |
 | crates/contexts/platform_admin/src/adapters/http/handlers.rs | `535b935ebcfc967aa7658bde4ef8b8b0e34eb71493b82b82b7c4ba47e6629f8f` |
 | crates/contexts/platform_admin/src/adapters/http/mod.rs | `4dbd8c2ce61074f2e805904774d4d57a7f76fb1167ab09ae8d9440213162a98d` |

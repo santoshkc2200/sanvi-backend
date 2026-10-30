@@ -348,12 +348,7 @@ fn quote(name: &str) -> String {
 
 /// The archive-action classes' tables (children before parents — the
 /// same dependency order the archival sweep uses).
-const RETAINED_CLASS_TABLES: &[(&str, &str)] = &[
-    ("billing", "invoices"),
-    ("payments", "refunds"),
-    ("payments", "disputes"),
-    ("payments", "payments"),
-];
+const RETAINED_CLASS_TABLES: &[(&str, &str)] = &[("billing", "invoices")];
 
 fn class_for_schema(schema: &str) -> &'static str {
     match schema {
@@ -361,7 +356,6 @@ fn class_for_schema(schema: &str) -> &'static str {
         "identity" => "identity_profile",
         "platform_admin" => "request_record",
         "billing" => "billing",
-        "payments" => "transaction_record",
         "privacy" => "request_record",
         "localization" | "notifications" | "theming" => "communication",
         "domains" => "request_record",
@@ -1068,14 +1062,13 @@ async fn purge(
 fn retained_class_of(table: &str) -> Option<&'static str> {
     match table {
         "invoices" => Some("invoice"),
-        "refunds" | "disputes" | "payments" => Some("transaction_record"),
         _ => None,
     }
 }
 
 fn retained_class_key(table: &str) -> &'static str {
     match table {
-        "invoices" | "refunds" | "disputes" | "payments" => "created_at",
+        "invoices" => "created_at",
         _ => "created_at",
     }
 }

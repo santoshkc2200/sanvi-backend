@@ -13,7 +13,6 @@ use sanvi_localization::LocalizationConfig;
 use sanvi_media::MediaConfig;
 use sanvi_messaging::RedisConfig;
 use sanvi_notifications::NotificationConfig;
-use sanvi_payments::PaymentsConfig;
 use sanvi_persistence::DatabaseConfig;
 use sanvi_platform_admin::PlatformAdminConfig;
 use sanvi_privacy::PrivacyConfig;
@@ -143,7 +142,6 @@ pub struct AppConfig {
     pub localization: LocalizationConfig,
     pub theming: ThemingConfig,
     pub domains: DomainsConfig,
-    pub payments: PaymentsConfig,
     pub advertising: AdvertisingConfig,
     pub accounting: AccountingConfig,
     /// Independently deployed Accounting service. Provider secrets live there.
@@ -184,7 +182,6 @@ impl Default for AppConfig {
             localization: LocalizationConfig::default(),
             theming: ThemingConfig::default(),
             domains: DomainsConfig::default(),
-            payments: PaymentsConfig::default(),
             advertising: AdvertisingConfig::default(),
             accounting: AccountingConfig::default(),
             accounting_service: Default::default(),
@@ -244,9 +241,6 @@ impl AppConfig {
         if let Err(err) = self.domains.validate() {
             problems.push(err.to_string());
         }
-        if let Err(err) = self.payments.validate() {
-            problems.push(err.to_string());
-        }
         if let Err(err) = self.advertising.validate() {
             problems.push(err.to_string());
         }
@@ -271,29 +265,12 @@ impl AppConfig {
         if let Err(err) = self.notification.validate() {
             problems.push(err.to_string());
         }
-        // Phase-09 invariant, enforced at boot: the Connect webhook
-        // endpoint and the phase-04 platform endpoint must never share a
-        // signing secret — a leaked one must not forge events for the
-        // other (the cross-secret unit tests live in sanvi-payments).
-        if !self.billing.stripe_webhook_secret.is_empty()
-            && self.billing.stripe_webhook_secret.expose_secret()
-                == self.payments.connect_webhook_secret.expose_secret()
-        {
-            problems.push(
-                "billing.stripe_webhook_secret and payments.connect_webhook_secret must differ \
-                 (the Connect and platform webhook endpoints are separate trust domains)"
-                    .to_string(),
-            );
-        }
         if !self.accounting.oauth_state_signing_secret.is_empty()
             && (self.accounting.oauth_state_signing_secret.expose_secret()
                 == self.advertising.oauth_state_signing_secret.expose_secret()
                 || (!self.billing.stripe_webhook_secret.is_empty()
                     && self.accounting.oauth_state_signing_secret.expose_secret()
-                        == self.billing.stripe_webhook_secret.expose_secret())
-                || (!self.payments.connect_webhook_secret.is_empty()
-                    && self.accounting.oauth_state_signing_secret.expose_secret()
-                        == self.payments.connect_webhook_secret.expose_secret()))
+                        == self.billing.stripe_webhook_secret.expose_secret()))
         {
             problems.push(
                 "accounting.oauth_state_signing_secret must differ from other contexts' signing and webhook secrets"
@@ -374,34 +351,6 @@ mod tests {
             .expect("empty features object is a valid config");
         assert!(minimal.features.payments);
         assert!(!minimal.features.advertising);
-    }
-
-    #[test]
-    fn shared_webhook_secrets_are_rejected_at_boot() {
-        use sanvi_telemetry::Redacted;
-        let config = AppConfig {
-            billing: sanvi_billing::BillingConfig {
-                stripe_webhook_secret: Redacted::new("whsec_same".to_string()),
-                ..sanvi_billing::BillingConfig::default()
-            },
-            payments: PaymentsConfig {
-                connect_webhook_secret: Redacted::new("whsec_same".to_string()),
-                ..PaymentsConfig::default()
-            },
-            ..AppConfig::default()
-        };
-        let err = config.validate().unwrap_err().to_string();
-        assert!(err.contains("must differ"));
-
-        // Distinct secrets (and the unset/unset case) pass.
-        let config = AppConfig {
-            payments: PaymentsConfig {
-                connect_webhook_secret: Redacted::new("whsec_connect".to_string()),
-                ..PaymentsConfig::default()
-            },
-            ..AppConfig::default()
-        };
-        config.validate().unwrap();
     }
 
     #[test]

@@ -6,9 +6,8 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use sanvi_access::domain::{Authorizer, Decision, Permission as AccessPermission, ResourceRef};
 use sanvi_http::ApiError;
 use sanvi_kernel::{TenantId, UserId};
-use sanvi_payments::{
-    adapters::remote::{AUDIT_AUDIENCE, AuditCommand, Delegation, PaymentsAuthorizer},
-    domain::error::PaymentsError,
+use sanvi_payments::adapters::remote::{
+    AUDIT_AUDIENCE, AuditCommand, Delegation, PaymentsAuthorizer,
 };
 use sanvi_persistence::TxManager;
 use sha2::{Digest, Sha256};
@@ -22,9 +21,8 @@ impl PaymentsAuthorizer for AuthorizerPaymentsAccess {
         user_id: UserId,
         tenant_id: Option<TenantId>,
         permission: &str,
-    ) -> Result<bool, PaymentsError> {
-        let perm = AccessPermission::parse(permission)
-            .map_err(|e| PaymentsError::InvalidConnection(e.to_string()))?;
+    ) -> anyhow::Result<bool> {
+        let perm = AccessPermission::parse(permission)?;
         let resource = match tenant_id {
             Some(tid) => ResourceRef::Tenant(tid),
             None => ResourceRef::Platform,
@@ -34,7 +32,7 @@ impl PaymentsAuthorizer for AuthorizerPaymentsAccess {
             Ok(Decision::Denied) => Ok(false),
             Err(e) => {
                 tracing::warn!(error = %e, "authorizer check failed for payments");
-                Err(PaymentsError::InvalidConnection(e.to_string()))
+                Err(anyhow::anyhow!(e.to_string()))
             }
         }
     }

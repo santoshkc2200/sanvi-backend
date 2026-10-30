@@ -151,11 +151,8 @@ fn extract_tenant_id(envelope: &EventEnvelope) -> Option<TenantId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::connection::ConnectionId;
-    use crate::domain::dispute::DisputeId;
     use crate::domain::events::{EventAmount, PaymentsEvent};
-    use crate::domain::payment::PaymentId;
-    use crate::domain::payout::PayoutId;
+    use crate::domain::{ConnectionId, DisputeId, PaymentId, PayoutId};
     use chrono::Utc;
     use sanvi_kernel::{EventId, SnowflakeId};
 

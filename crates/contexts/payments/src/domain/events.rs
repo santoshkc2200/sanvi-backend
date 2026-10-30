@@ -1,4 +1,6 @@
-//! The payments context's outbox events.
+//! The payments context's outbox events. The standalone Payments service
+//! emits them and delivers them to `/internal/payments/events`; the platform
+//! keeps this definition as the wire contract its notification mapping reads.
 //!
 //! Naming: `payments.<snake_case>` event types; `tenant_id` rides in
 //! envelope metadata, same as every other context. 09.1 declares the full
@@ -14,12 +16,7 @@ use sanvi_kernel::events::EventEnvelope;
 use sanvi_kernel::{EventId, SnowflakeId, TenantId};
 use serde::Serialize;
 
-use super::checkout::CheckoutId;
-use super::connection::ConnectionId;
-use super::dispute::DisputeId;
-use super::error::PaymentsError;
-use super::payment::{PaymentId, RefundId};
-use super::payout::PayoutId;
+use super::ids::{CheckoutId, ConnectionId, DisputeId, PaymentId, PayoutId, RefundId};
 
 pub const CONNECTION_AGGREGATE: &str = "payments.provider_connection";
 pub const CHECKOUT_AGGREGATE: &str = "payments.checkout";
@@ -92,15 +89,6 @@ impl PaymentsEventName {
 pub struct EventAmount {
     pub amount_minor: i64,
     pub currency: String,
-}
-
-impl EventAmount {
-    pub fn new(amount: &super::money::Money) -> Self {
-        Self {
-            amount_minor: amount.amount_minor,
-            currency: amount.currency.as_str().to_string(),
-        }
-    }
 }
 
 /// Every payments outbox event, internally tagged. Aggregate routing is
@@ -256,28 +244,9 @@ impl PaymentsEvent {
     }
 }
 
-/// The outbox port (implemented by the adapters layer).
-#[async_trait::async_trait]
-pub trait EventPublisher: Send + Sync {
-    async fn publish(
-        &self,
-        scope: &mut sanvi_persistence::PlatformScope<'_>,
-        tenant_id: TenantId,
-        events: &[PaymentsEvent],
-    ) -> Result<(), PaymentsError>;
-
-    async fn publish_scoped(
-        &self,
-        scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: TenantId,
-        events: &[PaymentsEvent],
-    ) -> Result<(), PaymentsError>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::money::Money;
 
     #[test]
     fn names_round_trip() {
@@ -296,13 +265,19 @@ mod tests {
                 connection_id: ConnectionId::try_from(4_i64).unwrap(),
                 provider: "fake".to_string(),
                 reference: "order-1".to_string(),
-                amount: EventAmount::new(&Money::new(2000, "JPY").unwrap()),
+                amount: EventAmount {
+                    amount_minor: 2000,
+                    currency: "JPY".to_string(),
+                },
             },
             PaymentsEvent::PaymentSucceeded {
                 payment_id: PaymentId::try_from(5_i64).unwrap(),
                 checkout_id: Some(CheckoutId::try_from(3_i64).unwrap()),
                 provider: "fake".to_string(),
-                amount: EventAmount::new(&Money::new(2000, "JPY").unwrap()),
+                amount: EventAmount {
+                    amount_minor: 2000,
+                    currency: "JPY".to_string(),
+                },
             },
             PaymentsEvent::PaymentFailed {
                 payment_id: PaymentId::try_from(6_i64).unwrap(),
@@ -314,21 +289,30 @@ mod tests {
                 refund_id: RefundId::try_from(7_i64).unwrap(),
                 payment_id: PaymentId::try_from(5_i64).unwrap(),
                 provider: "fake".to_string(),
-                amount: EventAmount::new(&Money::new(500, "JPY").unwrap()),
+                amount: EventAmount {
+                    amount_minor: 500,
+                    currency: "JPY".to_string(),
+                },
                 reason: Some("duplicate".to_string()),
             },
             PaymentsEvent::DisputeOpened {
                 dispute_id: DisputeId::try_from(8_i64).unwrap(),
                 payment_id: PaymentId::try_from(5_i64).unwrap(),
                 provider: "fake".to_string(),
-                amount: EventAmount::new(&Money::new(2000, "JPY").unwrap()),
+                amount: EventAmount {
+                    amount_minor: 2000,
+                    currency: "JPY".to_string(),
+                },
                 due_by: None,
             },
             PaymentsEvent::PayoutPaid {
                 payout_id: PayoutId::try_from(9_i64).unwrap(),
                 connection_id: ConnectionId::try_from(1_i64).unwrap(),
                 provider: "fake".to_string(),
-                amount: EventAmount::new(&Money::new(1500, "JPY").unwrap()),
+                amount: EventAmount {
+                    amount_minor: 1500,
+                    currency: "JPY".to_string(),
+                },
             },
         ];
         for event in events {
@@ -351,7 +335,10 @@ mod tests {
             connection_id: ConnectionId::try_from(40_i64).unwrap(),
             provider: "fake".to_string(),
             reference: "order-1".to_string(),
-            amount: EventAmount::new(&Money::new(2000, "JPY").unwrap()),
+            amount: EventAmount {
+                amount_minor: 2000,
+                currency: "JPY".to_string(),
+            },
         };
         assert_eq!(
             event.aggregate(),
@@ -362,7 +349,10 @@ mod tests {
             payment_id,
             checkout_id: Some(checkout_id),
             provider: "fake".to_string(),
-            amount: EventAmount::new(&Money::new(2000, "JPY").unwrap()),
+            amount: EventAmount {
+                amount_minor: 2000,
+                currency: "JPY".to_string(),
+            },
         };
         assert_eq!(
             event.aggregate(),
@@ -373,7 +363,10 @@ mod tests {
             refund_id,
             payment_id,
             provider: "fake".to_string(),
-            amount: EventAmount::new(&Money::new(500, "JPY").unwrap()),
+            amount: EventAmount {
+                amount_minor: 500,
+                currency: "JPY".to_string(),
+            },
             reason: None,
         };
         assert_eq!(
@@ -405,7 +398,10 @@ mod tests {
             payment_id: PaymentId::try_from(5_i64).unwrap(),
             checkout_id: None,
             provider: "fake".to_string(),
-            amount: EventAmount::new(&Money::new(2000, "JPY").unwrap()),
+            amount: EventAmount {
+                amount_minor: 2000,
+                currency: "JPY".to_string(),
+            },
         };
         let payload = serde_json::to_value(&event).unwrap();
         assert_eq!(payload["amount"]["amount_minor"], 2000);

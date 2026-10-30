@@ -411,7 +411,6 @@ async fn build(
         None, // localization
         None, // theming
         None, // domains
-        None, // payments
         None, // advertising
         accounting,
         None, // redis

@@ -1,32 +1,33 @@
-//! Platform gateway handlers for the Payments bounded context.
-//! Enforces entitlements (features.payments) and permission checks before delegating.
-//! Embedded state is preserved for explicit regression fixtures.
+//! Platform gateway handlers for the Payments bounded context. The platform's
+//! middleware has already enforced the session, tenant, `features.payments`,
+//! the route's permission and its entitlement; each handler forwards the
+//! request to the standalone Payments service under a request-bound
+//! delegation. The request and response types in [`super::contract`] exist
+//! for the OpenAPI contract only: bodies are relayed byte for byte.
 
-use actix_web::{FromRequest, HttpRequest, HttpResponse, web};
+use actix_web::{HttpRequest, HttpResponse, web};
 use sanvi_http::{
     ApiError, CurrentSubject, CurrentTenant, ProblemDetail, RequiredFeature, RequiredPermission,
 };
 
-use super::{
-    handlers::{
-        CheckoutConfigView, CheckoutView, ConnectionSessionView, ConnectionView,
-        CreateCheckoutRequest, CreateConnectionRequest, DisputeListQuery, DisputeListView,
-        PaymentDetailView, PaymentListQuery, PaymentListView, PayoutsListView, ProvidersView,
-        RefundRequest, RefundView, TaxSettingsView, UpdateTaxSettingsRequest,
-        create_payment_connection_embedded, create_payment_connection_session_embedded,
-        create_tenant_checkout_embedded, delete_payment_connection_embedded,
-        export_payments_embedded, get_current_payment_connection_embedded,
-        get_payment_connection_embedded, get_payment_embedded, get_tax_settings_embedded,
-        get_tenant_checkout_config_embedded, get_tenant_checkout_embedded, list_disputes_embedded,
-        list_payment_providers_embedded, list_payments_embedded, list_payouts_embedded,
-        put_tax_settings_embedded, refund_payment_embedded,
-    },
-    state::PaymentsState,
+use super::contract::{
+    CheckoutConfigView, CheckoutView, ConnectionSessionView, ConnectionView, CreateCheckoutRequest,
+    CreateConnectionRequest, DisputeListQuery, DisputeListView, PaymentDetailView,
+    PaymentListQuery, PaymentListView, PayoutsListView, ProvidersView, RefundRequest, RefundView,
+    TaxSettingsView, UpdateTaxSettingsRequest,
 };
 use crate::{
     adapters::remote::{GatewayState, proxy},
     domain::{CheckoutId, ConnectionId, PaymentId},
 };
+
+/// The gateway the composition root registers; without it the service is
+/// not configured and every Payments route answers 503.
+fn gateway(req: &HttpRequest) -> Result<web::Data<GatewayState>, ApiError> {
+    req.app_data::<web::Data<GatewayState>>()
+        .cloned()
+        .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))
+}
 
 /// `GET /api/v1/tenant/payments/providers`.
 ///
@@ -60,21 +61,13 @@ use crate::{
     )
 )]
 pub async fn list_payment_providers(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     _permission: RequiredPermission,
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    list_payment_providers_embedded(state, tenant, _permission).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `POST /api/v1/tenant/payments/connections` — connect a payment
@@ -102,7 +95,6 @@ pub async fn list_payment_providers(
     )
 )]
 pub async fn create_payment_connection(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
@@ -110,21 +102,7 @@ pub async fn create_payment_connection(
     _entitlement: RequiredFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<CreateConnectionRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    create_payment_connection_embedded(state, tenant, subject, req, body, _permission, _entitlement)
-        .await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `POST /api/v1/tenant/payments/connections/{id}/session` — mint an
@@ -152,32 +130,15 @@ pub async fn create_payment_connection(
     )
 )]
 pub async fn create_payment_connection_session(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
-    path: web::Path<ConnectionId>,
+    _path: web::Path<ConnectionId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    create_payment_connection_session_embedded(
-        state,
-        tenant,
-        subject,
-        req,
-        path,
-        _permission,
-        _entitlement,
-    )
-    .await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments/connections/current` - connection-id
@@ -201,7 +162,6 @@ pub async fn create_payment_connection_session(
     )
 )]
 pub async fn get_current_payment_connection(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     _permission: RequiredPermission,
@@ -209,14 +169,7 @@ pub async fn get_current_payment_connection(
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    get_current_payment_connection_embedded(state, tenant, subject, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments/connections/{id}` — the connection's
@@ -241,23 +194,15 @@ pub async fn get_current_payment_connection(
     )
 )]
 pub async fn get_payment_connection(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<ConnectionId>,
+    _path: web::Path<ConnectionId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    get_payment_connection_embedded(state, tenant, subject, path, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `DELETE /api/v1/tenant/payments/connections/{id}` — disconnect the
@@ -291,24 +236,15 @@ pub async fn get_payment_connection(
     )
 )]
 pub async fn delete_payment_connection(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
-    path: web::Path<ConnectionId>,
+    _path: web::Path<ConnectionId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    delete_payment_connection_embedded(state, tenant, subject, req, path, _permission, _entitlement)
-        .await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/checkout/config` — the storefront's pre-flight.
@@ -327,7 +263,6 @@ pub async fn delete_payment_connection(
     )
 )]
 pub async fn get_tenant_checkout_config(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     _permission: RequiredPermission,
@@ -335,14 +270,7 @@ pub async fn get_tenant_checkout_config(
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    get_tenant_checkout_config_embedded(state, tenant, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `POST /api/v1/tenant/checkout` — start a purchase on the tenant's own
@@ -370,7 +298,6 @@ pub async fn get_tenant_checkout_config(
     )
 )]
 pub async fn create_tenant_checkout(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
@@ -378,20 +305,7 @@ pub async fn create_tenant_checkout(
     _entitlement: RequiredFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<CreateCheckoutRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    create_tenant_checkout_embedded(state, tenant, req, body, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/checkout/{id}` — the confirming state. Polled by
@@ -415,23 +329,15 @@ pub async fn create_tenant_checkout(
     )
 )]
 pub async fn get_tenant_checkout(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<CheckoutId>,
+    _path: web::Path<CheckoutId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    get_tenant_checkout_embedded(state, tenant, path, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments` — every documented filter combinable,
@@ -453,23 +359,15 @@ pub async fn get_tenant_checkout(
     )
 )]
 pub async fn list_payments(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    query: web::Query<PaymentListQuery>,
+    _query: web::Query<PaymentListQuery>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    list_payments_embedded(state, tenant, query, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments/{id}` — payment detail with timeline,
@@ -491,23 +389,15 @@ pub async fn list_payments(
     )
 )]
 pub async fn get_payment(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    path: web::Path<PaymentId>,
+    _path: web::Path<PaymentId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    get_payment_embedded(state, tenant, path, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `POST /api/v1/tenant/payments/{id}/refund` — refund a payment.
@@ -541,39 +431,15 @@ pub async fn get_payment(
     )
 )]
 pub async fn refund_payment(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
-    path: web::Path<PaymentId>,
+    _path: web::Path<PaymentId>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<RefundRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    refund_payment_embedded(
-        state,
-        tenant,
-        subject,
-        req,
-        path,
-        body,
-        _permission,
-        _entitlement,
-    )
-    .await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments/disputes` — disputes for this tenant,
@@ -594,23 +460,15 @@ pub async fn refund_payment(
     )
 )]
 pub async fn list_disputes(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
-    query: web::Query<DisputeListQuery>,
+    _query: web::Query<DisputeListQuery>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    list_disputes_embedded(state, tenant, query, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments/export` — server-side CSV export,
@@ -640,32 +498,15 @@ pub async fn list_disputes(
     )
 )]
 pub async fn export_payments(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
-    query: web::Query<PaymentListQuery>,
+    _query: web::Query<PaymentListQuery>,
     _permission: RequiredPermission,
     _entitlement: RequiredFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    export_payments_embedded(
-        state,
-        tenant,
-        subject,
-        req,
-        query,
-        _permission,
-        _entitlement,
-    )
-    .await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments/payouts` — the connected account's payout
@@ -684,7 +525,6 @@ pub async fn export_payments(
     )
 )]
 pub async fn list_payouts(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     _permission: RequiredPermission,
@@ -692,14 +532,7 @@ pub async fn list_payouts(
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    list_payouts_embedded(state, tenant, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `GET /api/v1/tenant/payments/tax-settings`.
@@ -716,7 +549,6 @@ pub async fn list_payouts(
     )
 )]
 pub async fn get_tax_settings(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     _permission: RequiredPermission,
@@ -724,14 +556,7 @@ pub async fn get_tax_settings(
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    get_tax_settings_embedded(state, tenant, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }
 
 /// `PUT /api/v1/tenant/payments/tax-settings` — enable/disable automatic
@@ -756,7 +581,6 @@ pub async fn get_tax_settings(
     )
 )]
 pub async fn put_tax_settings(
-    state: Option<web::Data<PaymentsState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
@@ -764,18 +588,5 @@ pub async fn put_tax_settings(
     _entitlement: RequiredFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Payments service is not configured"))?;
-        return Ok(proxy(gateway, tenant, subject, _permission, req, payload).await?);
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<UpdateTaxSettingsRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    put_tax_settings_embedded(state, tenant, body, _permission, _entitlement).await
+    Ok(proxy(gateway(&req)?, tenant, subject, _permission, req, payload).await?)
 }

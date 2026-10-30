@@ -43,10 +43,6 @@ pub struct CliConfig {
     pub theming: sanvi_theming::ThemingConfig,
     #[serde(default)]
     pub domains: sanvi_domains::DomainsConfig,
-    /// Phase 09: the payments section (the requirement-key map rides
-    /// along; secrets stay env-only and are not needed by CLI commands).
-    #[serde(default)]
-    pub payments: sanvi_payments::PaymentsConfig,
     /// Phase 05 (TASK-028 reuse): the privacy section — archival seals
     /// cold objects with the envelope scheme's passphrase layer, so the
     /// KEK the exports use is the KEK archives are sealed under.
@@ -70,7 +66,6 @@ pub fn load(environment: &str) -> anyhow::Result<CliConfig> {
     config.billing.validate()?;
     config.theming.validate()?;
     config.domains.validate()?;
-    config.payments.validate()?;
     config.privacy.validate()?;
     config.ids.resolve(environment, 3)?;
     Ok(config)

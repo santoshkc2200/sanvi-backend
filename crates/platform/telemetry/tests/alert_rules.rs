@@ -467,20 +467,6 @@ const EXPORTED_METRICS: &[&str] = &[
     "db_pool_idle_gauge",
     "db_pool_acquire_seconds",
     "db_pool_acquire_failures_total",
-    // contexts/payments/src/adapters/metrics.rs
-    "payments_platform_balance_movements_total",
-    "payments_connection_status_gauge",
-    "payments_webhook_events_total",
-    "payments_connection_disconnects_total",
-    "payments_webhook_unprocessed_gauge",
-    "payments_webhook_dead_letter_gauge",
-    "payments_webhook_lag_seconds",
-    "payments_webhook_lag_seconds_bucket",
-    "payments_webhook_unknown_account_total",
-    "payments_payout_failures_total",
-    "payments_payment_failure_total",
-    "payments_payment_succeeded_total",
-    "payments_dispute_open_gauge",
     // contexts/advertising/src/adapters/metrics.rs
     "conversion_upload_total",
     "conversion_suppressed_total",
@@ -497,12 +483,31 @@ const EXPORTED_METRICS: &[&str] = &[
     "budget_auto_pause_total",
 ];
 
+/// Metrics the standalone Payments service exports
+/// (`payments-service/crates/contexts/payments/src/adapters/metrics.rs`).
+/// Alerts may reference them, but they live in another repository, so no
+/// source here anchors them.
+const SERVICE_EXPORTED_METRICS: &[&str] = &[
+    "payments_platform_balance_movements_total",
+    "payments_connection_status_gauge",
+    "payments_webhook_events_total",
+    "payments_connection_disconnects_total",
+    "payments_webhook_unprocessed_gauge",
+    "payments_webhook_dead_letter_gauge",
+    "payments_webhook_lag_seconds",
+    "payments_webhook_lag_seconds_bucket",
+    "payments_webhook_unknown_account_total",
+    "payments_payout_failures_total",
+    "payments_payment_failure_total",
+    "payments_payment_succeeded_total",
+    "payments_dispute_open_gauge",
+];
+
 /// Where those metrics are declared. `include_str!` keeps the anchor honest:
 /// renaming or moving a source breaks the compile, not the guarantee.
 const METRIC_SOURCES: &[&str] = &[
     include_str!("../../http/src/metrics.rs"),
     include_str!("../../persistence/src/pool_metrics.rs"),
-    include_str!("../../../contexts/payments/src/adapters/metrics.rs"),
     include_str!("../../../contexts/advertising/src/adapters/metrics.rs"),
 ];
 
@@ -537,6 +542,7 @@ fn exprs_reference_declared_metrics_only() {
         // Metric-shaped identifiers in the expression.
         let mut known = Vec::new();
         known.extend(exported.iter().copied());
+        known.extend(SERVICE_EXPORTED_METRICS.iter().copied());
         const PROMQL_WORDS: &[&str] = &[
             "sum",
             "rate",

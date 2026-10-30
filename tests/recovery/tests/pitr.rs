@@ -305,8 +305,8 @@ async fn pitr_to_a_timestamp_leaves_a_consistent_platform() {
         scoped_insert(&tx, "payment insert", move |conn| {
             Box::pin(
                 sqlx::query(
-                    "INSERT INTO payments.payments (id, tenant_id, external_payment_id, status, amount_minor, currency)
-                     VALUES ($1, $2, 'pi_drill_pre', 'succeeded', 1234, 'USD')",
+                    "INSERT INTO billing.invoices (id, tenant_id, stripe_invoice_id, status, total_minor, currency, created_at)
+                     VALUES ($1, $2, 'in_drill_pre', 'paid', 1234, 'usd', now())",
                 )
                 .bind(payment_id)
                 .bind(tenant_id)
@@ -352,8 +352,8 @@ async fn pitr_to_a_timestamp_leaves_a_consistent_platform() {
         scoped_insert(&tx, "post payment insert", move |conn| {
             Box::pin(
                 sqlx::query(
-                    "INSERT INTO payments.payments (id, tenant_id, external_payment_id, status, amount_minor, currency)
-                     VALUES ($1, $2, 'pi_drill_post', 'processing', 99, 'USD')",
+                    "INSERT INTO billing.invoices (id, tenant_id, stripe_invoice_id, status, total_minor, currency, created_at)
+                     VALUES ($1, $2, 'in_drill_post', 'open', 99, 'usd', now())",
                 )
                 .bind(payment_id)
                 .bind(tenant_id)
@@ -469,14 +469,14 @@ async fn pitr_to_a_timestamp_leaves_a_consistent_platform() {
         scope.commit().await.expect("scope commit");
     }
 
-    // 3. Payment records: the pre-target row, byte-for-byte its state.
+    // 3. Invoice records: the pre-target row, byte-for-byte its state.
     let payment: (String, String, i64) = {
         let mut scope = restored_tx
             .begin_unscoped("pitr: restored payment check", "recovery-tests")
             .await
             .expect("scope");
         let row = sqlx::query_as::<_, (String, String, i64)>(
-            "SELECT external_payment_id, status, amount_minor FROM payments.payments",
+            "SELECT stripe_invoice_id, status, total_minor FROM billing.invoices",
         )
         .fetch_one(&mut **scope.tx_mut().as_inner())
         .await
@@ -486,8 +486,8 @@ async fn pitr_to_a_timestamp_leaves_a_consistent_platform() {
     };
     assert_eq!(
         payment,
-        ("pi_drill_pre".to_string(), "succeeded".to_string(), 1234),
-        "a post-target payment row leaked into the pinned restore"
+        ("in_drill_pre".to_string(), "paid".to_string(), 1234),
+        "a post-target invoice row leaked into the pinned restore"
     );
     restored.close().await;
 

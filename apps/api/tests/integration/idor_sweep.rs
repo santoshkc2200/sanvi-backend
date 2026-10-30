@@ -57,7 +57,7 @@ use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsTenantLookupAdapter, FallbackGuideTranslator,
     IdentityDependencies, PlatformAdminDependencies, TenantCatalogAdapter, build_access_state,
     build_advertising_state, build_app, build_audit_state, build_domains_lookup,
-    build_domains_state, build_identity_state, build_localization_state, build_payments_state,
+    build_domains_state, build_identity_state, build_localization_state,
     build_platform_admin_state, build_system_state, build_tenancy_state, build_theming_state,
 };
 use sanvi_persistence::TxManager;
@@ -90,9 +90,6 @@ const CREATIVE: i64 = 910_231_104;
 const AUDIENCE: i64 = 910_231_105;
 const CONVERSION: i64 = 910_231_106;
 const BUDGET_ALERT: i64 = 910_231_107;
-const PAY_CONNECTION: i64 = 910_231_110;
-const CHECKOUT: i64 = 910_231_111;
-const PAYMENT: i64 = 910_231_112;
 const DOMAIN: i64 = 910_231_120;
 const ORDER: i64 = 910_231_121;
 const INVITATION: i64 = 910_231_122;
@@ -191,9 +188,6 @@ struct Seeded {
     audience: i64,
     conversion: i64,
     budget_alert: i64,
-    pay_connection: i64,
-    checkout: i64,
-    payment: i64,
     domain: i64,
     order: i64,
     invitation: i64,
@@ -214,9 +208,6 @@ impl Default for Seeded {
             audience: AUDIENCE,
             conversion: CONVERSION,
             budget_alert: BUDGET_ALERT,
-            pay_connection: PAY_CONNECTION,
-            checkout: CHECKOUT,
-            payment: PAYMENT,
             domain: DOMAIN,
             order: ORDER,
             invitation: INVITATION,
@@ -241,9 +232,6 @@ impl Seeded {
             audience: UNKNOWN_ID_ID,
             conversion: UNKNOWN_ID_ID,
             budget_alert: UNKNOWN_ID_ID,
-            pay_connection: UNKNOWN_ID_ID,
-            checkout: UNKNOWN_ID_ID,
-            payment: UNKNOWN_ID_ID,
             domain: UNKNOWN_ID_ID,
             order: UNKNOWN_ID_ID,
             invitation: UNKNOWN_ID_ID,
@@ -286,9 +274,6 @@ fn entity_id(path: &str, slot: &str, seeded: &Seeded) -> Option<String> {
         (p, "id") if p.contains("/ads/audiences") => seeded.audience,
         (p, "id") if p.contains("/ads/conversions") => seeded.conversion,
         (p, "alert_id") if p.contains("/ads/budget-alerts") => seeded.budget_alert,
-        (p, "id") if p.contains("/payments/connections") => seeded.pay_connection,
-        (p, "id") if p.contains("/checkout") => seeded.checkout,
-        (p, "id") if p.contains("/payments/") => seeded.payment,
         (p, "id") if p.contains("/domains/orders") => seeded.order,
         (p, "id") if p.contains("/domains/") => seeded.domain,
         (_, "invitation_id") => seeded.invitation,
@@ -970,41 +955,6 @@ async fn seeded_world(pool: &sanvi_persistence::PgPool) -> Seeded {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO payments.provider_connections
-         (id, tenant_id, provider, external_account_id, status)
-         VALUES ($1, $2, 'stripe_connect', $3, 'active')",
-    )
-    .bind(PAY_CONNECTION)
-    .bind(TENANT_B)
-    .bind(format!("acct_{MARKER}"))
-    .execute(&mut **tx)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO payments.checkouts
-         (id, tenant_id, connection_id, reference, amount_minor, currency, status)
-         VALUES ($1, $2, $3, $4, 2000, 'JPY', 'open')",
-    )
-    .bind(CHECKOUT)
-    .bind(TENANT_B)
-    .bind(PAY_CONNECTION)
-    .bind(format!("{MARKER}-order"))
-    .execute(&mut **tx)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO payments.payments
-         (id, tenant_id, checkout_id, external_payment_id, status, amount_minor, currency)
-         VALUES ($1, $2, $3, $4, 'succeeded', 2000, 'JPY')",
-    )
-    .bind(PAYMENT)
-    .bind(TENANT_B)
-    .bind(CHECKOUT)
-    .bind(format!("pay_{MARKER}"))
-    .execute(&mut **tx)
-    .await
-    .unwrap();
-    sqlx::query(
         "INSERT INTO domains.custom_domains
          (id, tenant_id, hostname, normalized_hostname, kind, role, status)
          VALUES ($1, $2, $3, $3, 'connected', 'primary', 'verified')",
@@ -1207,14 +1157,6 @@ async fn build_sweep_app(
         domains_lookup,
         tenancy.resolve.clone(),
     ));
-    let payments = Some(build_payments_state(
-        pool.clone(),
-        ids.clone(),
-        &config.payments,
-        metrics.prometheus_registry(),
-        &config.telemetry.environment,
-        audit.writer.clone(),
-    ));
     let directive_resolver: Arc<dyn DirectiveResolver> = Arc::new(AllowAllDirectives);
     let subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository> =
         Arc::new(sanvi_privacy::adapters::SqlxSubProcessorRepository::new());
@@ -1256,7 +1198,6 @@ async fn build_sweep_app(
         localization,
         theming,
         domains,
-        payments,
         advertising,
         accounting,
         None,                                                                  // redis
@@ -1360,10 +1301,6 @@ async fn resource_intact(pattern: &str, seeded: &Seeded, pool: &sanvi_persistenc
         p if p.starts_with("/api/v1/tenant/members/") => (
             seeded.member_b,
             "SELECT EXISTS(SELECT 1 FROM identity.memberships WHERE tenant_id = $1 AND user_id = $2)",
-        ),
-        p if p.starts_with("/api/v1/tenant/payments/connections/") => (
-            seeded.pay_connection,
-            "SELECT EXISTS(SELECT 1 FROM payments.provider_connections WHERE tenant_id = $1 AND id = $2)",
         ),
         p if p.starts_with("/api/v1/tenant/roles/") => (
             ROLE_B,
@@ -1641,6 +1578,36 @@ async fn platform_routes_require_platform_permissions() {
 /// appearing in the matrix whose id slot this suite cannot fill fails
 /// here — new phase routes must join the sweep, not silently bypass it.
 const SHAPE_A_EXCLUSIONS: &[(&str, &str, &str)] = &[
+    (
+        "GET",
+        "/api/v1/tenant/payments/connections/{id}",
+        "Payments records live in the standalone payments-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "DELETE",
+        "/api/v1/tenant/payments/connections/{id}",
+        "Payments records live in the standalone payments-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/payments/connections/{id}/session",
+        "Payments records live in the standalone payments-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/payments/{id}",
+        "Payments records live in the standalone payments-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/payments/{id}/refund",
+        "Payments records live in the standalone payments-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/checkout/{id}",
+        "Payments records live in the standalone payments-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
     (
         "GET",
         "/api/v1/tenant/ads/connections/{platform}/oauth/callback",

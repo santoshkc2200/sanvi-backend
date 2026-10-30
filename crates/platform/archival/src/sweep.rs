@@ -26,10 +26,9 @@ pub struct ClassTable {
 }
 
 /// The archive-action classes' tables, in dependency order (children
-/// before parents: `payments.payments` is referenced by refunds and
-/// disputes, so they archive first). A registered archive class with no
-/// entry here is skipped loudly — an unknown class must never be
-/// archived by guesswork.
+/// before parents). A registered archive class with no entry here is
+/// skipped loudly — an unknown class must never be archived by guesswork.
+/// `transaction_record` has none: Payments rows live in payments-service.
 pub fn archive_class_tables(data_class: &str) -> Option<&'static [ClassTable]> {
     match data_class {
         "invoice" => Some(&[ClassTable {
@@ -37,23 +36,6 @@ pub fn archive_class_tables(data_class: &str) -> Option<&'static [ClassTable]> {
             table: "invoices",
             key_column: "created_at",
         }]),
-        "transaction_record" => Some(&[
-            ClassTable {
-                schema: "payments",
-                table: "refunds",
-                key_column: "created_at",
-            },
-            ClassTable {
-                schema: "payments",
-                table: "disputes",
-                key_column: "created_at",
-            },
-            ClassTable {
-                schema: "payments",
-                table: "payments",
-                key_column: "created_at",
-            },
-        ]),
         _ => None,
     }
 }

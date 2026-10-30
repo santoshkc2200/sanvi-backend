@@ -48,7 +48,7 @@ export const RATE = Number(__ENV.PERF_RATE || 0);
 // unless PERF_SEED says otherwise): the three hot tenants plus a slice of
 // the long tail, so a run sweeps data-shaped hosts, not one hot key.
 export function tenant_slugs(count) {
-  const slugs = ['scale-hot-audit', 'scale-hot-ads', 'scale-hot-payments'];
+  const slugs = ['scale-hot-audit', 'scale-hot-ads'];
   const tail = Number(count || 12);
   for (let i = 0; i < tail; i += 1) {
     slugs.push(`scale-tail-${SEED}-${String(i).padStart(3, '0')}`);

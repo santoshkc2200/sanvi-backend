@@ -580,11 +580,7 @@ async fn every_tenant_table_is_forced_and_canonically_isolated() {
             .fetch_one(&pool)
             .await
             .expect("partition registry exists");
-    for parent in [
-        "platform.outbox",
-        "billing.webhook_events",
-        "payments.webhook_events",
-    ] {
+    for parent in ["platform.outbox", "billing.webhook_events"] {
         let (schema, table) = parent.split_once('.').expect("qualified");
         let kind: String = sqlx::query_scalar(
             "SELECT c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -604,9 +600,10 @@ async fn every_tenant_table_is_forced_and_canonically_isolated() {
     // One registry row per pinned parent, and nothing enrolled that is not
     // actually partitioned.
     assert!(
-        platform_scoped_parents >= 6,
+        platform_scoped_parents >= 5,
         "the partition registry holds {platform_scoped_parents} parents; TASK-028 \
-         enrolled six — pin this floor up when the registry grows"
+         enrolled six and payments.webhook_events left with Payments — pin this \
+         floor up when the registry grows"
     );
 }
 

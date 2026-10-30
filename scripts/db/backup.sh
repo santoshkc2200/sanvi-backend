@@ -184,7 +184,7 @@ psql_src -c "SELECT json_build_object(
     'audit_entries', (SELECT count(*) FROM audit.entries),
     'outbox_rows', (SELECT count(*) FROM platform.outbox),
     'outbox_unpublished', (SELECT count(*) FROM platform.outbox WHERE published_at IS NULL),
-    'payments', (SELECT count(*) FROM payments.payments),
+    'invoices', (SELECT count(*) FROM billing.invoices),
     'tenants', (SELECT count(*) FROM tenancy.tenants),
     'entitlement_overrides', (SELECT count(*) FROM access.entitlements)
 )::text" | jq '.' > "$session_dir/pre_backup_counts.json"
@@ -226,7 +226,7 @@ psql_src -c "SELECT json_build_object(
     'audit_entries', (SELECT count(*) FROM audit.entries),
     'outbox_rows', (SELECT count(*) FROM platform.outbox),
     'outbox_unpublished', (SELECT count(*) FROM platform.outbox WHERE published_at IS NULL),
-    'payments', (SELECT count(*) FROM payments.payments),
+    'invoices', (SELECT count(*) FROM billing.invoices),
     'tenants', (SELECT count(*) FROM tenancy.tenants),
     'entitlement_overrides', (SELECT count(*) FROM access.entitlements)
 )::text" | jq '.' > "$session_dir/source_counts.json"

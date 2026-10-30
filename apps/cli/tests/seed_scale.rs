@@ -138,17 +138,14 @@ async fn seeds_a_staging_database_and_matches_the_plan() {
         plan["tenants"].as_u64().unwrap()
     );
 
-    // The three hot tenants exist, and the hot dimensions have their rows.
+    // The two hot tenants exist, and the hot dimensions have their rows.
     let hot: Vec<String> = sqlx::query_scalar(
         "SELECT slug FROM tenancy.tenants WHERE slug LIKE 'scale-hot-%' ORDER BY slug",
     )
     .fetch_all(&admin)
     .await
     .expect("hot tenants");
-    assert_eq!(
-        hot,
-        vec!["scale-hot-ads", "scale-hot-audit", "scale-hot-payments"]
-    );
+    assert_eq!(hot, vec!["scale-hot-ads", "scale-hot-audit"]);
 
     let (audit_hot,): (i64,) = sqlx::query_as(
         "SELECT count(*) FROM audit.entries e JOIN tenancy.tenants t ON t.id = e.tenant_id \
@@ -174,51 +171,25 @@ async fn seeds_a_staging_database_and_matches_the_plan() {
         "the ads hot tenant is hot: {metrics_rows}"
     );
 
-    let (refunds,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM payments.refunds r JOIN tenancy.tenants t ON t.id = r.tenant_id \
-         WHERE t.slug = 'scale-hot-payments'",
-    )
-    .fetch_one(&admin)
-    .await
-    .expect("refund rows");
-    assert!(
-        refunds >= 500,
-        "the payments hot tenant carries many refunds: {refunds}"
-    );
-
     // The written tables must match the plan's printed row counts — the
-    // seed's contract is "same seed = identical row counts" (the payments
-    // table once quietly wrote a row per checkout, 25 % more than planned).
+    // seed's contract is "same seed = identical row counts".
     let counts = &plan["row_counts"];
-    for table in ["checkouts", "payments", "refunds"] {
-        let expected = counts[table].as_u64().expect("plan prints the row count");
-        let (actual,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT count(*) FROM payments.{table}"
-        )))
-        .fetch_one(&admin)
-        .await
-        .expect("payment-table row count");
+    for (key, table) in [
+        ("metrics_daily", "advertising.metrics_daily"),
+        ("custom_domains", "domains.custom_domains"),
+    ] {
+        let expected = counts[key].as_u64().expect("plan prints the row count");
+        let (actual,): (i64,) =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(&admin)
+                .await
+                .expect("table row count");
         assert_eq!(
             u64::try_from(actual).unwrap(),
             expected,
             "{table} rows must match the plan"
         );
     }
-
-    // And the state mix must be one production can produce: every payment
-    // sits on a completed checkout, succeeded there, with a capture.
-    let (inconsistent,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM payments.payments p \
-         JOIN payments.checkouts c ON c.id = p.checkout_id \
-         WHERE c.status <> 'complete' OR p.status <> 'succeeded' OR p.captured_at IS NULL",
-    )
-    .fetch_one(&admin)
-    .await
-    .expect("payment/checkout consistency count");
-    assert_eq!(
-        inconsistent, 0,
-        "payments exist only as captures of completed checkouts"
-    );
 
     // A second real run refuses instead of half-colliding on primary keys.
     let out = run_cli(&db, db.name(), "1", &[]);

@@ -30,7 +30,6 @@ fn rehearsal_proves_new_access_and_old_rejection_without_rendering_credentials()
         "oauth_state_signing",
         "preview_signing",
         "billing_webhook",
-        "connect_webhook",
         "privacy_kek",
         "advertising_kek",
     ] {

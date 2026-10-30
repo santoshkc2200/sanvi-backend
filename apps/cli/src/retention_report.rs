@@ -72,10 +72,9 @@ fn class_facts(data_class: &str) -> (Option<ClassTable>, Enforcement) {
             table("billing", "invoices", "created_at"),
             Enforcement::Executor("platform.archival_sweep"),
         ),
-        "transaction_record" => (
-            table("payments", "payments", "created_at"),
-            Enforcement::Executor("platform.archival_sweep"),
-        ),
+        // The rows live in payments-service's own database, which runs no
+        // archival sweep yet; nothing in this deployment enforces the class.
+        "transaction_record" => (None, Enforcement::Unenforced),
         "audit_log" => (
             table("audit", "entries", "occurred_at"),
             Enforcement::ByConstruction(

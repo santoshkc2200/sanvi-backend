@@ -24,7 +24,6 @@ const EXPECTED_PARENTS: &[(&str, &str, &str)] = &[
     ("audit", "entries", "occurred_at"),
     ("platform", "outbox", "occurred_at"),
     ("billing", "webhook_events", "received_at"),
-    ("payments", "webhook_events", "received_at"),
 ];
 
 #[derive(Debug, sqlx::FromRow)]

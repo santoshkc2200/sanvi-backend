@@ -407,8 +407,6 @@ async fn main() -> ExitCode {
     let domains: Option<sanvi_api::DomainsWiring> = None;
 
     // Phase 09: build the webhook receiver even when the tenant-facing
-    // Standalone Payments service handles payments processing; no in-process state.
-    let payments: Option<sanvi_payments::adapters::http::PaymentsState> = None;
     let advertising = if config.features.advertising {
         // The directive gate (TASK-014) is advertising's core invariant —
         // there is no meaningful way to run this context without the
@@ -464,7 +462,6 @@ async fn main() -> ExitCode {
             localization.clone(),
             theming.clone(),
             domains.clone(),
-            payments.clone(),
             advertising.clone(),
             None,
             redis.clone(),
