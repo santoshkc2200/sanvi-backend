@@ -84,7 +84,7 @@
    "expr": "max_over_time(payments_connection_status_gauge{status=\"onboarding\"}[7d]) > 0",
    "check": {
     "kind": "probe",
-    "probe": "gauge AND SQL: SELECT count(*) FROM payments.provider_connections WHERE status = 'onboarding' AND disconnected_at IS NULL AND last_synced_at < now() - interval '7 days'"
+    "probe": "gauge AND SQL against the payments-service database: SELECT count(*) FROM payments.provider_connections WHERE status = 'onboarding' AND disconnected_at IS NULL AND last_synced_at < now() - interval '7 days'"
    }
   },
   {

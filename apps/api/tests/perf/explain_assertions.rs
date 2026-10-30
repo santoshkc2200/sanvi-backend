@@ -84,14 +84,7 @@ enum Bind {
     I64(i64),
     OptI64(Option<i64>),
     OptText(Option<&'static str>),
-    Ts(chrono::DateTime<chrono::Utc>),
     OptTs(Option<chrono::DateTime<chrono::Utc>>),
-}
-
-/// Seconds after the Unix epoch — a fixed instant, not wall-clock arithmetic.
-fn ts(secs: i64) -> chrono::DateTime<chrono::Utc> {
-    use chrono::TimeZone as _;
-    chrono::Utc.timestamp_opt(secs, 0).unwrap()
 }
 
 fn rules() -> Vec<PlanRule> {
@@ -196,29 +189,7 @@ fn rules() -> Vec<PlanRule> {
             index: "orders_tenant_idx",
             child_index: None,
         },
-        PlanRule {
-            name: "payments disputes keyset",
-            sql: "SELECT id FROM payments.disputes
-                  WHERE tenant_id = $1 AND (created_at, id) < ($2::timestamptz, $3)
-                  ORDER BY created_at DESC, id DESC LIMIT 101",
-            binds: vec![I64(TENANT), Ts(ts(300)), I64(911_023_000_300)],
-            schema: "payments",
-            table: "disputes",
-            index: "disputes_tenant_idx",
-            child_index: None,
-        },
         // -- keyset pages whose index predates 11.2d: guard the good shape ---
-        PlanRule {
-            name: "payments page keyset",
-            sql: "SELECT p.id FROM payments.payments p
-                  WHERE p.tenant_id = $1 AND (p.created_at, p.id) < ($2::timestamptz, $3)
-                  ORDER BY p.created_at DESC, p.id DESC LIMIT 201",
-            binds: vec![I64(TENANT), Ts(ts(1_000)), I64(911_021_001_000)],
-            schema: "payments",
-            table: "payments",
-            index: "payments_tenant_created_id_idx",
-            child_index: None,
-        },
         PlanRule {
             name: "advertising campaigns keyset",
             sql: "SELECT id FROM advertising.campaigns
@@ -318,26 +289,6 @@ SELECT 911_080_000_000 + (t * 1000000) + g, 911_000_000 + t,
        'tokhash-' || t || '-' || g, now() + make_interval(days => 7)
 FROM generate_series(1, 500) g, generate_series(1, 3) t;
 
-INSERT INTO payments.provider_connections (id, tenant_id, provider, external_account_id, status)
-SELECT 911_005_000_000 + t, 911_000_000 + t, 'stripe_connect', 'acct_perf_' || t, 'active'
-FROM generate_series(1, 3) t;
-INSERT INTO payments.checkouts (id, tenant_id, connection_id, reference, amount_minor, currency, status, created_at)
-SELECT 911_010_000_000 + (t * 1000000) + g, 911_000_000 + t, 911_005_000_000 + t,
-       'perf-co-' || t || '-' || g, 1000 + g, 'USD', 'complete',
-       '2026-01-01'::timestamptz + make_interval(secs => g)
-FROM generate_series(1, 2000) g, generate_series(1, 3) t;
-INSERT INTO payments.payments (id, tenant_id, checkout_id, external_payment_id, status, amount_minor, currency, created_at)
-SELECT 911_020_000_000 + (t * 1000000) + g, 911_000_000 + t,
-       911_010_000_000 + (t * 1000000) + g, 'pay_perf_' || t || '_' || g,
-       'succeeded', 1000 + g, 'USD', '2026-01-01'::timestamptz + make_interval(secs => g)
-FROM generate_series(1, 2000) g, generate_series(1, 3) t;
-INSERT INTO payments.disputes (id, tenant_id, payment_id, external_dispute_id, status, amount_minor, currency, created_at)
-SELECT 911_022_000_000 + (t * 1000000) + g, 911_000_000 + t,
-       911_020_000_000 + (t * 1000000) + g, 'dp_perf_' || t || '_' || g,
-       'warning_needs_response', 1000 + g, 'USD',
-       '2026-01-01'::timestamptz + make_interval(secs => g)
-FROM generate_series(1, 600) g, generate_series(1, 3) t;
-
 INSERT INTO billing.invoices (id, tenant_id, stripe_invoice_id, status, total_minor, currency, created_at)
 SELECT 911_030_000_000 + (t * 1000000) + g, 911_000_000 + t,
        'in_perf_' || t || '_' || g, 'paid', 900 + g, 'usd',
@@ -391,8 +342,7 @@ SELECT 911_100_000_000 + (t * 1000000) + g, 911_000_000 + t,
 FROM generate_series(1, 500) g, generate_series(1, 3) t;
 
 ANALYZE tenancy.tenants, identity.users, identity.memberships, identity.invitations,
-        payments.provider_connections, payments.checkouts, payments.payments,
-        payments.disputes, billing.invoices, domains.custom_domains,
+        billing.invoices, domains.custom_domains,
         domains.live_hostnames, domains.orders, privacy.data_subjects,
         privacy.data_subject_requests, audit.entries,
         advertising.connections, advertising.campaigns;
@@ -807,7 +757,6 @@ async fn explain_json(pool: &PgPool, sql: &str, binds: &[Bind], scoped: bool) ->
             Bind::I64(v) => query.bind(*v),
             Bind::OptI64(v) => query.bind(*v),
             Bind::OptText(v) => query.bind(*v),
-            Bind::Ts(v) => query.bind(*v),
             Bind::OptTs(v) => query.bind(*v),
         };
     }

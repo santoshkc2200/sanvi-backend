@@ -338,19 +338,6 @@ pub async fn run(report: &Path) -> Result<()> {
         "signing",
     )?);
     let start = Instant::now();
-    use sanvi_payments::domain::verify_webhook_signature as connect_verify;
-    ensure!(
-        connect_verify(old.as_bytes(), payload, &retired, 300).is_ok(),
-        "baseline Connect signature"
-    );
-    rows.push(evidence(
-        "connect_webhook",
-        start,
-        connect_verify(new.as_bytes(), payload, &fresh, 300).is_ok(),
-        connect_verify(new.as_bytes(), payload, &retired, 300).is_err(),
-        "signing",
-    )?);
-    let start = Instant::now();
     let mut old_kek = [0u8; 32];
     let mut new_kek = [0u8; 32];
     let mut dek = [0u8; 32];

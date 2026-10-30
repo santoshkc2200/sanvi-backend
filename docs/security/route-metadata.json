@@ -3208,19 +3208,6 @@
   },
   {
    "method": "POST",
-   "path": "/internal/webhooks/stripe/connect",
-   "handler": "crates/contexts/payments/src/adapters/http/webhooks.rs::stripe_connect_webhook",
-   "permission": "exempt: Connect Stripe signature and IP allow-list",
-   "tenant": "connected account from verified webhook processing",
-   "rate_limit": "global-config-dependent",
-   "evidence": [
-    "crates/contexts/payments/src/adapters/http/webhooks.rs",
-    "crates/contexts/payments/src/adapters/http/routes.rs"
-   ],
-   "openapi_exemption": "internal webhook"
-  },
-  {
-   "method": "POST",
    "path": "/internal/kratos/registration",
    "handler": "crates/contexts/identity/src/adapters/http/webhooks.rs::kratos_registration",
    "permission": "exempt: Kratos shared secret and IP allow-list",

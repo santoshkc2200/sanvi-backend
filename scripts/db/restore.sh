@@ -10,8 +10,8 @@
 #     restore shows up first: the audit chain (the real `sanvi-cli audit
 #     verify` verifier against the restored database), the outbox (no row
 #     carries a delivery stamp from after the target; the pre-target
-#     delivery set is exactly the recorded pre-target state), and payment
-#     records (count and external-id uniqueness match the recorded state).
+#     delivery set is exactly the recorded pre-target state), and invoice
+#     records (count and Stripe-id uniqueness match the recorded state).
 #
 # With --rehearse the measured numbers land in
 # benchmarks/dr/<scenario>-<session>.json for committing — start time, end
@@ -226,13 +226,13 @@ read_json_field() {
     # MSYS_NO_PATHCONV set its file arguments would arrive unconverted.
     jq -r "$1"
 }
-for field in audit_entries outbox_rows outbox_unpublished payments; do
+for field in audit_entries outbox_rows outbox_unpublished invoices; do
     expected="$(jq -r ".$field" < "$EXPECTED_COUNTS")"
     case "$field" in
         audit_entries) actual="$(psql_restore -c 'SELECT count(*) FROM audit.entries')" ;;
         outbox_rows) actual="$(psql_restore -c 'SELECT count(*) FROM platform.outbox')" ;;
         outbox_unpublished) actual="$(psql_restore -c 'SELECT count(*) FROM platform.outbox WHERE published_at IS NULL')" ;;
-        payments) actual="$(psql_restore -c 'SELECT count(*) FROM payments.payments')" ;;
+        invoices) actual="$(psql_restore -c 'SELECT count(*) FROM billing.invoices')" ;;
     esac
     if [[ "$expected" != "$actual" ]]; then
         fail "$field: expected $expected, restored database has $actual"
@@ -246,10 +246,11 @@ if [[ "$scenario" == "pitr" ]]; then
 fi
 echo "restore: outbox and row counts match the recorded ${scenario} state"
 
-# 4. Payment records: external ids stay unique per tenant after replay.
-dupes="$(psql_restore -c 'SELECT count(*) FROM (SELECT tenant_id, external_payment_id FROM payments.payments GROUP BY 1, 2 HAVING count(*) > 1) d')"
-[[ "$dupes" == "0" ]] || fail "payment records torn: $dupes duplicate external ids"
-echo "restore: payment records consistent"
+# 4. Invoice records: Stripe ids stay unique after replay. (Payment
+# records live in payments-service, which backs up its own database.)
+dupes="$(psql_restore -c 'SELECT count(*) FROM (SELECT stripe_invoice_id FROM billing.invoices GROUP BY 1 HAVING count(*) > 1) d')"
+[[ "$dupes" == "0" ]] || fail "invoice records torn: $dupes duplicate Stripe ids"
+echo "restore: invoice records consistent"
 
 # Rehearse the degraded-mode read-only procedure in this restore window.
 if [[ "$REHEARSE" == "1" ]]; then
@@ -303,7 +304,7 @@ if [[ "$REHEARSE" == "1" ]]; then
           data_loss_window_basis: $window_basis,
           restored_audit_max_occurred_at: $restored_audit_max,
           machine: {cores: ($cores | tonumber), os: $os},
-          checks: {audit_chain: $audit, markers: "consistent", outbox: "consistent", payments: "consistent", degraded_mode: "read-only commands rehearsed; writes rejected with 25006"},
+          checks: {audit_chain: $audit, markers: "consistent", outbox: "consistent", invoices: "consistent", degraded_mode: "read-only commands rehearsed; writes rejected with 25006"},
           build: {cli: "sanvi-cli 0.10.0"}}' > "$report"
     echo "restore: report written — $report"
 fi

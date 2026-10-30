@@ -352,7 +352,6 @@ async fn build(
         None, // localization
         None, // theming
         None, // domains
-        None, // payments (routes proxy through GatewayState)
         None, // advertising
         None, // accounting
         None, // redis

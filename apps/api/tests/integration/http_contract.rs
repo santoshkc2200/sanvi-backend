@@ -186,7 +186,6 @@ pub(crate) fn test_app_with(
         None, // localization
         Some(theming),
         None,                                                                  // domains
-        None,                                                                  // payments
         None,                                                                  // advertising
         None,                                                                  // accounting
         None,                                                                  // redis

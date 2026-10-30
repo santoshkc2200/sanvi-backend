@@ -59,7 +59,6 @@ pub(crate) const APP_SCHEMAS: &[&str] = &[
     "access",
     "platform_admin",
     "billing",
-    "payments",
     "privacy",
     "localization",
     "theming",

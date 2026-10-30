@@ -94,24 +94,24 @@ async fn seed(port: u16, db: &str, variant: &str) {
         .await
         .expect("settings seed");
     }
-    // id-keyed payments: the live database carries a post-snapshot row the
+    // id-keyed invoices: the live database carries a post-snapshot row the
     // restore must remove; the snapshot carries a row the restore must add.
-    let payments: Vec<(i64, i64, &str, &str, i64)> = match variant {
+    let invoices: Vec<(i64, i64, &str, &str, i64)> = match variant {
         "live" => vec![
-            (910_000_001, TARGET, "pi_target_kept", "succeeded", 100),
-            (910_000_002, TARGET, "pi_target_extra", "processing", 7),
-            (910_000_003, NEIGHBOUR, "pi_neighbour", "succeeded", 42),
+            (910_000_001, TARGET, "in_target_kept", "paid", 100),
+            (910_000_002, TARGET, "in_target_extra", "open", 7),
+            (910_000_003, NEIGHBOUR, "in_neighbour", "paid", 42),
         ],
         _ => vec![
-            (910_000_001, TARGET, "pi_target_kept", "succeeded", 555),
-            (910_000_004, TARGET, "pi_target_missing", "succeeded", 99),
-            (910_000_003, NEIGHBOUR, "pi_neighbour", "succeeded", 42),
+            (910_000_001, TARGET, "in_target_kept", "paid", 555),
+            (910_000_004, TARGET, "in_target_missing", "paid", 99),
+            (910_000_003, NEIGHBOUR, "in_neighbour", "paid", 42),
         ],
     };
-    for (id, tenant, external, status, amount) in payments {
+    for (id, tenant, external, status, amount) in invoices {
         sqlx::query(
-            "INSERT INTO payments.payments (id, tenant_id, external_payment_id, status, amount_minor, currency)
-             VALUES ($1, $2, $3, $4, $5, 'USD')",
+            "INSERT INTO billing.invoices (id, tenant_id, stripe_invoice_id, status, total_minor, currency, created_at)
+             VALUES ($1, $2, $3, $4, $5, 'usd', '2026-01-01T00:00:00Z')",
         )
         .bind(id)
         .bind(tenant)
@@ -120,7 +120,7 @@ async fn seed(port: u16, db: &str, variant: &str) {
         .bind(amount)
         .execute(&pool)
         .await
-        .expect("payment seed");
+        .expect("invoice seed");
     }
     pool.close().await;
 }
@@ -138,7 +138,7 @@ async fn neighbour_checksum(port: u16, db: &str) -> String {
             "SELECT row_to_json(t)::text FROM (SELECT * FROM tenancy.tenant_settings WHERE tenant_id = {NEIGHBOUR}) t ORDER BY key"
         ),
         format!(
-            "SELECT row_to_json(t)::text FROM (SELECT * FROM payments.payments WHERE tenant_id = {NEIGHBOUR}) t ORDER BY id"
+            "SELECT row_to_json(t)::text FROM (SELECT * FROM billing.invoices WHERE tenant_id = {NEIGHBOUR}) t ORDER BY id"
         ),
     ] {
         let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(statement))
@@ -205,8 +205,8 @@ async fn tenant_restore_moves_only_the_target_and_audits_itself() {
 
     let pool = admin(port, &live_db).await;
     // The target's rows are exactly the snapshot's state: the tenant row
-    // and its composite-key setting restored, the post-snapshot payment
-    // deleted, the snapshot-only payment present, the kept payment's
+    // and its composite-key setting restored, the post-snapshot invoice
+    // deleted, the snapshot-only invoice present, the kept invoice's
     // amount byte-identical to the snapshot.
     let display: String =
         sqlx::query_scalar("SELECT display_name FROM tenancy.tenants WHERE id = $1")
@@ -224,26 +224,26 @@ async fn tenant_restore_moves_only_the_target_and_audits_itself() {
     .expect("target theme");
     assert_eq!(theme, "snapshot-theme");
     let externals: Vec<String> =
-        sqlx::query_scalar("SELECT external_payment_id FROM payments.payments WHERE tenant_id = $1 ORDER BY external_payment_id")
+        sqlx::query_scalar("SELECT stripe_invoice_id FROM billing.invoices WHERE tenant_id = $1 ORDER BY stripe_invoice_id")
             .bind(TARGET)
             .fetch_all(&pool)
             .await
-            .expect("target payments");
+            .expect("target invoices");
     assert_eq!(
         externals,
         vec![
-            "pi_target_kept".to_string(),
-            "pi_target_missing".to_string()
+            "in_target_kept".to_string(),
+            "in_target_missing".to_string()
         ],
         "the live-only row must be gone and the snapshot-only row present"
     );
     let amount: i64 = sqlx::query_scalar(
-        "SELECT amount_minor FROM payments.payments WHERE external_payment_id = 'pi_target_kept'",
+        "SELECT total_minor FROM billing.invoices WHERE stripe_invoice_id = 'in_target_kept'",
     )
     .fetch_one(&pool)
     .await
-    .expect("kept payment");
-    assert_eq!(amount, 555, "the kept payment must be the snapshot's bytes");
+    .expect("kept invoice");
+    assert_eq!(amount, 555, "the kept invoice must be the snapshot's bytes");
 
     // The neighbour: byte-identical, by checksum.
     let after = neighbour_checksum(port, &live_db).await;
@@ -277,15 +277,15 @@ async fn dry_run_writes_nothing() {
     let (stdout, stderr) = run_cli(port, &live_db, &snapshot_db, &["--dry-run"]);
     assert!(stderr.is_empty(), "dry-run failed: {stderr}\n{stdout}");
     assert!(stdout.contains("DRY RUN"), "{stdout}");
-    assert!(stdout.contains("payments.payments"), "{stdout}");
+    assert!(stdout.contains("billing.invoices"), "{stdout}");
 
     let pool = admin(port, &live_db).await;
     let amount: i64 = sqlx::query_scalar(
-        "SELECT amount_minor FROM payments.payments WHERE external_payment_id = 'pi_target_kept'",
+        "SELECT total_minor FROM billing.invoices WHERE stripe_invoice_id = 'in_target_kept'",
     )
     .fetch_one(&pool)
     .await
-    .expect("kept payment");
+    .expect("kept invoice");
     assert_eq!(amount, 100, "a dry run changed the target");
     let display: String =
         sqlx::query_scalar("SELECT display_name FROM tenancy.tenants WHERE id = $1")

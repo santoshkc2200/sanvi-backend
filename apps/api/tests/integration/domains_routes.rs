@@ -337,7 +337,6 @@ async fn build(
         None, // localization
         None, // theming
         None, // domains (routes through remote gateway)
-        None, // payments
         None, // advertising
         None, // accounting
         None, // redis

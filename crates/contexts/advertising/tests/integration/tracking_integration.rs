@@ -580,14 +580,11 @@ async fn client_value_is_overridden_by_the_payment_record_and_marked() {
     let tenant_id = seed_tenant(&pool, "value-override").await;
     let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
-    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+    let payment_id = sanvi_payments::domain::PaymentId::from_snowflake(
         sanvi_testsupport::test_ids().next_id().unwrap(),
     );
     let real_payment = PaymentLookup {
-        conversion_event_id: sanvi_payments::application::conversion_event_id(
-            tenant_id, payment_id,
-        )
-        .to_string(),
+        conversion_event_id: payment_id.to_string(),
         value: Money::new(4_980, "JPY").unwrap(),
     };
     let capture = capture_with(
@@ -603,8 +600,7 @@ async fn client_value_is_overridden_by_the_payment_record_and_marked() {
     command.currency = Some("JPY".to_string());
     capture.execute(command).await.unwrap();
 
-    let expected_event_id =
-        sanvi_payments::application::conversion_event_id(tenant_id, payment_id).to_string();
+    let expected_event_id = payment_id.to_string();
 
     let row = fetch_row(&pool, tenant_id, &expected_event_id).await;
     assert_eq!(row["value_minor"], 4_980);
@@ -620,14 +616,11 @@ async fn server_derived_event_id_deduplicates_different_client_event_ids_for_sam
     let tenant_id = seed_tenant(&pool, "server-event-id").await;
     let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
 
-    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+    let payment_id = sanvi_payments::domain::PaymentId::from_snowflake(
         sanvi_testsupport::test_ids().next_id().unwrap(),
     );
     let real_payment = PaymentLookup {
-        conversion_event_id: sanvi_payments::application::conversion_event_id(
-            tenant_id, payment_id,
-        )
-        .to_string(),
+        conversion_event_id: payment_id.to_string(),
         value: Money::new(4_980, "JPY").unwrap(),
     };
     let capture = capture_with(
@@ -645,8 +638,7 @@ async fn server_derived_event_id_deduplicates_different_client_event_ids_for_sam
     command2.order_ref = Some("order-dedupe-1".to_string());
     capture.execute(command2).await.unwrap();
 
-    let expected_event_id =
-        sanvi_payments::application::conversion_event_id(tenant_id, payment_id).to_string();
+    let expected_event_id = payment_id.to_string();
 
     let row = fetch_row(&pool, tenant_id, &expected_event_id).await;
     assert_eq!(row["event_id"], expected_event_id);
@@ -673,17 +665,14 @@ async fn order_dedupe_survives_the_payment_webhook_race() {
     first.order_ref = Some("order-webhook-race".to_string());
     before_webhook.execute(first).await.unwrap();
 
-    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+    let payment_id = sanvi_payments::domain::PaymentId::from_snowflake(
         sanvi_testsupport::test_ids().next_id().unwrap(),
     );
     let after_webhook = capture_with(
         tx,
         FakeDirectiveResolver::allow_all(),
         Some(PaymentLookup {
-            conversion_event_id: sanvi_payments::application::conversion_event_id(
-                tenant_id, payment_id,
-            )
-            .to_string(),
+            conversion_event_id: payment_id.to_string(),
             value: Money::new(4_980, "JPY").unwrap(),
         }),
         VendorRole::ThirdParty,
@@ -704,14 +693,11 @@ async fn server_derived_event_id_keeps_distinct_event_names() {
     let pool = db.app_pool();
     let tenant_id = seed_tenant(&pool, "event-name-dedupe").await;
     let tx = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
-    let payment_id = sanvi_payments::domain::payment::PaymentId::from_snowflake(
+    let payment_id = sanvi_payments::domain::PaymentId::from_snowflake(
         sanvi_testsupport::test_ids().next_id().unwrap(),
     );
     let payment = PaymentLookup {
-        conversion_event_id: sanvi_payments::application::conversion_event_id(
-            tenant_id, payment_id,
-        )
-        .to_string(),
+        conversion_event_id: payment_id.to_string(),
         value: Money::new(4_980, "JPY").unwrap(),
     };
     let capture = capture_with(

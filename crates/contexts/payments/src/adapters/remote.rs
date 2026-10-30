@@ -11,8 +11,6 @@ use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::domain::PaymentsError;
-
 pub const DELEGATION_HEADER: &str = "x-payments-delegation";
 pub const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -387,7 +385,7 @@ pub trait PaymentsAuthorizer: Send + Sync {
         user_id: UserId,
         tenant_id: Option<TenantId>,
         permission: &str,
-    ) -> Result<bool, PaymentsError>;
+    ) -> anyhow::Result<bool>;
 }
 
 #[derive(Clone)]

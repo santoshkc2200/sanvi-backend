@@ -72,8 +72,9 @@ Consistency checks run against the restored database before the drill passes:
    Unpublished rows are the expected posture: the worker re-delivers on
    recovery, and handlers are idempotent by the dependency matrix
    (`docs/runbooks/dependency-matrix.md`).
-4. **Payment records** — counts match the recorded state; external payment
-   ids stay unique per tenant after replay.
+4. **Invoice records** — counts match the recorded state; Stripe invoice ids
+   stay unique after replay. Payment records live in payments-service, which
+   backs up and restores its own database.
 
 ### 3. Single-tenant restore (`sanvi-cli tenant-restore`)
 

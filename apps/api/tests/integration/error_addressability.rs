@@ -2,7 +2,7 @@
 //!
 //! Every validation error the API can emit must carry the field path it
 //! belongs to, so a client can build an error summary that links to the
-//! offending input. This gate **enumerates** — each of the thirteen
+//! offending input. This gate **enumerates** — each of the twelve
 //! HTTP-facing contexts contributes one constructed sample per error
 //! variant plus its exhaustive field classifier, and the test fails on any
 //! sample classified as validation whose field list is empty or unnamed.
@@ -13,7 +13,7 @@
 //! the bottom proves this gate still fails on a flat validation error — a
 //! gate that has never caught anything is a gate nobody has tested.
 //!
-//! The thirteen contexts are the ones mounting HTTP handlers (see
+//! The twelve contexts are the ones mounting HTTP handlers (see
 //! `crates/contexts/*/src/adapters/http/`); `system` and `notifications`
 //! emit no validation errors of their own (probe fakes and an outbound
 //! gateway respectively).
@@ -124,18 +124,6 @@ fn contexts() -> Vec<(&'static str, Inventory)> {
                 .collect(),
         ),
         (
-            "payments",
-            sanvi_payments::adapters::http::validation::error_samples()
-                .into_iter()
-                .map(|(name, err)| {
-                    (
-                        name,
-                        sanvi_payments::adapters::http::validation::validation_issue(&err),
-                    )
-                })
-                .collect(),
-        ),
-        (
             "platform_admin",
             sanvi_platform_admin::adapters::http::validation::error_samples()
                 .into_iter()
@@ -226,7 +214,7 @@ fn flat_failures(context: &str, inventory: &Inventory) -> Vec<String> {
 }
 
 #[test]
-fn all_thirteen_http_contexts_are_enumerated() {
+fn all_twelve_http_contexts_are_enumerated() {
     let rows = contexts();
     let names: std::collections::BTreeSet<&str> = rows.iter().map(|(name, _)| *name).collect();
     let expected: std::collections::BTreeSet<&str> = [
@@ -238,7 +226,6 @@ fn all_thirteen_http_contexts_are_enumerated() {
         "identity",
         "localization",
         "media",
-        "payments",
         "platform_admin",
         "privacy",
         "tenancy",
@@ -297,22 +284,6 @@ fn wizard_payloads_name_the_step_three_field() {
             .any(|issue| issue.field.starts_with("ad_groups[")),
         "campaign violations must carry their ad_groups[i].ads[j] path: {issues:?}"
     );
-
-    // The checkout wizard's flat messages name their input, not the body:
-    // a bad amount addresses `amount_minor`, a bad currency `currency`.
-    let payments = contexts()
-        .into_iter()
-        .find(|(name, _)| *name == "payments")
-        .expect("payments is registered")
-        .1;
-    for (variant, classification) in &payments {
-        if variant.starts_with("Invalid") {
-            assert!(
-                classification.is_some(),
-                "{variant} is an input shape and must name its field"
-            );
-        }
-    }
 }
 
 /// The self-test: the gate fails on a planted flat validation error. If

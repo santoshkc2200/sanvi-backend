@@ -1,11 +1,11 @@
 //! The production-shaped distribution fixture (TASK-019 step 2, FR-1101).
 //!
 //! This file describes the shape production will have — deliberately *not* a
-//! uniform one: a long tail of small tenants, a middle band, and three
-//! deliberately hot tenants. The three hot tenants exist for three specific
-//! later tests: per-tenant fairness (TASK-023), single-tenant restore
-//! (TASK-025), and bloat measurement (TASK-028). **Do not simplify the
-//! distribution.**
+//! uniform one: a long tail of small tenants, a middle band, and two
+//! deliberately hot tenants. They exist for later tests: per-tenant fairness
+//! (TASK-023), single-tenant restore (TASK-025), and bloat measurement
+//! (TASK-028). The third, payments-heavy hot tenant left with Payments for
+//! the standalone service. **Do not simplify the distribution.**
 //!
 //! Everything here is pure: a seed in, a plan out, no clocks and no I/O — so
 //! the same seed produces identical row counts and checksums anywhere.
@@ -91,26 +91,9 @@ pub struct TenantPlan {
     pub ad_connections: u32,
     pub ad_campaigns_per_connection: u32,
     pub metrics_days: u32,
-    pub payments: u32,
-    /// Percentage of succeeded payments carrying a refund.
-    pub refund_ratio_pct: u32,
 }
 
 impl TenantPlan {
-    /// Checkout rows: roughly every payment plus a fraction that never
-    /// completed.
-    pub fn checkouts(&self) -> u32 {
-        self.payments + self.payments / 4
-    }
-
-    pub fn refunds(&self) -> u32 {
-        if self.payments == 0 {
-            0
-        } else {
-            (self.payments * self.refund_ratio_pct) / 100
-        }
-    }
-
     pub fn metrics_daily_rows(&self) -> u32 {
         self.ad_connections * self.ad_campaigns_per_connection * self.metrics_days
     }
@@ -141,10 +124,6 @@ impl DistributionPlan {
             counts.ad_campaigns +=
                 u64::from(tenant.ad_connections) * u64::from(tenant.ad_campaigns_per_connection);
             counts.metrics_daily += u64::from(tenant.metrics_daily_rows());
-            counts.provider_connections += u64::from(tenant.payments.min(1));
-            counts.checkouts += u64::from(tenant.checkouts());
-            counts.payments += u64::from(tenant.payments);
-            counts.refunds += u64::from(tenant.refunds());
         }
         counts
     }
@@ -172,10 +151,6 @@ pub struct RowCounts {
     pub ad_connections: u64,
     pub ad_campaigns: u64,
     pub metrics_daily: u64,
-    pub provider_connections: u64,
-    pub checkouts: u64,
-    pub payments: u64,
-    pub refunds: u64,
 }
 
 impl RowCounts {
@@ -191,10 +166,6 @@ impl RowCounts {
             + self.ad_connections
             + self.ad_campaigns
             + self.metrics_daily
-            + self.provider_connections
-            + self.checkouts
-            + self.payments
-            + self.refunds
     }
 }
 
@@ -233,15 +204,15 @@ const DOMAIN_STATES: &[(&str, &str, &str, bool)] = &[
     ("purchased", "primary", "live", true),
 ];
 
-/// Build the plan for `seed`: deterministic, with the three hot tenants,
+/// Build the plan for `seed`: deterministic, with the two hot tenants,
 /// a non-empty long tail and middle band, a Japanese-skewed locale mix,
 /// themes published at several revisions, and custom domains at every
 /// lifecycle state.
 pub fn plan(seed: u64) -> DistributionPlan {
     let mut rng = SplitMix64::new(seed);
-    let mut tenants = Vec::with_capacity((LONG_TAIL_TENANTS + MIDDLE_TENANTS + 3) as usize);
+    let mut tenants = Vec::with_capacity((LONG_TAIL_TENANTS + MIDDLE_TENANTS + 2) as usize);
 
-    // The three hot tenants, one hot dimension each, fixed slugs so later
+    // The two hot tenants, one hot dimension each, fixed slugs so later
     // tasks can name them.
     tenants.push(TenantPlan {
         slug: "scale-hot-audit".to_string(),
@@ -257,8 +228,6 @@ pub fn plan(seed: u64) -> DistributionPlan {
         ad_connections: 1,
         ad_campaigns_per_connection: 3,
         metrics_days: 30,
-        payments: 50,
-        refund_ratio_pct: 5,
     });
     tenants.push(TenantPlan {
         slug: "scale-hot-ads".to_string(),
@@ -274,25 +243,6 @@ pub fn plan(seed: u64) -> DistributionPlan {
         ad_connections: 2,
         ad_campaigns_per_connection: 15,
         metrics_days: 90,
-        payments: 0,
-        refund_ratio_pct: 0,
-    });
-    tenants.push(TenantPlan {
-        slug: "scale-hot-payments".to_string(),
-        display_name: "Scale Hot Payments (seed data)".to_string(),
-        band: Band::Hot,
-        hot_dimension: Some("payments_with_refunds"),
-        region: "us".to_string(),
-        default_locale: "en".to_string(),
-        enabled_locales: vec!["en".to_string()],
-        audit_entries: 800,
-        theme_revisions: 2,
-        domains: vec![domain_plan(7)],
-        ad_connections: 0,
-        ad_campaigns_per_connection: 0,
-        metrics_days: 0,
-        payments: 4_000,
-        refund_ratio_pct: 25,
     });
 
     // The middle band.
@@ -321,8 +271,6 @@ pub fn plan(seed: u64) -> DistributionPlan {
             ad_connections: 1,
             ad_campaigns_per_connection: rng.range(1, 4) as u32,
             metrics_days: 30,
-            payments: rng.range(30, 80) as u32,
-            refund_ratio_pct: rng.range(2, 15) as u32,
         });
     }
 
@@ -358,8 +306,6 @@ pub fn plan(seed: u64) -> DistributionPlan {
             ad_connections: 0,
             ad_campaigns_per_connection: 0,
             metrics_days: 0,
-            payments: rng.range(0, 4) as u32,
-            refund_ratio_pct: rng.range(0, 20) as u32,
         });
     }
 
@@ -382,7 +328,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn the_distribution_has_the_three_hot_tenants() {
+    fn the_distribution_has_the_two_hot_tenants() {
         let plan = plan(1);
         let hot: BTreeSet<&str> = plan
             .tenants
@@ -392,8 +338,8 @@ mod tests {
             .collect();
         assert_eq!(
             hot,
-            BTreeSet::from(["scale-hot-audit", "scale-hot-ads", "scale-hot-payments"]),
-            "the three hot tenants must exist by slug"
+            BTreeSet::from(["scale-hot-audit", "scale-hot-ads"]),
+            "the two hot tenants must exist by slug"
         );
 
         // And each is actually hot in its dimension, not just named so.
@@ -405,12 +351,6 @@ mod tests {
         };
         assert!(by_slug("scale-hot-audit").audit_entries >= 10_000);
         assert!(by_slug("scale-hot-ads").metrics_daily_rows() >= 2_000);
-        let payments = by_slug("scale-hot-payments");
-        assert!(payments.payments >= 1_000);
-        assert!(
-            payments.refunds() >= payments.payments / 5,
-            "the payments hot tenant carries many refunds"
-        );
     }
 
     #[test]

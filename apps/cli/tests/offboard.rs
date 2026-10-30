@@ -7,7 +7,7 @@
 //! the data, the residual scan finds nothing unexpected (partitions and
 //! archives by name), and a neighbour tenant is byte-identical; the
 //! purge report separates removed from lawfully retained, and a tenant
-//! with completed payments cannot produce an empty retained list;
+//! with paid invoices cannot produce an empty retained list;
 //! offboarding is idempotent (a replay answers the stored report).
 
 use std::process::Command;
@@ -15,8 +15,8 @@ use std::process::Command;
 /// Fixed ids in this suite's own range (910_291_xxx).
 const TENANT_OFFBOARDED: i64 = 910_291_001;
 const TENANT_NEIGHBOUR: i64 = 910_291_002;
-const PAYMENT_ID: i64 = 910_291_101;
-const NEIGHBOUR_PAYMENT_ID: i64 = 910_291_102;
+const INVOICE_ID: i64 = 910_291_101;
+const NEIGHBOUR_INVOICE_ID: i64 = 910_291_102;
 
 struct CliOutcome {
     code: i32,
@@ -99,22 +99,22 @@ async fn seed(db: &sanvi_testsupport::TestDb, database: &str) {
         .unwrap();
     }
 
-    // A completed payment well inside its 3650-day statutory window for
-    // each tenant: the offboarded tenant's row must be *retained* (with
-    // reason and retention end date), the neighbour's must survive
+    // A paid invoice well inside its 3650-day statutory window for each
+    // tenant: the offboarded tenant's row must be *retained* (with reason
+    // and retention end date), the neighbour's must survive
     // byte-identically.
     for (id, tenant) in [
-        (PAYMENT_ID, TENANT_OFFBOARDED),
-        (NEIGHBOUR_PAYMENT_ID, TENANT_NEIGHBOUR),
+        (INVOICE_ID, TENANT_OFFBOARDED),
+        (NEIGHBOUR_INVOICE_ID, TENANT_NEIGHBOUR),
     ] {
         sqlx::query(
-            "INSERT INTO payments.payments
-               (id, tenant_id, external_payment_id, status, amount_minor, currency, created_at)
-             VALUES ($1, $2, $3, 'succeeded', 4200, 'JPY', now() - interval '30 days')",
+            "INSERT INTO billing.invoices
+               (id, tenant_id, stripe_invoice_id, status, total_minor, currency, created_at)
+             VALUES ($1, $2, $3, 'paid', 4200, 'jpy', now() - interval '30 days')",
         )
         .bind(id)
         .bind(tenant)
-        .bind(format!("pi_offboard_{id}"))
+        .bind(format!("in_offboard_{id}"))
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -234,7 +234,7 @@ async fn offboarding_is_export_then_purge_with_residual_scan_and_neighbour_proof
         "the one-time passphrase is printed for the operator"
     );
     let tables = export_json["tables"].as_object().unwrap();
-    assert_eq!(tables["payments.payments"], 1, "the payment exported");
+    assert_eq!(tables["billing.invoices"], 1, "the invoice exported");
     assert_eq!(
         tables["tenancy.tenant_settings"], 1,
         "keyed tables export too"
@@ -256,7 +256,6 @@ async fn offboarding_is_export_then_purge_with_residual_scan_and_neighbour_proof
             "access",
             "platform_admin",
             "billing",
-            "payments",
             "privacy",
             "localization",
             "theming",
@@ -270,16 +269,16 @@ async fn offboarding_is_export_then_purge_with_residual_scan_and_neighbour_proof
                 "context {expected} missing from the export: {contexts:?}"
             );
         }
-        let payment_entry = data["contexts"]
+        let invoice_entry = data["contexts"]
             .as_array()
             .unwrap()
             .iter()
             .flat_map(|b| b["entries"].as_array().cloned().unwrap_or_default())
-            .find(|e| e["label"] == "payments.payments")
-            .expect("the payment table is an entry");
+            .find(|e| e["label"] == "billing.invoices")
+            .expect("the invoice table is an entry");
         assert_eq!(
-            payment_entry["value"].as_array().unwrap().first().unwrap()["external_payment_id"],
-            format!("pi_offboard_{PAYMENT_ID}")
+            invoice_entry["value"].as_array().unwrap().first().unwrap()["stripe_invoice_id"],
+            format!("in_offboard_{INVOICE_ID}")
         );
     }
 
@@ -330,7 +329,7 @@ async fn offboarding_is_export_then_purge_with_residual_scan_and_neighbour_proof
 
     // Removed: the settings and everything else the tenant owned. The
     // tenant row itself becomes a tombstone (FK anchor for the retained
-    // rows), and the payment inside its statutory window is NOT removed.
+    // rows), and the invoice inside its statutory window is NOT removed.
     let removed = report["removed"].as_object().unwrap();
     assert!(
         !removed.contains_key("tenancy.tenants"),
@@ -338,31 +337,31 @@ async fn offboarding_is_export_then_purge_with_residual_scan_and_neighbour_proof
     );
     assert_eq!(removed["tenancy.tenant_settings"], 1);
     assert!(
-        !removed.contains_key("payments.payments"),
-        "the in-window payment must not be removed: {removed:?}"
+        !removed.contains_key("billing.invoices"),
+        "the in-window invoice must not be removed: {removed:?}"
     );
 
     // Lawfully retained: non-empty, with reason and retention end date —
-    // a tenant with completed payments cannot produce an empty list.
+    // a tenant with paid invoices cannot produce an empty list.
     let retained = report["lawfully_retained"].as_array().unwrap();
     assert!(
         !retained.is_empty(),
-        "a tenant with a completed payment must retain it (empty retained list is a bug)"
+        "a tenant with a paid invoice must retain it (empty retained list is a bug)"
     );
-    let payment_retained = retained
+    let invoice_retained = retained
         .iter()
-        .find(|r| r["table"] == "payments.payments")
-        .expect("the payment's retention is reported");
-    assert_eq!(payment_retained["rows_retained"], 1);
+        .find(|r| r["table"] == "billing.invoices")
+        .expect("the invoice's retention is reported");
+    assert_eq!(invoice_retained["rows_retained"], 1);
     assert!(
-        payment_retained["legal_basis"]
+        invoice_retained["legal_basis"]
             .as_str()
             .unwrap()
             .contains("statutory"),
         "the retained class carries its legal basis"
     );
     assert!(
-        payment_retained["retention_end"].is_string(),
+        invoice_retained["retention_end"].is_string(),
         "the retained class carries a retention end date"
     );
     assert_eq!(report["neighbour"]["byte_identical"], true);
@@ -382,16 +381,16 @@ async fn offboarding_is_export_then_purge_with_residual_scan_and_neighbour_proof
     };
     assert_eq!(name, "purged tenant");
     assert!(purged_at.is_some(), "the tombstone stamps the purge");
-    let neighbour_payment: Option<String> =
-        sqlx::query_scalar("SELECT external_payment_id FROM payments.payments WHERE id = $1")
-            .bind(NEIGHBOUR_PAYMENT_ID)
+    let neighbour_invoice: Option<String> =
+        sqlx::query_scalar("SELECT stripe_invoice_id FROM billing.invoices WHERE id = $1")
+            .bind(NEIGHBOUR_INVOICE_ID)
             .fetch_optional(&pool)
             .await
             .unwrap();
     assert_eq!(
-        neighbour_payment.as_deref(),
-        Some("pi_offboard_910291102"),
-        "the neighbour's payment is byte-identical"
+        neighbour_invoice.as_deref(),
+        Some("in_offboard_910291102"),
+        "the neighbour's invoice is byte-identical"
     );
 
     // --- 7. the residual scan, standalone: clean, by name ------------------
@@ -427,7 +426,7 @@ async fn offboarding_is_export_then_purge_with_residual_scan_and_neighbour_proof
         "the retained audit rows appear by name: {names:?}"
     );
     assert!(
-        names.iter().any(|n| n.contains("payments.payments")),
+        names.iter().any(|n| n.contains("billing.invoices")),
         "the retained statutory rows appear by name: {names:?}"
     );
 

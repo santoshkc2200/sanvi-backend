@@ -49,15 +49,33 @@ Privacy orchestration uses `RemotePaymentsPrivacyProvider`, which calls the serv
 bundle, erase report or rectification result. A 409, an unreadable answer or an unreachable
 service leaves the request pending; nothing is reported done unless the service did it.
 
-Historical Payments migrations, the in-process handlers (`*_embedded`) and repositories remain
-for pre-cutover rollback and existing regression fixtures. The production binary does not
-construct Payments state. After service traffic starts, keep the service database
-authoritative even when rolling application images back. Dropping the old data and
-reclaiming its schema are separate contraction changes, after explicit cutover verification.
+## Contraction
 
-No production deployment, data transfer or destructive contraction is performed by this
-change. Apply the platform receipt migrations before starting service delivery, and freeze
-old writers before copying data.
+The platform no longer holds Payments data or code. Migration
+`20261030000000_payments_contraction` drops the `payments` schema (connections, checkouts,
+payments, refunds, disputes, payouts, tax settings and the partitioned webhook inbox) and
+its partition-registry row. Its down migration recreates the schema exactly as it was, but
+empty: the rows are not copied back. No data was copied out either: the only deployment
+was a development environment with no data worth keeping.
+
+`sanvi-payments` now holds only what fronts the service: the delegation and gateway, the
+published HTTP contract types (`adapters/http/contract.rs`, used for `api/payments.yaml`
+only; bodies are relayed byte for byte), route permissions, the problem-type registry,
+the remote privacy provider, and the event shapes the notification mapping reads.
+`platform_admin.application_fees` stays with platform admin.
+
+What moved with the data, and is now the service's concern:
+
+- tenant offboarding export and purge of Payments rows, and single-tenant restore;
+- statutory retention of `transaction_record` (the retention report lists it as
+  unenforced here; the service runs no archival sweep yet);
+- backups and PITR of the Payments database (the DR drill checks invoices instead);
+- the Connect webhook secret and its cross-secret check against billing's;
+- the payments-heavy hot tenant in `seed-scale`, and the live ordering, statement-count,
+  plan and IDOR probes that ran against Payments tables.
+
+Payments alerts stay in `observability/alerts/rules.json`; their metrics are exported by the
+service, and the `ConnectionsStuckOnboarding` probe runs against its database.
 
 ## Advertising and operator commands
 
