@@ -546,16 +546,6 @@ archival_sweep_interval_secs = 86400
 # SANVI__ADVERTISING_SERVICE__{BASE_URL,SIGNING_SECRET,INBOUND_SECRET}.
 base_url = ""
 
-[accounting]
-# All credentials are environment-only (SANVI__ACCOUNTING__*). Empty values
-# are valid while the release flag is off.
-freee_client_id = ""
-freee_client_secret = ""
-freee_redirect_uri = ""
-oauth_state_signing_secret = ""
-token_kek = ""
-token_kek_id = "kek-1"
-
 [media]
 # Both values are environment-only (SANVI__MEDIA__BASE_URL,
 # SANVI__MEDIA__SERVICE_API_KEY), never committed. Empty values are valid:

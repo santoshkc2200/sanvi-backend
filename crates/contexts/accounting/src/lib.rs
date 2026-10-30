@@ -1,10 +1,12 @@
-//! Tenant accounting destinations and controlled provider cutovers.
-//!
-//! This context owns integration state, never a merchant's general ledger or stock.
-//! Provider authorization and HTTP/UI composition are deliberately not enabled yet.
+//! The platform side of Accounting. The bounded context itself runs in the
+//! standalone `accounting-service` with its own database; this crate holds
+//! what the platform needs to front it: the request-bound delegation and
+//! gateway, the published HTTP contract and route permissions, and the remote
+//! privacy provider.
+
 pub mod adapters;
-pub mod application;
-pub mod config;
 pub mod domain;
 
-pub use config::AccountingConfig;
+pub mod routes {
+    pub use crate::adapters::http::routes::accounting_tenant_scope_routes;
+}

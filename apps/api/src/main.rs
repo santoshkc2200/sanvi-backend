@@ -434,7 +434,6 @@ async fn main() -> ExitCode {
             theming.clone(),
             domains.clone(),
             advertising.clone(),
-            None,
             redis.clone(),
             ssr_cache.clone(),
             degradation.clone(),

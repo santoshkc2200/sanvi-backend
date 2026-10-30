@@ -1,10 +1,7 @@
-pub mod handlers;
-pub mod routes;
-pub mod state;
-
-pub use handlers::*;
-pub use routes::*;
-pub use state::*;
-
+pub mod contract;
 pub mod gateway_handlers;
+pub mod routes;
+
+pub use contract::*;
 pub use gateway_handlers::*;
+pub use routes::*;

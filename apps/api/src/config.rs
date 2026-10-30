@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use sanvi_access::AccessConfig;
-use sanvi_accounting::AccountingConfig;
 use sanvi_audit::AuditConfig;
 use sanvi_billing::BillingConfig;
 use sanvi_domains::DomainsConfig;
@@ -143,7 +142,6 @@ pub struct AppConfig {
     pub domains: DomainsConfig,
     #[serde(default)]
     pub advertising_service: sanvi_advertising::adapters::remote::ServiceConfig,
-    pub accounting: AccountingConfig,
     /// Independently deployed Accounting service. Provider secrets live there.
     #[serde(default)]
     pub accounting_service: sanvi_accounting::adapters::remote::ServiceConfig,
@@ -183,7 +181,6 @@ impl Default for AppConfig {
             theming: ThemingConfig::default(),
             domains: DomainsConfig::default(),
             advertising_service: Default::default(),
-            accounting: AccountingConfig::default(),
             accounting_service: Default::default(),
             domains_service: Default::default(),
             payments_service: Default::default(),
@@ -253,9 +250,6 @@ impl AppConfig {
         if let Err(err) = self.payments_service.validate() {
             problems.push(err.to_string());
         }
-        if let Err(err) = self.accounting.validate() {
-            problems.push(err.to_string());
-        }
         if let Err(err) = self.media.validate() {
             problems.push(err.to_string());
         }
@@ -264,16 +258,6 @@ impl AppConfig {
         }
         if let Err(err) = self.notification.validate() {
             problems.push(err.to_string());
-        }
-        if !self.accounting.oauth_state_signing_secret.is_empty()
-            && (!self.billing.stripe_webhook_secret.is_empty()
-                && self.accounting.oauth_state_signing_secret.expose_secret()
-                    == self.billing.stripe_webhook_secret.expose_secret())
-        {
-            problems.push(
-                "accounting.oauth_state_signing_secret must differ from other contexts' signing and webhook secrets"
-                    .to_string(),
-            );
         }
         if self.readiness_probe_secs == 0 {
             problems.push("readiness_probe_secs must be >= 1".to_string());

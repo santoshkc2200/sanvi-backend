@@ -50,8 +50,6 @@ use actix_web::test as aw_test;
 use chrono::Utc;
 use serde_json::{Value, json};
 
-use sanvi_accounting::domain::{AccountMappings, Book, BookId, Connection, ConnectionId, Provider};
-use sanvi_api::accounting::build_accounting_state;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsTenantLookupAdapter, FallbackGuideTranslator,
     IdentityDependencies, PlatformAdminDependencies, TenantCatalogAdapter, build_access_state,
@@ -89,8 +87,6 @@ const BUDGET_ALERT: i64 = 910_231_107;
 const DOMAIN: i64 = 910_231_120;
 const ORDER: i64 = 910_231_121;
 const INVITATION: i64 = 910_231_122;
-const BOOK: i64 = 910_231_130;
-const BOOK_CONNECTION: i64 = 910_231_131;
 
 /// Substituted for every entity-id slot in the twin probe of sweep 2: an
 /// id that exists nowhere.
@@ -188,8 +184,6 @@ struct Seeded {
     order: i64,
     invitation: i64,
     member_b: i64,
-    book: i64,
-    book_connection: i64,
     media_asset: &'static str,
 }
 
@@ -208,8 +202,6 @@ impl Default for Seeded {
             order: ORDER,
             invitation: INVITATION,
             member_b: MEMBER_B,
-            book: BOOK,
-            book_connection: BOOK_CONNECTION,
             media_asset: "idor-asset-b",
         }
     }
@@ -232,8 +224,6 @@ impl Seeded {
             order: UNKNOWN_ID_ID,
             invitation: UNKNOWN_ID_ID,
             member_b: UNKNOWN_ID_ID,
-            book: UNKNOWN_ID_ID,
-            book_connection: UNKNOWN_ID_ID,
             media_asset: "idor-unknown-asset",
         }
     }
@@ -264,8 +254,6 @@ fn entity_id(path: &str, slot: &str, seeded: &Seeded) -> Option<String> {
         (p, "ad_group_id") if p.contains("/ads/") => seeded.ad_group,
         (p, "ad_id") if p.contains("/ads/") => seeded.ad,
         (p, "connection_id") if p.contains("/ads/connections") => seeded.ad_connection,
-        (p, "book_id") if p.contains("/accounting/") => seeded.book,
-        (p, "connection_id") if p.contains("/accounting/") => seeded.book_connection,
         (p, "creative_id") if p.contains("/ads/creatives") => seeded.creative,
         (p, "id") if p.contains("/ads/audiences") => seeded.audience,
         (p, "id") if p.contains("/ads/conversions") => seeded.conversion,
@@ -448,27 +436,9 @@ fn body_for(method: &str, pattern: &str) -> Option<Value> {
             Some(json!([{"key": "idor.sweep", "locale": "en", "value": "sweep"}]))
         }
         "/api/v1/tenant/accounting/books" => Some(json!({"legal_entity_key": "sweep"})),
-        "/api/v1/tenant/accounting/books/{book_id}/connections" => Some(json!({
-            "provider": "freee",
-            "organization_id": "1",
-            "mappings": {
-                "revenue_account": "sales",
-                "refund_account": "refunds",
-                "clearing_account": "clearing",
-                "tax_codes": {"standard": "21"}
-            }
-        })),
         "/api/v1/tenant/accounting/authorization/callback" => {
             Some(json!({"state": "idor-sweep", "code": "idor-sweep"}))
         }
-        "/api/v1/tenant/accounting/books/{book_id}/activation" => Some(json!({
-            "connection_id": BOOK_CONNECTION.to_string(),
-            "starts_at": "2030-01-01T00:00:00Z"
-        })),
-        "/api/v1/tenant/accounting/books/{book_id}/switch" => Some(json!({
-            "connection_id": BOOK_CONNECTION.to_string(),
-            "cutover_at": "2030-01-01T00:00:00Z"
-        })),
         "/api/v1/tenant/settings" => Some(json!({"settings": {}})),
         "/api/v1/tenant/theme/assets" => Some(json!({"kind": "logo", "data_base64": "aGVsbG8="})),
         "/api/v1/tenant/theme/draft" => Some(json!({})),
@@ -654,17 +624,6 @@ fn sweep_config(kratos_url: String, keto_url: String, media_url: String) -> AppC
     config.ory.kratos_admin_url = kratos_url;
     config.ory.keto_read_url = keto_url.clone();
     config.ory.keto_write_url = keto_url;
-    // Consent is composed so its routes reach their lookups instead of
-    // answering 503; no sweep request gets far enough to call freee.
-    config.accounting.freee_client_id = "idor-sweep-client".to_string();
-    config.accounting.freee_client_secret =
-        sanvi_telemetry::Redacted::new("idor-sweep-client-secret".to_string());
-    config.accounting.freee_redirect_uri = "https://tenant-a.itest/accounting/callback".to_string();
-    config.accounting.oauth_state_signing_secret =
-        sanvi_telemetry::Redacted::new("idor-sweep-accounting-state-0123456".to_string());
-    config.accounting.token_kek =
-        sanvi_telemetry::Redacted::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
-    config.accounting.token_kek_id = "idor-sweep".to_string();
     config.media.base_url = media_url;
     config.media.service_api_key = "idor-sweep-media-key".into();
     config
@@ -860,39 +819,6 @@ async fn seeded_world(pool: &sanvi_persistence::PgPool) -> Seeded {
     .execute(&mut **tx)
     .await
     .unwrap();
-    let mut book = Book::new(
-        BookId::try_from(BOOK).unwrap(),
-        sanvi_kernel::TenantId::try_from(TENANT_B).unwrap(),
-        format!("{MARKER}-entity"),
-    )
-    .unwrap();
-    book.add_connection(
-        Connection::new(
-            ConnectionId::try_from(BOOK_CONNECTION).unwrap(),
-            Provider::Freee,
-            format!("{MARKER}-org"),
-            AccountMappings {
-                revenue_account: format!("{MARKER}-revenue"),
-                refund_account: "refunds".to_string(),
-                clearing_account: "clearing".to_string(),
-                tax_codes: [("standard".to_string(), "21".to_string())].into(),
-            },
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO accounting.books (id, tenant_id, legal_entity_key, revision, document)
-         VALUES ($1, $2, $3, $4, $5)",
-    )
-    .bind(BOOK)
-    .bind(TENANT_B)
-    .bind(book.legal_entity_key())
-    .bind(book.revision())
-    .bind(serde_json::to_value(&book).unwrap())
-    .execute(&mut **tx)
-    .await
-    .unwrap();
     scope.commit().await.unwrap();
 
     Seeded::default()
@@ -1030,17 +956,6 @@ async fn build_sweep_app(
     ));
     let advertising = None;
 
-    let accounting = Some(
-        build_accounting_state(
-            &config.accounting,
-            TxManager::new(pool.clone(), ids.clone()),
-            ids.clone(),
-            access.authorizer.clone(),
-            Arc::new(sanvi_kernel::SystemClock),
-        )
-        .expect("accounting state is valid"),
-    );
-
     build_app(
         config,
         metrics,
@@ -1056,7 +971,6 @@ async fn build_sweep_app(
         theming,
         domains,
         advertising,
-        accounting,
         None,                                                                  // redis
         None,                                                                  // ssr_cache
         std::sync::Arc::new(sanvi_resilience::DegradationRegistry::default()), // degradation
@@ -1102,13 +1016,6 @@ where
         // satisfies every handler that only requires presence.
         actix_web::http::header::HeaderValue::from_static("01990f0d-0000-7000-8000-0000000aa001"),
     ));
-    // Accounting book mutations reject a missing If-Match (400) before
-    // any lookup; a syntactically valid revision lets the lookup decide.
-    let builder = if uri.contains("/accounting/books/") && method != "GET" {
-        builder.insert_header((actix_web::http::header::IF_MATCH, "\"1\""))
-    } else {
-        builder
-    };
     let builder = match body {
         Some(body) => builder.set_json(body),
         None => builder,
@@ -1466,6 +1373,41 @@ const SHAPE_A_EXCLUSIONS: &[(&str, &str, &str)] = &[
         "GET",
         "/api/v1/tenant/checkout/{id}",
         "Payments records live in the standalone payments-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/accounting/books/{book_id}",
+        "Accounting records live in the standalone accounting-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/accounting/books/{book_id}/activation",
+        "Accounting records live in the standalone accounting-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/accounting/books/{book_id}/connections",
+        "Accounting records live in the standalone accounting-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization",
+        "Accounting records live in the standalone accounting-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "DELETE",
+        "/api/v1/tenant/accounting/books/{book_id}/connections/{connection_id}/authorization",
+        "Accounting records live in the standalone accounting-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "PUT",
+        "/api/v1/tenant/accounting/books/{book_id}/switch",
+        "Accounting records live in the standalone accounting-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
+    ),
+    (
+        "DELETE",
+        "/api/v1/tenant/accounting/books/{book_id}/switch",
+        "Accounting records live in the standalone accounting-service, which scopes storage by the signed tenant; the gateway's permission and entitlement checks run in sweep 1",
     ),
     (
         "GET",

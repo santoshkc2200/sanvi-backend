@@ -77,5 +77,9 @@
   "20261028000400_platform_domains_event_receipts.sql": "rolling",
   "20261028000500_audit_payments_receipts.sql": "rolling",
   "20261028000600_platform_payments_event_receipts.sql": "rolling",
-  "20261030000000_payments_contraction.sql": "maintenance"
+  "20261030000000_payments_contraction.sql": "maintenance",
+  "20261030000100_platform_advertising_event_receipts.sql": "rolling",
+  "20261030000200_platform_advertising_delegation_nonces.sql": "rolling",
+  "20261030000300_platform_advertising_partition_handoff.sql": "maintenance",
+  "20261030000400_accounting_contraction.sql": "maintenance"
 }
