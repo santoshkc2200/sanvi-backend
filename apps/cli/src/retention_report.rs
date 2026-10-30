@@ -60,14 +60,10 @@ fn class_facts(data_class: &str) -> (Option<ClassTable>, Enforcement) {
             table("privacy", "preference_signals", "observed_at"),
             Enforcement::Executor("privacy.retention_sweep"),
         ),
-        "advertising_conversion_event" => (
-            table("advertising", "conversion_events", "occurred_at"),
-            Enforcement::Executor("platform.partition_maintenance"),
-        ),
-        "advertising_metric" => (
-            table("advertising", "metrics_daily", "date"),
-            Enforcement::Executor("platform.partition_maintenance"),
-        ),
+        // Storage lives in Advertising; its durable events project real retention runs here.
+        "advertising_conversion_event" | "advertising_metric" => {
+            (None, Enforcement::Executor("advertising.retention"))
+        }
         "invoice" => (
             table("billing", "invoices", "created_at"),
             Enforcement::Executor("platform.archival_sweep"),

@@ -21,30 +21,16 @@ use sanvi_access::{
     AccessConfig,
     adapters::{
         HttpKetoClient, OutboxEventPublisher as AccessEventPublisher, RedisEntitlementCache,
-        SqlxEntitlementRepository, SqlxFeatureRepository, SqlxQuotaUsageStore, SqlxRoleCatalog,
-        SqlxRoleRepository, SystemClock as AccessSystemClock, sync::entitlement_sync_handler,
+        SqlxEntitlementRepository, SqlxQuotaUsageStore, SqlxRoleCatalog, SqlxRoleRepository,
+        sync::entitlement_sync_handler,
     },
-    application::{EntitlementFeatureGate, EntitlementResolver, ExpireEntitlements},
+    application::ExpireEntitlements,
     domain::{
-        Clock, EntitlementCache, EntitlementRepository, EventPublisher, FeatureKey,
-        PermissionStore, QuotaUsageStore, RoleRepository,
+        Clock, EntitlementCache, EntitlementRepository, EventPublisher, PermissionStore,
+        QuotaUsageStore, RoleRepository,
     },
 };
-use sanvi_advertising::{
-    AudienceRepository, PlatformKey,
-    adapters::{
-        AdvertisingMetrics, OutboxEventPublisher as AdvertisingEventPublisher,
-        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository,
-    },
-    application::{
-        ReconcileCampaign, ReconcileDueCampaigns, RetractWithdrawnConversions, SyncAudiences,
-        UploadPendingConversions,
-    },
-    domain::AdvertisingConnectionRepository,
-    domain::CampaignRepository as AdvertisingCampaignRepository,
-    domain::ConversionEventRepository,
-    domain::EventPublisher as AdvertisingEvents,
-};
+
 use sanvi_audit::{
     AuditConfig,
     adapters::{SqlxAuditReader, SqlxAuditWriter},
@@ -103,18 +89,17 @@ use sanvi_privacy::{
         ZipPackager,
     },
     application::{
-        CleanupExpiredExports, GenerateAnnualMetrics, PersistedDirectiveResolver, ProcessDsrBatch,
-        PropagateErasure, PropagateOptOuts, RetentionSweep,
+        CleanupExpiredExports, GenerateAnnualMetrics, ProcessDsrBatch, PropagateErasure,
+        PropagateOptOuts, RetentionSweep,
     },
     domain::{
         AppealRepository, AuthorizedAgentRepository, BreachRepository, ConsentRepository,
-        DestinationRetainedItem, DirectiveRepository, DirectiveResolver, DsrRepository,
-        EnvelopeCrypto, EraseDestinationOutcome, ErasureDestination, ExportArtifactRepository,
-        Hasher, JurisdictionRepository, LegalHoldRepository,
-        Notifications as PrivacyNotificationsTrait, ParticipantRepository, PrivacyError,
-        ProviderRegistry, RequestMetricsRepository, RetentionRuleRepository, SignalRepository,
-        SubProcessorNotifier, SubProcessorRepository, SubjectKeyRepository, SubjectRef,
-        SubjectRepository, VerificationRepository,
+        DestinationRetainedItem, DirectiveRepository, DsrRepository, EnvelopeCrypto,
+        EraseDestinationOutcome, ErasureDestination, ExportArtifactRepository, Hasher,
+        JurisdictionRepository, LegalHoldRepository, Notifications as PrivacyNotificationsTrait,
+        ParticipantRepository, PrivacyError, ProviderRegistry, RequestMetricsRepository,
+        RetentionRuleRepository, SignalRepository, SubProcessorNotifier, SubProcessorRepository,
+        SubjectKeyRepository, SubjectRef, SubjectRepository, VerificationRepository,
     },
 };
 use sanvi_telemetry::TelemetryConfig;
@@ -289,100 +274,6 @@ impl CopyRenderer for WorkerCopyRenderer {
             text_body,
             html_body,
         })
-    }
-}
-
-/// The worker's tenant-timezone source for budget periods (advertising
-/// port): the tenant's locale settings from the localization context.
-/// Advertising must not import another context's domain, so the port is
-/// implemented here at the composition root. Unset settings resolve to
-/// `"UTC"`, matching `TenantLocaleSettings::default_for`.
-struct WorkerTenantTimezone;
-
-#[async_trait::async_trait]
-impl sanvi_advertising::domain::TenantTimezoneSource for WorkerTenantTimezone {
-    async fn timezone(
-        &self,
-        scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: TenantId,
-    ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
-        use sanvi_localization::domain::TenantLocaleRepository as _;
-        let repo = sanvi_localization::adapters::SqlxTenantLocaleRepository::new();
-        let settings = repo
-            .get(scope, tenant_id)
-            .await
-            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
-        Ok(settings
-            .map(|s| s.timezone)
-            .unwrap_or_else(|| "UTC".to_string()))
-    }
-}
-
-/// The worker's per-tenant budget-guardrails entitlement check (advertising
-/// port) through the access context's cached resolver — the same resolution
-/// the HTTP feature gate performs, so the sweep and the routes agree on who
-/// is rolled out. Every error fails closed (`false`): an uncertain gate
-/// skips evaluation, never auto-pauses.
-struct WorkerBudgetEntitlement {
-    gate: Arc<sanvi_access::application::EntitlementFeatureGate>,
-    feature: sanvi_access::domain::FeatureKey,
-}
-
-#[async_trait::async_trait]
-impl sanvi_advertising::domain::BudgetGuardrailEntitlement for WorkerBudgetEntitlement {
-    async fn is_enabled(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<bool, sanvi_advertising::domain::AdvertisingError> {
-        use sanvi_access::domain::FeatureGate as _;
-        match self.gate.is_enabled(tenant_id, &self.feature).await {
-            Ok(enabled) => Ok(enabled),
-            Err(sanvi_access::domain::AccessError::FeatureNotFound { key }) => {
-                tracing::warn!(
-                    %tenant_id,
-                    %key,
-                    "budget guardrails feature missing from catalog; failing closed"
-                );
-                Ok(false)
-            }
-            Err(err) => Err(sanvi_advertising::domain::AdvertisingError::Storage(
-                err.to_string(),
-            )),
-        }
-    }
-}
-
-/// Customer-facing tenant labels for rollback notices (advertising port).
-/// Falls back to the tenant id when the directory read fails rather than
-/// dropping the notice.
-struct WorkerTenantDirectory {
-    tx_manager: sanvi_persistence::TxManager,
-    tenants: Arc<dyn sanvi_tenancy::domain::TenantRepository>,
-}
-
-#[async_trait::async_trait]
-impl sanvi_advertising::domain::TenantDirectory for WorkerTenantDirectory {
-    async fn display_name(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
-        let mut scope = self
-            .tx_manager
-            .begin_unscoped("budget_rollback_directory", "tenancy")
-            .await
-            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
-        let tenant = self
-            .tenants
-            .find_by_id(&mut scope, tenant_id)
-            .await
-            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
-        scope
-            .commit()
-            .await
-            .map_err(|err| sanvi_advertising::domain::AdvertisingError::Storage(err.to_string()))?;
-        Ok(tenant
-            .map(|t| t.display_name().to_string())
-            .unwrap_or_else(|| tenant_id.to_string()))
     }
 }
 
@@ -579,35 +470,11 @@ pub struct SchedulerConfig {
     /// Purchase saga advancement + refund retries (phase 08).
     pub domains_orders_interval_secs: u64,
     /// Pre-create current and following partitions for every registry
-    /// parent (TASK-028: one job, one registry — advertising, audit, outbox
+    /// parent (TASK-028: one job, one registry — audit, outbox
     /// and the webhook histories). This starts before any conversion
     /// endpoint exists: partition maintenance cannot be an afterthought on
     /// the first day of a new month.
     pub partition_maintenance_interval_secs: u64,
-    /// Cross-tenant campaign reconciliation sweep (TASK-012, 10.3) — the
-    /// nightly safety net alongside on-demand reconciliation. Never mutates
-    /// a platform; only observes and records drift.
-    pub advertising_reconciliation_interval_secs: u64,
-    /// Conversion upload worker sweep (TASK-015, 10.6).
-    pub advertising_conversion_upload_interval_secs: u64,
-    /// Conversion retraction worker sweep (TASK-015, 10.6).
-    pub advertising_conversion_retraction_interval_secs: u64,
-    /// Audience sync worker sweep (TASK-015, 10.6).
-    pub advertising_audience_sync_interval_secs: u64,
-    /// Metrics ingestion sweep (TASK-016, 10.7). One schedule covers both
-    /// "hourly for today" and the trailing backfill — see
-    /// `RunMetricsIngestion::execute`'s doc comment for why.
-    pub advertising_metrics_ingestion_interval_secs: u64,
-    /// Scheduled OAuth token-refresh sweep (TASK-018, 10.9).
-    pub advertising_token_refresh_interval_secs: u64,
-    /// How long a connection may go unverified before that sweep picks it up.
-    /// Distinct from the sweep's own cadence: the pass runs often, each
-    /// connection is checked rarely.
-    pub advertising_token_refresh_stale_after_secs: u64,
-    /// Budget guardrails evaluation & spend anomaly sweep (TASK-017, 10.8).
-    pub advertising_budget_guardrails_interval_secs: u64,
-    /// Budget rollover sweep (TASK-017, 10.8).
-    pub advertising_budget_rollover_interval_secs: u64,
     /// TASK-028 (FR-1130): the archival sweep — archive-action retention
     /// classes age out to cold storage, monthly steps per tenant.
     pub archival_sweep_interval_secs: u64,
@@ -638,15 +505,6 @@ impl Default for SchedulerConfig {
             domains_health_interval_secs: 3600,
             domains_orders_interval_secs: 60,
             partition_maintenance_interval_secs: 86_400,
-            advertising_reconciliation_interval_secs: 86_400,
-            advertising_conversion_upload_interval_secs: 60,
-            advertising_conversion_retraction_interval_secs: 60,
-            advertising_audience_sync_interval_secs: 3600,
-            advertising_metrics_ingestion_interval_secs: 3600,
-            advertising_token_refresh_interval_secs: 3600,
-            advertising_token_refresh_stale_after_secs: 21_600,
-            advertising_budget_guardrails_interval_secs: 300,
-            advertising_budget_rollover_interval_secs: 3600,
             archival_sweep_interval_secs: 86_400,
         }
     }
@@ -828,7 +686,7 @@ pub struct WorkerConfig {
     #[serde(default)]
     pub payments_service: sanvi_payments::adapters::remote::ServiceConfig,
     #[serde(default)]
-    pub advertising: sanvi_advertising::AdvertisingConfig,
+    pub advertising_service: sanvi_advertising::adapters::remote::ServiceConfig,
     #[serde(default)]
     pub notification: sanvi_notifications::NotificationConfig,
     #[serde(default)]
@@ -861,7 +719,7 @@ impl WorkerConfig {
         self.domains.validate()?;
         self.domains_service.validate()?;
         self.payments_service.validate()?;
-        self.advertising.validate()?;
+        self.advertising_service.validate()?;
         self.notification.validate()?;
         self.product_access.validate()?;
         if self.outbox.batch_size == 0 {
@@ -899,7 +757,7 @@ fn load_config() -> anyhow::Result<WorkerConfig> {
 /// counted as done. Lives in the composition root because the privacy
 /// context never imports the advertising context.
 struct AdSuppressionDestination {
-    sweep: Arc<RetractWithdrawnConversions>,
+    service: sanvi_advertising::adapters::remote::RemoteClient,
 }
 
 #[async_trait::async_trait]
@@ -917,11 +775,32 @@ impl ErasureDestination for AdSuppressionDestination {
         _subject: &SubjectRef,
         _tenant_id: Option<PrivacyTenantId>,
     ) -> Result<EraseDestinationOutcome, PrivacyError> {
-        let report = self
-            .sweep
-            .execute(200)
+        use sanvi_advertising::adapters::remote::{Delegation, RequestBinding, TENANT_AUDIENCE};
+        let body =
+            serde_json::to_vec(_subject).map_err(|e| PrivacyError::Upstream(e.to_string()))?;
+        let claims = Delegation::new(
+            TENANT_AUDIENCE,
+            "suppression",
+            &RequestBinding::json("POST", "/internal/advertising/suppression", &body),
+        );
+        let response = self
+            .service
+            .send(&claims, body, "application/json", "")
             .await
-            .map_err(|err| PrivacyError::Upstream(err.to_string()))?;
+            .map_err(|e| PrivacyError::Upstream(e.to_string()))?;
+        if response.status != 200 {
+            return Err(PrivacyError::ProcessingPending(
+                "Advertising suppression is pending".into(),
+            ));
+        }
+        #[derive(serde::Deserialize)]
+        struct Report {
+            retracted: u64,
+            unpropagated: u64,
+        }
+        let report: Report = serde_json::from_slice(&response.body)
+            .map_err(|e| PrivacyError::Upstream(e.to_string()))?;
+
         let retained = if report.unpropagated > 0 {
             vec![DestinationRetainedItem {
                 detail: format!(
@@ -1159,31 +1038,6 @@ async fn main() -> ExitCode {
     // the HTTP feature gate performs, so the sweep and the routes agree on
     // which tenants are rolled out. Built here (not in the advertising
     // context) because advertising must not import access's domain.
-    let budget_guardrails_feature: FeatureKey =
-        match FeatureKey::parse("advertising.budget_guardrails") {
-            Ok(key) => key,
-            Err(err) => {
-                eprintln!("invalid budget guardrails feature key: {err}");
-                return ExitCode::from(2);
-            }
-        };
-    let budget_entitlement_gate = Arc::new(EntitlementFeatureGate::new(
-        Arc::new(EntitlementResolver::new(
-            access_tx.clone(),
-            Arc::new(SqlxFeatureRepository::new()),
-            entitlements.clone(),
-            entitlement_cache.clone(),
-            Arc::new(sanvi_cache::SingleFlight::new()),
-            Arc::new(sanvi_cache::CacheMetrics::new(registry)),
-            Arc::new(AccessSystemClock),
-            config.access.entitlement_cache_ttl_secs,
-        )),
-        access_tx.clone(),
-        quota.clone(),
-        access_events.clone(),
-        Arc::new(AccessSystemClock),
-    ));
-
     let entitlement_consumer = EventConsumer::postgres(tx_manager.clone());
     let entitlement_consumer_metrics = Arc::new(ConsumerMetrics::new("access-entitlements"));
     if let Err(err) = entitlement_consumer_metrics.register(registry) {
@@ -1528,7 +1382,10 @@ async fn main() -> ExitCode {
                 .expect("validated payments service configuration for privacy provider"),
         ),
         std::sync::Arc::new(
-            sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(privacy_tx.clone()),
+            sanvi_advertising::adapters::RemoteAdvertisingPrivacyProvider::new(
+                &config.advertising_service,
+            )
+            .expect("validated Advertising service configuration"),
         ),
         std::sync::Arc::new(sanvi_media::adapters::MediaPrivacyProvider::with_storage(
             privacy_tx.clone(),
@@ -1600,16 +1457,6 @@ async fn main() -> ExitCode {
         privacy_metrics.clone(),
         privacy_clock.clone(),
     ));
-    let privacy_directive_resolver: std::sync::Arc<dyn DirectiveResolver> =
-        std::sync::Arc::new(PersistedDirectiveResolver::new(
-            privacy_tx.clone(),
-            privacy_subjects.clone(),
-            privacy_jurisdictions.clone(),
-            privacy_consents.clone(),
-            privacy_signals.clone(),
-            privacy_directives.clone(),
-            privacy_clock.clone(),
-        ));
     let _ = (
         privacy_jurisdictions,
         privacy_appeals,
@@ -1644,111 +1491,6 @@ async fn main() -> ExitCode {
         config.audit.verify_batch_size,
     ));
 
-    // TASK-012 (10.3): the nightly reconciliation sweep. When `real_platform_adapters`
-    // is false (default), the fake adapter is used for every platform; when
-    // true, real Google Ads / Meta adapters are registered where configured,
-    // falling back to the fake adapter per platform if credentials are missing
-    // or invalid.
-    let mut advertising_token_providers: std::collections::HashMap<
-        PlatformKey,
-        Arc<dyn sanvi_advertising::domain::ConnectionAccessTokenProvider>,
-    > = std::collections::HashMap::new();
-    match config.advertising.token_kek_bytes() {
-        Ok(token_kek) => {
-            let token_vault = Arc::new(sanvi_advertising::domain::TokenVault::new(
-                Arc::new(sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto::new(
-                    token_kek,
-                    config.advertising.token_kek_id.clone(),
-                )),
-                Arc::new(sanvi_advertising::adapters::SqlxConnectionTokenRepository::new()),
-            ));
-            advertising_token_providers = sanvi_advertising::adapters::build_access_token_providers(
-                &config.advertising,
-                tx_manager.clone(),
-                token_vault,
-            );
-        }
-        Err(error) => {
-            // Without the KEK nothing can decrypt a stored refresh token; the
-            // sweep still runs and reports every connection as skipped.
-            tracing::warn!(%error, "advertising token refresh: token vault unavailable");
-        }
-    }
-
-    let advertising_campaigns: Arc<dyn AdvertisingCampaignRepository> =
-        Arc::new(SqlxCampaignRepository::new());
-    let advertising_events: Arc<dyn AdvertisingEvents> =
-        Arc::new(AdvertisingEventPublisher::new(ids.clone()));
-    let advertising_ids: Arc<dyn sanvi_advertising::domain::IdGenerator> = Arc::new(
-        sanvi_advertising::adapters::SystemIdGenerator::new(ids.clone()),
-    );
-    let (ad_platform_registry, ad_platform_mode) =
-        match sanvi_advertising::adapters::build_platform_registry(
-            &config.advertising,
-            &advertising_token_providers,
-        ) {
-            Ok(res) => res,
-            Err(err) => {
-                tracing::error!(%err, "failed to initialize advertising platform registry");
-                return std::process::ExitCode::FAILURE;
-            }
-        };
-    let advertising_platforms = Arc::new(sanvi_advertising::adapters::rate_limited_registry(
-        &ad_platform_registry,
-        |platform| match platform.as_str() {
-            "meta" => (10, 2),
-            _ => (
-                config.advertising.quota_platform_wide_permits,
-                config.advertising.quota_per_connection_permits,
-            ),
-        },
-    ));
-    let advertising_reconcile_campaign = Arc::new(ReconcileCampaign::new(
-        tx_manager.clone(),
-        advertising_campaigns.clone(),
-        advertising_events.clone(),
-        advertising_ids.clone(),
-    ));
-    let advertising_connections: Arc<dyn AdvertisingConnectionRepository> =
-        Arc::new(SqlxAdvertisingConnectionRepository::new());
-    let advertising_reconciliation_sweep = Arc::new(ReconcileDueCampaigns::new(
-        tx_manager.clone(),
-        advertising_campaigns.clone(),
-        advertising_connections.clone(),
-        advertising_platforms.clone(),
-        advertising_reconcile_campaign,
-    ));
-    let (advertising_conversion_sinks, conversion_sink_mode) =
-        match sanvi_advertising::adapters::build_conversion_sinks(
-            &config.advertising,
-            &advertising_token_providers,
-        ) {
-            Ok(res) => res,
-            Err(err) => {
-                tracing::error!(%err, "failed to initialize advertising conversion sinks");
-                return std::process::ExitCode::FAILURE;
-            }
-        };
-    let advertising_conversion_events: Arc<dyn ConversionEventRepository> =
-        Arc::new(SqlxCampaignRepository::new());
-    let advertising_metrics = Arc::new(AdvertisingMetrics::new(registry));
-    let advertising_conversion_upload_sweep = Arc::new(UploadPendingConversions::new(
-        tx_manager.clone(),
-        advertising_conversion_events.clone(),
-        advertising_connections.clone(),
-        privacy_directive_resolver.clone(),
-        advertising_conversion_sinks.clone(),
-        advertising_metrics.clone(),
-    ));
-    let advertising_conversion_retraction_sweep = Arc::new(RetractWithdrawnConversions::new(
-        tx_manager.clone(),
-        advertising_conversion_events.clone(),
-        advertising_connections.clone(),
-        privacy_directive_resolver.clone(),
-        advertising_conversion_sinks,
-        advertising_metrics.clone(),
-    ));
-
     // TASK-029 (FR-1134): after the saga erases a subject, propagation
     // reaches the destinations outside the provider registry and ledgers
     // each outcome. The job runs inside the dsr_advance pass (below), so a
@@ -1769,159 +1511,16 @@ async fn main() -> ExitCode {
         }),
         Arc::new(SearchIndexDestination),
         Arc::new(AdSuppressionDestination {
-            sweep: advertising_conversion_retraction_sweep.clone(),
+            service: sanvi_advertising::adapters::remote::RemoteClient::new(
+                &config.advertising_service,
+            )
+            .expect("validated Advertising service configuration"),
         }),
     ];
     let erasure_propagation = Arc::new(PropagateErasure::new(
         privacy_tx.clone(),
         erasure_destinations,
     ));
-
-    let (advertising_audience_sinks, audience_sink_mode) =
-        match sanvi_advertising::adapters::build_audience_sinks(
-            &config.advertising,
-            &advertising_token_providers,
-        ) {
-            Ok(res) => res,
-            Err(err) => {
-                tracing::error!(%err, "failed to initialize advertising audience sinks");
-                return std::process::ExitCode::FAILURE;
-            }
-        };
-    tracing::info!(
-        platform_mode = %ad_platform_mode,
-        conversion_sink_mode = %conversion_sink_mode,
-        audience_sink_mode = %audience_sink_mode,
-        "advertising capabilities initialized"
-    );
-    let advertising_audiences: Arc<dyn AudienceRepository> =
-        Arc::new(SqlxCampaignRepository::new());
-    let advertising_audience_sync_sweep = Arc::new(SyncAudiences::new(
-        tx_manager.clone(),
-        advertising_audiences,
-        advertising_conversion_events.clone(),
-        advertising_connections.clone(),
-        privacy_directive_resolver,
-        advertising_audience_sinks,
-        advertising_metrics.clone(),
-    ));
-
-    // TASK-016 (10.7): metrics ingestion, revenue join & the ROAS query
-    // layer's ingestion sweep.
-    let advertising_metrics_repo: Arc<dyn sanvi_advertising::domain::MetricsRepository> =
-        Arc::new(sanvi_advertising::adapters::SqlxMetricsRepository::new());
-    let advertising_ingest_metrics = Arc::new(
-        sanvi_advertising::application::IngestConnectionMetrics::new(
-            tx_manager.clone(),
-            advertising_platforms.clone(),
-            advertising_campaigns.clone(),
-            advertising_metrics_repo.clone(),
-        ),
-    );
-    let advertising_revenue_join =
-        Arc::new(sanvi_advertising::application::JoinCampaignRevenue::new(
-            tx_manager.clone(),
-            advertising_campaigns.clone(),
-            advertising_connections.clone(),
-            advertising_conversion_events,
-            advertising_metrics_repo.clone(),
-        ));
-    let advertising_metrics_ingestion_sweep =
-        Arc::new(sanvi_advertising::application::RunMetricsIngestion::new(
-            tx_manager.clone(),
-            advertising_connections.clone(),
-            advertising_ingest_metrics,
-            advertising_revenue_join,
-            advertising_metrics.clone(),
-            config.advertising.metrics_ingestion_backfill_days,
-        ));
-    let advertising_token_refresh_sweep =
-        Arc::new(sanvi_advertising::application::RunTokenRefresh::new(
-            tx_manager.clone(),
-            advertising_connections.clone(),
-            advertising_token_providers,
-            advertising_metrics.clone(),
-            config.scheduler.advertising_token_refresh_stale_after_secs as i64,
-        ));
-
-    // TASK-017 (10.8): budget guardrails, spend alerts, threshold evaluator & rollover sweep.
-    let advertising_budget_caps: Arc<dyn sanvi_advertising::domain::BudgetCapRepository> =
-        Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new());
-    let advertising_budget_alerts: Arc<dyn sanvi_advertising::domain::BudgetAlertRepository> =
-        Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new());
-    let advertising_fx_rates: Arc<dyn sanvi_advertising::domain::FxRatePort> =
-        sanvi_advertising::adapters::build_fx_rates(&config.advertising, tx_manager.clone());
-    let advertising_timezones: Arc<dyn sanvi_advertising::domain::TenantTimezoneSource> =
-        Arc::new(WorkerTenantTimezone);
-    let advertising_spend_status = Arc::new(sanvi_advertising::application::GetSpendStatus::new(
-        tx_manager.clone(),
-        advertising_metrics_repo.clone(),
-        advertising_budget_caps.clone(),
-        advertising_campaigns.clone(),
-        advertising_connections.clone(),
-        advertising_fx_rates,
-        advertising_timezones.clone(),
-        config.advertising.metrics_restatement_days,
-    ));
-    let advertising_pause_campaign = Arc::new(sanvi_advertising::application::PauseCampaign::new(
-        tx_manager.clone(),
-        advertising_campaigns.clone(),
-        advertising_connections.clone(),
-        advertising_events.clone(),
-        advertising_platforms.clone(),
-        advertising_ids.clone(),
-    ));
-    // No `ResumeCampaign` here: budget guardrails never auto-resume (FR-1013),
-    // so the rollover sweep has nothing to resume with.
-    let advertising_threshold_evaluator =
-        Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
-            tx_manager.clone(),
-            advertising_budget_caps.clone(),
-            advertising_budget_alerts.clone(),
-            advertising_campaigns.clone(),
-            advertising_pause_campaign,
-            advertising_spend_status,
-            advertising_events.clone(),
-            advertising_ids.clone(),
-            advertising_metrics.clone(),
-        ));
-    let advertising_spend_anomaly_detector =
-        Arc::new(sanvi_advertising::application::SpendAnomalyDetector::new(
-            tx_manager.clone(),
-            advertising_budget_alerts,
-            advertising_metrics_repo,
-            advertising_campaigns.clone(),
-            advertising_events.clone(),
-            advertising_ids,
-            config.advertising.metrics_restatement_days,
-        ));
-    let advertising_rollover_sweep =
-        Arc::new(sanvi_advertising::application::BudgetRolloverSweep::new(
-            tx_manager.clone(),
-            advertising_budget_caps,
-            advertising_timezones,
-        ));
-    // Per-tenant rollout gate + rollback notices (TASK-017 follow-up): route
-    // gating cannot protect background jobs, so the sweep partitions caps by
-    // entitlement itself and emails every tenant whose retained caps stopped
-    // being evaluated.
-    let advertising_enforcement_gate =
-        Arc::new(sanvi_advertising::application::EnforcementGate::new(
-            tx_manager.clone(),
-            Arc::new(WorkerBudgetEntitlement {
-                gate: budget_entitlement_gate,
-                feature: budget_guardrails_feature,
-            }),
-            Arc::new(WorkerTenantDirectory {
-                tx_manager: tx_manager.clone(),
-                tenants: tenants.clone(),
-            }),
-            advertising_events.clone(),
-            // Durable suspension-notice dedupe: one notice per
-            // enabled→suspended transition, surviving restarts and shared
-            // across replicas.
-            Arc::new(sanvi_advertising::adapters::SqlxGuardrailSuspensionLedger::new()),
-        ));
 
     // TASK-028 (FR-1129/FR-1130): the archival sweep's cold storage.
     // Only when the feature is on AND the envelope KEK is configured —
@@ -1955,109 +1554,6 @@ async fn main() -> ExitCode {
         };
 
     let jobs: Vec<Arc<dyn sanvi_messaging::Job>> = vec![
-        Arc::new(FnJob::new(
-            "advertising.budget_guardrails",
-            Duration::from_secs(config.scheduler.advertising_budget_guardrails_interval_secs),
-            {
-                let evaluator = advertising_threshold_evaluator.clone();
-                let anomaly_detector = advertising_spend_anomaly_detector.clone();
-                let gate = advertising_enforcement_gate.clone();
-                let enabled = config.features.advertising;
-                move || {
-                    let evaluator = evaluator.clone();
-                    let anomaly_detector = anomaly_detector.clone();
-                    let gate = gate.clone();
-                    Box::pin(async move {
-                        // Read the caps in a short transaction that commits before
-                        // evaluation starts: each cap opens its own tenant-scoped
-                        // transaction, so holding one here would keep a platform
-                        // transaction open across every nested acquisition.
-                        let caps = evaluator
-                            .list_active_caps()
-                            .await
-                            .map_err(|e| anyhow::anyhow!(e))?;
-                        use sanvi_advertising::application::SuspensionReason;
-
-                        // Global rollback: no evaluation at all. Tenants whose
-                        // caps were previously evaluated get the suspension
-                        // notice (the ledger suppresses anyone never observed
-                        // serving — a fresh deploy with the flag off is not a
-                        // rollback); the rollback path includes it by spec.
-                        if !enabled {
-                            let mut tenants: Vec<_> = caps.iter().map(|c| c.tenant_id).collect();
-                            tenants.sort_unstable();
-                            tenants.dedup();
-                            gate.notify_suspended(&tenants, SuspensionReason::FeatureDisabled)
-                                .await;
-                            return Ok(());
-                        }
-
-                        // Per-tenant rollout: route gating cannot protect
-                        // background jobs, so non-entitled tenants are
-                        // partitioned out here — their caps are never
-                        // evaluated and never pause — and notified.
-                        let (evaluable, suspended) = gate.partition(&caps).await;
-                        gate.notify_suspended(&suspended, SuspensionReason::EntitlementOff)
-                            .await;
-                        if let Err(e) = evaluator.evaluate_caps(&evaluable).await {
-                            tracing::error!(error = %e, "Budget guardrail sweep failed");
-                        }
-
-                        // Spend anomaly detection runs for every entitled
-                        // tenant that has an active cap, reusing the cap
-                        // listing rather than re-querying.
-                        let mut tenants: Vec<_> = evaluable.iter().map(|c| c.tenant_id).collect();
-                        tenants.sort_unstable();
-                        tenants.dedup();
-                        for tenant_id in tenants {
-                            if let Err(e) = anomaly_detector
-                                .detect_anomalies_for_tenant(tenant_id)
-                                .await
-                            {
-                                tracing::warn!(
-                                    %tenant_id,
-                                    error = %e,
-                                    "Spend anomaly detection failed for tenant; continuing"
-                                );
-                            }
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "advertising.budget_rollover",
-            Duration::from_secs(config.scheduler.advertising_budget_rollover_interval_secs),
-            {
-                let rollover = advertising_rollover_sweep.clone();
-                let enabled = config.features.advertising;
-                move || {
-                    let rollover = rollover.clone();
-                    Box::pin(async move {
-                        if !enabled {
-                            return Ok(());
-                        }
-                        // Each sweep is a no-op unless the period actually rolled
-                        // over since the last tick; the job interval is far shorter
-                        // than either period.
-                        for period in [
-                            sanvi_advertising::domain::BudgetPeriod::Daily,
-                            sanvi_advertising::domain::BudgetPeriod::Monthly,
-                        ] {
-                            if let Err(e) = rollover.sweep_all(period).await {
-                                tracing::error!(
-                                    period = period.as_str(),
-                                    error = %e,
-                                    "Budget rollover sweep failed"
-                                );
-                            }
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
         Arc::new(FnJob::new(
             "platform.partition_maintenance",
             Duration::from_secs(config.scheduler.partition_maintenance_interval_secs),
@@ -2098,291 +1594,6 @@ async fn main() -> ExitCode {
                         )
                         .execute(&pool)
                         .await?;
-                        // TASK-018 retention enforcement: the
-                        // privacy.retention_rules registry is the single
-                        // source of truth for both the cutoff *and* the
-                        // action. The conversion-event class is registered
-                        // `anonymise`: aged conversion partitions get their
-                        // personal-data columns stripped (consent snapshot
-                        // retained as proof) and are kept — only an explicit
-                        // `delete` action authorizes a drop. A missing rule
-                        // skips that class this pass — loudly, never
-                        // silently.
-                        let rules: Vec<(String, String, i64)> = sqlx::query_as(
-                            "SELECT data_class, action,
-                                    (EXTRACT(EPOCH FROM period) / 86400)::bigint AS days
-                             FROM privacy.retention_rules
-                             WHERE data_class IN ('advertising_conversion_event', 'advertising_metric')",
-                        )
-                        .fetch_all(&pool)
-                        .await?;
-                        let rules = rules
-                            .into_iter()
-                            .map(|(class, action, days)| (class, (action, days)))
-                            .collect::<std::collections::HashMap<String, (String, i64)>>();
-
-                        let mut conversion_cutoff: Option<i32> = None;
-                        let mut anonymise_conversions = true;
-                        match rules.get("advertising_conversion_event") {
-                            Some((action, days)) => {
-                                if action != "anonymise" && action != "delete" {
-                                    tracing::warn!(
-                                        action = %action,
-                                        "unexpected retention action for advertising_conversion_event; treating as anonymise"
-                                    );
-                                }
-                                // `anonymise` (the registered default) strips
-                                // personal data before the drop; `delete`
-                                // drops rows as-is.
-                                anonymise_conversions = action != "delete";
-                                conversion_cutoff = Some(*days as i32);
-                            }
-                            None => tracing::warn!(
-                                "privacy.retention_rules has no advertising_conversion_event row; conversion partition drops are skipped this pass"
-                            ),
-                        }
-
-                        let mut metrics_cutoff: Option<i32> = None;
-                        match rules.get("advertising_metric") {
-                            Some((action, days)) if action == "delete" => {
-                                metrics_cutoff = Some(*days as i32);
-                            }
-                            Some((action, _)) => tracing::warn!(
-                                action = %action,
-                                "privacy.retention_rules advertising_metric action is not delete; metrics partition drops are skipped this pass"
-                            ),
-                            None => tracing::warn!(
-                                "privacy.retention_rules has no advertising_metric row; metrics partition drops are skipped this pass"
-                            ),
-                        }
-
-                        // A NULL cutoff skips that class entirely; the SQL
-                        // function never acts on a missing rule. Under
-                        // `anonymise` the function strips personal data and
-                        // retains the partition; under `delete` it drops.
-                        sqlx::query(
-                            "SELECT advertising.enforce_retention(
-                               CASE WHEN $1::int IS NULL THEN NULL
-                                    ELSE current_date - $1::int END,
-                               CASE WHEN $2::int IS NULL THEN NULL
-                                    ELSE current_date - $2::int END,
-                               $3::boolean
-                             )",
-                        )
-                        .bind(conversion_cutoff)
-                        .bind(metrics_cutoff)
-                        .bind(anonymise_conversions)
-                        .execute(&pool)
-                        .await?;
-
-                        // TASK-028 (FR-1130): the run ledger. One row per
-                        // advertising class this pass actually acted on,
-                        // counted from the enforcement log of the last day
-                        // — the retention report and the staleness alert
-                        // read these rows, never a promise.
-                        let acted: Vec<(String, i64)> = sqlx::query_as(
-                            "SELECT parent_name, count(*)
-                             FROM advertising.partition_retention_log
-                             WHERE recorded_at > now() - interval '25 hours'
-                             GROUP BY parent_name",
-                        )
-                        .fetch_all(&pool)
-                        .await?;
-                        let class_of = |parent: &str| {
-                            if parent == "conversion_events" {
-                                Some("advertising_conversion_event")
-                            } else if parent == "metrics_daily" {
-                                Some("advertising_metric")
-                            } else {
-                                None
-                            }
-                        };
-                        let conversion_action = if anonymise_conversions {
-                            "anonymise"
-                        } else {
-                            "delete"
-                        };
-                        for (parent, count) in acted {
-                            if let Some(class) = class_of(&parent) {
-                                let action = if class == "advertising_metric" {
-                                    "delete"
-                                } else {
-                                    conversion_action
-                                };
-                                sqlx::query(
-                                    "INSERT INTO privacy.retention_runs
-                                       (data_class, action, rows_affected, executor, detail)
-                                     VALUES ($1, $2, $3, 'platform.partition_maintenance',
-                                             '{\"per_parent_actions\": true}'::jsonb)",
-                                )
-                                .bind(class)
-                                .bind(action)
-                                .bind(count)
-                                .execute(&pool)
-                                .await?;
-                            }
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "advertising.reconciliation",
-            Duration::from_secs(config.scheduler.advertising_reconciliation_interval_secs),
-            {
-                let sweep = advertising_reconciliation_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 || report.errors > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                updated = report.updated,
-                                drifted = report.drifted,
-                                errors = report.errors,
-                                "advertising reconciliation sweep pass"
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "advertising.metrics_ingestion",
-            Duration::from_secs(config.scheduler.advertising_metrics_ingestion_interval_secs),
-            {
-                let sweep = advertising_metrics_ingestion_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.connections_checked > 0 || report.errors > 0 {
-                            tracing::info!(
-                                connections_checked = report.connections_checked,
-                                rows_ingested = report.rows_ingested,
-                                errors = report.errors,
-                                "advertising metrics ingestion sweep pass"
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "advertising.token_refresh",
-            Duration::from_secs(config.scheduler.advertising_token_refresh_interval_secs),
-            {
-                let sweep = advertising_token_refresh_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 || report.errors > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                refreshed = report.refreshed,
-                                failed = report.failed,
-                                errors = report.errors,
-                                "advertising token refresh sweep pass"
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "advertising.conversion_upload",
-            Duration::from_secs(config.scheduler.advertising_conversion_upload_interval_secs),
-            {
-                let sweep = advertising_conversion_upload_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                uploaded = report.uploaded,
-                                failed = report.failed,
-                                parked = report.parked,
-                                suppressed_late = report.suppressed_late,
-                                "advertising conversion upload sweep pass"
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "advertising.conversion_retraction",
-            Duration::from_secs(
-                config
-                    .scheduler
-                    .advertising_conversion_retraction_interval_secs,
-            ),
-            {
-                let sweep = advertising_conversion_retraction_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                retracted = report.retracted,
-                                unpropagated = report.unpropagated,
-                                failed = report.failed,
-                                "advertising conversion retraction sweep pass"
-                            );
-                        }
-                        Ok(())
-                    })
-                }
-            },
-        )),
-        Arc::new(FnJob::new(
-            "advertising.audience_sync",
-            Duration::from_secs(config.scheduler.advertising_audience_sync_interval_secs),
-            {
-                let sweep = advertising_audience_sync_sweep.clone();
-                move || {
-                    let sweep = sweep.clone();
-                    Box::pin(async move {
-                        let report = sweep
-                            .execute(3600, 200)
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err))?;
-                        if report.checked > 0 {
-                            tracing::info!(
-                                checked = report.checked,
-                                synced = report.synced,
-                                failed = report.failed,
-                                removed_identifiers = report.removed_identifiers,
-                                unpropagated_removals = report.unpropagated_removals,
-                                "advertising audience sync sweep pass"
-                            );
-                        }
                         Ok(())
                     })
                 }

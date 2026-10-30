@@ -529,50 +529,22 @@ payments_tax_check_interval_secs = 86400
 # webhook histories) from platform.partitioned_tables.
 partition_maintenance_interval_secs = 86400
 # 10.3: nightly cross-tenant campaign reconciliation sweep (observes only).
-advertising_reconciliation_interval_secs = 86400
 # 10.6: conversion upload worker sweep.
-advertising_conversion_upload_interval_secs = 60
 # TASK-028 (FR-1130): the archival sweep (archive-action retention
 # classes aging out to cold storage).
 archival_sweep_interval_secs = 86400
 # 10.6: conversion retraction worker sweep.
-advertising_conversion_retraction_interval_secs = 60
 # 10.6: audience sync worker sweep.
-advertising_audience_sync_interval_secs = 3600
 # 10.7: metrics ingestion sweep (hourly-for-today + trailing backfill in one schedule).
-advertising_metrics_ingestion_interval_secs = 3600
 # 10.9: scheduled OAuth token refresh sweep.
-advertising_token_refresh_interval_secs = 3600
 # A connection unverified for this long is picked up by the sweep above.
-advertising_token_refresh_stale_after_secs = 21600
 # 10.8: budget guardrails evaluation & spend anomaly sweep.
-advertising_budget_guardrails_interval_secs = 300
 # 10.8: budget rollover sweep.
-advertising_budget_rollover_interval_secs = 3600
 
-[advertising]
-# All credentials are environment-only (SANVI__ADVERTISING__*). Empty values
-# are valid while the release flag is off; TASK-011 refuses OAuth work until
-# the corresponding credentials are configured.
-# Off until Google/Meta credentials exist; flip per-environment via SANVI__ADVERTISING__REAL_PLATFORM_ADAPTERS.
-real_platform_adapters = false
-google_ads_developer_token = ""
-google_ads_client_id = ""
-google_ads_client_secret = ""
-meta_client_id = ""
-meta_client_secret = ""
-oauth_state_signing_secret = ""
-tracking_site_key_signing_secret = ""
-google_ads_api_version = "v22"
-meta_api_version = "v24.0"
-quota_platform_wide_permits = 20
-quota_per_connection_permits = 3
-# Cross-currency cap math: "ecb" serves the ECB euro reference rates (free,
-# no key, cached 24h); "none" refuses every cross-currency cap until a
-# provider is configured.
-fx_provider = "ecb"
-fx_ecb_url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
-fx_timeout_secs = 5
+[advertising_service]
+# Independent service origin and directional signing keys are environment-only:
+# SANVI__ADVERTISING_SERVICE__{BASE_URL,SIGNING_SECRET,INBOUND_SECRET}.
+base_url = ""
 
 [accounting]
 # All credentials are environment-only (SANVI__ACCOUNTING__*). Empty values

@@ -253,56 +253,6 @@ pub async fn run(report: &Path) -> Result<()> {
         "signing",
     )?);
     let start = Instant::now();
-    use sanvi_advertising::application::tracking::site_key::{generate_site_key, verify_site_key};
-    let origin = "https://drill.invalid";
-    let retired = generate_site_key(&old, tenant, origin)?;
-    ensure!(
-        verify_site_key(&old, &retired, origin).is_ok(),
-        "baseline tracking verification"
-    );
-    rows.push(evidence(
-        "tracking_signing",
-        start,
-        verify_site_key(&new, &generate_site_key(&new, tenant, origin)?, origin).is_ok(),
-        verify_site_key(&new, &retired, origin).is_err(),
-        "signing",
-    )?);
-    let start = Instant::now();
-    use sanvi_advertising::domain::{OAuthStateError, OAuthStateManager, PlatformKey};
-    let platform = PlatformKey::parse("google_ads")?;
-    let issuer = OAuthStateManager::new(old.as_bytes());
-    let replacement = OAuthStateManager::new(new.as_bytes());
-    let retired = issuer
-        .issue(tenant, platform.clone(), now, chrono::Duration::minutes(5))
-        .await?;
-    let baseline = issuer
-        .issue(tenant, platform.clone(), now, chrono::Duration::minutes(5))
-        .await?;
-    ensure!(
-        issuer
-            .redeem(&baseline, tenant, &platform, now)
-            .await
-            .is_ok(),
-        "baseline OAuth verification"
-    );
-    let fresh = replacement
-        .issue(tenant, platform.clone(), now, chrono::Duration::minutes(5))
-        .await?;
-    let rejected = matches!(
-        replacement.redeem(&retired, tenant, &platform, now).await,
-        Err(OAuthStateError::Forged)
-    );
-    rows.push(evidence(
-        "oauth_state_signing",
-        start,
-        replacement
-            .redeem(&fresh, tenant, &platform, now)
-            .await
-            .is_ok(),
-        rejected,
-        "signing",
-    )?);
-    let start = Instant::now();
     use sanvi_theming::{ThemeState, sign_preview_token, verify_preview_token};
     let retired = sign_preview_token(old.as_bytes(), tenant, ThemeState::Draft, 60, now);
     ensure!(
@@ -376,26 +326,6 @@ pub async fn run(report: &Path) -> Result<()> {
         start,
         replacement.unwrap(&stored, "new")? == dek,
         previous.unwrap(&stored, "new").is_err(),
-        "envelope",
-    )?);
-    let start = Instant::now();
-    use sanvi_advertising::adapters::SqlxTenantEnvelopeCrypto;
-    let previous = SqlxTenantEnvelopeCrypto::new(old_kek, "old".into());
-    let replacement = SqlxTenantEnvelopeCrypto::new(new_kek, "new".into());
-    let rewrapped = previous.rewrap_dek(&wrapped, &replacement)?;
-    sqlx::query("INSERT INTO rotation_keys VALUES ('advertising', $1, 'new')")
-        .bind(&rewrapped)
-        .execute(&admin)
-        .await?;
-    let stored: Vec<u8> =
-        sqlx::query_scalar("SELECT wrapped FROM rotation_keys WHERE kind='advertising'")
-            .fetch_one(&admin)
-            .await?;
-    rows.push(evidence(
-        "advertising_kek",
-        start,
-        replacement.rewrap_dek(&stored, &replacement).is_ok(),
-        previous.rewrap_dek(&stored, &previous).is_err(),
         "envelope",
     )?);
     admin.close().await;

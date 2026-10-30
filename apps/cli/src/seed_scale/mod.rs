@@ -77,14 +77,6 @@ fn base_date() -> chrono::NaiveDate {
     time_at(0).date_naive()
 }
 
-fn currency_for(region: &str) -> &'static str {
-    match region {
-        "jp" => "JPY",
-        "eu" => "EUR",
-        _ => "USD",
-    }
-}
-
 /// `seed-scale --seed N [--dry-run]`: plan the distribution, print its row
 /// counts and checksum, and (without `--dry-run`) write it.
 pub async fn run(
@@ -154,7 +146,6 @@ async fn run_on_pool(
     let mut seeded = SeededIds::new();
     let tenant_ids = write_core_entities(&tx_manager, &plan, &mut seeded).await?;
     write_audit_chain(&tx_manager, &plan, &tenant_ids, &mut seeded).await?;
-    write_advertising(&tx_manager, &plan, &tenant_ids, &mut seeded).await?;
 
     println!(
         "{}",
@@ -511,171 +502,6 @@ async fn insert_audit_chunk(
     .bind(&hashes)
     .execute(&mut *db)
     .await?;
-    Ok(())
-}
-
-// -- advertising -------------------------------------------------------------
-
-/// Connections, campaigns and the heavy `metrics_daily` rollup. The
-/// monthly partitions must exist before any metrics row is written, so the
-/// same partition-maintenance function the worker uses runs first.
-async fn write_advertising(
-    tx: &TxManager,
-    plan: &DistributionPlan,
-    tenant_ids: &[i64],
-    seeded: &mut SeededIds,
-) -> anyhow::Result<()> {
-    let mut platform = tx
-        .begin_unscoped(
-            "seed-scale: advertising connections and metrics",
-            "cli:seed-scale",
-        )
-        .await?;
-    let db = platform.tx_mut().as_inner();
-
-    let platforms = ["google_ads", "meta"];
-
-    // (tenant_id, connection_id, campaign_id, days) per metrics row batch.
-    let mut metric_keys: Vec<(i64, String, i64, i64, i64)> = Vec::new();
-
-    for (plan_tenant, tenant_id) in plan.tenants.iter().zip(tenant_ids) {
-        for c in 0..plan_tenant.ad_connections {
-            let connection_id = seeded.next_id();
-            let platform_name = platforms[((usize::try_from(*tenant_id).unwrap_or(0))
-                + usize::try_from(c).unwrap_or(0))
-                % 2];
-            sqlx::query(
-                "INSERT INTO advertising.connections
-                   (id, tenant_id, platform, external_account_id, account_name, currency,
-                    timezone, status, token_ref, connected_at, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, 'UTC', 'active', 'seed-scale', $7, $7, $7)",
-            )
-            .bind(connection_id)
-            .bind(tenant_id)
-            .bind(platform_name)
-            .bind(format!("act_seed_{connection_id}"))
-            .bind(format!("{} — connection {c}", plan_tenant.slug))
-            .bind(currency_for(&plan_tenant.region))
-            .bind(time_at(20))
-            .execute(&mut **db)
-            .await?;
-
-            for k in 0..plan_tenant.ad_campaigns_per_connection {
-                let campaign_id = seeded.next_id();
-                sqlx::query(
-                    "INSERT INTO advertising.campaigns
-                       (id, tenant_id, connection_id, platform, external_id, name, objective,
-                        status, budget, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'OUTCOME_SALES', 'ENABLED', $7::jsonb, $8, $8)",
-                )
-                .bind(campaign_id)
-                .bind(tenant_id)
-                .bind(connection_id)
-                .bind(platform_name)
-                .bind(format!("seed-{campaign_id}"))
-                .bind(format!("Seed Campaign {k}"))
-                .bind(
-                    serde_json::json!({
-                        "amount_minor": 100_000,
-                        "currency": currency_for(&plan_tenant.region),
-                    })
-                    .to_string(),
-                )
-                .bind(time_at(21))
-                .execute(&mut **db)
-                .await?;
-
-                for day in 0..plan_tenant.metrics_days {
-                    metric_keys.push((
-                        *tenant_id,
-                        platform_name.to_string(),
-                        connection_id,
-                        campaign_id,
-                        i64::from(day),
-                    ));
-                }
-            }
-        }
-    }
-
-    // Partitions first: one call per *calendar* month the metrics span —
-    // stepping 30 days can skip a month (Jan 31 + 30 days is Mar 2).
-    let days = metric_keys
-        .iter()
-        .map(|(_, _, _, _, d)| *d)
-        .max()
-        .unwrap_or(0);
-    let mut month_start = base_date().with_day(1).expect("day 1 exists");
-    let last_month_start = (base_date() + chrono::Duration::days(days))
-        .with_day(1)
-        .expect("day 1 exists");
-    while month_start <= last_month_start {
-        sqlx::query("SELECT advertising.ensure_monthly_partitions($1::date)")
-            .bind(month_start)
-            .execute(&mut **db)
-            .await?;
-        month_start = month_start
-            .checked_add_months(chrono::Months::new(1))
-            .expect("month steps stay in range");
-    }
-
-    // The rollup rows themselves, chunked.
-    const CHUNK: usize = 400;
-    let currency_by_tenant: std::collections::HashMap<i64, &str> = plan
-        .tenants
-        .iter()
-        .zip(tenant_ids)
-        .map(|(t, id)| (*id, currency_for(&t.region)))
-        .collect();
-
-    for start in (0..metric_keys.len()).step_by(CHUNK) {
-        let end = (start + CHUNK).min(metric_keys.len());
-        let slice = &metric_keys[start..end];
-        let tenant_col: Vec<i64> = slice.iter().map(|r| r.0).collect();
-        let platform_col: Vec<&str> = slice.iter().map(|r| r.1.as_str()).collect();
-        let connection_col: Vec<i64> = slice.iter().map(|r| r.2).collect();
-        let campaign_col: Vec<i64> = slice.iter().map(|r| r.3).collect();
-        let date_col: Vec<chrono::NaiveDate> = slice
-            .iter()
-            .map(|r| base_date() + chrono::Duration::days(r.4))
-            .collect();
-        let impressions: Vec<i64> = (start..end)
-            .map(|n| 500 + ((n as i64 * 104_729) % 9_500))
-            .collect();
-        let clicks: Vec<i64> = (start..end)
-            .map(|n| 20 + ((n as i64 * 1_577) % 480))
-            .collect();
-        let spend: Vec<i64> = (start..end)
-            .map(|n| 1_000 + ((n as i64 * 3_511) % 24_000))
-            .collect();
-        let currencies: Vec<&str> = tenant_col.iter().map(|t| currency_by_tenant[t]).collect();
-        let conversions: Vec<String> = (start..end).map(|n| format!("{}", n % 40)).collect();
-        let conversion_value: Vec<i64> = (start..end).map(|n| (n as i64 * 977) % 30_000).collect();
-
-        sqlx::query(
-            "INSERT INTO advertising.metrics_daily
-               (tenant_id, platform, connection_id, campaign_id, date, impressions, clicks,
-                spend_minor, currency, conversions, conversion_value_minor)
-             SELECT * FROM UNNEST(
-               $1::bigint[], $2::text[], $3::bigint[], $4::bigint[], $5::date[], $6::bigint[],
-               $7::bigint[], $8::bigint[], $9::text[], $10::numeric[], $11::bigint[]) ",
-        )
-        .bind(&tenant_col)
-        .bind(&platform_col)
-        .bind(&connection_col)
-        .bind(&campaign_col)
-        .bind(&date_col)
-        .bind(&impressions)
-        .bind(&clicks)
-        .bind(&spend)
-        .bind(&currencies)
-        .bind(&conversions)
-        .bind(&conversion_value)
-        .execute(&mut **db)
-        .await?;
-    }
-
-    platform.commit().await?;
     Ok(())
 }
 

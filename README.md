@@ -213,3 +213,7 @@ configuration with secrets redacted.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the layering rules, the
 "how to add a use case" recipe, and commit conventions. Conventional Commits
 enforced by pre-commit; CODEOWNERS cover the architecture invariants.
+
+Advertising runs in the separate `sanvi-advertising` repository. See
+[Advertising extraction](docs/advertising-service-extraction.md) for service configuration,
+data ownership, cutover and rollback.

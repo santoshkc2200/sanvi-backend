@@ -1,8 +1,8 @@
 //! The production-shaped distribution fixture (TASK-019 step 2, FR-1101).
 //!
 //! This file describes the shape production will have — deliberately *not* a
-//! uniform one: a long tail of small tenants, a middle band, and two
-//! deliberately hot tenants. They exist for later tests: per-tenant fairness
+//! uniform one: a long tail of small tenants, a middle band, and one
+//! deliberately hot audit tenant. They exist for later tests: per-tenant fairness
 //! (TASK-023), single-tenant restore (TASK-025), and bloat measurement
 //! (TASK-028). The third, payments-heavy hot tenant left with Payments for
 //! the standalone service. **Do not simplify the distribution.**
@@ -88,15 +88,6 @@ pub struct TenantPlan {
     pub audit_entries: u32,
     pub theme_revisions: u32,
     pub domains: Vec<DomainPlan>,
-    pub ad_connections: u32,
-    pub ad_campaigns_per_connection: u32,
-    pub metrics_days: u32,
-}
-
-impl TenantPlan {
-    pub fn metrics_daily_rows(&self) -> u32 {
-        self.ad_connections * self.ad_campaigns_per_connection * self.metrics_days
-    }
 }
 
 /// The whole distribution for one seed.
@@ -120,10 +111,6 @@ impl DistributionPlan {
             counts.custom_domains += tenant.domains.len() as u64;
             counts.live_hostnames += tenant.domains.iter().filter(|d| d.projected).count() as u64;
             counts.audit_entries += u64::from(tenant.audit_entries);
-            counts.ad_connections += u64::from(tenant.ad_connections);
-            counts.ad_campaigns +=
-                u64::from(tenant.ad_connections) * u64::from(tenant.ad_campaigns_per_connection);
-            counts.metrics_daily += u64::from(tenant.metrics_daily_rows());
         }
         counts
     }
@@ -148,9 +135,6 @@ pub struct RowCounts {
     pub custom_domains: u64,
     pub live_hostnames: u64,
     pub audit_entries: u64,
-    pub ad_connections: u64,
-    pub ad_campaigns: u64,
-    pub metrics_daily: u64,
 }
 
 impl RowCounts {
@@ -163,9 +147,6 @@ impl RowCounts {
             + self.custom_domains
             + self.live_hostnames
             + self.audit_entries
-            + self.ad_connections
-            + self.ad_campaigns
-            + self.metrics_daily
     }
 }
 
@@ -204,15 +185,15 @@ const DOMAIN_STATES: &[(&str, &str, &str, bool)] = &[
     ("purchased", "primary", "live", true),
 ];
 
-/// Build the plan for `seed`: deterministic, with the two hot tenants,
+/// Build the plan for `seed`: deterministic, with the hot audit tenant,
 /// a non-empty long tail and middle band, a Japanese-skewed locale mix,
 /// themes published at several revisions, and custom domains at every
 /// lifecycle state.
 pub fn plan(seed: u64) -> DistributionPlan {
     let mut rng = SplitMix64::new(seed);
-    let mut tenants = Vec::with_capacity((LONG_TAIL_TENANTS + MIDDLE_TENANTS + 2) as usize);
+    let mut tenants = Vec::with_capacity((LONG_TAIL_TENANTS + MIDDLE_TENANTS + 1) as usize);
 
-    // The two hot tenants, one hot dimension each, fixed slugs so later
+    // The hot audit tenant, one hot dimension each, fixed slugs so later
     // tasks can name them.
     tenants.push(TenantPlan {
         slug: "scale-hot-audit".to_string(),
@@ -225,26 +206,7 @@ pub fn plan(seed: u64) -> DistributionPlan {
         audit_entries: 20_000,
         theme_revisions: 5,
         domains: vec![domain_plan(0)],
-        ad_connections: 1,
-        ad_campaigns_per_connection: 3,
-        metrics_days: 30,
     });
-    tenants.push(TenantPlan {
-        slug: "scale-hot-ads".to_string(),
-        display_name: "Scale Hot Ads (seed data)".to_string(),
-        band: Band::Hot,
-        hot_dimension: Some("advertising_metrics_daily"),
-        region: "us".to_string(),
-        default_locale: "en".to_string(),
-        enabled_locales: vec!["en".to_string(), "ja".to_string()],
-        audit_entries: 500,
-        theme_revisions: 3,
-        domains: vec![domain_plan(4)],
-        ad_connections: 2,
-        ad_campaigns_per_connection: 15,
-        metrics_days: 90,
-    });
-
     // The middle band.
     for i in 0..MIDDLE_TENANTS {
         let ja_first = rng.below(100) < 55;
@@ -268,9 +230,6 @@ pub fn plan(seed: u64) -> DistributionPlan {
             audit_entries: rng.range(150, 250) as u32,
             theme_revisions: rng.range(1, 5) as u32,
             domains: vec![domain_plan(rng.below(DOMAIN_STATES.len() as u64) as usize)],
-            ad_connections: 1,
-            ad_campaigns_per_connection: rng.range(1, 4) as u32,
-            metrics_days: 30,
         });
     }
 
@@ -303,9 +262,6 @@ pub fn plan(seed: u64) -> DistributionPlan {
             } else {
                 Vec::new()
             },
-            ad_connections: 0,
-            ad_campaigns_per_connection: 0,
-            metrics_days: 0,
         });
     }
 
@@ -328,7 +284,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn the_distribution_has_the_two_hot_tenants() {
+    fn the_distribution_has_the_hot_audit_tenant() {
         let plan = plan(1);
         let hot: BTreeSet<&str> = plan
             .tenants
@@ -338,8 +294,8 @@ mod tests {
             .collect();
         assert_eq!(
             hot,
-            BTreeSet::from(["scale-hot-audit", "scale-hot-ads"]),
-            "the two hot tenants must exist by slug"
+            BTreeSet::from(["scale-hot-audit"]),
+            "the hot audit tenant must exist by slug"
         );
 
         // And each is actually hot in its dimension, not just named so.
@@ -350,7 +306,6 @@ mod tests {
                 .expect("hot tenant exists")
         };
         assert!(by_slug("scale-hot-audit").audit_entries >= 10_000);
-        assert!(by_slug("scale-hot-ads").metrics_daily_rows() >= 2_000);
     }
 
     #[test]

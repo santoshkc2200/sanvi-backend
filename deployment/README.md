@@ -74,3 +74,11 @@ at the same public URL; nothing on the Stripe side changes.
 Follow docs/payments-service-extraction.md and payments-service/docs/cutover.md;
 no data copy or routing change is automatic.
 
+
+## Advertising service
+
+Advertising deploys independently from `sanvi-advertising` on port 8085 by default.
+Set `SANVI__ADVERTISING_SERVICE__BASE_URL`, `SIGNING_SECRET` and `INBOUND_SECRET` on
+platform API/worker replicas. Provider and token-encryption credentials belong only to
+the Advertising deployment. Follow `docs/advertising-service-extraction.md` and the
+service extraction runbook for the coordinated writer freeze and verified data copy.

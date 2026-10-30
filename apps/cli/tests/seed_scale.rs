@@ -145,7 +145,7 @@ async fn seeds_a_staging_database_and_matches_the_plan() {
     .fetch_all(&admin)
     .await
     .expect("hot tenants");
-    assert_eq!(hot, vec!["scale-hot-ads", "scale-hot-audit"]);
+    assert_eq!(hot, vec!["scale-hot-audit"]);
 
     let (audit_hot,): (i64,) = sqlx::query_as(
         "SELECT count(*) FROM audit.entries e JOIN tenancy.tenants t ON t.id = e.tenant_id \
@@ -159,25 +159,19 @@ async fn seeds_a_staging_database_and_matches_the_plan() {
         "the audit hot tenant is hot: {audit_hot}"
     );
 
-    let (metrics_rows,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM advertising.metrics_daily m JOIN tenancy.tenants t ON t.id = m.tenant_id \
-         WHERE t.slug = 'scale-hot-ads'",
-    )
-    .fetch_one(&admin)
-    .await
-    .expect("metrics rows");
-    assert!(
-        metrics_rows >= 2_000,
-        "the ads hot tenant is hot: {metrics_rows}"
+    let metrics_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM advertising.metrics_daily")
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+    assert_eq!(
+        metrics_rows, 0,
+        "platform seeding must not write service-owned Advertising rows"
     );
 
     // The written tables must match the plan's printed row counts — the
     // seed's contract is "same seed = identical row counts".
     let counts = &plan["row_counts"];
-    for (key, table) in [
-        ("metrics_daily", "advertising.metrics_daily"),
-        ("custom_domains", "domains.custom_domains"),
-    ] {
+    for (key, table) in [("custom_domains", "domains.custom_domains")] {
         let expected = counts[key].as_u64().expect("plan prints the row count");
         let (actual,): (i64,) =
             sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))

@@ -22,7 +22,7 @@ Context list and responsibility:
 | `localization` | Locales, translation catalogs, tenant locale settings, formatting policy |
 | `theming` | Themes/templates registry, versions, tenant theme selection & overrides |
 | `domains` | Custom domain claims, DNS verification, certificate lifecycle, registrar orders |
-| `advertising` | Ad account connections, campaigns, creatives, spend/conversion metrics |
+| `advertising` | Signed gateway to the independent Advertising service; published contract and privacy participation |
 | `notifications` | Transactional email/SMS/webhook fan-out, templates, delivery status |
 | `audit` | Append-only audit log, actor/action/target, tamper-evident chain |
 
@@ -86,7 +86,7 @@ Bounded contexts must not import another context's domain or repository types. T
 - **Platform Admin Composition**: `platform_admin` acts as a composite administration aggregate directly delegating tenant, membership, and entitlement state across `access`, `identity`, and `tenancy`.
 - **Cross-context integrations**:
   - `billing/src/application/plans.rs` and `sync.rs` import `sanvi_access::domain` to synchronize subscription plan entitlements with access feature keys.
-  - `advertising` imports `sanvi_payments::domain::CheckoutRepository` for conversion attribution and `sanvi_privacy::domain` for tracking consent directives.
+  - Advertising business logic runs in the separate service. Its platform gateway uses signed HTTP delegation and remote privacy participation; it imports no Payments repositories.
   - `access` imports `sanvi_identity::domain` for membership synchronization and relation tuple rebuilding.
 
   The access projection adapter shares that identity boundary to load authoritative membership

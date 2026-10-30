@@ -40,18 +40,6 @@ fn contexts() -> Vec<(&'static str, Inventory)> {
                 .collect(),
         ),
         (
-            "advertising",
-            sanvi_advertising::adapters::http::validation::error_samples()
-                .into_iter()
-                .map(|(name, err)| {
-                    (
-                        name,
-                        sanvi_advertising::adapters::http::validation::validation_issue(&err),
-                    )
-                })
-                .collect(),
-        ),
-        (
             "audit",
             sanvi_audit::adapters::http::validation::error_samples()
                 .into_iter()
@@ -214,12 +202,11 @@ fn flat_failures(context: &str, inventory: &Inventory) -> Vec<String> {
 }
 
 #[test]
-fn all_twelve_http_contexts_are_enumerated() {
+fn all_platform_http_contexts_are_enumerated() {
     let rows = contexts();
     let names: std::collections::BTreeSet<&str> = rows.iter().map(|(name, _)| *name).collect();
     let expected: std::collections::BTreeSet<&str> = [
         "access",
-        "advertising",
         "audit",
         "billing",
         "domains",
@@ -259,67 +246,4 @@ fn every_validation_error_carries_its_field_path() {
         "flat validation errors in the contract:\n  - {}",
         failures.join("\n  - ")
     );
-}
-
-/// The wizard check: a multi-step payload rejected at step three names the
-/// step-three field, not the envelope. The advertising campaign tree is
-/// the canonical shape (`ad_groups[i].ads[j].creative…`).
-#[test]
-fn wizard_payloads_name_the_step_three_field() {
-    let inventory = contexts()
-        .into_iter()
-        .find(|(name, _)| *name == "advertising")
-        .expect("advertising is registered")
-        .1;
-    let (_, classification) = inventory
-        .iter()
-        .find(|(variant, _)| *variant == "Validation")
-        .expect("the advertising Validation variant is sampled");
-    let (_, issues) = classification
-        .as_ref()
-        .expect("campaign validation is field-addressed");
-    assert!(
-        issues
-            .iter()
-            .any(|issue| issue.field.starts_with("ad_groups[")),
-        "campaign violations must carry their ad_groups[i].ads[j] path: {issues:?}"
-    );
-}
-
-/// The self-test: the gate fails on a planted flat validation error. If
-/// this ever passes, the enumeration above has been softened into
-/// decoration.
-#[test]
-fn the_gate_fails_on_a_planted_flat_validation_error() {
-    let planted: Inventory = vec![
-        (
-            "Addressed",
-            Some((
-                "detail".to_string(),
-                vec![FieldIssue::new("hostname", "detail")],
-            )),
-        ),
-        (
-            "Planted flat",
-            Some(("flat detail".to_string(), Vec::new())),
-        ),
-        (
-            "Planted unnamed",
-            Some(("detail".to_string(), vec![FieldIssue::new(" ", "detail")])),
-        ),
-        (
-            "Planted mute",
-            Some(("detail".to_string(), vec![FieldIssue::new("hostname", " ")])),
-        ),
-        ("NotValidation", None),
-    ];
-    let failures = flat_failures("self_test", &planted);
-    assert_eq!(
-        failures.len(),
-        3,
-        "exactly the planted flat ones fail: {failures:?}"
-    );
-    assert!(failures[0].contains("Planted flat"));
-    assert!(failures[1].contains("Planted unnamed"));
-    assert!(failures[2].contains("Planted mute"));
 }

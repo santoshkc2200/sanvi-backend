@@ -23,7 +23,7 @@ under every feature/configuration combination. The gate checks declarations, not
 semantics or runtime enforcement. Feature-gated routes are included even when
 disabled. Implicit framework HEAD/OPTIONS behavior is not a separate handler.
 
-Routes: 252 (243 OpenAPI operations).
+Routes: 254 (243 OpenAPI operations).
 
 | Method | Path | Handler | Required permission / exemption | Tenant scoping | Rate-limit class | Contract |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -265,6 +265,8 @@ Routes: 252 (243 OpenAPI operations).
 | GET | /healthz | crates/contexts/system/src/adapters/http/handlers.rs::healthz | exempt: public bootstrap/disclosure endpoint (no permission key) | not tenant-scoped: public platform data | global-config-dependent | OpenAPI |
 | POST | /internal/accounting/audit | apps/api/src/accounting.rs::ingest_audit | exempt:request-bound-accounting-service-delegation | signed Accounting scope; platform transaction | global-config-dependent | OpenAPI |
 | POST | /internal/accounting/events | apps/api/src/accounting.rs::ingest_event | exempt:request-bound-accounting-service-delegation | signed Accounting scope; platform transaction | global-config-dependent | OpenAPI |
+| POST | /internal/advertising/events | apps/api/src/advertising.rs::ingest_advertising_event | exempt: request-bound Advertising service delegation | signed internal service operation; explicit tenant IDs only | global-config-dependent | Internal service delegation boundary; documented in Advertising extraction runbook |
+| POST | /internal/advertising/platform | apps/api/src/advertising.rs::platform_operation | exempt: request-bound Advertising service delegation | signed internal service operation; explicit tenant IDs only | global-config-dependent | Internal service delegation boundary; documented in Advertising extraction runbook |
 | POST | /internal/domains/audit | apps/api/src/domains.rs::ingest_domains_audit | exempt:request-bound-domains-service-delegation | signed Domains scope; platform transaction | global-config-dependent | OpenAPI |
 | POST | /internal/domains/events | apps/api/src/domains.rs::ingest_domains_event | exempt:request-bound-domains-service-delegation | signed Domains scope; platform transaction | global-config-dependent | OpenAPI |
 | POST | /internal/domains/tenant-state | apps/api/src/domains.rs::tenant_state | exempt:request-bound-domains-service-delegation | signed Domains scope; platform lookup | global-config-dependent | OpenAPI |
@@ -287,12 +289,13 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | Source | SHA-256 |
 | --- | --- |
 | apps/api/src/accounting.rs | `50893a8b06bd563d099a73867799eecab8cb9d0d08aad012cbd563029c48ff5c` |
-| apps/api/src/compliance.rs | `4fe927082136688eee8d87ab1d2fa3f015ea04b9b1d0fe47d72fb32ca66e8071` |
-| apps/api/src/config.rs | `dbcc3eb1c064ee556878c9f30d79f7d18b69a6c47970604b9456509911fe5f50` |
+| apps/api/src/advertising.rs | `6bfbb3ee2a64b94e0b359c0caea83d0ac1ae2112b191f8723ee6207c2e3fb07d` |
+| apps/api/src/compliance.rs | `c49932d63d0b68e66ff03eaa8b13ca08c779475b62b7e9fd2763eaa8ac269d6f` |
+| apps/api/src/config.rs | `042e2d57a8918dcd03042a337fef3860c997aa01f3659f3d293e4f5b1e2f10cf` |
 | apps/api/src/domains.rs | `12c067de12ceea752c9549a1f4697378427a463cc5ce48bf2fbed22bd740f504` |
-| apps/api/src/lib.rs | `8e12af242e94c8b01aa624d33b0e2f874c30a73077fc2a20a20e7b30d8377a4e` |
-| apps/api/src/main.rs | `3b0b0543066889964937e594625671443bb030bdbdeba51ca0438fffd114bc5f` |
-| apps/api/src/openapi.rs | `7684f55419ae0c1bd62d510bb8a7f6d896512a34fedbc561f65651c235fc865b` |
+| apps/api/src/lib.rs | `8552a24c5b5cbd2f651b6d4d44ac0189aa1664ad013f9530e08f39665ef7bc9d` |
+| apps/api/src/main.rs | `33f91d9af7477944a341d852ef13559d098670256c6dd250d1e8f1c0fcfead4e` |
+| apps/api/src/openapi.rs | `e1236afca91c75bdf5a8a9ab25f25ac89be7b0504bde732af5879290351cc1d7` |
 | apps/api/src/payments.rs | `645348eb6ae43ac181325b82891867dc684ea1f546340c83eb1bdfb1d3b3287f` |
 | apps/api/src/product_access.rs | `b680883b3bae7b8e4fefa24419fd7445cb86417d4378243ded6b9f4d93f7121a` |
 | crates/contexts/access/src/adapters/http/catalog.rs | `155e6bed67329f1bc8ed1f19566e30ad5a9927415c5d0149155db946dde53101` |
@@ -306,12 +309,11 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/accounting/src/adapters/http/routes.rs | `7397075d67953820deca884f8380337155cc107629b536660cef9dccded238f1` |
 | crates/contexts/accounting/src/adapters/http/state.rs | `c52ff12463250c3458fcaba1e948ebafb3153a1e73c1207b503cdced7dc1c7cc` |
 | crates/contexts/accounting/src/adapters/remote.rs | `02a87e6621b22f54c909e3bda443c4517a3e996d10e22d378d34d3de51955da3` |
-| crates/contexts/advertising/src/adapters/http/handlers.rs | `cd54f596bb2fdcf97615e61af5a31293306d18911f13a66fadc8bdb46e26f374` |
-| crates/contexts/advertising/src/adapters/http/mod.rs | `ffede5d48c9c71cb0210209c6561d8e9caa69e7b3d079948bb4882eb1709e8d0` |
-| crates/contexts/advertising/src/adapters/http/routes.rs | `3452d1f14ce42e698112c0889872484aa72b7b30905a204dc3a9eb4d5379d225` |
-| crates/contexts/advertising/src/adapters/http/state.rs | `8e781113d56bd279c104c7dea631be2b89699739e08aead20f632480ec318c22` |
-| crates/contexts/advertising/src/adapters/http/tracking_handlers.rs | `955c90856fe667e74698ffb5498132f30d136697d27b56c6948f458798e06cc8` |
-| crates/contexts/advertising/src/adapters/http/validation.rs | `24c1daf2daebea77db631fb2b2492623f367ec38c95604adb2ea39f70bc02b28` |
+| crates/contexts/advertising/src/adapters/http/handlers.rs | `2feb47d72b912ee888ac0f2bc540604e317e876366c78e4cc9ec72c9cc533615` |
+| crates/contexts/advertising/src/adapters/http/mod.rs | `83a713fc0cf78dcb8cf6afefeeee75b16082c71b5359e7dbeafe212a2704e18d` |
+| crates/contexts/advertising/src/adapters/http/routes.rs | `fe9a4d79817339a3f040ed4be3164f4deadbe8b481e472fcbf8a93d40aaa32e5` |
+| crates/contexts/advertising/src/adapters/http/tracking_handlers.rs | `03b9dc415a09e72e8e079cbb9f66178907664509b49d6c838254770d4ec2205f` |
+| crates/contexts/advertising/src/adapters/remote.rs | `5d3128e59e558bc54954b0535eb20c70e71a9385c129465c14400548358b5325` |
 | crates/contexts/audit/src/adapters/http/catalog.rs | `f76f01c97fe5e578e2a4e63911ca9c21a1d24e8db9cf88d74ad99bc1187349e4` |
 | crates/contexts/audit/src/adapters/http/handlers.rs | `891efde99f0bca0f874540b59ad10948e8765db5e8daf17a498d46ac73cecbf1` |
 | crates/contexts/audit/src/adapters/http/mod.rs | `6e3f445e8bf539be89cf356af9eabf10aac9f1fcf44056c52d42d8b48a08f3fa` |

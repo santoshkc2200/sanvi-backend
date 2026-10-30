@@ -1,0 +1,1 @@
+DROP TABLE platform.advertising_delegation_nonces;

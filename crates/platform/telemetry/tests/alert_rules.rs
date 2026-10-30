@@ -467,6 +467,12 @@ const EXPORTED_METRICS: &[&str] = &[
     "db_pool_idle_gauge",
     "db_pool_acquire_seconds",
     "db_pool_acquire_failures_total",
+];
+
+/// Metrics exported by the standalone Advertising and Payments services.
+/// Alerts may reference them, but they live in another repository, so no
+/// source here anchors them.
+const SERVICE_EXPORTED_METRICS: &[&str] = &[
     // contexts/advertising/src/adapters/metrics.rs
     "conversion_upload_total",
     "conversion_suppressed_total",
@@ -481,13 +487,6 @@ const EXPORTED_METRICS: &[&str] = &[
     "ads_sync_duration_seconds_bucket",
     "budget_threshold_alerts_total",
     "budget_auto_pause_total",
-];
-
-/// Metrics the standalone Payments service exports
-/// (`payments-service/crates/contexts/payments/src/adapters/metrics.rs`).
-/// Alerts may reference them, but they live in another repository, so no
-/// source here anchors them.
-const SERVICE_EXPORTED_METRICS: &[&str] = &[
     "payments_platform_balance_movements_total",
     "payments_connection_status_gauge",
     "payments_webhook_events_total",
@@ -508,7 +507,6 @@ const SERVICE_EXPORTED_METRICS: &[&str] = &[
 const METRIC_SOURCES: &[&str] = &[
     include_str!("../../http/src/metrics.rs"),
     include_str!("../../persistence/src/pool_metrics.rs"),
-    include_str!("../../../contexts/advertising/src/adapters/metrics.rs"),
 ];
 
 /// The semconv http metrics are declared in OTel naming (dots); the

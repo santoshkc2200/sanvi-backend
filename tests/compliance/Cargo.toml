@@ -12,6 +12,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 sanvi-api.workspace = true
+sanvi-advertising.workspace = true
 sanvi-audit.workspace = true
 sanvi-cache.workspace = true
 sanvi-domains.workspace = true

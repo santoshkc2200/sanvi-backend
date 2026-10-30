@@ -16,10 +16,10 @@ use figment::{
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsTenantLookupAdapter, IdentityDependencies,
-    PlatformAdminDependencies, TenantCatalogAdapter, build_access_state, build_advertising_state,
-    build_app, build_audit_state, build_billing_state, build_identity_state,
-    build_localization_state, build_platform_admin_state, build_privacy_state,
-    build_remote_domains_lookup, build_system_state, build_tenancy_state, build_theming_state,
+    PlatformAdminDependencies, TenantCatalogAdapter, build_access_state, build_app,
+    build_audit_state, build_billing_state, build_identity_state, build_localization_state,
+    build_platform_admin_state, build_privacy_state, build_remote_domains_lookup,
+    build_system_state, build_tenancy_state, build_theming_state,
 };
 use sanvi_http::{bind, run};
 use sanvi_identity::domain::{RoleCatalog, TenantCatalog};
@@ -358,6 +358,7 @@ async fn main() -> ExitCode {
                 accounting_service: config.accounting_service.clone(),
                 domains_service: config.domains_service.clone(),
                 payments_service: config.payments_service.clone(),
+                advertising_service: config.advertising_service.clone(),
                 media: config.media.clone(),
                 product_access: config.product_access.clone(),
                 tx: privacy_tx.clone(),
@@ -406,37 +407,7 @@ async fn main() -> ExitCode {
     // Standalone Domains service handles domains processing; no in-process state.
     let domains: Option<sanvi_api::DomainsWiring> = None;
 
-    // Phase 09: build the webhook receiver even when the tenant-facing
-    let advertising = if config.features.advertising {
-        // The directive gate (TASK-014) is advertising's core invariant —
-        // there is no meaningful way to run this context without the
-        // privacy context's resolver to ask.
-        let Some(directive_resolver) = privacy.as_ref().map(|wiring| wiring.resolver.clone())
-        else {
-            eprintln!("failed to configure advertising: the privacy feature must be enabled");
-            return ExitCode::from(1);
-        };
-        let subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository> =
-            Arc::new(sanvi_privacy::adapters::SqlxSubProcessorRepository::new());
-        match build_advertising_state(
-            pool.clone(),
-            ids.clone(),
-            &config.advertising,
-            &config.payments_service,
-            directive_resolver,
-            subprocessors,
-        )
-        .await
-        {
-            Ok(state) => Some(state),
-            Err(err) => {
-                eprintln!("failed to configure advertising: {err}");
-                return ExitCode::from(1);
-            }
-        }
-    } else {
-        None
-    };
+    let advertising = None;
 
     // TASK-022 (FR-1111): one SSR cache per process — see build_app's note.
     // Registered counters land here, once, before the workers fork.

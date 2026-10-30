@@ -134,6 +134,7 @@ fi
 # literal in domain/application code is a future adapter rewrite waiting to
 # happen; this gate fails before that dependency can become entrenched.
 for layer in "$root/crates/contexts/advertising/src/domain" "$root/crates/contexts/advertising/src/application"; do
+  [[ -d "$layer" ]] || continue
   if contains_platform_literal "$layer"; then
     echo "advertising invariant failed: platform literal outside adapter" >&2
     exit 1

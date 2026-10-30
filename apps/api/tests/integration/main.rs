@@ -1,5 +1,6 @@
 mod abuse_quotas;
 mod accounting_routes;
+mod advertising_routes;
 mod cache_headers_snapshot;
 mod collection_ordering;
 mod domains_routes;

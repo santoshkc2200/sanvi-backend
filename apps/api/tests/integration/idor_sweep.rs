@@ -47,7 +47,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use actix_web::test as aw_test;
-use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
 
@@ -56,15 +55,12 @@ use sanvi_api::accounting::build_accounting_state;
 use sanvi_api::{
     AccessEntitlementAdmin, AppConfig, DomainsTenantLookupAdapter, FallbackGuideTranslator,
     IdentityDependencies, PlatformAdminDependencies, TenantCatalogAdapter, build_access_state,
-    build_advertising_state, build_app, build_audit_state, build_domains_lookup,
-    build_domains_state, build_identity_state, build_localization_state,
-    build_platform_admin_state, build_system_state, build_tenancy_state, build_theming_state,
+    build_app, build_audit_state, build_domains_lookup, build_domains_state, build_identity_state,
+    build_localization_state, build_platform_admin_state, build_system_state, build_tenancy_state,
+    build_theming_state,
 };
 use sanvi_persistence::TxManager;
-use sanvi_privacy::domain::{
-    DirectiveResolver, DirectiveSnapshot, DirectiveSource, DirectiveState, JurisdictionRef,
-    PrivacyError, ProcessingPurpose, PurposeDirective, SubjectRef,
-};
+
 use sanvi_system::domain::BuildInfo;
 use sanvi_telemetry::MetricsRegistry;
 
@@ -658,14 +654,6 @@ fn sweep_config(kratos_url: String, keto_url: String, media_url: String) -> AppC
     config.ory.kratos_admin_url = kratos_url;
     config.ory.keto_read_url = keto_url.clone();
     config.ory.keto_write_url = keto_url;
-    config.advertising.tracking_site_key_signing_secret =
-        sanvi_telemetry::Redacted::new("idor-sweep-tracking-secret-0123456789".to_string());
-    config.advertising.oauth_state_signing_secret =
-        sanvi_telemetry::Redacted::new("idor-sweep-oauth-secret-0123456789ab".to_string());
-    // 32 zero bytes, standard base64 — `token_kek_bytes()` wants exactly
-    // 32 decoded bytes; the KEK never protects anything real here.
-    config.advertising.token_kek =
-        sanvi_telemetry::Redacted::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
     // Consent is composed so its routes reach their lookups instead of
     // answering 503; no sweep request gets far enough to call freee.
     config.accounting.freee_client_id = "idor-sweep-client".to_string();
@@ -685,37 +673,6 @@ fn sweep_config(kratos_url: String, keto_url: String, media_url: String) -> AppC
 /// Advertising's directive gate is faked (allow-everything): the sweep
 /// proves *authorization and storage isolation*, not phase 05's consent
 /// engine, and the privacy context is deliberately not mounted.
-struct AllowAllDirectives;
-
-#[async_trait]
-impl DirectiveResolver for AllowAllDirectives {
-    async fn resolve(
-        &self,
-        _subject: &SubjectRef,
-        purpose: ProcessingPurpose,
-    ) -> Result<PurposeDirective, PrivacyError> {
-        Ok(PurposeDirective {
-            purpose,
-            state: DirectiveState::Allowed,
-            source: DirectiveSource::Default,
-            jurisdiction: JurisdictionRef::from_static("eu"),
-            notice_version: None,
-            effective_at: Utc::now(),
-            superseded_at: None,
-        })
-    }
-
-    async fn snapshot(&self, subject: &SubjectRef) -> Result<DirectiveSnapshot, PrivacyError> {
-        Ok(DirectiveSnapshot {
-            subject: subject.clone(),
-            jurisdiction: JurisdictionRef::from_static("eu"),
-            directives: vec![],
-            minor_opt_in_age: None,
-            honours_universal_opt_out: false,
-        })
-    }
-}
-
 async fn seeded_world(pool: &sanvi_persistence::PgPool) -> Seeded {
     // Tenants (platform-level table; the identity RLS suite seeds the
     // same way).
@@ -868,92 +825,6 @@ async fn seeded_world(pool: &sanvi_persistence::PgPool) -> Seeded {
     let resources = TxManager::new(pool.clone(), sanvi_testsupport::test_ids());
     let mut scope = resources.begin_for(TENANT_B).await.unwrap();
     let tx = scope.tx_mut().as_inner();
-    sqlx::query(
-        "INSERT INTO advertising.connections
-         (id, tenant_id, platform, external_account_id, currency, timezone, status, token_ref)
-         VALUES ($1, $2, 'google_ads', $3, 'JPY', 'Asia/Tokyo', 'active', 'secret-ref')",
-    )
-    .bind(AD_CONNECTION)
-    .bind(TENANT_B)
-    .bind(format!("{MARKER}-acct"))
-    .execute(&mut **tx)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO advertising.campaigns
-         (id, tenant_id, connection_id, platform, name, objective, status, budget)
-         VALUES ($1, $2, $3, 'google_ads', $4, 'sales', 'draft', '{}'::jsonb)",
-    )
-    .bind(AD_CAMPAIGN)
-    .bind(TENANT_B)
-    .bind(AD_CONNECTION)
-    .bind(format!("{MARKER} campaign"))
-    .execute(&mut **tx)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO advertising.ad_groups (id, tenant_id, campaign_id, name) VALUES ($1, $2, $3, $4)")
-        .bind(AD_GROUP)
-        .bind(TENANT_B)
-        .bind(AD_CAMPAIGN)
-        .bind(format!("{MARKER} ad group"))
-        .execute(&mut **tx)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO advertising.ads (id, tenant_id, ad_group_id, landing_url) VALUES ($1, $2, $3, $4)")
-        .bind(AD)
-        .bind(TENANT_B)
-        .bind(AD_GROUP)
-        .bind(format!("https://b.example/{MARKER}"))
-        .execute(&mut **tx)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO advertising.creatives (id, tenant_id, specification) VALUES ($1, $2, $3::jsonb)")
-        .bind(CREATIVE)
-        .bind(TENANT_B)
-        .bind(json!({"name": MARKER}).to_string())
-        .execute(&mut **tx)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO advertising.audiences (id, tenant_id, platform, name, status) VALUES ($1, $2, 'google_ads', $3, 'active')")
-        .bind(AUDIENCE)
-        .bind(TENANT_B)
-        .bind(format!("{MARKER} audience"))
-        .execute(&mut **tx)
-        .await
-        .unwrap();
-    let occurred = Utc::now();
-    sqlx::query(
-        "INSERT INTO advertising.conversion_event_dedup
-         (tenant_id, event_id, dedupe_key, occurred_at) VALUES ($1, $2, $2, $3)",
-    )
-    .bind(TENANT_B)
-    .bind(format!("idor-evt-{CONVERSION}"))
-    .bind(occurred)
-    .execute(&mut **tx)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO advertising.conversion_events
-         (id, tenant_id, event_id, dedupe_key, name, occurred_at, consent)
-         VALUES ($1, $2, $3, $3, 'purchase', $4, '{}'::jsonb)",
-    )
-    .bind(CONVERSION)
-    .bind(TENANT_B)
-    .bind(format!("idor-evt-{CONVERSION}"))
-    .bind(occurred)
-    .execute(&mut **tx)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO advertising.budget_alerts
-         (id, tenant_id, period, period_start, threshold, condition, spend_minor, cap_minor, currency)
-         VALUES ($1, $2, 'daily', CURRENT_DATE, 80, 'warn', 1000, 5000, 'JPY')",
-    )
-    .bind(BUDGET_ALERT)
-    .bind(TENANT_B)
-    .execute(&mut **tx)
-    .await
-    .unwrap();
     sqlx::query(
         "INSERT INTO domains.custom_domains
          (id, tenant_id, hostname, normalized_hostname, kind, role, status)
@@ -1157,21 +1028,7 @@ async fn build_sweep_app(
         domains_lookup,
         tenancy.resolve.clone(),
     ));
-    let directive_resolver: Arc<dyn DirectiveResolver> = Arc::new(AllowAllDirectives);
-    let subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository> =
-        Arc::new(sanvi_privacy::adapters::SqlxSubProcessorRepository::new());
-    let advertising = Some(
-        build_advertising_state(
-            pool.clone(),
-            ids.clone(),
-            &config.advertising,
-            &config.payments_service,
-            directive_resolver,
-            subprocessors,
-        )
-        .await
-        .expect("advertising state is valid"),
-    );
+    let advertising = None;
 
     let accounting = Some(
         build_accounting_state(
@@ -1420,8 +1277,7 @@ async fn cross_tenant_resource_ids_stay_invisible_on_the_own_host() {
     // The control case: the attacker *is* allowed by the gate inside
     // tenant A. Without this the assertions below could pass trivially on
     // the gate's 403, proving nothing about storage scoping.
-    let (gate_status, gate_body) =
-        call(&app, "GET", "/api/v1/tenant/ads/campaigns", None, HOST_A).await;
+    let (gate_status, gate_body) = call(&app, "GET", "/api/v1/tenant/members", None, HOST_A).await;
     assert_eq!(
         gate_status, 200,
         "the attacker must pass the gate on their own tenant for this sweep to mean anything: {gate_body}"
@@ -1436,7 +1292,10 @@ async fn cross_tenant_resource_ids_stay_invisible_on_the_own_host() {
         let excluded = SHAPE_A_EXCLUSIONS
             .iter()
             .any(|(method, path, _)| *method == row.method && *path == row.path);
-        if excluded || id_slots.is_empty() {
+        // Advertising storage isolation is exercised in the service repository,
+        // including tenant_scope_hides_other_tenants_connections_and_partition_rows.
+        // Its gateway authorization remains covered by sweeps 1 and 3 here.
+        if row.context() == "advertising" || excluded || id_slots.is_empty() {
             continue;
         }
         let uri = format!(

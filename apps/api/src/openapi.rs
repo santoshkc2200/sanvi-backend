@@ -5,31 +5,6 @@ use sanvi_accounting::adapters::http::{
     StartAuthorizationResponse,
 };
 use sanvi_accounting::domain::{AccountMappings, Provider as AccountingProvider};
-use sanvi_advertising::adapters::http::handlers::{
-    AccountView, AdvertisingProblemType, BudgetAlertsView, BudgetCapsView, CampaignChangesView,
-    CampaignReviewStatusView, CampaignView, CampaignsView, ConnectionFreshnessView,
-    ConnectionHealthView, ConnectionView, ConnectionsView, CreateAdGroupRequest, CreateAdRequest,
-    CreateCampaignRequest, CreateConnectionRequest, CreateCreativeRequest, CreativePreviewView,
-    CreativePreviewsView, CreativeView, CreativesView, MetricPoint, MetricsFreshnessView,
-    MetricsQueryResponse, MetricsSummaryResponse, MetricsSummaryRow, MoneyView, OAuthCallbackQuery,
-    PatchAdGroupRequest, PatchAdRequest, PatchCampaignRequest, PendingConnectionView,
-    PutBudgetCapRequest, RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView,
-    StartOAuthRequest, StartOAuthResponse, ValidationResultView,
-};
-use sanvi_advertising::adapters::http::tracking_handlers::{
-    CreateAudienceRequest, TestTrackingEventResponse, TrackConversionRequest, TrackingSiteKeyView,
-};
-use sanvi_advertising::application::AdReviewStatusView;
-use sanvi_advertising::application::{
-    AdsFreshnessSummaryView, ConnectionAttentionView, DryRunEvaluationResult,
-    PlatformAdsHealthReport, PlatformConnectionCountView, PutBudgetCapResponse, SpendStatusReport,
-};
-use sanvi_advertising::domain::{
-    AlertCondition, Audience, AudienceStatus, BudgetActionsConfigured, BudgetAlert, BudgetCap,
-    BudgetPeriod, ClickIds, ConsentSnapshot, ConversionDiagnostics, ConversionEvent, DataFreshness,
-    HashedIdentifier, Money as AdvertisingMoney, SpendStatusItem, TrackingSettings, UploadReceipt,
-    UploadState, ValueSource,
-};
 use sanvi_http::{ApiError, ProblemDetail};
 use sanvi_media::domain::{
     AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput,
@@ -212,55 +187,6 @@ use utoipa::OpenApi;
         sanvi_payments::adapters::http::gateway_handlers::list_payouts,
         sanvi_payments::adapters::http::gateway_handlers::get_tax_settings,
         sanvi_payments::adapters::http::gateway_handlers::put_tax_settings,
-        sanvi_advertising::adapters::http::handlers::list_ad_platforms,
-        sanvi_advertising::adapters::http::handlers::resolve_campaign_drift,
-        sanvi_advertising::adapters::http::handlers::create_campaign,
-        sanvi_advertising::adapters::http::handlers::list_campaigns,
-        sanvi_advertising::adapters::http::handlers::get_campaign,
-        sanvi_advertising::adapters::http::handlers::patch_campaign,
-        sanvi_advertising::adapters::http::handlers::validate_campaign,
-        sanvi_advertising::adapters::http::handlers::publish_campaign,
-        sanvi_advertising::adapters::http::handlers::pause_campaign,
-        sanvi_advertising::adapters::http::handlers::resume_campaign,
-        sanvi_advertising::adapters::http::handlers::poll_campaign_review_status,
-        sanvi_advertising::adapters::http::handlers::list_campaign_changes,
-        sanvi_advertising::adapters::http::handlers::add_ad_group,
-        sanvi_advertising::adapters::http::handlers::update_ad_group,
-        sanvi_advertising::adapters::http::handlers::add_ad,
-        sanvi_advertising::adapters::http::handlers::update_ad,
-        sanvi_advertising::adapters::http::handlers::start_oauth,
-        sanvi_advertising::adapters::http::handlers::oauth_callback,
-        sanvi_advertising::adapters::http::handlers::create_connection,
-        sanvi_advertising::adapters::http::handlers::list_connections,
-        sanvi_advertising::adapters::http::handlers::delete_connection,
-        sanvi_advertising::adapters::http::handlers::create_creative,
-        sanvi_advertising::adapters::http::handlers::get_creative,
-        sanvi_advertising::adapters::http::handlers::list_creatives,
-        sanvi_advertising::adapters::http::handlers::delete_creative,
-        sanvi_advertising::adapters::http::handlers::get_creative_previews,
-        sanvi_advertising::adapters::http::handlers::get_ads_metrics,
-        sanvi_advertising::adapters::http::handlers::get_ads_metrics_summary,
-        sanvi_advertising::adapters::http::handlers::get_ads_metrics_export,
-        sanvi_advertising::adapters::http::handlers::get_ads_metrics_freshness,
-        sanvi_advertising::adapters::http::handlers::get_budget_caps,
-        sanvi_advertising::adapters::http::handlers::put_budget_cap,
-        sanvi_advertising::adapters::http::handlers::get_campaign_budget_cap,
-        sanvi_advertising::adapters::http::handlers::put_campaign_budget_cap,
-        sanvi_advertising::adapters::http::handlers::get_budget_alerts,
-        sanvi_advertising::adapters::http::handlers::acknowledge_budget_alert,
-        sanvi_advertising::adapters::http::handlers::get_spend_status,
-        sanvi_advertising::adapters::http::handlers::get_platform_ads_health,
-        sanvi_advertising::adapters::http::tracking_handlers::public_track_conversion,
-        sanvi_advertising::adapters::http::tracking_handlers::get_tracking_settings,
-        sanvi_advertising::adapters::http::tracking_handlers::put_tracking_settings,
-        sanvi_advertising::adapters::http::tracking_handlers::get_tracking_site_key,
-        sanvi_advertising::adapters::http::tracking_handlers::test_tracking_event,
-        sanvi_advertising::adapters::http::tracking_handlers::list_conversions,
-        sanvi_advertising::adapters::http::tracking_handlers::get_conversion_diagnostics,
-        sanvi_advertising::adapters::http::tracking_handlers::retry_conversion,
-        sanvi_advertising::adapters::http::tracking_handlers::list_audiences,
-        sanvi_advertising::adapters::http::tracking_handlers::create_audience,
-        sanvi_advertising::adapters::http::tracking_handlers::refresh_audience,
         crate::accounting::ingest_audit,
         crate::accounting::ingest_event,
         sanvi_accounting::adapters::http::list_accounting_books,
@@ -286,30 +212,12 @@ use utoipa::OpenApi;
         sanvi_product_access::adapters::http::handlers::proxy_import_delete,
         sanvi_product_access::adapters::http::handlers::proxy_import_callback,
     ),
+    modifiers(&AdvertisingContract),
     components(schemas(
         sanvi_http::quotas::TenantUsage,
         sanvi_http::quotas::QuotaDimension,
         sanvi_http::quotas::DimensionUsage,
-        ProblemDetail, ApiError, AdvertisingProblemType, MetricPoint, MoneyView,
-        RenderedMoneyView, ResolveCampaignDriftRequest, ResolvedCampaignDriftView,
-        CampaignView, CampaignsView, CreateCampaignRequest, PatchCampaignRequest,
-        ValidationResultView, CampaignChangesView, CampaignReviewStatusView, AdReviewStatusView,
-        CreateAdGroupRequest, PatchAdGroupRequest, CreateAdRequest, PatchAdRequest,
-        StartOAuthRequest, StartOAuthResponse,
-        OAuthCallbackQuery, AccountView, PendingConnectionView, CreateConnectionRequest,
-        ConnectionHealthView, ConnectionView, ConnectionsView,
-        CreateCreativeRequest, CreativeView, CreativesView, CreativePreviewView, CreativePreviewsView,
-        TrackConversionRequest, TestTrackingEventResponse, TrackingSettings, TrackingSiteKeyView,
-        ConversionEvent,
-        ConversionDiagnostics, ConsentSnapshot, ClickIds, ValueSource,
-        UploadReceipt, UploadState, AdvertisingMoney, HashedIdentifier,
-        CreateAudienceRequest, Audience, AudienceStatus,
-        MetricsQueryResponse, MetricsSummaryResponse, MetricsSummaryRow,
-        MetricsFreshnessView, ConnectionFreshnessView,
-        BudgetCapsView, BudgetAlertsView, PutBudgetCapRequest, PutBudgetCapResponse,
-        BudgetCap, BudgetAlert, BudgetPeriod, AlertCondition, DataFreshness,
-        SpendStatusItem, SpendStatusReport, BudgetActionsConfigured, DryRunEvaluationResult,
-        PlatformAdsHealthReport, PlatformConnectionCountView, ConnectionAttentionView, AdsFreshnessSummaryView,
+        ProblemDetail, ApiError, sanvi_advertising::adapters::http::handlers::AdvertisingProblemType,
         AssetDeliveryView, AssetUploadView, AssetView, CompletedPartInput, CreateAssetInput, UploadPartView,
         AccountingProblemType, BookView, AccountingConnectionView, PeriodView, PeriodStateView,
         CredentialStatusView, CreateBookRequest, RegisterConnectionRequest,
@@ -341,6 +249,59 @@ use utoipa::OpenApi;
     )
 )]
 pub struct ApiDoc;
+
+struct AdvertisingContract;
+impl utoipa::Modify for AdvertisingContract {
+    fn modify(&self, document: &mut utoipa::openapi::OpenApi) {
+        let mut value: serde_json::Value = serde_yaml::from_str(include_str!(
+            "../../../crates/contexts/advertising/contract.yaml"
+        ))
+        .expect("validated Advertising contract YAML");
+        // Per-context published documents omit shared document metadata.
+        value["openapi"] = serde_json::json!("3.1.0");
+        value["info"] = serde_json::json!({ "title": "Advertising", "version": "0.10.0" });
+        // Utoipa serializes unrestricted JSON as `{}`, but its deserializer
+        // requires an explicit null type to reconstruct the same AnyValue schema.
+        fn prepare_schema(schema: &mut serde_json::Value) {
+            let Some(object) = schema.as_object_mut() else {
+                return;
+            };
+            if !["type", "$ref", "allOf", "anyOf", "oneOf"]
+                .iter()
+                .any(|key| object.contains_key(*key))
+            {
+                object.insert("type".into(), serde_json::Value::Null);
+            }
+            if let Some(properties) = object.get_mut("properties").and_then(|v| v.as_object_mut()) {
+                for property in properties.values_mut() {
+                    prepare_schema(property);
+                }
+            }
+            for key in ["items", "additionalProperties"] {
+                if let Some(child) = object.get_mut(key) {
+                    prepare_schema(child);
+                }
+            }
+            for key in ["allOf", "anyOf", "oneOf"] {
+                if let Some(children) = object.get_mut(key).and_then(|v| v.as_array_mut()) {
+                    for child in children {
+                        prepare_schema(child);
+                    }
+                }
+            }
+        }
+        for schema in value["components"]["schemas"]
+            .as_object_mut()
+            .expect("contract schemas")
+            .values_mut()
+        {
+            prepare_schema(schema);
+        }
+        let contract: utoipa::openapi::OpenApi =
+            serde_json::from_value(value).expect("validated Advertising service contract");
+        document.merge(contract);
+    }
+}
 
 #[cfg(test)]
 mod tests {

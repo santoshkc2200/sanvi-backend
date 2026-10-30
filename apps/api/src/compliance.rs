@@ -88,7 +88,13 @@ impl ComplianceHarness {
     /// the privacy ledger, so no provider ever dials them — but the paths
     /// are the real ones.
     pub fn build(pool: sanvi_persistence::PgPool, ids: Arc<dyn RawIdGenerator>) -> Self {
-        Self::build_with_services(pool, ids, Default::default(), Default::default())
+        Self::build_with_services(
+            pool,
+            ids,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
     }
 
     /// As [`Self::build`], with the Domains provider pointed at `domains_service`.
@@ -101,7 +107,13 @@ impl ComplianceHarness {
         ids: Arc<dyn RawIdGenerator>,
         domains_service: sanvi_domains::adapters::remote::ServiceConfig,
     ) -> Self {
-        Self::build_with_services(pool, ids, domains_service, Default::default())
+        Self::build_with_services(
+            pool,
+            ids,
+            domains_service,
+            Default::default(),
+            Default::default(),
+        )
     }
 
     /// As [`Self::build`], with the Payments provider pointed at `payments_service`.
@@ -110,7 +122,13 @@ impl ComplianceHarness {
         ids: Arc<dyn RawIdGenerator>,
         payments_service: sanvi_payments::adapters::remote::ServiceConfig,
     ) -> Self {
-        Self::build_with_services(pool, ids, Default::default(), payments_service)
+        Self::build_with_services(
+            pool,
+            ids,
+            Default::default(),
+            payments_service,
+            Default::default(),
+        )
     }
 
     /// Build the harness pointing at both standalone services.
@@ -119,6 +137,7 @@ impl ComplianceHarness {
         ids: Arc<dyn RawIdGenerator>,
         domains_service: sanvi_domains::adapters::remote::ServiceConfig,
         payments_service: sanvi_payments::adapters::remote::ServiceConfig,
+        advertising_service: sanvi_advertising::adapters::remote::ServiceConfig,
     ) -> Self {
         let export_dir =
             std::env::temp_dir().join(format!("sanvi-compliance-drill-{}", uuid::Uuid::now_v7()));
@@ -137,6 +156,7 @@ impl ComplianceHarness {
             accounting_service: Default::default(),
             domains_service,
             payments_service,
+            advertising_service,
             media: sanvi_media::MediaConfig::default(),
             product_access: sanvi_product_access::ProductAccessConfig::default(),
             tx: tx.clone(),

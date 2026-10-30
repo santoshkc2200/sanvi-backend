@@ -6,6 +6,7 @@
 //! infrastructure → inject adapters into use cases → serve.
 
 pub mod accounting;
+pub mod advertising;
 pub mod compliance;
 pub mod config;
 pub mod domains;
@@ -45,23 +46,7 @@ use sanvi_access::{
         QuotaUsageStore, RoleRepository,
     },
 };
-use sanvi_advertising::{
-    AdvertisingConfig, OAuthStateManager,
-    adapters::{
-        SqlxAdvertisingConnectionRepository, SqlxCampaignRepository, SqlxConnectionTokenRepository,
-        SqlxCreativeRepository, SqlxOAuthStateStore, SqlxTenantEnvelopeCrypto,
-    },
-    application::{
-        AddAd, AddAdGroup, CreateCampaign, CreateConnection, CreateCreative, DeleteConnection,
-        DeleteCreative, GetCampaign, GetCreative, GetCreativePreviews, GetFreshness,
-        HandleCallback, ListCampaignChanges, ListCampaigns, ListConnections, ListCreatives,
-        ListPlatformCatalog, PatchCampaign, PollCampaignReviewStatus, PublishCampaign,
-        QueryMetrics, ReconcileCampaign, ResolveCampaignDrift, ResumeCampaign, StartAuthorization,
-        UpdateAd, UpdateAdGroup, ValidateCampaign,
-    },
-    domain::TokenVault,
-    routes as advertising_routes,
-};
+use sanvi_advertising::routes as advertising_routes;
 use sanvi_audit::{
     AuditConfig,
     adapters::{SqlxAuditReader, SqlxAuditWriter},
@@ -1726,6 +1711,7 @@ pub struct PrivacyProviderDeps {
     pub accounting_service: sanvi_accounting::adapters::remote::ServiceConfig,
     pub domains_service: sanvi_domains::adapters::remote::ServiceConfig,
     pub payments_service: sanvi_payments::adapters::remote::ServiceConfig,
+    pub advertising_service: sanvi_advertising::adapters::remote::ServiceConfig,
     pub media: sanvi_media::MediaConfig,
     pub product_access: sanvi_product_access::ProductAccessConfig,
     pub tx: sanvi_persistence::TxManager,
@@ -1845,7 +1831,12 @@ pub fn privacy_provider_registry(deps: &PrivacyProviderDeps) -> ProviderRegistry
             sanvi_payments::adapters::RemotePaymentsPrivacyProvider::new(&deps.payments_service)
                 .expect("validated Payments service configuration"),
         ),
-        Arc::new(sanvi_advertising::adapters::AdvertisingPrivacyProvider::new(tx.clone())),
+        Arc::new(
+            sanvi_advertising::adapters::RemoteAdvertisingPrivacyProvider::new(
+                &deps.advertising_service,
+            )
+            .expect("validated Advertising service configuration"),
+        ),
         Arc::new(sanvi_media::adapters::MediaPrivacyProvider::with_storage(
             tx.clone(),
             deps.media.clone(),
@@ -2970,456 +2961,6 @@ pub fn build_remote_domains_lookup(
 /// are calendar periods in the tenant timezone (TASK-017), and advertising
 /// must not import another context's domain, so this adapter implements the
 /// advertising port from the localization repository here at the composition
-/// root.
-#[derive(Debug, Clone, Copy, Default)]
-struct LocalizationTenantTimezone;
-
-impl LocalizationTenantTimezone {
-    const fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait::async_trait]
-impl sanvi_advertising::domain::TenantTimezoneSource for LocalizationTenantTimezone {
-    async fn timezone(
-        &self,
-        scope: &mut sanvi_persistence::ScopedTx<'_>,
-        tenant_id: sanvi_kernel::TenantId,
-    ) -> Result<String, sanvi_advertising::domain::AdvertisingError> {
-        use sanvi_localization::domain::TenantLocaleRepository as _;
-        let repo = SqlxTenantLocaleRepository::new();
-        let settings = repo
-            .get(scope, tenant_id)
-            .await
-            .map_err(|e| sanvi_advertising::domain::AdvertisingError::Storage(e.to_string()))?;
-        Ok(settings
-            .map(|s| s.timezone)
-            .unwrap_or_else(|| "UTC".to_string()))
-    }
-}
-
-pub async fn build_advertising_state(
-    pool: sanvi_persistence::PgPool,
-    ids: std::sync::Arc<dyn sanvi_kernel::RawIdGenerator>,
-    config: &AdvertisingConfig,
-    payments_service: &sanvi_payments::adapters::remote::ServiceConfig,
-    directive_resolver: Arc<dyn DirectiveResolver>,
-    subprocessors: Arc<dyn sanvi_privacy::domain::SubProcessorRepository>,
-) -> anyhow::Result<sanvi_advertising::adapters::http::AdvertisingState> {
-    config.validate_oauth_enabled()?;
-    config.validate_tracking_enabled()?;
-    let token_kek = config.token_kek_bytes()?;
-    let tx = sanvi_persistence::TxManager::new(pool.clone(), ids.clone());
-    let oauth_store = std::sync::Arc::new(SqlxOAuthStateStore::new(tx.clone()));
-    let oauth_state = OAuthStateManager::with_store(
-        config.oauth_state_signing_secret.expose_secret(),
-        oauth_store,
-    );
-    let token_vault = std::sync::Arc::new(TokenVault::new(
-        std::sync::Arc::new(SqlxTenantEnvelopeCrypto::new(
-            token_kek,
-            config.token_kek_id.clone(),
-        )),
-        std::sync::Arc::new(SqlxConnectionTokenRepository::new()),
-    ));
-    let token_providers = sanvi_advertising::adapters::build_access_token_providers(
-        config,
-        tx.clone(),
-        token_vault.clone(),
-    );
-    let (platform_registry, ad_platform_mode) =
-        sanvi_advertising::adapters::build_platform_registry(config, &token_providers)?;
-    tracing::info!(
-        platform_mode = %ad_platform_mode,
-        "advertising platform capability initialized"
-    );
-    let registry = std::sync::Arc::new(sanvi_advertising::adapters::rate_limited_registry(
-        &platform_registry,
-        |platform| match platform.as_str() {
-            "meta" => (10, 2),
-            _ => (
-                config.quota_platform_wide_permits,
-                config.quota_per_connection_permits,
-            ),
-        },
-    ));
-    let campaigns: std::sync::Arc<dyn sanvi_advertising::domain::CampaignRepository> =
-        std::sync::Arc::new(SqlxCampaignRepository::new());
-    let creatives: std::sync::Arc<dyn sanvi_advertising::domain::CreativeRepository> =
-        std::sync::Arc::new(SqlxCreativeRepository::new());
-    let connections: std::sync::Arc<dyn sanvi_advertising::AdvertisingConnectionRepository> =
-        std::sync::Arc::new(SqlxAdvertisingConnectionRepository::new());
-    let events: std::sync::Arc<dyn sanvi_advertising::domain::EventPublisher> = std::sync::Arc::new(
-        sanvi_advertising::adapters::OutboxEventPublisher::new(ids.clone()),
-    );
-    let advertising_ids: std::sync::Arc<dyn sanvi_advertising::domain::IdGenerator> =
-        std::sync::Arc::new(sanvi_advertising::adapters::SystemIdGenerator::new(
-            ids.clone(),
-        ));
-
-    // 10.5: conversion capture & the directive gate. The sub-processor
-    // role snapshot is loaded once here rather than per beacon hit — see
-    // `SnapshotVendorRoleLookup`'s own doc comment for why.
-    let vendor_role: std::sync::Arc<dyn sanvi_advertising::domain::VendorRolePort> = {
-        let subprocessor_tx = tx.clone();
-        let mut subprocessor_scope = subprocessor_tx
-            .begin_unscoped(
-                "advertising: load sub-processor roles for the conversion tracking gate",
-                "system",
-            )
-            .await?;
-        std::sync::Arc::new(
-            sanvi_advertising::adapters::SnapshotVendorRoleLookup::load(
-                subprocessors.as_ref(),
-                &mut subprocessor_scope,
-            )
-            .await?,
-        )
-    };
-    let payment_lookup: std::sync::Arc<dyn sanvi_advertising::domain::PaymentLookupPort> =
-        std::sync::Arc::new(sanvi_advertising::adapters::RemotePaymentLookup::new(
-            payments_service,
-        )?);
-    let conversion_repo: std::sync::Arc<dyn sanvi_advertising::domain::ConversionEventRepository> =
-        std::sync::Arc::new(SqlxCampaignRepository::new());
-    let tracking_settings_repo: std::sync::Arc<
-        dyn sanvi_advertising::domain::TrackingSettingsRepository,
-    > = std::sync::Arc::new(sanvi_advertising::adapters::SqlxTrackingSettingsRepository::new());
-    let capture = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::capture::CaptureConversion::new(
-            tx.clone(),
-            conversion_repo.clone(),
-            payment_lookup,
-            vendor_role,
-            directive_resolver.clone(),
-            advertising_ids.clone(),
-        ),
-    );
-    let settings_mgr = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::settings::ManageTrackingSettings::new(
-            tx.clone(),
-            tracking_settings_repo,
-        ),
-    );
-    let list_conversions = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::conversions::ListConversions::new(
-            tx.clone(),
-            conversion_repo.clone(),
-        ),
-    );
-    let get_conversion_diagnostics = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::conversions::GetConversionDiagnostics::new(
-            tx.clone(),
-            conversion_repo.clone(),
-        ),
-    );
-    let retry_conversion = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::retry::RetryConversion::new(
-            tx.clone(),
-            conversion_repo.clone(),
-            directive_resolver.clone(),
-        ),
-    );
-    let audience_repo: std::sync::Arc<dyn sanvi_advertising::domain::AudienceRepository> =
-        std::sync::Arc::new(SqlxCampaignRepository::new());
-    let mut audience_sinks: std::collections::BTreeMap<
-        sanvi_advertising::domain::PlatformKey,
-        std::sync::Arc<dyn sanvi_advertising::domain::AudienceSyncPort>,
-    > = std::collections::BTreeMap::new();
-    for descriptor in sanvi_advertising::adapters::FakeAdPlatform::fixtures() {
-        audience_sinks.insert(
-            descriptor.key.clone(),
-            std::sync::Arc::new(sanvi_advertising::adapters::FakeAudienceSync::new(
-                descriptor,
-            )),
-        );
-    }
-    let advertising_metrics =
-        std::sync::Arc::new(sanvi_advertising::adapters::AdvertisingMetrics::default());
-    let create_audience = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::audiences::CreateAudience::new(
-            tx.clone(),
-            audience_repo.clone(),
-            advertising_ids.clone(),
-        ),
-    );
-    let list_audiences = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::audiences::ListAudiences::new(
-            tx.clone(),
-            audience_repo.clone(),
-        ),
-    );
-    let refresh_audience = std::sync::Arc::new(
-        sanvi_advertising::application::tracking::audiences::RefreshAudience::new(
-            tx.clone(),
-            audience_repo,
-            conversion_repo,
-            connections.clone(),
-            directive_resolver,
-            audience_sinks,
-            advertising_metrics.clone(),
-        ),
-    );
-
-    let budget_caps_repo =
-        std::sync::Arc::new(sanvi_advertising::adapters::SqlxBudgetCapRepository::new());
-    let budget_alerts_repo =
-        std::sync::Arc::new(sanvi_advertising::adapters::SqlxBudgetAlertRepository::new());
-    let fx_rates = sanvi_advertising::adapters::build_fx_rates(config, tx.clone());
-    let tenant_timezones: std::sync::Arc<dyn sanvi_advertising::domain::TenantTimezoneSource> =
-        std::sync::Arc::new(LocalizationTenantTimezone::new());
-    let metrics_repo =
-        std::sync::Arc::new(sanvi_advertising::adapters::SqlxMetricsRepository::new());
-    let pause_campaign_service =
-        std::sync::Arc::new(sanvi_advertising::application::PauseCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        ));
-    let spend_status_service =
-        std::sync::Arc::new(sanvi_advertising::application::GetSpendStatus::new(
-            tx.clone(),
-            metrics_repo.clone(),
-            budget_caps_repo.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            fx_rates.clone(),
-            tenant_timezones.clone(),
-            config.metrics_restatement_days,
-        ));
-    let evaluator = std::sync::Arc::new(sanvi_advertising::application::ThresholdEvaluator::new(
-        tx.clone(),
-        budget_caps_repo.clone(),
-        budget_alerts_repo.clone(),
-        campaigns.clone(),
-        pause_campaign_service.clone(),
-        spend_status_service.clone(),
-        events.clone(),
-        advertising_ids.clone(),
-        advertising_metrics.clone(),
-    ));
-    let get_budget_caps = std::sync::Arc::new(sanvi_advertising::application::GetBudgetCaps::new(
-        tx.clone(),
-        budget_caps_repo.clone(),
-    ));
-    let put_budget_cap = std::sync::Arc::new(sanvi_advertising::application::PutBudgetCap::new(
-        tx.clone(),
-        budget_caps_repo.clone(),
-        advertising_ids.clone(),
-        spend_status_service.clone(),
-        evaluator,
-    ));
-    let get_campaign_budget_cap = std::sync::Arc::new(
-        sanvi_advertising::application::GetCampaignBudgetCap::new(tx.clone(), budget_caps_repo),
-    );
-    let list_budget_alerts =
-        std::sync::Arc::new(sanvi_advertising::application::ListBudgetAlerts::new(
-            tx.clone(),
-            budget_alerts_repo.clone(),
-        ));
-    let acknowledge_budget_alert = std::sync::Arc::new(
-        sanvi_advertising::application::AcknowledgeBudgetAlert::new(tx.clone(), budget_alerts_repo),
-    );
-
-    Ok(sanvi_advertising::adapters::http::AdvertisingState {
-        config: config.clone(),
-        idempotency: sanvi_persistence::IdempotencyStore::new(tx.pool().clone()),
-        catalog: std::sync::Arc::new(ListPlatformCatalog::new(registry.clone())),
-        reconcile_campaign: std::sync::Arc::new(ReconcileCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            events.clone(),
-            advertising_ids.clone(),
-        )),
-        resolve_campaign_drift: std::sync::Arc::new(ResolveCampaignDrift::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        create_campaign: std::sync::Arc::new(CreateCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            registry.clone(),
-            events.clone(),
-            advertising_ids.clone(),
-        )),
-        get_campaign: std::sync::Arc::new(GetCampaign::new(tx.clone(), campaigns.clone())),
-        list_campaigns: std::sync::Arc::new(ListCampaigns::new(tx.clone(), campaigns.clone())),
-        validate_campaign: std::sync::Arc::new(ValidateCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            creatives.clone(),
-            registry.clone(),
-        )),
-        patch_campaign: std::sync::Arc::new(PatchCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            creatives.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        publish_campaign: std::sync::Arc::new(PublishCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            creatives.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        pause_campaign: pause_campaign_service,
-        resume_campaign: std::sync::Arc::new(ResumeCampaign::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        list_campaign_changes: std::sync::Arc::new(ListCampaignChanges::new(
-            tx.clone(),
-            campaigns.clone(),
-        )),
-        add_ad_group: std::sync::Arc::new(AddAdGroup::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        update_ad_group: std::sync::Arc::new(UpdateAdGroup::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        add_ad: std::sync::Arc::new(AddAd::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            creatives.clone(),
-            events.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        poll_review_status: std::sync::Arc::new(PollCampaignReviewStatus::new(
-            tx.clone(),
-            campaigns.clone(),
-            connections.clone(),
-            registry.clone(),
-        )),
-        update_ad: std::sync::Arc::new(UpdateAd::new(
-            tx.clone(),
-            campaigns,
-            connections.clone(),
-            creatives.clone(),
-            events,
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        start_authorization: std::sync::Arc::new(StartAuthorization::new(
-            registry.clone(),
-            oauth_state.clone(),
-            advertising_ids.clone(),
-        )),
-        handle_callback: std::sync::Arc::new(HandleCallback::new(
-            tx.clone(),
-            connections.clone(),
-            registry.clone(),
-            oauth_state.clone(),
-            token_vault,
-            advertising_ids.clone(),
-        )),
-        create_connection: std::sync::Arc::new(CreateConnection::new(
-            tx.clone(),
-            connections.clone(),
-        )),
-        list_connections: std::sync::Arc::new(ListConnections::new(
-            tx.clone(),
-            connections.clone(),
-            registry.clone(),
-        )),
-        delete_connection: std::sync::Arc::new(DeleteConnection::new(
-            tx.clone(),
-            connections.clone(),
-        )),
-        create_creative: std::sync::Arc::new(CreateCreative::new(
-            tx.clone(),
-            creatives.clone(),
-            connections.clone(),
-            registry.clone(),
-            advertising_ids.clone(),
-        )),
-        get_creative: std::sync::Arc::new(GetCreative::new(tx.clone(), creatives.clone())),
-        list_creatives: std::sync::Arc::new(ListCreatives::new(tx.clone(), creatives.clone())),
-        delete_creative: std::sync::Arc::new(DeleteCreative::new(tx.clone(), creatives.clone())),
-        get_creative_previews: std::sync::Arc::new(GetCreativePreviews::new(
-            tx.clone(),
-            creatives,
-            registry.clone(),
-        )),
-        query_metrics: std::sync::Arc::new(QueryMetrics::new(
-            tx.clone(),
-            metrics_repo,
-            config.metrics_max_query_span_days,
-            config.metrics_restatement_days,
-        )),
-        get_freshness: std::sync::Arc::new(GetFreshness::new(
-            tx.clone(),
-            connections.clone(),
-            config.metrics_freshness_stalled_after_hours,
-        )),
-        get_platform_ads_health: std::sync::Arc::new(
-            sanvi_advertising::application::GetPlatformAdsHealth::new(
-                tx,
-                connections,
-                registry,
-                config.metrics_freshness_stalled_after_hours,
-            ),
-        ),
-        get_budget_caps,
-        put_budget_cap,
-        get_campaign_budget_cap,
-        list_budget_alerts,
-        acknowledge_budget_alert,
-        get_spend_status: spend_status_service,
-        fx_rates,
-        oauth_state,
-        // Concurrency caps on the public track beacon: a coarse abuse
-        // control (see `tracking_handlers` module doc), not a
-        // time-windowed rate limiter — deliberately fixed rather than
-        // configurable, since there is no per-tenant knob for a
-        // pre-authentication endpoint.
-        tracking_ip_limiter: std::sync::Arc::new(sanvi_advertising::adapters::QuotaLimiter::new(
-            500, 5,
-        )),
-        tracking_domain_limiter: std::sync::Arc::new(
-            sanvi_advertising::adapters::QuotaLimiter::new(1000, 50),
-        ),
-        capture,
-        settings_mgr,
-        list_conversions,
-        get_conversion_diagnostics,
-        retry_conversion,
-        create_audience,
-        list_audiences,
-        refresh_audience,
-    })
-}
-
 /// Build the media context's application state: the `hitox-media-service`
 /// HTTP gateway wrapped in the six asset use cases. Unlike the DB-backed
 /// contexts this is sync and infallible (an unconfigured service fails
@@ -3618,7 +3159,7 @@ pub fn build_app(
     localization: Option<LocalizationWiring>,
     theming: Option<ThemingWiring>,
     domains: Option<DomainsWiring>,
-    advertising: Option<sanvi_advertising::adapters::http::AdvertisingState>,
+    advertising: Option<sanvi_advertising::adapters::remote::GatewayState>,
     accounting: Option<sanvi_accounting::adapters::http::AccountingState>,
     redis: Option<redis::aio::ConnectionManager>,
     ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
@@ -3637,7 +3178,20 @@ pub fn build_app(
     > + 'static,
 > {
     let server_config = config.server.clone();
-    let _ = accounting;
+    let _ = advertising;
+    let advertising =
+        config
+            .features
+            .advertising
+            .then(|| sanvi_advertising::adapters::remote::GatewayState {
+                remote: sanvi_advertising::adapters::remote::RemoteClient::new(
+                    &config.advertising_service,
+                )
+                .expect("validated Advertising service configuration"),
+                authorizer: Arc::new(advertising::AuthorizerAdvertisingAccess(
+                    access.authorizer.clone(),
+                )),
+            });
 
     let state = AppState {
         build_info: system.build_info.execute(),
@@ -3774,6 +3328,14 @@ pub fn build_app(
             writer: audit.writer.clone(),
         }))
         .configure(payments::internal_routes)
+        .app_data(web::Data::new(advertising::AdvertisingPlatformState {
+            secret: config.advertising_service.inbound_secret.clone(),
+            transactions: access.tx_manager.clone(),
+            directives: privacy.as_ref().map(|w| w.state.directive_resolver.clone()),
+            feature_gate: access.feature_gate.clone(),
+            enabled: config.features.advertising,
+        }))
+        .configure(advertising::internal_routes)
         .app_data(web::JsonConfig::default().limit(server_config.max_body_bytes))
         .app_data(web::PayloadConfig::default().limit(server_config.max_body_bytes))
         .configure(health_routes)
