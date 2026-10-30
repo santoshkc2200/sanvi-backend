@@ -1,14 +1,30 @@
-//! Platform gateway handlers. Embedded state is an explicit regression fixture.
-use super::{handlers::*, state::AccountingState};
+//! Platform gateway handlers for the Accounting bounded context.
+//! The platform gateway forwards /api/v1/tenant/accounting/* to the standalone
+//! Accounting service under a request-bound HMAC delegation. The contract types
+//! in [`super::contract`] exist for OpenAPI schema publication; bodies are relayed
+//! byte for byte.
+
+use super::contract::{
+    ActivateBookRequest, BookView, CompleteAuthorizationRequest, CreateBookRequest,
+    RegisterConnectionRequest, ScheduleSwitchRequest, StartAuthorizationResponse,
+};
 use crate::{
     adapters::remote::{GatewayState, proxy},
     domain::{BookId, ConnectionId},
 };
-use actix_web::{FromRequest, HttpRequest, HttpResponse, web};
+use actix_web::{HttpRequest, HttpResponse, web};
 use sanvi_http::{
     ApiError, CurrentSubject, CurrentTenant, FreshAal2Required, ProblemDetail, RequiredAnyFeature,
     RequiredPermission,
 };
+
+/// The gateway the composition root registers; without it the service is
+/// not configured and every Accounting route answers 503.
+fn gateway(req: &HttpRequest) -> Result<web::Data<GatewayState>, ApiError> {
+    req.app_data::<web::Data<GatewayState>>()
+        .cloned()
+        .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))
+}
 
 #[utoipa::path(
     get,
@@ -23,7 +39,6 @@ use sanvi_http::{
     )
 )]
 pub async fn list_accounting_books(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     _permission: RequiredPermission,
@@ -31,23 +46,16 @@ pub async fn list_accounting_books(
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    list_accounting_books_embedded(state, tenant, subject, _permission, _entitlement).await
+    proxy(
+        gateway(&req)?,
+        tenant,
+        subject,
+        _permission,
+        _entitlement,
+        req,
+        payload,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -66,7 +74,6 @@ pub async fn list_accounting_books(
     )
 )]
 pub async fn create_accounting_book(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
@@ -74,30 +81,16 @@ pub async fn create_accounting_book(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<CreateBookRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    create_accounting_book_embedded(state, tenant, subject, req, body, _permission, _entitlement)
-        .await
+    proxy(
+        gateway(&req)?,
+        tenant,
+        subject,
+        _permission,
+        _entitlement,
+        req,
+        payload,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -115,7 +108,6 @@ pub async fn create_accounting_book(
     )
 )]
 pub async fn get_accounting_book(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<BookId>,
@@ -124,23 +116,17 @@ pub async fn get_accounting_book(
     req: HttpRequest,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    get_accounting_book_embedded(state, tenant, subject, path, _permission, _entitlement).await
+    let _ = path;
+    proxy(
+        gateway(&req)?,
+        tenant,
+        subject,
+        _permission,
+        _entitlement,
+        req,
+        payload,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -164,7 +150,6 @@ pub async fn get_accounting_book(
     )
 )]
 pub async fn register_accounting_connection(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<BookId>,
@@ -173,37 +158,15 @@ pub async fn register_accounting_connection(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<RegisterConnectionRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    register_accounting_connection_embedded(
-        state,
+    let _ = path;
+    proxy(
+        gateway(&req)?,
         tenant,
         subject,
-        path,
-        req,
-        body,
         _permission,
         _entitlement,
+        req,
+        payload,
     )
     .await
 }
@@ -227,7 +190,6 @@ pub async fn register_accounting_connection(
 )]
 #[allow(clippy::too_many_arguments)]
 pub async fn start_accounting_authorization(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<(BookId, ConnectionId)>,
@@ -237,31 +199,15 @@ pub async fn start_accounting_authorization(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    start_accounting_authorization_embedded(
-        state,
+    let _ = path;
+    proxy(
+        gateway(&req)?,
         tenant,
         subject,
-        path,
-        req,
-        _fresh_mfa,
         _permission,
         _entitlement,
+        req,
+        payload,
     )
     .await
 }
@@ -277,7 +223,7 @@ pub async fn start_accounting_authorization(
     ),
     responses(
         (status = 204, description = "Provider authorization revoked locally"),
-                (status = 403, description = "Missing tenant.accounting.manage permission, missing accounting.freee entitlement, or fresh MFA missing", body = ProblemDetail),
+        (status = 403, description = "Missing tenant.accounting.manage permission, missing accounting.freee entitlement, or fresh MFA missing", body = ProblemDetail),
         (status = 404, description = "Book or connection not found", body = ProblemDetail),
         (status = 409, description = "The connection is an active, scheduled or draining destination", body = ProblemDetail),
         (status = 503, description = "freee is not configured", body = ProblemDetail),
@@ -286,7 +232,6 @@ pub async fn start_accounting_authorization(
 )]
 #[allow(clippy::too_many_arguments)]
 pub async fn revoke_accounting_authorization(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<(BookId, ConnectionId)>,
@@ -296,31 +241,15 @@ pub async fn revoke_accounting_authorization(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    revoke_accounting_authorization_embedded(
-        state,
+    let _ = path;
+    proxy(
+        gateway(&req)?,
         tenant,
         subject,
-        path,
-        req,
-        _fresh_mfa,
         _permission,
         _entitlement,
+        req,
+        payload,
     )
     .await
 }
@@ -340,7 +269,6 @@ pub async fn revoke_accounting_authorization(
     )
 )]
 pub async fn complete_accounting_authorization(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     req: HttpRequest,
@@ -348,36 +276,14 @@ pub async fn complete_accounting_authorization(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<CompleteAuthorizationRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    complete_accounting_authorization_embedded(
-        state,
+    proxy(
+        gateway(&req)?,
         tenant,
         subject,
-        req,
-        body,
         _permission,
         _entitlement,
+        req,
+        payload,
     )
     .await
 }
@@ -403,10 +309,8 @@ pub async fn complete_accounting_authorization(
         (status = 502, description = "Accounting service rejected platform credentials or returned an invalid response", body = ProblemDetail)
     )
 )]
-// One argument per extractor: each guard runs before the body.
 #[allow(clippy::too_many_arguments)]
 pub async fn activate_accounting_book(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<BookId>,
@@ -416,38 +320,15 @@ pub async fn activate_accounting_book(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<ActivateBookRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    activate_accounting_book_embedded(
-        state,
+    let _ = path;
+    proxy(
+        gateway(&req)?,
         tenant,
         subject,
-        path,
-        req,
-        body,
-        _fresh_mfa,
         _permission,
         _entitlement,
+        req,
+        payload,
     )
     .await
 }
@@ -473,10 +354,8 @@ pub async fn activate_accounting_book(
         (status = 502, description = "Accounting service rejected platform credentials or returned an invalid response", body = ProblemDetail)
     )
 )]
-// One argument per extractor: each guard runs before the body.
 #[allow(clippy::too_many_arguments)]
 pub async fn schedule_accounting_switch(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<BookId>,
@@ -486,38 +365,15 @@ pub async fn schedule_accounting_switch(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    let mut raw: actix_web::dev::Payload = payload.into();
-    let body = web::Json::<ScheduleSwitchRequest>::from_request(&req, &mut raw)
-        .await
-        .map_err(|error| ApiError::BadRequest {
-            detail: error.to_string(),
-        })?;
-    schedule_accounting_switch_embedded(
-        state,
+    let _ = path;
+    proxy(
+        gateway(&req)?,
         tenant,
         subject,
-        path,
-        req,
-        body,
-        _fresh_mfa,
         _permission,
         _entitlement,
+        req,
+        payload,
     )
     .await
 }
@@ -542,7 +398,6 @@ pub async fn schedule_accounting_switch(
     )
 )]
 pub async fn cancel_accounting_switch(
-    state: Option<web::Data<AccountingState>>,
     tenant: CurrentTenant,
     subject: CurrentSubject,
     path: web::Path<BookId>,
@@ -551,22 +406,15 @@ pub async fn cancel_accounting_switch(
     _entitlement: RequiredAnyFeature,
     payload: web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let Some(state) = state else {
-        let gateway = req
-            .app_data::<web::Data<GatewayState>>()
-            .cloned()
-            .ok_or_else(|| ApiError::service_unavailable("Accounting service is not configured"))?;
-        return proxy(
-            gateway,
-            tenant,
-            subject,
-            _permission,
-            _entitlement,
-            req,
-            payload,
-        )
-        .await;
-    };
-    cancel_accounting_switch_embedded(state, tenant, subject, path, req, _permission, _entitlement)
-        .await
+    let _ = path;
+    proxy(
+        gateway(&req)?,
+        tenant,
+        subject,
+        _permission,
+        _entitlement,
+        req,
+        payload,
+    )
+    .await
 }

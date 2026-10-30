@@ -29,13 +29,23 @@ append/outbox insert. A retry after a lost
 acknowledgement produces one durable platform effect. Privacy orchestration uses the
 service's signed `/internal/privacy/review`, failing closed while unavailable.
 
-Historical Accounting migrations and in-process builders remain for pre-cutover
-rollback and existing regression fixtures. They are not selected by the production
-binary. After service traffic starts, keep the service database authoritative even
-when rolling application images back. Dropping old data/source and reclaiming its
-schema are separate contraction changes, after explicit cutover verification.
+## Contraction
 
-No production deployment, data transfer or destructive contraction is performed by
-this change. Apply platform receipt migrations before starting service delivery;
-freeze old writers before copying data. See the service cutover procedure for the
-operator sequence and post-write rollback restrictions.
+The platform no longer holds Accounting data or embedded code. Migration
+`20261030000400_accounting_contraction` drops the `accounting` schema (books,
+connections, candidate connections, historical periods, and postings) and its
+supporting functions/triggers. Its down migration recreates the schema exactly
+as it was, empty. No data was copied out: the only deployment was a development
+environment with no data worth keeping.
+
+`sanvi-accounting` now holds only what fronts the service: the delegation and gateway,
+the published HTTP contract types (`adapters/http/contract.rs`, used for
+`api/accounting.yaml`), route permissions, and the remote privacy provider.
+
+What moved with the data, and is now the service's concern:
+
+- provider credentials (freee/MoneyForward/Xero) and token KEK;
+- books, connections, cutovers, and date-based period routing;
+- posting lifecycle, terminal immutability, and external provider deliveries;
+- privacy export and purge orchestration executed via `/internal/privacy/review`.
+

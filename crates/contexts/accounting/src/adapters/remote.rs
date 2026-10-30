@@ -1,13 +1,10 @@
 //! Authenticated HTTP boundary between the platform and Accounting.
 //! Claims are bound to the exact request and have a thirty-second lifetime.
 
-use crate::{
-    application::{AccountingAccess, Actor, Permission, RequestContext},
-    domain::AccountingError,
-};
 use actix_web::{HttpRequest, HttpResponse, http::StatusCode};
 use chrono::Utc;
 use sanvi_http::{ApiError, Subject, TenantContext};
+use sanvi_kernel::{TenantId, UserId};
 use sanvi_telemetry::Redacted;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -61,6 +58,13 @@ impl ServiceConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestContext {
+    pub request_id: Option<String>,
+    pub ip: Option<std::net::IpAddr>,
+    pub user_agent: Option<String>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Delegation {
     /// Unique per token. Receivers with side effects reject a repeated ID.
@@ -97,6 +101,7 @@ pub struct RequestBinding<'a> {
     pub content_type: &'a str,
     pub if_match: &'a str,
 }
+
 impl<'a> RequestBinding<'a> {
     pub fn json(method: &'a str, target: &'a str, body: &'a [u8]) -> Self {
         Self {
@@ -211,28 +216,19 @@ pub fn header<'a>(request: &'a HttpRequest, name: &str) -> &'a str {
         .unwrap_or_default()
 }
 
-pub struct DelegatedAccess(pub Delegation);
-#[async_trait::async_trait]
-impl AccountingAccess for DelegatedAccess {
-    async fn require(&self, actor: Actor, permission: Permission) -> Result<(), AccountingError> {
-        let expected = match permission {
-            Permission::Read => "tenant.accounting.read",
-            Permission::Manage => "tenant.accounting.manage",
-            Permission::Export => return Err(AccountingError::Forbidden),
-        };
-        match (actor, self.0.tenant.as_ref(), self.0.subject.as_ref()) {
-            (Actor::User { tenant_id, user_id }, Some(tenant), Some(subject))
-                if tenant_id == tenant.tenant_id
-                    && subject.tenant_id == Some(tenant_id)
-                    && user_id == subject.user_id
-                    && (self.0.permission.as_deref() == Some(expected)
-                        || (expected == "tenant.accounting.read" && self.0.can_read))
-                    && self.0.expires_at > Utc::now().timestamp() =>
-            {
-                Ok(())
-            }
-            _ => Err(AccountingError::Forbidden),
-        }
+pub fn request_context(request: &HttpRequest) -> RequestContext {
+    RequestContext {
+        request_id: request
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
+        ip: sanvi_http::client_ip(request),
+        user_agent: request
+            .headers()
+            .get(actix_web::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
     }
 }
 
@@ -247,6 +243,7 @@ pub struct RemoteResponse {
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
+
 impl RemoteResponse {
     pub fn into_http(self) -> Result<HttpResponse, ApiError> {
         let status = StatusCode::from_u16(self.status).map_err(|_| ApiError::BadGateway {
@@ -272,6 +269,7 @@ impl RemoteClient {
             client,
         })
     }
+
     pub async fn send(
         &self,
         claims: &Delegation,
@@ -365,10 +363,20 @@ impl RemoteClient {
     }
 }
 
+#[async_trait::async_trait]
+pub trait AccountingAuthorizer: Send + Sync {
+    async fn check(
+        &self,
+        user_id: UserId,
+        tenant_id: Option<TenantId>,
+        permission: &str,
+    ) -> anyhow::Result<bool>;
+}
+
 #[derive(Clone)]
 pub struct GatewayState {
     pub remote: RemoteClient,
-    pub access: Arc<dyn AccountingAccess>,
+    pub authorizer: Arc<dyn AccountingAuthorizer>,
 }
 
 pub async fn proxy(
@@ -380,28 +388,18 @@ pub async fn proxy(
     request: HttpRequest,
     body: actix_web::web::Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let required = if request.method().is_safe() {
-        Permission::Read
-    } else {
-        Permission::Manage
-    };
-    let actor = Actor::User {
-        tenant_id: tenant.0.tenant_id,
-        user_id: subject.0.user_id,
-    };
-    state
-        .access
-        .require(actor, required)
-        .await
-        .map_err(super::http::api_error)?;
-    let can_read = if required == Permission::Read {
+    let can_read = if permission.key == "tenant.accounting.read" {
         true
     } else {
-        match state.access.require(actor, Permission::Read).await {
-            Ok(()) => true,
-            Err(AccountingError::Forbidden) => false,
-            Err(error) => return Err(super::http::api_error(error)),
-        }
+        state
+            .authorizer
+            .check(
+                subject.0.user_id,
+                Some(tenant.0.tenant_id),
+                "tenant.accounting.read",
+            )
+            .await
+            .unwrap_or(false)
     };
     let content_type = header(&request, "content-type");
     let if_match = header(&request, "if-match");
@@ -422,7 +420,7 @@ pub async fn proxy(
     claims.subject = Some(delegated_subject);
     claims.can_read = can_read;
     claims.permission = Some(permission.key.to_owned());
-    claims.request = super::http::request_context(&request);
+    claims.request = request_context(&request);
     state
         .remote
         .send(&claims, body.to_vec(), content_type, if_match)

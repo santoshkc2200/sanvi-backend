@@ -3160,7 +3160,6 @@ pub fn build_app(
     theming: Option<ThemingWiring>,
     domains: Option<DomainsWiring>,
     advertising: Option<sanvi_advertising::adapters::remote::GatewayState>,
-    accounting: Option<sanvi_accounting::adapters::http::AccountingState>,
     redis: Option<redis::aio::ConnectionManager>,
     ssr_cache: Option<std::sync::Arc<sanvi_cache::SsrCache>>,
     degradation: std::sync::Arc<sanvi_resilience::DegradationRegistry>,
@@ -3294,7 +3293,7 @@ pub fn build_app(
         .app_data(web::Data::new(sanvi_accounting::adapters::remote::GatewayState {
             remote: sanvi_accounting::adapters::remote::RemoteClient::new(&config.accounting_service)
                 .expect("validated Accounting service configuration"),
-            access: Arc::new(accounting::AuthorizerAccess(access.authorizer.clone())),
+            authorizer: Arc::new(accounting::AuthorizerAccountingAccess(access.authorizer.clone())),
         }))
         .app_data(web::Data::new(accounting::AuditIngestState {
             secret: config.accounting_service.inbound_secret.clone(),
@@ -3386,11 +3385,6 @@ pub fn build_app(
         Some(state) => app
             .app_data(web::Data::new(state))
             .configure(advertising_routes::advertising_platform_routes),
-        None => app,
-    };
-
-    let app = match accounting {
-        Some(state) => app.app_data(web::Data::new(state)),
         None => app,
     };
 

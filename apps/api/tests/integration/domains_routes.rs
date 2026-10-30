@@ -338,7 +338,6 @@ async fn build(
         None, // theming
         None, // domains (routes through remote gateway)
         None, // advertising
-        None, // accounting
         None, // redis
         None, // ssr_cache
         Arc::new(sanvi_resilience::DegradationRegistry::default()),
