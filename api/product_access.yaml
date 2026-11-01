@@ -1,5 +1,67 @@
 components:
   schemas:
+    CreateProductRequest:
+      additionalProperties: false
+      description: A new product.
+      properties:
+        description:
+          description: Long description, at most 10000 characters.
+          type:
+          - string
+          - 'null'
+        status:
+          description: '`draft` (default) or `active`.'
+          example: draft
+          type:
+          - string
+          - 'null'
+        tax_class:
+          description: |-
+            `standard` (default), `reduced` or `exempt`: the store rate orders
+            charge on its sales.
+          example: standard
+          type:
+          - string
+          - 'null'
+        title:
+          description: Display title, 1 to 255 characters.
+          example: Linen shirt
+          type: string
+        variants:
+          description: 1 to 100 variants sharing the store's currency and one set of option names.
+          items:
+            $ref: '#/components/schemas/VariantRequest'
+          type: array
+      required:
+      - title
+      - variants
+      type: object
+    CreateStoreRequest:
+      additionalProperties: false
+      description: A new store.
+      properties:
+        currency:
+          description: Upper-case ISO 4217 code every price in the store uses. Fixed once set.
+          example: JPY
+          type: string
+        name:
+          description: Display name, 1 to 120 characters.
+          example: Tokyo flagship
+          type: string
+        slug:
+          description: 3 to 63 lower-case letters, digits or hyphens, unique in the tenant.
+          example: tokyo
+          type: string
+        timezone:
+          description: IANA timezone name.
+          example: Asia/Tokyo
+          type: string
+      required:
+      - name
+      - slug
+      - currency
+      - timezone
+      type: object
     FieldIssue:
       description: |-
         One field-addressed validation issue (TASK-027, FR-1127).
@@ -23,6 +85,65 @@ components:
       required:
       - field
       - message
+      type: object
+    LocationBody:
+      description: A stored stock location.
+      properties:
+        created_at:
+          description: Creation time.
+          format: date-time
+          type: string
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        name:
+          description: Display name.
+          type: string
+        store_id:
+          description: Store identifier.
+          example: '7401234567890120000'
+          type: string
+      required:
+      - id
+      - store_id
+      - name
+      - created_at
+      type: object
+    LocationPageBody:
+      description: One page of locations.
+      properties:
+        items:
+          description: Locations on this page.
+          items:
+            $ref: '#/components/schemas/LocationBody'
+          type: array
+        next_after:
+          description: Cursor for the next page.
+          type:
+          - string
+          - 'null'
+      required:
+      - items
+      type: object
+    MoneyBody:
+      additionalProperties: false
+      description: An amount in minor units with its currency.
+      properties:
+        amount_minor:
+          description: Non-negative amount in the currency's minor unit.
+          example: 4500
+          format: int64
+          type: integer
+        currency:
+          description: Upper-case ISO 4217 code.
+          example: JPY
+          type: string
+      required:
+      - amount_minor
+      - currency
       type: object
     ProblemDetail:
       allOf:
@@ -90,6 +211,470 @@ components:
         - detail
         type: object
       description: RFC 9457 problem detail. This is the only error body the API produces.
+    ProductBody:
+      description: A stored product.
+      properties:
+        created_at:
+          description: Creation time.
+          format: date-time
+          type: string
+        description:
+          description: Long description.
+          type:
+          - string
+          - 'null'
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        import_overrides:
+          description: |-
+            Field paths a merchant changed that the next connector re-import will
+            replace. Empty for first-party products.
+          items:
+            type: string
+          type: array
+        status:
+          $ref: '#/components/schemas/ProductStatusBody'
+          description: Lifecycle status.
+        store_id:
+          description: Store id (decimal Snowflake).
+          example: '7401234567890120000'
+          type: string
+        tax_class:
+          description: '`standard`, `reduced` or `exempt`.'
+          example: standard
+          type: string
+        title:
+          description: Display title.
+          type: string
+        updated_at:
+          description: Time of the last change, or the creation time.
+          format: date-time
+          type: string
+        variants:
+          description: Variants in display order.
+          items:
+            $ref: '#/components/schemas/VariantBody'
+          type: array
+        version:
+          description: Starts at 1 and grows with every change; edits send the version they read.
+          example: 1
+          format: int64
+          type: integer
+      required:
+      - id
+      - store_id
+      - title
+      - status
+      - tax_class
+      - variants
+      - created_at
+      - version
+      - updated_at
+      - import_overrides
+      type: object
+    ProductPageBody:
+      description: One page of products, newest first.
+      properties:
+        items:
+          description: Products on this page.
+          items:
+            $ref: '#/components/schemas/ProductBody'
+          type: array
+        next_cursor:
+          description: Pass as `cursor` for the next page; absent on the last page.
+          type:
+          - string
+          - 'null'
+      required:
+      - items
+      type: object
+    ProductStatusBody:
+      description: Product lifecycle status.
+      enum:
+      - draft
+      - active
+      - archived
+      type: string
+    RoundingBody:
+      additionalProperties: false
+      description: How tax is rounded.
+      properties:
+        level:
+          description: '`line` rounds each line''s tax; `order` rounds once per tax class.'
+          example: order
+          type: string
+        mode:
+          description: '`half_up` or `down`.'
+          example: down
+          type: string
+      required:
+      - level
+      - mode
+      type: object
+    SetStoreTaxRequest:
+      additionalProperties: false
+      description: A store's tax settings, replacing the stored ones.
+      properties:
+        mode:
+          description: |-
+            `none`, `exclusive` (tax added on top of prices) or `inclusive`
+            (prices contain the tax).
+          example: inclusive
+          type: string
+        rates_ppm:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TaxRatesBody'
+            description: Required unless `mode` is `none`, and refused when it is.
+        rounding:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RoundingBody'
+            description: Required unless `mode` is `none`, and refused when it is.
+        version:
+          description: The `version` the change is based on, as last read.
+          example: 1
+          format: int64
+          type: integer
+      required:
+      - version
+      - mode
+      type: object
+    StockLevelBody:
+      description: Stock level for a variant at a location.
+      properties:
+        available:
+          description: Available stock.
+          format: int64
+          type: integer
+        held:
+          description: Quantity held by active reservations.
+          format: int64
+          type: integer
+        location_id:
+          description: Location id.
+          type: string
+        on_hand:
+          description: On-hand balance.
+          format: int64
+          type: integer
+        safety_stock:
+          description: Safety buffer.
+          format: int64
+          type: integer
+        variant_id:
+          description: Variant id.
+          type: string
+      required:
+      - location_id
+      - variant_id
+      - on_hand
+      - safety_stock
+      - held
+      - available
+      type: object
+    StockPageBody:
+      description: One page of stock levels.
+      properties:
+        items:
+          description: Stock levels on this page.
+          items:
+            $ref: '#/components/schemas/StockLevelBody'
+          type: array
+        next_after:
+          description: Cursor for the next page.
+          type:
+          - string
+          - 'null'
+      required:
+      - items
+      type: object
+    StoreBody:
+      description: A stored store.
+      properties:
+        created_at:
+          description: Creation time.
+          format: date-time
+          type: string
+        currency:
+          description: Currency of every price in the store.
+          type: string
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        name:
+          description: Display name.
+          type: string
+        slug:
+          description: URL-safe handle, unique in the tenant.
+          type: string
+        status:
+          $ref: '#/components/schemas/StoreStatusBody'
+          description: Lifecycle status.
+        tax:
+          $ref: '#/components/schemas/StoreTaxBody'
+          description: Tax settings orders are placed under.
+        timezone:
+          description: IANA timezone name.
+          type: string
+        updated_at:
+          description: Time of the last change, or the creation time.
+          format: date-time
+          type: string
+        version:
+          description: Starts at 1 and grows with every change; edits send the version they read.
+          example: 1
+          format: int64
+          type: integer
+      required:
+      - id
+      - name
+      - slug
+      - currency
+      - timezone
+      - status
+      - tax
+      - created_at
+      - version
+      - updated_at
+      type: object
+    StorePageBody:
+      description: One page of stores, newest first.
+      properties:
+        items:
+          description: Stores on this page.
+          items:
+            $ref: '#/components/schemas/StoreBody'
+          type: array
+        next_cursor:
+          description: Pass as `cursor` for the next page; absent on the last page.
+          type:
+          - string
+          - 'null'
+      required:
+      - items
+      type: object
+    StoreStatusBody:
+      description: Store lifecycle status.
+      enum:
+      - active
+      - archived
+      type: string
+    StoreTaxBody:
+      description: A store's tax settings.
+      properties:
+        mode:
+          description: '`none`, `exclusive` or `inclusive`.'
+          example: inclusive
+          type: string
+        rates_ppm:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TaxRatesBody'
+            description: Absent when `mode` is `none`.
+        rounding:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RoundingBody'
+            description: Absent when `mode` is `none`.
+      required:
+      - mode
+      type: object
+    StoreVersionRequest:
+      additionalProperties: false
+      description: The version an archive or restore is based on.
+      properties:
+        version:
+          description: The `version` as last read.
+          example: 1
+          format: int64
+          type: integer
+      required:
+      - version
+      type: object
+    TaxRatesBody:
+      additionalProperties: false
+      description: Tax rates in parts per million (10% is `100000`); `exempt` is always 0.
+      properties:
+        reduced:
+          description: |-
+            Rate of the `reduced` class, 0 to 500000; the standard rate when the
+            store has no reduced rate.
+          example: 80000
+          format: int64
+          type: integer
+        standard:
+          description: Rate of the `standard` class, 0 to 500000.
+          example: 100000
+          format: int64
+          type: integer
+      required:
+      - standard
+      - reduced
+      type: object
+    UpdateProductRequest:
+      additionalProperties: false
+      description: A full replacement of a product's editable fields.
+      properties:
+        acknowledge_import_overwrite:
+          description: |-
+            Apply changes to fields a connector re-import will replace. Without it,
+            such an edit is refused with `ecommerce/import-overwrite-warning`.
+          type: boolean
+        description:
+          description: Long description; leaving it out clears it.
+          type:
+          - string
+          - 'null'
+        status:
+          description: '`draft`, `active` or `archived`.'
+          example: active
+          type: string
+        tax_class:
+          description: '`standard`, `reduced` or `exempt`; leaving it out keeps the current class.'
+          example: reduced
+          type:
+          - string
+          - 'null'
+        title:
+          description: Display title, 1 to 255 characters.
+          type: string
+        variants:
+          description: Every existing variant by `id`, plus new ones without an `id`.
+          items:
+            $ref: '#/components/schemas/UpdateVariantRequest'
+          type: array
+        version:
+          description: The `version` the edit is based on, as last read.
+          example: 1
+          format: int64
+          type: integer
+      required:
+      - version
+      - title
+      - status
+      - variants
+      type: object
+    UpdateStoreRequest:
+      additionalProperties: false
+      description: New values for a store's editable fields. The slug and currency are fixed.
+      properties:
+        name:
+          description: Display name, 1 to 120 characters.
+          example: Tokyo flagship
+          type: string
+        timezone:
+          description: IANA timezone name.
+          example: Asia/Tokyo
+          type: string
+        version:
+          description: The `version` the edit is based on, as last read.
+          example: 1
+          format: int64
+          type: integer
+      required:
+      - version
+      - name
+      - timezone
+      type: object
+    UpdateVariantRequest:
+      additionalProperties: false
+      description: An edited or new variant.
+      properties:
+        archived:
+          description: Withdraw the variant from sale; existing holds still commit.
+          type: boolean
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type:
+          - string
+          - 'null'
+        options:
+          additionalProperties:
+            type: string
+          description: Up to 3 option names mapped to values.
+          propertyNames:
+            type: string
+          type: object
+        price:
+          $ref: '#/components/schemas/MoneyBody'
+          description: Unit price, in the store's currency.
+        sku:
+          description: Up to 64 characters without whitespace, unique within the store.
+          type:
+          - string
+          - 'null'
+      required:
+      - price
+      type: object
+    VariantBody:
+      description: A stored variant.
+      properties:
+        archived:
+          description: Withdrawn from sale; existing holds may still be committed.
+          type: boolean
+        id:
+          examples:
+          - '873698342314721281'
+          format: snowflake-id
+          pattern: ^[1-9][0-9]{0,18}$
+          type: string
+        options:
+          additionalProperties:
+            type: string
+          description: Option name to value.
+          propertyNames:
+            type: string
+          type: object
+        price:
+          $ref: '#/components/schemas/MoneyBody'
+          description: Unit price.
+        sku:
+          description: Stock-keeping unit.
+          type:
+          - string
+          - 'null'
+      required:
+      - id
+      - options
+      - price
+      - archived
+      type: object
+    VariantRequest:
+      additionalProperties: false
+      description: A new variant.
+      properties:
+        options:
+          additionalProperties:
+            type: string
+          description: Up to 3 option names mapped to values.
+          example:
+            size: M
+          propertyNames:
+            type: string
+          type: object
+        price:
+          $ref: '#/components/schemas/MoneyBody'
+          description: Unit price.
+        sku:
+          description: Up to 64 characters without whitespace, unique within the store.
+          example: SHIRT-M
+          type:
+          - string
+          - 'null'
+      required:
+      - price
+      type: object
 info:
   description: Multi-tenant SaaS platform API (v1)
   license:
@@ -287,6 +872,897 @@ paths:
       summary: |-
         Write through to ecommerce-connectors: `POST /api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}`
         becomes `POST /v1/{tail}`.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores:
+    get:
+      operationId: ecommerce_list_stores
+      parameters:
+      - description: Page size, 1 to 100 (default 50).
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      - description: '`next_cursor` from the previous page.'
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorePageBody'
+          description: One page
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid paging parameters
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.store.read` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: List the tenant's stores in every status, newest first.
+      tags:
+      - product_access
+    post:
+      description: |-
+        Retrying with the same `Idempotency-Key` and body returns the store the
+        first request created, with `Idempotency-Replayed: true`.
+      operationId: ecommerce_create_store
+      parameters:
+      - description: 1 to 255 visible ASCII characters, unique per tenant
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStoreRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBody'
+          description: Created, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              description: '`true` when replayed'
+              schema:
+                type: string
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid fields
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.store.manage`, or the plan's store limit is
+            reached (`ecommerce/store-limit-reached`), or the platform refused
+            the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: The slug is already used in the tenant (`ecommerce/slug-taken`)
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Idempotency-Key reused with a different body
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Open a store, within the plan's `ecommerce.stores.max` active stores.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}:
+    get:
+      operationId: ecommerce_get_store
+      parameters:
+      - description: A store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBody'
+          description: The store
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed path or oversized body
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.store.read` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No store with this id in the tenant
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Read one of the tenant's stores, in any status.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/archive:
+    post:
+      description: |-
+        Its catalog, stock and reservations then read as missing; the store
+        itself stays readable and frees a slot of the plan's store limit.
+        Archiving an archived store returns it.
+      operationId: ecommerce_archive_store
+      parameters:
+      - description: A store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreVersionRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBody'
+          description: The archived store
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid fields
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.store.manage` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No store with this id in the tenant
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: A newer version exists (`ecommerce/version-conflict`), or a reservation still holds stock (`ecommerce/store-has-held-reservations`)
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Archive a store.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/locations:
+    get:
+      operationId: ecommerce_list_locations
+      parameters:
+      - description: An active store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      - description: Page size, 1 to 100 (default 50).
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      - description: Pass location id to fetch items with lower ids.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationPageBody'
+          description: One page
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid paging parameters
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.inventory.read` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No active store with this id in the tenant
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: List an active store's stock locations.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/products:
+    get:
+      operationId: ecommerce_list_products
+      parameters:
+      - description: An active store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      - description: Page size, 1 to 100 (default 50).
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      - description: '`next_cursor` from the previous page.'
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPageBody'
+          description: One page
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid paging parameters
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.product.read` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No active store with this id in the tenant
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: List an active store's products, newest first.
+      tags:
+      - product_access
+    post:
+      description: |-
+        Retrying with the same `Idempotency-Key` and body returns the product the
+        first request created, with `Idempotency-Replayed: true`.
+      operationId: ecommerce_create_product
+      parameters:
+      - description: An active store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      - description: 1 to 255 visible ASCII characters, unique per store
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+        required: true
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductBody'
+          description: Created, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              description: '`true` when replayed'
+              schema:
+                type: string
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid fields
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.product.manage` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No active store with this id in the tenant
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: A SKU is already used in the store (`ecommerce/sku-taken`)
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Idempotency-Key reused with a different body
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Create a product in an active store.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}:
+    get:
+      operationId: ecommerce_get_product
+      parameters:
+      - description: An active store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      - description: A product of that store (decimal Snowflake)
+        in: path
+        name: product_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductBody'
+          description: The product
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Malformed path or oversized body
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.product.read` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No active store, or no such product in it
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Read one product of an active store, in any status.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}/update:
+    post:
+      description: |-
+        The body replaces every editable field and names the `version` it was
+        based on. An edit that changes nothing returns the product, so a retry of
+        an applied edit succeeds.
+      operationId: ecommerce_update_product
+      parameters:
+      - description: An active store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      - description: A product of that store (decimal Snowflake)
+        in: path
+        name: product_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProductRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductBody'
+          description: The product after the edit
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid fields
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.product.manage` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No active store, or no such product in it
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: A newer version exists (`ecommerce/version-conflict`), a SKU is taken, or the edit changes imported fields without `acknowledge_import_overwrite` (`ecommerce/import-overwrite-warning`)
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Edit, archive or restore a product.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/stock:
+    get:
+      operationId: ecommerce_list_stock
+      parameters:
+      - description: An active store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      - description: Location id to filter by.
+        in: query
+        name: location_id
+        required: true
+        schema:
+          type: string
+      - description: Page size, 1 to 100 (default 50).
+        in: query
+        name: limit
+        required: false
+        schema:
+          format: int32
+          minimum: 0
+          type: integer
+      - description: Variant id cursor for subsequent pages.
+        in: query
+        name: after
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockPageBody'
+          description: One page of stock levels
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid query parameters
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.inventory.read` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No active store with this id in the tenant
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: List stock levels at a location.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/tax:
+    post:
+      description: |-
+        Orders placed afterwards, including those from reservations held before,
+        use the new settings; placed orders keep theirs. Settings equal to the
+        stored ones return the store, so a retry of an applied change succeeds.
+      operationId: ecommerce_set_store_tax
+      parameters:
+      - description: A store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetStoreTaxRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBody'
+          description: The store after the change
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid fields
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.store.manage` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No store with this id in the tenant
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: A newer version exists (`ecommerce/version-conflict`)
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Set the tax settings orders of a store are placed under, in any status.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/unarchive:
+    post:
+      operationId: ecommerce_unarchive_store
+      parameters:
+      - description: A store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreVersionRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBody'
+          description: The active store
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid fields
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.store.manage`, or the plan's store limit is
+            reached (`ecommerce/store-limit-reached`), or the platform refused
+            the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No store with this id in the tenant
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: A newer version exists (`ecommerce/version-conflict`)
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: |-
+        Restore an archived store, within the plan's `ecommerce.stores.max`.
+        Restoring an active store returns it.
+      tags:
+      - product_access
+  /api/v1/tenant/ecommerce/stores/{store_id}/update:
+    post:
+      description: |-
+        An edit that changes nothing returns the store, so a retry of an applied
+        edit succeeds.
+      operationId: ecommerce_update_store
+      parameters:
+      - description: A store of the caller's tenant (decimal Snowflake)
+        in: path
+        name: store_id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStoreRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBody'
+          description: The store after the edit
+        '400':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: Invalid fields
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: |-
+            Missing `ecommerce.store.manage` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: No store with this id in the tenant
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: A newer version exists (`ecommerce/version-conflict`)
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+      summary: Rename a store or change its timezone, in any status.
       tags:
       - product_access
   /api/v1/tenant/ecommerce/{tail}:

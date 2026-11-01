@@ -212,7 +212,7 @@ use utoipa::OpenApi;
         sanvi_product_access::adapters::http::handlers::proxy_import_delete,
         sanvi_product_access::adapters::http::handlers::proxy_import_callback,
     ),
-    modifiers(&AdvertisingContract),
+    modifiers(&AdvertisingContract, &EcommerceContract),
     components(schemas(
         sanvi_http::quotas::TenantUsage,
         sanvi_http::quotas::QuotaDimension,
@@ -240,7 +240,7 @@ use utoipa::OpenApi;
         (name = "advertising", description = "Tenant advertising. Money is integer minor units paired with ISO-4217 account currency; rendered FX values carry their rate date. Problem types: advertising/platform-unavailable, advertising/connection-not-active, advertising/capability-unsupported, advertising/token-expired, advertising/directive-suppressed, advertising/budget-cap-reached. Every mutating endpoint requires Idempotency-Key."),
         (name = "accounting", description = "Gateway to the separately deployed Accounting service. Tenant destinations and freee consent. Internal audit/event ingestion requires request-bound service delegation. Problem types: accounting/authorization-rejected, accounting/reauthorization-required, accounting/verification-failed, accounting/provider-unavailable. Book mutations require If-Match with the book revision. Nothing is posted to a provider yet."),
         (name = "media", description = "Tenant media assets: multipart upload (presign/complete), asset reads/deletes and delivery URLs via hitox-media-service. Upstream failures surface as problems carrying a `code` extension member."),
-        (name = "product_access", description = "Platform proxy to separately deployed product services. `/api/v1/tenant/ecommerce/{tail}` forwards to ecommerce-service `/v1/{tail}` with a signed delegation (tenant, user, the user's ecommerce.* permissions, plan limits) after checking the tenant's products.ecommerce.enabled entitlement. `/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}` forwards to ecommerce-connectors `/v1/{tail}` with a signed connector identity token after checking products.ecommerce.enabled and ecommerce.import.* permissions. The product service's own contract documents each route; its responses pass through.")
+        (name = "product_access", description = "Platform proxy to separately deployed product services. `/api/v1/tenant/ecommerce/{tail}` forwards to ecommerce-service `/v1/{tail}` with a signed delegation (tenant, user, the user's ecommerce.* permissions, plan limits) after checking the tenant's products.ecommerce.enabled entitlement. `/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}` forwards to ecommerce-connectors `/v1/{tail}` with a signed connector identity token after checking products.ecommerce.enabled and ecommerce.import.* permissions. The proxied ecommerce surface is also enumerated below with schemas mirrored from the service's contract v0.1.0 (stores, products with variants/prices, read-only stock — phase 13; the `{tail}` passthrough stays for any un-mirrored route); the service's responses, including its problem documents, pass through.")
     ),
     info(
         title = "Sanvi API",
@@ -250,56 +250,90 @@ use utoipa::OpenApi;
 )]
 pub struct ApiDoc;
 
-struct AdvertisingContract;
-impl utoipa::Modify for AdvertisingContract {
-    fn modify(&self, document: &mut utoipa::openapi::OpenApi) {
-        let mut value: serde_json::Value = serde_yaml::from_str(include_str!(
-            "../../../crates/contexts/advertising/contract.yaml"
-        ))
-        .expect("validated Advertising contract YAML");
-        // Per-context published documents omit shared document metadata.
-        value["openapi"] = serde_json::json!("3.1.0");
-        value["info"] = serde_json::json!({ "title": "Advertising", "version": "0.10.0" });
-        // Utoipa serializes unrestricted JSON as `{}`, but its deserializer
-        // requires an explicit null type to reconstruct the same AnyValue schema.
-        fn prepare_schema(schema: &mut serde_json::Value) {
-            let Some(object) = schema.as_object_mut() else {
-                return;
-            };
-            if !["type", "$ref", "allOf", "anyOf", "oneOf"]
-                .iter()
-                .any(|key| object.contains_key(*key))
-            {
-                object.insert("type".into(), serde_json::Value::Null);
+/// Merges a committed per-service contract YAML (paths already prefixed with
+/// the platform routes that reach them, schemas mirrored from the service's
+/// own document) into the merged platform document. Both the advertising
+/// gateway and the product_access proxy publish their proxied surfaces this
+/// way; the yaml is the only place the mirrored shapes live.
+fn merge_contract_yaml(
+    document: &mut utoipa::openapi::OpenApi,
+    yaml: &str,
+    title: &str,
+    version: &str,
+) {
+    let mut value: serde_json::Value =
+        serde_yaml::from_str(yaml).expect("validated service contract YAML");
+    // Per-context published documents omit shared document metadata.
+    value["openapi"] = serde_json::json!("3.1.0");
+    value["info"] = serde_json::json!({ "title": title, "version": version });
+    // Utoipa serializes unrestricted JSON as `{}`, but its deserializer
+    // requires an explicit null type to reconstruct the same AnyValue schema.
+    fn prepare_schema(schema: &mut serde_json::Value) {
+        let Some(object) = schema.as_object_mut() else {
+            return;
+        };
+        if !["type", "$ref", "allOf", "anyOf", "oneOf"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+        {
+            object.insert("type".into(), serde_json::Value::Null);
+        }
+        if let Some(properties) = object.get_mut("properties").and_then(|v| v.as_object_mut()) {
+            for property in properties.values_mut() {
+                prepare_schema(property);
             }
-            if let Some(properties) = object.get_mut("properties").and_then(|v| v.as_object_mut()) {
-                for property in properties.values_mut() {
-                    prepare_schema(property);
-                }
+        }
+        for key in ["items", "additionalProperties"] {
+            if let Some(child) = object.get_mut(key) {
+                prepare_schema(child);
             }
-            for key in ["items", "additionalProperties"] {
-                if let Some(child) = object.get_mut(key) {
+        }
+        for key in ["allOf", "anyOf", "oneOf"] {
+            if let Some(children) = object.get_mut(key).and_then(|v| v.as_array_mut()) {
+                for child in children {
                     prepare_schema(child);
                 }
             }
-            for key in ["allOf", "anyOf", "oneOf"] {
-                if let Some(children) = object.get_mut(key).and_then(|v| v.as_array_mut()) {
-                    for child in children {
-                        prepare_schema(child);
-                    }
-                }
-            }
         }
-        for schema in value["components"]["schemas"]
-            .as_object_mut()
-            .expect("contract schemas")
-            .values_mut()
-        {
-            prepare_schema(schema);
-        }
-        let contract: utoipa::openapi::OpenApi =
-            serde_json::from_value(value).expect("validated Advertising service contract");
-        document.merge(contract);
+    }
+    for schema in value["components"]["schemas"]
+        .as_object_mut()
+        .expect("contract schemas")
+        .values_mut()
+    {
+        prepare_schema(schema);
+    }
+    let contract: utoipa::openapi::OpenApi =
+        serde_json::from_value(value).expect("validated service contract");
+    document.merge(contract);
+}
+
+struct AdvertisingContract;
+impl utoipa::Modify for AdvertisingContract {
+    fn modify(&self, document: &mut utoipa::openapi::OpenApi) {
+        merge_contract_yaml(
+            document,
+            include_str!("../../../crates/contexts/advertising/contract.yaml"),
+            "Advertising",
+            "0.10.0",
+        );
+    }
+}
+
+/// The ecommerce surface the product_access proxy forwards, mirrored from
+/// `ecommerce-service/api/openapi.yaml` v0.1.0 (phase 13): stores, products
+/// with variants/prices, and read-only stock. The `{tail}` passthrough route
+/// stays as-is; this enumerates the routes the admin console's generated
+/// client types against.
+struct EcommerceContract;
+impl utoipa::Modify for EcommerceContract {
+    fn modify(&self, document: &mut utoipa::openapi::OpenApi) {
+        merge_contract_yaml(
+            document,
+            include_str!("../../../crates/contexts/product_access/ecommerce-contract.yaml"),
+            "Ecommerce (proxied)",
+            "0.1.0",
+        );
     }
 }
 
@@ -474,6 +508,50 @@ mod tests {
         assert!(json.contains("/api/v1/tenant/accounting/books"));
         assert!(json.contains("/api/v1/tenant/accounting/authorization/callback"));
         assert!(json.contains("\"accounting\""));
+    }
+
+    #[test]
+    fn doc_contains_the_proxied_ecommerce_contract() {
+        let document: serde_json::Value =
+            serde_json::from_str(&ApiDoc::openapi().to_json().unwrap()).unwrap();
+        let paths = document["paths"].as_object().unwrap();
+        for path in [
+            "/api/v1/tenant/ecommerce/stores",
+            "/api/v1/tenant/ecommerce/stores/{store_id}",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/update",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/tax",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/archive",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/unarchive",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/locations",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/products",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}/update",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/stock",
+        ] {
+            assert!(
+                paths.contains_key(path),
+                "missing mirrored ecommerce path {path}"
+            );
+        }
+        // The frozen passthrough stays alongside the enumerated mirror.
+        assert!(paths.contains_key("/api/v1/tenant/ecommerce/{tail}"));
+        let schemas = document["components"]["schemas"].as_object().unwrap();
+        for schema in [
+            "StoreBody",
+            "ProductBody",
+            "VariantBody",
+            "MoneyBody",
+            "StockPageBody",
+        ] {
+            assert!(
+                schemas.contains_key(schema),
+                "missing mirrored schema {schema}"
+            );
+        }
+        // Store and product ids are decimal-string Snowflakes: the mirror keeps
+        // them strings, never numbers.
+        let store_id = &schemas["StoreBody"]["properties"]["id"];
+        assert_eq!(store_id["type"], "string");
     }
 
     #[test]

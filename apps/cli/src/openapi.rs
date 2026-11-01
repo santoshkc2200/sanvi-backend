@@ -107,9 +107,21 @@ fn replace_id_schema(property: &mut serde_json::Value, snowflake_schema: &serde_
         if let Some(items) = property.get_mut("items") {
             *items = snowflake_schema.clone();
         }
-    } else {
-        *property = snowflake_schema.clone();
+        return;
     }
+    // A nullable id (type: [string, "null"], e.g. a mirrored service contract's
+    // "the variant edited; leave out for a new variant") keeps its null: the
+    // shared snowflake schema replaces the string shape, never the null.
+    if property.get("type").is_some_and(|kind| {
+        kind.as_array()
+            .is_some_and(|types| types.iter().any(|kind| kind == "null"))
+    }) {
+        let mut nullable = snowflake_schema.clone();
+        nullable["type"] = serde_json::json!(["string", "null"]);
+        *property = nullable;
+        return;
+    }
+    *property = snowflake_schema.clone();
 }
 
 fn is_snowflake_field(name: &str) -> bool {

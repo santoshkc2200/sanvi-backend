@@ -347,7 +347,9 @@ components:
           - '873698342314721281'
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
-          type: string
+          type:
+          - string
+          - 'null'
         subject_ref:
           $ref: '#/components/schemas/SubjectRef'
         tenant_id:
@@ -355,7 +357,9 @@ components:
           - '873698342314721281'
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
-          type: string
+          type:
+          - string
+          - 'null'
         withdrawn_at:
           format: date-time
           type:
@@ -1309,7 +1313,9 @@ components:
           - '873698342314721281'
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
-          type: string
+          type:
+          - string
+          - 'null'
       required:
       - request_id
       - subject_key
@@ -1604,7 +1610,9 @@ components:
           - '873698342314721281'
           format: snowflake-id
           pattern: ^[1-9][0-9]{0,18}$
-          type: string
+          type:
+          - string
+          - 'null'
       required:
       - kind
       - key
