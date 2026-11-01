@@ -1,0 +1,1 @@
+DROP TABLE platform.ecommerce_public_store_bindings;

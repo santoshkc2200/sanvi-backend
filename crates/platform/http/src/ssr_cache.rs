@@ -87,6 +87,10 @@ pub const SSR_CACHE_EXCLUDED_PREFIXES: &[&str] = &[
     // change) do not fire on tenant lifecycle changes.
     "/api/v1/public/tenant-context",
     "/api/v1/public/slug-availability",
+    // The shopper catalog (phase 14): prices, stock and store bindings
+    // change without any invalidation event, and the no-store posture is
+    // the phase's policy (CDN caching is a later optimization).
+    "/api/v1/public/ecommerce",
 ];
 
 /// The coarse device partition behind [`DeviceClass`] (FR-1111): the

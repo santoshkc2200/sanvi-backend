@@ -5,7 +5,7 @@ use serde::Deserialize;
 /// `SANVI__PRODUCT_ACCESS__SIGNING_KEY_SEED`), never from committed files.
 /// The defaults leave every product unconfigured: the process boots and
 /// every product request fails closed with 503.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ProductAccessConfig {
     /// Key id placed in delegation-token headers.
     #[serde(default)]
@@ -13,10 +13,30 @@ pub struct ProductAccessConfig {
     /// 32-byte Ed25519 seed, hex. Product services trust its public key.
     #[serde(default)]
     pub signing_key_seed: String,
+    /// How long a purchase credential grants order access, in seconds.
+    /// Short-lived by design; the status link states its expiry.
+    #[serde(default = "default_credential_ttl_secs")]
+    pub purchase_credential_ttl_secs: i64,
     #[serde(default)]
     pub ecommerce: UpstreamConfig,
     #[serde(default)]
     pub connectors: UpstreamConfig,
+}
+
+fn default_credential_ttl_secs() -> i64 {
+    crate::domain::DEFAULT_CREDENTIAL_TTL_SECS
+}
+
+impl Default for ProductAccessConfig {
+    fn default() -> Self {
+        Self {
+            signing_key_id: String::new(),
+            signing_key_seed: String::new(),
+            purchase_credential_ttl_secs: default_credential_ttl_secs(),
+            ecommerce: UpstreamConfig::default(),
+            connectors: UpstreamConfig::default(),
+        }
+    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -52,9 +72,13 @@ impl std::fmt::Debug for UpstreamConfig {
 impl serde::Serialize for ProductAccessConfig {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ProductAccessConfig", 4)?;
+        let mut state = serializer.serialize_struct("ProductAccessConfig", 5)?;
         state.serialize_field("signing_key_id", &self.signing_key_id)?;
         state.serialize_field("signing_key_seed", "[REDACTED]")?;
+        state.serialize_field(
+            "purchase_credential_ttl_secs",
+            &self.purchase_credential_ttl_secs,
+        )?;
         state.serialize_field("ecommerce", &self.ecommerce)?;
         state.serialize_field("connectors", &self.connectors)?;
         state.end()
@@ -114,6 +138,7 @@ mod tests {
         ProductAccessConfig {
             signing_key_id: "dev-ed25519-1".into(),
             signing_key_seed: SEED.into(),
+            purchase_credential_ttl_secs: crate::domain::DEFAULT_CREDENTIAL_TTL_SECS,
             ecommerce: UpstreamConfig {
                 base_url: "http://127.0.0.1:18081".into(),
                 service_key: "dev-service-key-current".into(),

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform.ecommerce_public_store_bindings (tenant_id, store_id) VALUES ($1, $2) ON CONFLICT (tenant_id) DO UPDATE SET store_id = EXCLUDED.store_id, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "067968e59d19c67c89171d76a0b6584826e2a76b30e810574009d8e9980ccb32"
+}

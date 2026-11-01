@@ -3208,8 +3208,11 @@ pub fn build_app(
         degradation.clone(),
         access.tx_manager.clone(),
     );
-    let product_access_state =
-        product_access::build_product_access_state(&config.product_access, &access);
+    let product_access_state = product_access::build_product_access_state(
+        &config.product_access,
+        &access,
+        tenancy.host_resolver.clone(),
+    );
 
     // The billing context mounts its tenant routes inside the shared tenant
     // scope (a second scope on the same prefix would shadow the first).
@@ -3449,6 +3452,14 @@ pub fn build_app(
             .configure(theming_routes::theming_platform_routes),
         None => app,
     };
+
+    // Phase-14: the public shopper scope (host-resolved, unauthenticated)
+    // and the tenant-side published-store binding routes. The shopper
+    // scope fails closed with 503 while ecommerce-service is unconfigured,
+    // matching the tenant proxy's posture.
+    let app = app
+        .configure(sanvi_product_access::routes::product_access_public_routes)
+        .configure(sanvi_product_access::routes::product_access_binding_routes);
 
     // Phase-08 gate: the domains context's platform and internal routes
     // (the tenant routes mount inside the shared tenant scope above). The

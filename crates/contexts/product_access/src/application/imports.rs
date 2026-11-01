@@ -130,6 +130,25 @@ mod tests {
         fn sign_connector(&self, claims: &ConnectorClaims) -> Result<String, ProductAccessError> {
             Ok(serde_json::to_string(claims).unwrap())
         }
+        fn sign_checkout(
+            &self,
+            claims: &crate::domain::CheckoutClaims,
+        ) -> Result<String, ProductAccessError> {
+            Ok(serde_json::to_string(claims).unwrap())
+        }
+
+        fn sign_credential(
+            &self,
+            claims: &crate::domain::PurchaseCredentialClaims,
+        ) -> Result<String, ProductAccessError> {
+            Ok(serde_json::to_string(claims).unwrap())
+        }
+
+        fn verify_json(&self, _: &str) -> Result<serde_json::Value, ProductAccessError> {
+            Err(ProductAccessError::Unavailable(
+                "test signer does not verify".to_owned(),
+            ))
+        }
     }
 
     #[derive(Default)]

@@ -197,6 +197,15 @@ def generate(root):
     for key, operation in operations.items():
         if key not in rows:
             raise ValueError(f"unmapped OpenAPI route: {key}")
+        if rows[key].get("mirror_of"):
+            # A mirrored service surface (the ecommerce contract merge)
+            # documents the routes the `{tail}` proxy forwards; it has no
+            # utoipa annotation or runtime route of its own. The proxy row
+            # it names carries both.
+            method, _, target = rows[key]["mirror_of"].partition(" ")
+            if (method.upper(), target) not in rows:
+                raise ValueError(f"mirror_of names no mapped route: {key}")
+            continue
         if key not in annotated or annotated[key] != rows[key]["handler"]:
             raise ValueError(f"OpenAPI route lacks matching handler annotation: {key}")
         handler_file, handler_name = rows[key]["handler"].rsplit("::", 1)
@@ -211,6 +220,8 @@ def generate(root):
             raise ValueError(f"annotated route absent from OpenAPI: {key}")
     mapped_targets = set()
     for row in rows.values():
+        if row.get("mirror_of"):
+            continue
         relative, name = row["handler"].rsplit("::", 1)
         context = relative.split("/")[2] if relative.startswith("crates/") else "app"
         mapped_targets.add((context, name))

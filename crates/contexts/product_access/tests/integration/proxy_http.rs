@@ -13,9 +13,10 @@ use sanvi_http::{
 use sanvi_kernel::{RoleId, TenantId, UserId};
 use sanvi_product_access::adapters::http::ProductAccessState;
 use sanvi_product_access::adapters::{Ed25519Signer, HttpProductUpstream};
-use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest};
+use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest, ShopperScope};
 use sanvi_product_access::domain::{
-    CONNECTORS, ECOMMERCE, EntitlementView, ProductAccessError, RolePermissions, TenantEntitlements,
+    CONNECTORS, ECOMMERCE, EntitlementView, HostTenants, ProductAccessError, RolePermissions,
+    ShopperTenant, StoreBindings, TenantEntitlements,
 };
 use sanvi_product_access::routes::product_access_tenant_scope_routes;
 
@@ -171,10 +172,40 @@ fn state(base_url: &str, grants: Grants) -> ProductAccessState {
         )),
         imports: Arc::new(ProxyImportRequest::new(
             grants.clone(),
-            grants,
-            signer,
+            grants.clone(),
+            signer.clone(),
             Arc::new(HttpProductUpstream::new(&CONNECTORS, base_url, SERVICE_KEY).unwrap()),
         )),
+        shopper: Arc::new(ShopperScope::new(
+            Arc::new(NoHostTenants),
+            grants.clone(),
+            Arc::new(NoBindings),
+            signer,
+            Arc::new(HttpProductUpstream::new(&ECOMMERCE, base_url, SERVICE_KEY).unwrap()),
+            3600,
+        )),
+    }
+}
+
+struct NoHostTenants;
+
+#[async_trait]
+impl HostTenants for NoHostTenants {
+    async fn resolve(&self, _: &str) -> Result<Option<ShopperTenant>, ProductAccessError> {
+        Ok(None)
+    }
+}
+
+struct NoBindings;
+
+#[async_trait]
+impl StoreBindings for NoBindings {
+    async fn published_store(&self, _: TenantId) -> Result<Option<i64>, ProductAccessError> {
+        Ok(None)
+    }
+
+    async fn publish(&self, _: TenantId, _: Option<i64>) -> Result<(), ProductAccessError> {
+        Ok(())
     }
 }
 

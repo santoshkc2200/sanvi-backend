@@ -3,10 +3,11 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 
 use crate::domain::{
-    ConnectorClaims, DelegationClaims, PrivacyClaims, ProductAccessError, TokenSigner,
+    CheckoutClaims, ConnectorClaims, DelegationClaims, PrivacyClaims, ProductAccessError,
+    PurchaseCredentialClaims, TokenSigner,
 };
 
 pub struct Ed25519Signer {
@@ -68,6 +69,44 @@ impl Ed25519Signer {
     }
 }
 
+impl Ed25519Signer {
+    /// Verifies a compact JWT signed by this key: three segments, an EdDSA
+    /// header carrying this signer's `kid`, and a signature over the
+    /// signing input. Returns the claims payload; audience and expiry are
+    /// the caller's decision.
+    fn verify_compact(&self, token: &str) -> Result<serde_json::Value, ProductAccessError> {
+        let bad =
+            || ProductAccessError::BadRequest("token is not a valid signed document".to_owned());
+        let mut parts = token.split('.');
+        let (header_b64, claims_b64, signature_b64) =
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some(h), Some(c), Some(s)) if parts.next().is_none() => (h, c, s),
+                _ => return Err(bad()),
+            };
+        let header: serde_json::Value = URL_SAFE_NO_PAD
+            .decode(header_b64)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or_else(bad)?;
+        if header.get("alg").and_then(|v| v.as_str()) != Some("EdDSA")
+            || header.get("kid").and_then(|v| v.as_str()) != Some(self.kid.as_str())
+        {
+            return Err(bad());
+        }
+        let signature = URL_SAFE_NO_PAD.decode(signature_b64).map_err(|_| bad())?;
+        let signing_input = format!("{header_b64}.{claims_b64}");
+        UnparsedPublicKey::new(&ED25519, self.key.public_key().as_ref())
+            .verify(signing_input.as_bytes(), &signature)
+            .map_err(|_| bad())?;
+        let claims: serde_json::Value = URL_SAFE_NO_PAD
+            .decode(claims_b64)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or_else(bad)?;
+        Ok(claims)
+    }
+}
+
 impl TokenSigner for Ed25519Signer {
     fn sign(&self, claims: &DelegationClaims) -> Result<String, ProductAccessError> {
         self.sign_json(claims)
@@ -79,6 +118,21 @@ impl TokenSigner for Ed25519Signer {
 
     fn sign_connector(&self, claims: &ConnectorClaims) -> Result<String, ProductAccessError> {
         self.sign_json(claims)
+    }
+
+    fn sign_checkout(&self, claims: &CheckoutClaims) -> Result<String, ProductAccessError> {
+        self.sign_json(claims)
+    }
+
+    fn sign_credential(
+        &self,
+        claims: &PurchaseCredentialClaims,
+    ) -> Result<String, ProductAccessError> {
+        self.sign_json(claims)
+    }
+
+    fn verify_json(&self, token: &str) -> Result<serde_json::Value, ProductAccessError> {
+        self.verify_compact(token)
     }
 }
 
@@ -99,6 +153,24 @@ impl TokenSigner for DisabledSigner {
     }
 
     fn sign_connector(&self, _: &ConnectorClaims) -> Result<String, ProductAccessError> {
+        Err(ProductAccessError::Unavailable(
+            "no delegation signing key is configured".to_owned(),
+        ))
+    }
+
+    fn sign_checkout(&self, _: &CheckoutClaims) -> Result<String, ProductAccessError> {
+        Err(ProductAccessError::Unavailable(
+            "no delegation signing key is configured".to_owned(),
+        ))
+    }
+
+    fn sign_credential(&self, _: &PurchaseCredentialClaims) -> Result<String, ProductAccessError> {
+        Err(ProductAccessError::Unavailable(
+            "no delegation signing key is configured".to_owned(),
+        ))
+    }
+
+    fn verify_json(&self, _: &str) -> Result<serde_json::Value, ProductAccessError> {
         Err(ProductAccessError::Unavailable(
             "no delegation signing key is configured".to_owned(),
         ))
@@ -208,5 +280,61 @@ mod tests {
                 .to_string();
             assert!(!error.contains(SEED));
         }
+    }
+
+    #[test]
+    fn checkout_and_credential_tokens_verify_and_tamper_fails() {
+        use crate::domain::{CHECKOUT_AUDIENCE, CheckoutLine, PurchaseCredentialClaims};
+        use chrono::DateTime;
+
+        let signer = Ed25519Signer::from_seed_hex("dev-ed25519-1", SEED).unwrap();
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let checkout = CheckoutClaims::new(
+            "555".into(),
+            sanvi_kernel::TenantId::try_from(1001_i64).unwrap(),
+            42,
+            "700".into(),
+            "800".into(),
+            "JPY".into(),
+            vec![CheckoutLine {
+                variant_id: "900".into(),
+                unit_price_minor: 1200,
+                quantity: 2,
+            }],
+            "018f0000000070008000000000000000".into(),
+            DateTime::from_timestamp(1_800_000_900, 0).unwrap(),
+            now,
+        );
+        let token = signer.sign_checkout(&checkout).unwrap();
+        let verified = signer.verify_json(&token).unwrap();
+        assert_eq!(verified["aud"], CHECKOUT_AUDIENCE);
+        assert_eq!(verified["sub"], "555");
+        assert_eq!(verified["lines"][0]["unit_price_minor"], 1200);
+
+        let credential = PurchaseCredentialClaims::new(
+            "42".into(),
+            sanvi_kernel::TenantId::try_from(1001_i64).unwrap(),
+            42,
+            "018f0000000070008000000000000000".into(),
+            3600,
+            now,
+        );
+        let credential_token = signer.sign_credential(&credential).unwrap();
+        assert_eq!(signer.verify_json(&credential_token).unwrap()["sub"], "42");
+
+        // A flipped payload byte and a foreign token both fail closed.
+        let (head, rest) = token.split_once('.').unwrap();
+        let (_payload, sig) = rest.rsplit_once('.').unwrap();
+        let tampered = format!("{head}.e30.{sig}");
+        assert!(signer.verify_json(&tampered).is_err());
+        assert!(signer.verify_json("not-a-token").is_err());
+        assert!(signer.verify_json("").is_err());
+        let other = Ed25519Signer::from_seed_hex(
+            "dev-ed25519-1",
+            "0808080808080808080808080808080808080808080808080808080808080808",
+        )
+        .unwrap();
+        assert!(other.verify_json(&token).is_err(), "wrong key fails");
+        assert!(DisabledSigner.verify_json(&token).is_err());
     }
 }

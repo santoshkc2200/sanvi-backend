@@ -3531,6 +3531,446 @@
       }
     },
     {
+      "method": "GET",
+      "path": "/api/v1/public/ecommerce/store",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::get_public_store",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/ecommerce/products",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::get_public_products",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/ecommerce/products/{product_id}",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::get_public_product",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/public/ecommerce/checkout",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::post_public_checkout",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/public/ecommerce/checkout/release",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::post_public_checkout_release",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/public/ecommerce/orders",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::post_public_order",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/ecommerce/orders/{order_id}",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::get_public_order",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/public/ecommerce/orders/{order_id}/cancel",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::post_public_order_cancel",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/public/ecommerce/orders/{order_id}/payment",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::post_public_payment",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/ecommerce/orders/{order_id}/payment",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::get_public_payment",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/public/ecommerce/orders/{order_id}/payment/cancel",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::post_public_payment_cancel",
+      "permission": "exempt: public shopper scope (phase 14); unauthenticated by design — the tenant is resolved from the validated host, the entitlement and published-store binding are checked per request, order access requires a short-lived purchase credential in the query string, and checkout/order mutations are idempotency-keyed and rate-limited per IP",
+      "tenant": "host resolved explicitly by each handler (?host override for SSR callers)",
+      "rate_limit": "global-config-dependent",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs",
+        "crates/contexts/product_access/src/domain/shopper.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce-public-store",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::get_published_store",
+      "permission": "ecommerce.store.read",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tenant/ecommerce-public-store",
+      "handler": "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs::put_published_store",
+      "permission": "ecommerce.store.manage",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/shopper_handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/shopper.rs"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/archive",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/locations",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/products",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}/update",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/stock",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/tax",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/unarchive",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/update",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/products",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
       "method": "POST",
       "path": "/internal/accounting/audit",
       "handler": "apps/api/src/accounting.rs::ingest_audit",

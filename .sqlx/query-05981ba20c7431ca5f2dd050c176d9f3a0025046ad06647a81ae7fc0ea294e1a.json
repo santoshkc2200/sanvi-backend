@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM platform.ecommerce_public_store_bindings WHERE tenant_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "05981ba20c7431ca5f2dd050c176d9f3a0025046ad06647a81ae7fc0ea294e1a"
+}

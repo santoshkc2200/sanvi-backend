@@ -6,13 +6,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sanvi_access::adapters::SqlxRoleCatalog;
 use sanvi_access::application::ListTenantEntitlements;
+use sanvi_http::TenantResolver;
 use sanvi_identity::domain::RoleCatalog;
 use sanvi_kernel::{RoleId, TenantId};
 use sanvi_product_access::ProductAccessConfig;
 use sanvi_product_access::adapters::http::ProductAccessState;
 use sanvi_product_access::adapters::signer::DisabledSigner;
-use sanvi_product_access::adapters::{Ed25519Signer, HttpProductUpstream};
-use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest};
+use sanvi_product_access::adapters::{
+    Ed25519Signer, HostTenantShopperAdapter, HttpProductUpstream, SqlxStoreBindings,
+};
+use sanvi_product_access::application::{ProxyImportRequest, ProxyRequest, ShopperScope};
 use sanvi_product_access::domain::{
     CONNECTORS, ECOMMERCE, EntitlementView, ProductAccessError, RolePermissions,
     TenantEntitlements, TokenSigner,
@@ -63,9 +66,12 @@ impl RolePermissions for AccessRolePermissions {
 /// Builds the proxy state. Infallible like the media wiring: a product
 /// whose configuration does not load (boot validation reports it) fails
 /// closed with 503 on every request instead of serving unauthenticated.
+/// `host_tenants` is the tenancy context's host resolver, adapted for the
+/// public shopper scope.
 pub fn build_product_access_state(
     config: &ProductAccessConfig,
     access: &AccessWiring,
+    host_tenants: Arc<dyn TenantResolver>,
 ) -> ProductAccessState {
     let signer: Arc<dyn TokenSigner> =
         match Ed25519Signer::from_seed_hex(&config.signing_key_id, &config.signing_key_seed) {
@@ -87,6 +93,7 @@ pub fn build_product_access_state(
         HttpProductUpstream::new(&ECOMMERCE, "", "")
     })
     .expect("an unconfigured upstream always builds");
+    let upstream = Arc::new(upstream);
 
     let connectors_upstream = HttpProductUpstream::new(
         &CONNECTORS,
@@ -107,12 +114,21 @@ pub fn build_product_access_state(
         access.role_repository.clone(),
     )));
 
+    let shopper = Arc::new(ShopperScope::new(
+        Arc::new(HostTenantShopperAdapter::new(host_tenants)),
+        entitlements.clone(),
+        Arc::new(SqlxStoreBindings::new(access.tx_manager.clone())),
+        signer.clone(),
+        upstream.clone(),
+        config.purchase_credential_ttl_secs,
+    ));
+
     ProductAccessState {
         ecommerce: Arc::new(ProxyRequest::new(
             entitlements.clone(),
             permissions.clone(),
             signer.clone(),
-            Arc::new(upstream),
+            upstream,
         )),
         imports: Arc::new(ProxyImportRequest::new(
             entitlements,
@@ -120,5 +136,6 @@ pub fn build_product_access_state(
             signer,
             Arc::new(connectors_upstream),
         )),
+        shopper,
     }
 }

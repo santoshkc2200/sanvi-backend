@@ -12,7 +12,16 @@ use crate::domain::{
 };
 
 pub mod imports;
+pub mod shopper;
 pub use imports::ProxyImportRequest;
+pub use shopper::{
+    PublicProductPage, PublicProductView, PublicStoreView, PublicVariantView, PublishStoreRequest,
+    PublishedStoreView, ShopperCheckoutLineView, ShopperCheckoutView, ShopperGuestAddress,
+    ShopperGuestContact, ShopperGuestLine, ShopperOrderConfirmationView, ShopperOrderLineView,
+    ShopperOrderPaymentView, ShopperOrderView, ShopperPaymentAttemptView, ShopperPaymentStartView,
+    ShopperPaymentStatusView, ShopperPlaceOrderRequest, ShopperReleaseCheckoutRequest,
+    ShopperScope, ShopperStartCheckoutRequest,
+};
 
 /// The verified caller as the platform resolved it for this request.
 #[derive(Debug, Clone, Copy)]
@@ -133,6 +142,25 @@ mod tests {
             claims: &crate::domain::ConnectorClaims,
         ) -> Result<String, ProductAccessError> {
             Ok(serde_json::to_string(claims).unwrap())
+        }
+        fn sign_checkout(
+            &self,
+            claims: &crate::domain::CheckoutClaims,
+        ) -> Result<String, ProductAccessError> {
+            Ok(serde_json::to_string(claims).unwrap())
+        }
+
+        fn sign_credential(
+            &self,
+            claims: &crate::domain::PurchaseCredentialClaims,
+        ) -> Result<String, ProductAccessError> {
+            Ok(serde_json::to_string(claims).unwrap())
+        }
+
+        fn verify_json(&self, _: &str) -> Result<serde_json::Value, ProductAccessError> {
+            Err(ProductAccessError::Unavailable(
+                "test signer does not verify".to_owned(),
+            ))
         }
     }
 

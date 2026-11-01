@@ -97,6 +97,7 @@ async fn export_pages_until_next_after_is_null() {
     let config = ProductAccessConfig {
         signing_key_id: "dev-ed25519-1".into(),
         signing_key_seed: SEED.into(),
+        purchase_credential_ttl_secs: 3600,
         ecommerce: UpstreamConfig {
             base_url: format!("http://{address}"),
             service_key: SERVICE_KEY.into(),
@@ -173,6 +174,7 @@ async fn erase_reports_the_anonymised_count() {
     let config = ProductAccessConfig {
         signing_key_id: "dev-ed25519-1".into(),
         signing_key_seed: SEED.into(),
+        purchase_credential_ttl_secs: 3600,
         ecommerce: UpstreamConfig {
             base_url: format!("http://{address}"),
             service_key: SERVICE_KEY.into(),
@@ -221,6 +223,7 @@ async fn upstream_failure_is_an_upstream_error() {
     let config = ProductAccessConfig {
         signing_key_id: "dev-ed25519-1".into(),
         signing_key_seed: SEED.into(),
+        purchase_credential_ttl_secs: 3600,
         ecommerce: UpstreamConfig {
             base_url: format!("http://{address}"),
             service_key: SERVICE_KEY.into(),
@@ -252,6 +255,7 @@ async fn unconfigured_or_non_user_subject_is_empty() {
     let configured = ProductAccessPrivacyProvider::from_config(&ProductAccessConfig {
         signing_key_id: "dev-ed25519-1".into(),
         signing_key_seed: SEED.into(),
+        purchase_credential_ttl_secs: 3600,
         ecommerce: UpstreamConfig {
             base_url: "http://127.0.0.1:59999".into(),
             service_key: SERVICE_KEY.into(),
