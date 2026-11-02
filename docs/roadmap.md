@@ -35,6 +35,17 @@ ordering moves into the tasks' `Depends on` / `Blocked by` lines and the shared 
 - **Phase 09** — decomposed. See each repo's `docs/tasks/phase-09/`.
 - **Phase 10** — decomposed. See each repo's `docs/tasks/phase-10/`.
 - **Phase 11** (twelve slices) — decomposed. See each repo's `docs/tasks/phase-11/`.
+- **Phase 12** — decomposed. See each repo's `docs/tasks/phase-12/`.
+- **Phase 13** — decomposed. See each repo's `docs/tasks/phase-13/`.
+- **Phase 14** — decomposed. See each repo's `docs/tasks/phase-14/`; its one hard cross-track
+  edge (the backend shopper path + OpenAPI mirror) landed in sanvi-backend and gated TASK-045.
+- **Phase 15** — decomposed (frontend `docs/tasks/phase-15/`). Its gate is backend-repo work
+  with no service change: define and grant the five `ecommerce.order.read`/`.manage`,
+  `ecommerce.customer.read`/`.manage`/`.privacy` permissions (the delegated v2 token then carries
+  them — no proxy route change; the `{tail}` GET/POST forward already serves the paths), and
+  extend the `ecommerce-contract.yaml` mirror with the orders + customers surfaces. Staff-side
+  placement/quotes/discounts, payment recording, refunds, fulfillment, returns and shipping
+  management are later phases.
 
 ## Phase map
 
@@ -52,6 +63,10 @@ ordering moves into the tasks' `Depends on` / `Blocked by` lines and the shared 
 | 09 | Tenant Payment Providers | 0.10.0 | Merchant money | Stripe Connect (Accounts v2, direct charges), provider abstraction | Connect onboarding, embedded components, checkout |
 | 10 | Advertising & Campaigns | 0.11.0 | Growth | Google/Meta Ads adapters, conversion pipeline, metrics store | Campaign manager, ROAS dashboard, spend tracking |
 | 11 | Hardening, Observability & GA | 1.0.0 | Ship it | SLOs, tracing, load/DR tests, pen-test remediation | Performance budgets, a11y, e2e suite, error tracking |
+| 12 | Accounting Connect | 1.1.0 | Books | Accounting service (books, journal entries), freee OAuth connector | Accounting admin surfaces, connect flow |
+| 13 | Ecommerce Admin | 1.2.0 | Catalog | `ecommerce-service` (stores, products/variants/prices, stock), entitlement gate, service-key proxy | Ecommerce admin surfaces (stores, products, stock) |
+| 14 | Ecommerce Shopper Storefront | 1.3.0 | Shoppers buy | Public scope: host-scoped catalog read, guest checkout orchestration, purchase credentials, OpenAPI mirror | `apps/ecommerce` store: catalog, guest checkout, hosted-redirect payment, credential-scoped order status |
+| 15 | Ecommerce Orders & Customers | 1.4.0 | Order ops | The five `ecommerce.order.*`/`ecommerce.customer.*` permissions granted through the delegated token + the orders/customers OpenAPI mirror (no proxy change — the `{tail}` forward already carries the paths) | Orders list/snapshot detail/cancel with typed refusals; customer records, add-and-archive addresses, export/erase (staff-initiated DSR) |
 
 ## Sequencing rules
 
@@ -102,3 +117,6 @@ packages that do not exist yet — creating them is phase 00 work.
 | Version | Phase | Tagged | Notes |
 |---------|-------|--------|-------|
 | 0.10.0 | 09 — Tenant Payment Providers | backend track complete; tag `v0.10.0` lands when both tracks' 09.7 are done (cross-repo gate) | Stripe Connect (Accounts v2), direct-charge checkout, refunds/disputes/payouts, guarded disconnect, statutory retention override for transaction records, payments observability + runbooks |
+| 1.1.0 | 12 — Accounting Connect | both tracks complete; the `v1.1.0-alpha.N`/`v1.1.0` tags the task headers named were never cut in git (their closeout notes recorded them as commit-time steps that did not happen) | freee OAuth connector and accounting admin surfaces |
+| 1.2.0 | 13 — Ecommerce Admin | frontend complete (TASK-039–044); `v1.2.0` recorded as pending by TASK-044's execution notes and not yet cut | `ecommerce-service` admin surface through the service-key proxy: stores, products/variants/prices, stock overview; entitlement gate |
+| 1.3.0 | 14 — Ecommerce Shopper Storefront | frontend complete (TASK-045–050); `v1.3.0-alpha.1..6` and `v1.3.0` cut by TASK-050 on the phase commits | the shopper path: public catalog read, guest checkout orchestration, purchase credentials, OpenAPI mirror; `apps/ecommerce` becomes the real tenant store |
