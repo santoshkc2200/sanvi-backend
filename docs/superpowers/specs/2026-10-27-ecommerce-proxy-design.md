@@ -67,6 +67,12 @@ become 503. Nothing is retried.
   `ecommerce.product.read`, `ecommerce.product.manage`. `tenant_owner` and
   `tenant_admin` get all four; `tenant_member` gets the two reads. System
   roles are re-seeded idempotently.
+- Phase 15 adds `ecommerce.order.read`/`.manage` and
+  `ecommerce.customer.read`/`.manage`/`.privacy` (staff orders and customer
+  records). `tenant_owner` and `tenant_admin` get all five; `tenant_member`
+  gets `ecommerce.order.read` only, because customer records are end-customer
+  personal data. The mirrored contract (`ecommerce-contract.yaml`) documents
+  these routes; the runtime stays the `{tail}` passthrough.
 - Features: `products.ecommerce.enabled` (boolean, off by default) and
   `ecommerce.stores.max` (quota, default limit 1). A tenant gets ecommerce
   through a platform-operator entitlement override until plans that include

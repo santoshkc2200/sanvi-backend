@@ -35,12 +35,14 @@ ordering moves into the tasks' `Depends on` / `Blocked by` lines and the shared 
 - **Phase 09** — decomposed. See each repo's `docs/tasks/phase-09/`.
 - **Phase 10** — decomposed. See each repo's `docs/tasks/phase-10/`.
 - **Phase 11** (twelve slices) — decomposed. See each repo's `docs/tasks/phase-11/`.
-- **Phase 12** — decomposed. See each repo's `docs/tasks/phase-12/`.
-- **Phase 13** — decomposed. See each repo's `docs/tasks/phase-13/`.
-- **Phase 14** — decomposed. See each repo's `docs/tasks/phase-14/`; its one hard cross-track
-  edge (the backend shopper path + OpenAPI mirror) landed in sanvi-backend and gated TASK-045.
-- **Phase 15** — decomposed (frontend `docs/tasks/phase-15/`). Its gate is backend-repo work
-  with no service change: define and grant the five `ecommerce.order.read`/`.manage`,
+- **Phases 12–15** — decomposed in the frontend only (`sanvi-frontend/docs/tasks/phase-12/` to
+  `phase-15/`, TASK-033–056). The backend side of these phases is the product services
+  (`accounting-service`, `ecommerce-service`) plus small platform-side changes that landed as
+  plain commits; sanvi-backend has no `docs/tasks/phase-12` to `phase-15` and no backlog rows for
+  them. Phase 14's one hard cross-track edge (the backend shopper path + OpenAPI mirror) landed in
+  sanvi-backend and gated TASK-045.
+- **Phase 15** — its gate was backend-repo work with no service change (landed in `0408a32` and
+  `7562cf6`): define and grant the five `ecommerce.order.read`/`.manage`,
   `ecommerce.customer.read`/`.manage`/`.privacy` permissions (the delegated v2 token then carries
   them — no proxy route change; the `{tail}` GET/POST forward already serves the paths), and
   extend the `ecommerce-contract.yaml` mirror with the orders + customers surfaces. Staff-side
