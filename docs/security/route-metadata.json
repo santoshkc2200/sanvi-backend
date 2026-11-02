@@ -3971,6 +3971,266 @@
       "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
     },
     {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/customers",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/customers",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}/archive",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}/erase",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}/export",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/customers/{customer_id}/update",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/orders",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_get",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "GET /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/cancel",
+      "handler": "crates/contexts/product_access/src/adapters/http/handlers.rs::proxy_ecommerce_post",
+      "permission": "exempt: delegated product proxy; requires products.ecommerce.enabled and at least one ecommerce.* permission of an active membership, and ecommerce-service authorizes each use case from the signed delegation",
+      "tenant": "CurrentTenant",
+      "rate_limit": "global-config-dependent+tenant-optional",
+      "evidence": [
+        "crates/contexts/product_access/src/adapters/http/handlers.rs",
+        "crates/contexts/product_access/src/adapters/http/routes.rs",
+        "crates/contexts/product_access/src/application/mod.rs",
+        "crates/contexts/product_access/src/domain/delegation.rs"
+      ],
+      "mount_prefix": "/api/v1/tenant",
+      "mount_evidence": {
+        "source": "apps/api/src/lib.rs",
+        "expression": "web::scope(\"/api/v1/tenant\")"
+      },
+      "mirror_of": "POST /api/v1/tenant/ecommerce/{tail}"
+    },
+    {
       "method": "POST",
       "path": "/internal/accounting/audit",
       "handler": "apps/api/src/accounting.rs::ingest_audit",
