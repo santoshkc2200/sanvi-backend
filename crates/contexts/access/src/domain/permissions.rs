@@ -570,6 +570,31 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Reserve, read, commit and release stock reservations in the tenant's ecommerce stores",
     },
+    PermissionDef {
+        key: "ecommerce.order.read",
+        scope: PermissionScope::Tenant,
+        description: "List and read the tenant's ecommerce orders",
+    },
+    PermissionDef {
+        key: "ecommerce.order.manage",
+        scope: PermissionScope::Tenant,
+        description: "Cancel the tenant's ecommerce orders",
+    },
+    PermissionDef {
+        key: "ecommerce.customer.read",
+        scope: PermissionScope::Tenant,
+        description: "List and read the tenant's ecommerce customer records and their addresses",
+    },
+    PermissionDef {
+        key: "ecommerce.customer.manage",
+        scope: PermissionScope::Tenant,
+        description: "Create and change the tenant's ecommerce customer records, and add and archive their addresses",
+    },
+    PermissionDef {
+        key: "ecommerce.customer.privacy",
+        scope: PermissionScope::Tenant,
+        description: "Export a customer's data for an access request and erase it for an erasure request",
+    },
 ];
 
 /// Registry lookup.

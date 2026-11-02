@@ -262,6 +262,13 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.inventory.read",
             "ecommerce.inventory.manage",
             "ecommerce.stock.reserve",
+            // Phase 15: owners see and cancel the orders their stores took
+            // and run the customer records, including the privacy actions.
+            "ecommerce.order.read",
+            "ecommerce.order.manage",
+            "ecommerce.customer.read",
+            "ecommerce.customer.manage",
+            "ecommerce.customer.privacy",
         ],
     },
     RoleSeed {
@@ -307,6 +314,13 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.inventory.read",
             "ecommerce.inventory.manage",
             "ecommerce.stock.reserve",
+            // Phase 15: admins see and cancel orders and run customer
+            // records, like owners.
+            "ecommerce.order.read",
+            "ecommerce.order.manage",
+            "ecommerce.customer.read",
+            "ecommerce.customer.manage",
+            "ecommerce.customer.privacy",
         ],
     },
     RoleSeed {
@@ -318,6 +332,9 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "tenancy.settings.read",
             "ecommerce.store.read",
             "ecommerce.product.read",
+            // Phase 15: members read the store page's orders; customer
+            // records are end-customer PII and stay with the staff roles.
+            "ecommerce.order.read",
         ],
     },
     RoleSeed {
@@ -482,6 +499,41 @@ mod tests {
             );
             assert!(owner.contains(&permission), "owner needs {permission}");
             assert!(admin.contains(&permission), "admin needs {permission}");
+            assert!(
+                !member.contains(&permission),
+                "member must not have {permission}"
+            );
+        }
+    }
+
+    #[test]
+    fn order_and_customer_permissions_follow_the_phase_15_split() {
+        let owner = seed_by_key("tenant_owner").unwrap().permissions;
+        let admin = seed_by_key("tenant_admin").unwrap().permissions;
+        let member = seed_by_key("tenant_member").unwrap().permissions;
+        for permission in [
+            "ecommerce.order.read",
+            "ecommerce.order.manage",
+            "ecommerce.customer.read",
+            "ecommerce.customer.manage",
+            "ecommerce.customer.privacy",
+        ] {
+            assert!(
+                crate::domain::permissions::lookup(permission).is_some(),
+                "{permission} must be registered"
+            );
+            assert!(owner.contains(&permission), "owner needs {permission}");
+            assert!(admin.contains(&permission), "admin needs {permission}");
+        }
+        // Members read the store page's orders; customer records are
+        // end-customer PII and stay with the staff roles.
+        assert!(member.contains(&"ecommerce.order.read"));
+        for permission in [
+            "ecommerce.order.manage",
+            "ecommerce.customer.read",
+            "ecommerce.customer.manage",
+            "ecommerce.customer.privacy",
+        ] {
             assert!(
                 !member.contains(&permission),
                 "member must not have {permission}"
