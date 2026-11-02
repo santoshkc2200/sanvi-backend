@@ -405,7 +405,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/product_access/src/adapters/http/routes.rs | `5792e932571ce7c3608f8c3ef83cd5bd1c4d04802c6613a3d0a5ffc7bbed67d2` |
 | crates/contexts/product_access/src/adapters/http/shopper_handlers.rs | `9ac1f752855c9fdf0e2f5d64037cf0aae9a82a00a64288d0a15a5ef1e6f21369` |
 | crates/contexts/product_access/src/application/mod.rs | `8e486700d7f0b7131d58a6f9f1979a9bc5fe603ccd290893359208416ace49a1` |
-| crates/contexts/product_access/src/application/shopper.rs | `209313f750fff882a23ff62e1e1fffc5ccd4eee11f44d10f24fcadb228d64481` |
+| crates/contexts/product_access/src/application/shopper.rs | `e2c80d0f5c0f1915a7be20b3c8c42178b7869a4acf9e580daf90a4ce1f63fc64` |
 | crates/contexts/product_access/src/domain/delegation.rs | `cdc158a4936885dd08e2ec10ccf092877f0175f18d5c50dae47547563d0ce5d3` |
 | crates/contexts/product_access/src/domain/shopper.rs | `c142bb60bdf468db5cff0264a1d6e1dc173d9020608dc86aef1663dda2a22598` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `e960b2e416f59193f64a5dcdf9838e5dd518dcd0b0e086829c2d925ecb5ec8f7` |

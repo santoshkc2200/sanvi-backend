@@ -1993,7 +1993,6 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::adapters::signer::DisabledSigner;
     use crate::domain::{
         EntitlementView, ForwardResponse, Product, ProductAccessError, ProductUpstream,
         ShopperTenant,
@@ -2086,6 +2085,43 @@ mod tests {
                 .ok_or(ProductAccessError::BadRequest("not a token".to_owned()))?;
             serde_json::from_str(payload)
                 .map_err(|_| ProductAccessError::BadRequest("not a token".to_owned()))
+        }
+    }
+
+    /// Stands in for an unconfigured signing key: every mint fails closed.
+    struct NoKeySigner;
+
+    fn no_key() -> ProductAccessError {
+        ProductAccessError::Unavailable("no delegation signing key is configured".to_owned())
+    }
+
+    impl TokenSigner for NoKeySigner {
+        fn sign(&self, _: &DelegationClaims) -> Result<String, ProductAccessError> {
+            Err(no_key())
+        }
+        fn sign_privacy(
+            &self,
+            _: &crate::domain::PrivacyClaims,
+        ) -> Result<String, ProductAccessError> {
+            Err(no_key())
+        }
+        fn sign_connector(
+            &self,
+            _: &crate::domain::ConnectorClaims,
+        ) -> Result<String, ProductAccessError> {
+            Err(no_key())
+        }
+        fn sign_checkout(&self, _: &CheckoutClaims) -> Result<String, ProductAccessError> {
+            Err(no_key())
+        }
+        fn sign_credential(
+            &self,
+            _: &PurchaseCredentialClaims,
+        ) -> Result<String, ProductAccessError> {
+            Err(no_key())
+        }
+        fn verify_json(&self, _: &str) -> Result<serde_json::Value, ProductAccessError> {
+            Err(no_key())
         }
     }
 
@@ -3312,7 +3348,7 @@ mod tests {
             Arc::new(FixedHosts(active_tenant())),
             Arc::new(Fixed(entitled())),
             FixedBinding::bound(Some(42)),
-            Arc::new(DisabledSigner),
+            Arc::new(NoKeySigner),
             upstream.clone(),
             3600,
         );
