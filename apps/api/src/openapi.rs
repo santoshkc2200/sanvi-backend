@@ -274,7 +274,7 @@ use utoipa::OpenApi;
         (name = "advertising", description = "Tenant advertising. Money is integer minor units paired with ISO-4217 account currency; rendered FX values carry their rate date. Problem types: advertising/platform-unavailable, advertising/connection-not-active, advertising/capability-unsupported, advertising/token-expired, advertising/directive-suppressed, advertising/budget-cap-reached. Every mutating endpoint requires Idempotency-Key."),
         (name = "accounting", description = "Gateway to the separately deployed Accounting service. Tenant destinations and freee consent. Internal audit/event ingestion requires request-bound service delegation. Problem types: accounting/authorization-rejected, accounting/reauthorization-required, accounting/verification-failed, accounting/provider-unavailable. Book mutations require If-Match with the book revision. Nothing is posted to a provider yet."),
         (name = "media", description = "Tenant media assets: multipart upload (presign/complete), asset reads/deletes and delivery URLs via hitox-media-service. Upstream failures surface as problems carrying a `code` extension member."),
-        (name = "product_access", description = "Platform proxy to separately deployed product services. `/api/v1/tenant/ecommerce/{tail}` forwards to ecommerce-service `/v1/{tail}` with a signed delegation (tenant, user, the user's ecommerce.* permissions, plan limits) after checking the tenant's products.ecommerce.enabled entitlement. `/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}` forwards to ecommerce-connectors `/v1/{tail}` with a signed connector identity token after checking products.ecommerce.enabled and ecommerce.import.* permissions. The proxied ecommerce surface is also enumerated below with schemas mirrored from the service's contract v0.1.0 (stores, products with variants/prices, read-only stock — phase 13; the `{tail}` passthrough stays for any un-mirrored route); the service's responses, including its problem documents, pass through. Phase 14 adds the public shopper scope: `/api/v1/public/ecommerce/...` is unauthenticated and resolves the tenant from the validated host, which serves the tenant's published store (at most one; an unbound host answers 404-shaped `ecommerce/store-unavailable`, never an upgrade prompt). It enumerates a catalog-only allowlist (store summary, product list/detail with variants, prices and server-computed availability), orchestrates guest checkout as the platform's web-checkout service user (guest customer + address, reservation hold, idempotent placement with server-side price/tax snapshots and a price-drift refusal `ecommerce/price-changed`), and guards order reads/cancel/payment with a short-lived purchase credential carried in the `credential` query parameter (`ecommerce/credential-invalid` vs `ecommerce/credential-expired`); hosted payment attempts return `redirect_url` and one pending attempt per order is enforced upstream (`ecommerce/payment-in-progress`). Tenant-side binding administration lives at `/api/v1/tenant/ecommerce-public-store`.")
+        (name = "product_access", description = "Platform proxy to separately deployed product services. `/api/v1/tenant/ecommerce/{tail}` forwards to ecommerce-service `/v1/{tail}` with a signed delegation (tenant, user, the user's ecommerce.* permissions, plan limits) after checking the tenant's products.ecommerce.enabled entitlement. `/api/v1/tenant/ecommerce-imports/stores/{store_id}/{tail}` forwards to ecommerce-connectors `/v1/{tail}` with a signed connector identity token after checking products.ecommerce.enabled and ecommerce.import.* permissions. The proxied ecommerce surface is also enumerated below with schemas mirrored from the service's contract v0.1.0 (stores, products with variants/prices, read-only stock — phase 13; the staff orders surface and the tenant-level customers surface with their addresses, export and erase — phase 15; the `{tail}` passthrough stays for any un-mirrored route); the service's responses, including its problem documents, pass through. Phase 14 adds the public shopper scope: `/api/v1/public/ecommerce/...` is unauthenticated and resolves the tenant from the validated host, which serves the tenant's published store (at most one; an unbound host answers 404-shaped `ecommerce/store-unavailable`, never an upgrade prompt). It enumerates a catalog-only allowlist (store summary, product list/detail with variants, prices and server-computed availability), orchestrates guest checkout as the platform's web-checkout service user (guest customer + address, reservation hold, idempotent placement with server-side price/tax snapshots and a price-drift refusal `ecommerce/price-changed`), and guards order reads/cancel/payment with a short-lived purchase credential carried in the `credential` query parameter (`ecommerce/credential-invalid` vs `ecommerce/credential-expired`); hosted payment attempts return `redirect_url` and one pending attempt per order is enforced upstream (`ecommerce/payment-in-progress`). Tenant-side binding administration lives at `/api/v1/tenant/ecommerce-public-store`.")
     ),
     info(
         title = "Sanvi API",
@@ -355,8 +355,10 @@ impl utoipa::Modify for AdvertisingContract {
 }
 
 /// The ecommerce surface the product_access proxy forwards, mirrored from
-/// `ecommerce-service/api/openapi.yaml` v0.1.0 (phase 13): stores, products
-/// with variants/prices, and read-only stock. The `{tail}` passthrough route
+/// `ecommerce-service/api/openapi.yaml` v0.1.0 (phases 13 and 15): stores,
+/// products with variants/prices, read-only stock, and the staff orders
+/// surface (list, read, cancel) plus the tenant-level customers surface
+/// (records, addresses, export, erase). The `{tail}` passthrough route
 /// stays as-is; this enumerates the routes the admin console's generated
 /// client types against.
 struct EcommerceContract;
@@ -561,6 +563,19 @@ mod tests {
             "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}",
             "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}/update",
             "/api/v1/tenant/ecommerce/stores/{store_id}/stock",
+            // Phase 15: the staff orders surface and the tenant-level
+            // customers surface.
+            "/api/v1/tenant/ecommerce/stores/{store_id}/orders",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}",
+            "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/cancel",
+            "/api/v1/tenant/ecommerce/customers",
+            "/api/v1/tenant/ecommerce/customers/{customer_id}",
+            "/api/v1/tenant/ecommerce/customers/{customer_id}/update",
+            "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses",
+            "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}",
+            "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}/archive",
+            "/api/v1/tenant/ecommerce/customers/{customer_id}/export",
+            "/api/v1/tenant/ecommerce/customers/{customer_id}/erase",
         ] {
             assert!(
                 paths.contains_key(path),
@@ -576,6 +591,18 @@ mod tests {
             "VariantBody",
             "MoneyBody",
             "StockPageBody",
+            "OrderBody",
+            "OrderPageBody",
+            "CancelOrderRequest",
+            "CustomerBody",
+            "CustomerPageBody",
+            "CreateCustomerRequest",
+            "UpdateCustomerRequest",
+            "AddressBody",
+            "CreateAddressRequest",
+            "ArchiveAddressRequest",
+            "CustomerExportBody",
+            "EraseCustomerRequest",
         ] {
             assert!(
                 schemas.contains_key(schema),

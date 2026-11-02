@@ -11,12 +11,220 @@
 # `ProblemDetail` shape here; extension members such as `current_version`
 # travel but are not re-declared).
 #
-# Phase-13 surface only: stores (incl. tax, archive, locations read),
-# products with variants and prices, and read-only stock. Orders, customers
-# and reservations are mirrored when their phases land. The proxy forwards
-# GET and POST only; every update is a POST to `.../update`.
+# Phase-13 surface: stores (incl. tax, archive, locations read), products
+# with variants and prices, and read-only stock. Phase-15 adds the staff
+# orders surface (list, read, cancel) and the tenant-level customers surface
+# (records, addresses — add and archive only, no edit exists — export and
+# erase). Reservations, checkout quotes, order placement, payment
+# attempts/payments/refunds, fulfillments, returns and shipping methods stay
+# un-mirrored until their phases land. The proxy forwards GET and POST only;
+# every update is a POST to `.../update`.
 components:
   schemas:
+    AddressBody:
+      type: object
+      description: A stored address. Erased addresses read with null fields.
+      required:
+      - id
+      - customer_id
+      - status
+      - created_at
+      properties:
+        archived_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When it was archived.
+        city:
+          type:
+          - string
+          - 'null'
+          description: City.
+          example: Shibuya-ku
+        country:
+          type:
+          - string
+          - 'null'
+          description: ISO 3166-1 alpha-2 country code.
+          example: JP
+        created_at:
+          type: string
+          format: date-time
+          description: Creation time.
+        customer_id:
+          type: string
+          description: The customer it belongs to.
+          example: '7401234567890120000'
+        erased_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When it was erased.
+        id:
+          type: string
+          description: Address id (decimal Snowflake).
+          example: '7401234567890120000'
+        line1:
+          type:
+          - string
+          - 'null'
+          description: Street line.
+          example: 1-2-3 Shibuya
+        line2:
+          type:
+          - string
+          - 'null'
+          description: Second street line.
+        phone:
+          type:
+          - string
+          - 'null'
+          description: Delivery contact in E.164 form.
+        postal_code:
+          type:
+          - string
+          - 'null'
+          description: Postal code.
+          example: 150-0002
+        recipient:
+          type:
+          - string
+          - 'null'
+          description: Who receives the parcel.
+          example: Aiko Tanaka
+        region:
+          type:
+          - string
+          - 'null'
+          description: State, prefecture or province.
+          example: Tokyo
+        status:
+          $ref: '#/components/schemas/AddressStatusBody'
+          description: Lifecycle status.
+    AddressPageBody:
+      type: object
+      description: One page of addresses, newest first.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddressBody'
+          description: Addresses on this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Pass as `cursor` for the next page; absent on the last page.
+    AddressStatusBody:
+      type: string
+      description: Address lifecycle status.
+      enum:
+      - active
+      - archived
+      - erased
+    ArchiveAddressRequest:
+      type: object
+      description: An archive request has no fields; send `{}`.
+      additionalProperties: false
+    CancelOrderRequest:
+      type: object
+      description: A request to cancel an order.
+      required:
+      - version
+      - reason
+      properties:
+        reason:
+          type: string
+          description: '`customer_request`, `out_of_stock`, `fraud_suspected` or `other`.'
+          example: customer_request
+        version:
+          type: integer
+          format: int64
+          description: The version the caller read.
+          example: 1
+      additionalProperties: false
+    CreateAddressRequest:
+      type: object
+      description: |-
+        A new address. Addresses are never edited: to correct one, add the corrected
+        address and archive the old one.
+      properties:
+        city:
+          type:
+          - string
+          - 'null'
+          description: City, 1 to 100 characters.
+          example: Shibuya-ku
+        country:
+          type:
+          - string
+          - 'null'
+          description: ISO 3166-1 alpha-2 country code.
+          example: JP
+        line1:
+          type:
+          - string
+          - 'null'
+          description: Street line, 1 to 200 characters.
+          example: 1-2-3 Shibuya
+        line2:
+          type:
+          - string
+          - 'null'
+          description: Second street line, 1 to 200 characters.
+          example: Room 401
+        phone:
+          type:
+          - string
+          - 'null'
+          description: Delivery contact in E.164 form.
+          example: '+819012345678'
+        postal_code:
+          type:
+          - string
+          - 'null'
+          description: Postal code, 1 to 20 characters; stored uppercased.
+          example: 150-0002
+        recipient:
+          type:
+          - string
+          - 'null'
+          description: Who receives the parcel, 1 to 120 characters.
+          example: Aiko Tanaka
+        region:
+          type:
+          - string
+          - 'null'
+          description: State, prefecture or province, 1 to 100 characters.
+          example: Tokyo
+      additionalProperties: false
+    CreateCustomerRequest:
+      type: object
+      description: A new customer. At least one field is required.
+      properties:
+        email:
+          type:
+          - string
+          - 'null'
+          description: Email address, unique among the tenant's active customers ignoring case.
+          example: aiko@example.jp
+        name:
+          type:
+          - string
+          - 'null'
+          description: Display name, 1 to 120 characters.
+          example: Aiko Tanaka
+        phone:
+          type:
+          - string
+          - 'null'
+          description: Phone number in E.164 form.
+          example: '+819012345678'
+      additionalProperties: false
     CreateProductRequest:
       type: object
       description: A new product.
@@ -79,6 +287,118 @@ components:
           description: IANA timezone name.
           example: Asia/Tokyo
       additionalProperties: false
+    CustomerBody:
+      type: object
+      description: A stored customer. Erased customers read with null contact fields.
+      required:
+      - id
+      - status
+      - version
+      - created_at
+      - updated_at
+      properties:
+        created_at:
+          type: string
+          format: date-time
+          description: Creation time.
+        email:
+          type:
+          - string
+          - 'null'
+          description: Email address as given.
+          example: aiko@example.jp
+        erased_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When the personal data was erased.
+        id:
+          type: string
+          description: Customer id (decimal Snowflake).
+          example: '7401234567890120000'
+        name:
+          type:
+          - string
+          - 'null'
+          description: Display name.
+          example: Aiko Tanaka
+        phone:
+          type:
+          - string
+          - 'null'
+          description: Phone number in E.164 form.
+          example: '+819012345678'
+        status:
+          $ref: '#/components/schemas/CustomerStatusBody'
+          description: Lifecycle status.
+        updated_at:
+          type: string
+          format: date-time
+          description: Time of the last change, or the creation time.
+        version:
+          type: integer
+          format: int64
+          description: Starts at 1 and grows with every change; edits send the version they read.
+          example: 1
+    CustomerExportBody:
+      type: object
+      description: 'Everything held about a customer: the record, their addresses and a page
+
+  of their orders.'
+      required:
+      - customer
+      - addresses
+      - orders
+      properties:
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddressBody'
+          description: 'Every address of the customer in every status, oldest first; the
+
+  same on every page.'
+        customer:
+          $ref: '#/components/schemas/CustomerBody'
+          description: The customer.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Pass as `cursor` for the next page of orders; absent on the last page.
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderBody'
+          description: 'Their orders in every store of the tenant, archived stores included,
+
+  oldest first.'
+    CustomerPageBody:
+      type: object
+      description: One page of customers, newest first.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerBody'
+          description: Customers on this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Pass as `cursor` for the next page; absent on the last page.
+    CustomerStatusBody:
+      type: string
+      description: Customer lifecycle status.
+      enum:
+      - active
+      - erased
+    EraseCustomerRequest:
+      type: object
+      description: An erasure request has no fields; send `{}`.
+      additionalProperties: false
     LocationBody:
       type: object
       description: A stored stock location.
@@ -136,6 +456,488 @@ components:
           description: Upper-case ISO 4217 code.
           example: JPY
       additionalProperties: false
+    OrderBody:
+      type: object
+      description: A stored order.
+      required:
+      - id
+      - store_id
+      - reservation_id
+      - status
+      - channel
+      - currency
+      - subtotal_minor
+      - shipping_minor
+      - discount_minor
+      - tax_minor
+      - total_minor
+      - tax_mode
+      - tax_lines
+      - lines
+      - placed_at
+      - payment
+      - fulfillment
+      - returns
+      - version
+      - updated_at
+      properties:
+        billing_address_id:
+          type:
+          - string
+          - 'null'
+          description: The customer's address it bills to; null when none was named.
+          example: '7401234567890120000'
+        cancel_reason:
+          type:
+          - string
+          - 'null'
+          description: Why it was cancelled.
+        cancelled_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: Cancellation time.
+        channel:
+          type: string
+          description: '`web` or `pos`.'
+          example: pos
+        currency:
+          type: string
+          description: The store currency.
+          example: JPY
+        customer_id:
+          type:
+          - string
+          - 'null'
+          description: The customer who bought it; null for an anonymous sale.
+          example: '7401234567890120000'
+        discount_minor:
+          type: integer
+          format: int64
+          description: 'Fixed merchandise discount fixed at placement; 0 when none was
+
+  granted.'
+          example: 150
+        discount_reason:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Why the discount was granted: `promotion`, `goodwill`, `price_match` or
+            `other`; null when none was granted.
+          example: promotion
+        fulfillment:
+          $ref: '#/components/schemas/OrderFulfillmentBody'
+          description: |-
+            Where the order stands with its goods, from its fulfillments. Fulfillments
+            do not change the order's `version`.
+        id:
+          type: string
+          description: Order identifier.
+          example: '7401234567890120000'
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderLineBody'
+          description: Sold lines with their prices at placement.
+        payment:
+          $ref: '#/components/schemas/OrderPaymentBody'
+          description: Where the order stands with its money, from its payments and refunds.
+        placed_at:
+          type: string
+          format: date-time
+          description: Placement time.
+        reservation_id:
+          type: string
+          description: The reservation it committed.
+          example: '7401234567890120000'
+        returns:
+          $ref: '#/components/schemas/OrderReturnsBody'
+          description: |-
+            Where the order stands with its returned goods, from its fulfillments and
+            returns. Returns do not change the order's `version` either.
+        shipping:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/OrderShippingBody'
+            description: Selected shipping service snapshotted at placement; null when no method was selected.
+        shipping_address_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            The customer's address it ships to; null when none was named. Read it
+            through the customer's address routes.
+          example: '7401234567890120000'
+        shipping_minor:
+          type: integer
+          format: int64
+          description: Flat shipping charge, or 0 when no method was selected.
+          example: 500
+        status:
+          type: string
+          description: '`placed` or `cancelled`.'
+          example: placed
+        store_id:
+          type: string
+          description: Store identifier.
+          example: '7401234567890120000'
+        subtotal_minor:
+          type: integer
+          format: int64
+          description: Sum of line totals, in minor units.
+          example: 3600
+        tax_destination:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TaxDestinationBody'
+            description: |-
+              Where it was taxed; null when `tax_mode` is `none`. Kept after the
+              customer's erasure as a tax record.
+        tax_lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderTaxLineBody'
+          description: |-
+            Tax owed per class, `standard`, then `reduced`, then `exempt`; empty when
+            `tax_mode` is `none`.
+        tax_minor:
+          type: integer
+          format: int64
+          description: |-
+            Tax owed, in minor units: added to the net subtotal when `tax_mode` is
+            `exclusive`, already inside it when `inclusive`, 0 when `none`.
+          example: 266
+        tax_mode:
+          type: string
+          description: '`none`, `exclusive` or `inclusive`: the store''s setting at placement.'
+          example: inclusive
+        tax_rounding:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RoundingBody'
+            description: The store's rounding rule at placement; null when `tax_mode` is `none`.
+        terminal_ref:
+          type:
+          - string
+          - 'null'
+          description: Opaque terminal reference, POS only.
+        total_minor:
+          type: integer
+          format: int64
+          description: |-
+            Amount due: the subtotal, less `discount_minor`, plus `shipping_minor`, plus
+            `tax_minor` when `tax_mode` is `exclusive`.
+          example: 3600
+        updated_at:
+          type: string
+          format: date-time
+          description: Time of the last change.
+        version:
+          type: integer
+          format: int64
+          description: Starts at 1; name it when cancelling. Payments do not change it.
+    OrderFulfillmentBody:
+      type: object
+      description: An order's fulfillment status, as `OrderBody` carries it.
+      required:
+      - status
+      - lines
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderFulfillmentLineBody'
+          description: Progress per order line, in position order.
+        status:
+          type: string
+          description: |-
+            `unfulfilled`, `partially_fulfilled`, `fulfilled`, or `not_required` (a
+            cancelled order nothing was handed over for).
+          example: partially_fulfilled
+    OrderFulfillmentLineBody:
+      type: object
+      description: One order line's fulfillment progress.
+      required:
+      - line_position
+      - fulfilled_quantity
+      - remaining_quantity
+      properties:
+        fulfilled_quantity:
+          type: integer
+          format: int64
+          description: Units handed over so far.
+          example: 2
+        line_position:
+          type: integer
+          format: int32
+          description: Zero-based position of the order line.
+          example: 0
+        remaining_quantity:
+          type: integer
+          format: int64
+          description: Units still to hand over; 0 once the order is cancelled.
+          example: 1
+    OrderLineBody:
+      type: object
+      description: One sold line, as the catalog read at placement.
+      required:
+      - position
+      - product_id
+      - variant_id
+      - location_id
+      - product_title
+      - options
+      - unit_price_minor
+      - quantity
+      - line_total_minor
+      - discount_minor
+      - net_line_total_minor
+      properties:
+        discount_minor:
+          type: integer
+          format: int64
+          description: The fixed discount allocated to this line; 0 when none was granted.
+          example: 100
+        line_total_minor:
+          type: integer
+          format: int64
+          description: |-
+            `unit_price_minor × quantity`, the gross merchandise amount before any
+            discount and before exclusive tax.
+        location_id:
+          type: string
+          description: Location the stock left.
+          example: '7401234567890120000'
+        net_line_total_minor:
+          type: integer
+          format: int64
+          description: '`line_total_minor - discount_minor`, the amount tax was charged on.'
+          example: 3500
+        options:
+          type: object
+          description: Options at placement.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        position:
+          type: integer
+          format: int32
+          description: 'Zero-based position of the line in the order: name it when
+
+  fulfilling part of the order.'
+          example: 0
+        product_id:
+          type: string
+          description: Product sold.
+          example: '7401234567890120000'
+        product_title:
+          type: string
+          description: Product title at placement.
+        quantity:
+          type: integer
+          format: int64
+          description: Units sold.
+        sku:
+          type:
+          - string
+          - 'null'
+          description: SKU at placement.
+        tax_class:
+          type:
+          - string
+          - 'null'
+          description: The product's tax class at placement; null when the store charged no tax.
+          example: reduced
+        tax_rate_ppm:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: The class's rate in parts per million; null when the store charged no tax.
+          example: 80000
+        unit_price_minor:
+          type: integer
+          format: int64
+          description: Unit price at placement, in minor units.
+        variant_id:
+          type: string
+          description: Variant sold.
+          example: '7401234567890120000'
+    OrderPageBody:
+      type: object
+      description: One page of orders, newest first.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderBody'
+          description: Orders on this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Pass as `cursor` for the next page; absent on the last page.
+    OrderPaymentBody:
+      type: object
+      description: An order's payment state.
+      required:
+      - status
+      - paid_minor
+      - refunded_minor
+      - due_minor
+      - pending_minor
+      - pending_refund_minor
+      - overpaid_minor
+      properties:
+        due_minor:
+          type: integer
+          format: int64
+          description: 'Still owed: `total_minor` less payments net of refunds; 0 once the
+
+  order is cancelled.'
+          example: 0
+        overpaid_minor:
+          type: integer
+          format: int64
+          description: |-
+            Paid beyond the total; only an online payment that arrived late can cause
+            it, and it is refunded automatically.
+          example: 0
+        paid_minor:
+          type: integer
+          format: int64
+          description: Sum of payments, in minor units.
+          example: 1800
+        pending_minor:
+          type: integer
+          format: int64
+          description: 'Of what is due, what a pending online payment attempt holds: no
+
+  other payment may take it.'
+          example: 0
+        pending_refund_minor:
+          type: integer
+          format: int64
+          description: |-
+            Money on its way back through the payment provider; it still stands paid
+            until the provider confirms.
+          example: 0
+        refunded_minor:
+          type: integer
+          format: int64
+          description: Sum of refunds, in minor units.
+          example: 0
+        status:
+          type: string
+          description: |-
+            `unpaid`, `partially_paid`, `paid` (the whole total stands paid, or nothing
+            is owed), `partially_refunded` or `refunded` (every payment returned in
+            full).
+          example: paid
+    OrderReturnLineBody:
+      type: object
+      description: One order line's return progress.
+      required:
+      - line_position
+      - returned_quantity
+      - restocked_quantity
+      - returnable_quantity
+      properties:
+        line_position:
+          type: integer
+          format: int32
+          description: Zero-based position of the order line.
+          example: 0
+        restocked_quantity:
+          type: integer
+          format: int64
+          description: Units of them back in saleable stock.
+          example: 1
+        returnable_quantity:
+          type: integer
+          format: int64
+          description: 'Units still returnable: handed over but not yet returned; 0 once
+
+  the order is cancelled.'
+          example: 1
+        returned_quantity:
+          type: integer
+          format: int64
+          description: Units received back so far.
+          example: 2
+    OrderReturnsBody:
+      type: object
+      description: An order's return summary, as `OrderBody` carries it.
+      required:
+      - lines
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderReturnLineBody'
+          description: Progress per order line, in position order.
+    OrderShippingBody:
+      type: object
+      description: A selected shipping method snapshotted on an order or quote.
+      required:
+      - method_id
+      - name
+      properties:
+        method_id:
+          type: string
+          description: Selected method id.
+          example: '7401234567890120000'
+        name:
+          type: string
+          description: Display name at quote or placement.
+        tax_class:
+          type:
+          - string
+          - 'null'
+          description: The method's tax class; null in untaxed mode.
+          example: standard
+        tax_rate_ppm:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: The class's rate in parts per million; null in untaxed mode.
+          example: 100000
+    OrderTaxLineBody:
+      type: object
+      description: The tax an order owes on one class.
+      required:
+      - tax_class
+      - rate_ppm
+      - amount_minor
+      - tax_minor
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: |-
+            The class's line totals as priced, including any selected shipping charge in
+            its class, tax included when `tax_mode` is `inclusive`.
+          example: 3600
+        rate_ppm:
+          type: integer
+          format: int32
+          description: The rate in parts per million.
+          example: 80000
+        tax_class:
+          type: string
+          description: '`standard`, `reduced` or `exempt`.'
+          example: reduced
+        tax_minor:
+          type: integer
+          format: int64
+          description: Tax owed on them.
+          example: 266
     ProductBody:
       type: object
       description: A stored product.
@@ -420,6 +1222,41 @@ components:
           description: The `version` as last read.
           example: 1
       additionalProperties: false
+    TaxDestinationBody:
+      type: object
+      description: Where an order was taxed.
+      required:
+      - zone
+      properties:
+        country:
+          type:
+          - string
+          - 'null'
+          description: The destination country; null when the order named no address.
+          example: US
+        region:
+          type:
+          - string
+          - 'null'
+          description: |-
+            The region of the zone that decided the rates, as the store names it (never
+            the address's own text); null unless a regional zone matched.
+          example: CA
+        source:
+          type:
+          - string
+          - 'null'
+          description: |-
+            `shipping` or `billing`: the address whose place decided the rates; null
+            when the order named none.
+          example: shipping
+        zone:
+          type: string
+          description: |-
+            `zone` (a zone covered the destination), `outside` (none did; the store's
+            `outside_zones` rule applied) or `store` (no address; the store's own rates
+            applied).
+          example: zone
     TaxRatesBody:
       type: object
       description: Tax rates in parts per million (10% is `100000`); `exempt` is always 0.
@@ -439,6 +1276,38 @@ components:
           format: int64
           description: Rate of the `standard` class, 0 to 500000.
           example: 100000
+      additionalProperties: false
+    UpdateCustomerRequest:
+      type: object
+      description: |-
+        New contact fields for a customer. They replace all three stored ones: a
+        field left out or null is cleared. At least one is required.
+      required:
+      - version
+      properties:
+        email:
+          type:
+          - string
+          - 'null'
+          description: Email address, unique among the tenant's active customers ignoring case.
+          example: aiko@example.jp
+        name:
+          type:
+          - string
+          - 'null'
+          description: Display name, 1 to 120 characters.
+          example: Aiko Tanaka
+        phone:
+          type:
+          - string
+          - 'null'
+          description: Phone number in E.164 form.
+          example: '+819012345678'
+        version:
+          type: integer
+          format: int64
+          description: The `version` the edit is based on, as last read.
+          example: 1
       additionalProperties: false
     UpdateProductRequest:
       type: object
@@ -592,6 +1461,667 @@ components:
           example: SHIRT-M
       additionalProperties: false
 paths:
+  /api/v1/tenant/ecommerce/customers:
+    get:
+      tags:
+      - product_access
+      summary: List the tenant's customers in every status, newest first.
+      operationId: ecommerce_list_customers
+      parameters:
+      - name: email
+        in: query
+        description: Only customers with exactly this email, ignoring case.
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size, 1 to 100 (default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: '`next_cursor` from the previous page.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerPageBody'
+        '400':
+          description: Invalid paging parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+    post:
+      tags:
+      - product_access
+      summary: Create a customer of the tenant.
+      description: |-
+        Retrying with the same `Idempotency-Key` and body returns the customer the
+        first request created, with `Idempotency-Replayed: true`.
+      operationId: ecommerce_create_customer
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: 1 to 255 visible ASCII characters, unique per tenant
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+        required: true
+      responses:
+        '201':
+          description: Created, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerBody'
+        '400':
+          description: Invalid fields or a missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.manage` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: Another active customer uses the email (`ecommerce/customer-email-taken`, `customer_id`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: Idempotency-Key reused with a different body, or after the customer was erased
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/customers/{customer_id}:
+    get:
+      tags:
+      - product_access
+      summary: Read one of the tenant's customers, in any status.
+      operationId: ecommerce_get_customer
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The customer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerBody'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No customer with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/customers/{customer_id}/addresses:
+    get:
+      tags:
+      - product_access
+      summary: 'List a customer''s addresses, newest first: the active ones by default.'
+      operationId: ecommerce_list_customer_addresses
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: status
+        in: query
+        description: '`active` (the default), `archived`, `erased` or `all`.'
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size, 1 to 100 (default 50, more than the active limit of 20).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: '`next_cursor` from the previous page.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressPageBody'
+        '400':
+          description: Invalid status or paging parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No customer with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+    post:
+      tags:
+      - product_access
+      summary: Add an address to a customer.
+      description: |-
+        A customer has at most 20 active addresses. Retrying with the same
+        `Idempotency-Key` and body returns the address the first request added, with
+        `Idempotency-Replayed: true`.
+      operationId: ecommerce_add_customer_address
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: 1 to 255 visible ASCII characters, unique per tenant
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAddressRequest'
+        required: true
+      responses:
+        '201':
+          description: Added, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressBody'
+        '400':
+          description: Invalid fields or a missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.manage` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No customer with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: |-
+            The customer was erased (`ecommerce/customer-erased`) or has 20 active
+            addresses (`ecommerce/address-limit-reached`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: Idempotency-Key reused with a different request, or after the customer was erased
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}:
+    get:
+      tags:
+      - product_access
+      summary: Read one of a customer's addresses, in any status.
+      operationId: ecommerce_get_customer_address
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: address_id
+        in: path
+        description: An address of that customer (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The address
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressBody'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: The customer has no address with this id
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}/archive:
+    post:
+      tags:
+      - product_access
+      summary: Archive one of a customer's addresses.
+      description: |-
+        It stays readable, and orders that name it keep it; new orders cannot name
+        it. Archiving an archived address returns it unchanged.
+      operationId: ecommerce_archive_customer_address
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: address_id
+        in: path
+        description: An address of that customer (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArchiveAddressRequest'
+        required: true
+      responses:
+        '200':
+          description: The archived address
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressBody'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.manage` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: The customer has no address with this id
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: The customer was erased (`ecommerce/customer-erased`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/customers/{customer_id}/erase:
+    post:
+      tags:
+      - product_access
+      summary: Erase a customer's personal data, for an erasure request.
+      description: |-
+        Blanks the name, email and phone and every address, and marks the customer
+        and its addresses `erased`. Their orders stay, still linked to the customer
+        id and address ids. Erasing an erased customer returns it unchanged. This
+        cannot be undone.
+      operationId: ecommerce_erase_customer
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EraseCustomerRequest'
+        required: true
+      responses:
+        '200':
+          description: The erased customer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerBody'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.privacy` (the service's refusal), or the
+            platform refused the request: the tenant lacks `products.ecommerce.enabled`,
+            or the user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No customer with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/customers/{customer_id}/export:
+    get:
+      tags:
+      - product_access
+      summary: Export everything held about a customer, for an access request.
+      description: |-
+        Returns the record, every address in every status, and their orders in every
+        store of the tenant, archived stores included, a page at a time. An erased
+        customer exports with null contact and address fields and their orders.
+      operationId: ecommerce_export_customer
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Orders per page, 1 to 100 (default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: '`next_cursor` from the previous page.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The customer and one page of orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerExportBody'
+        '400':
+          description: Invalid paging parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.privacy` (the service's refusal), or the
+            platform refused the request: the tenant lacks `products.ecommerce.enabled`,
+            or the user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No customer with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/customers/{customer_id}/update:
+    post:
+      tags:
+      - product_access
+      summary: Replace an active customer's contact fields.
+      description: 'An edit that changes nothing returns the customer, so a retry of an
+
+  applied edit succeeds.'
+      operationId: ecommerce_update_customer
+      parameters:
+      - name: customer_id
+        in: path
+        description: A customer of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerRequest'
+        required: true
+      responses:
+        '200':
+          description: The customer after the edit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerBody'
+        '400':
+          description: Invalid fields
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.customer.manage` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No customer with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: |-
+            A newer version exists (`ecommerce/version-conflict`), the email is taken
+            (`ecommerce/customer-email-taken`) or the customer was erased
+            (`ecommerce/customer-erased`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
   /api/v1/tenant/ecommerce/stores:
     get:
       tags:
@@ -897,6 +2427,221 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
         '404':
           description: No active store with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders:
+    get:
+      tags:
+      - product_access
+      summary: List an active store's orders, newest first.
+      operationId: ecommerce_list_orders
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: status
+        in: query
+        description: 'Only orders in this status: `placed` or `cancelled`.'
+        required: false
+        schema:
+          type: string
+      - name: customer_id
+        in: query
+        description: Only orders of this customer.
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size, 1 to 100 (default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: '`next_cursor` from the previous page.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPageBody'
+        '400':
+          description: Invalid status, customer or paging parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.order.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No active store with this id in the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}:
+    get:
+      tags:
+      - product_access
+      summary: Read one order of an active store.
+      operationId: ecommerce_get_order
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderBody'
+        '403':
+          description: |-
+            Missing `ecommerce.order.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/cancel:
+    post:
+      tags:
+      - product_access
+      summary: Cancel an order and put its stock back.
+      description: |-
+        An order with money paid on it is refunded first, and an order with any
+        goods handed over cannot be cancelled at all — even fully refunded — because
+        restoring its stock would sell handed-over goods twice; returned goods need
+        the returns workflow. Cancelling a cancelled order returns it unchanged,
+        whatever the version.
+      operationId: ecommerce_cancel_order
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelOrderRequest'
+        required: true
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderBody'
+        '400':
+          description: Invalid fields
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.order.manage` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: |-
+            Based on an older version (`current_version`); money still stands paid on
+            the order or is on its way back (`ecommerce/order-has-payments`, with
+            `net_minor` and `pending_refund_minor`): refund it first; an online payment
+            attempt is pending (`ecommerce/payment-in-progress`, with `attempt_id`):
+            cancel it first; or any goods were handed over
+            (`ecommerce/order-has-fulfillments`)
           content:
             application/problem+json:
               schema:
