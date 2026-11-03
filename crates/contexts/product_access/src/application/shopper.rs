@@ -295,10 +295,8 @@ pub struct PublishedStoreView {
     pub store_id: Option<String>,
 }
 
-/// The response of a service call after parsing: whether the service
-/// replayed an idempotent create, and the JSON body.
+/// The response of a service call after parsing.
 struct ServiceReply {
-    replayed: bool,
     body: serde_json::Value,
 }
 
@@ -1010,12 +1008,19 @@ impl ShopperScope {
         let (tenant_id, store_id) = self.store_context(host).await?;
         let claims = self.checkout_claims(checkout_token, tenant_id, store_id, true)?;
 
+        // Guarded placement: the order commits only when the terms under
+        // the service's placement locks still match the quote the shopper
+        // approved. The fingerprint and the shipping method come only from
+        // the signed claims — never from the browser — and the retry of an
+        // ambiguous outcome re-presents this same request and key.
         let payload = serde_json::json!({
             "reservation_id": claims.sub,
             "channel": "web",
             "customer_id": claims.customer_id,
             "shipping_address_id": claims.shipping_address_id,
-        });
+            "expected_pricing_fingerprint": claims.pricing_fingerprint,
+        })
+        .pipe_optional("shipping_method_id", claims.shipping_method_id.as_deref());
         let reply = self
             .call_service(
                 tenant_id,
@@ -1025,98 +1030,21 @@ impl ShopperScope {
                 Some(payload),
                 Some(&format!("web-order-{shopper_key}")),
             )
-            .await?;
-        let order: OrderDoc = parse_doc(&reply.body)?;
-
-        // On a first placement (not a replay), the order must carry the
-        // prices the checkout summary showed. A drift is refused and the
-        // fresh order cancelled: the shopper re-validates instead of being
-        // silently charged a different total. Replays return the original
-        // order whatever the catalog says now — its snapshot is the truth.
-        if !reply.replayed
-            && order.lines.iter().any(|line| {
-                claims
-                    .lines
-                    .iter()
-                    .find(|approved| approved.variant_id == line.variant_id)
-                    .is_none_or(|approved| approved.unit_price_minor != line.unit_price_minor)
-            })
-        {
-            self.cancel_fresh_order(tenant_id, store_id, &order.id, order.version)
-                .await;
-            return Err(ShopperError::PriceChanged);
-        }
-
-        self.confirmation(tenant_id, store_id, order).await
-    }
-
-    /// Cancels a just-placed order after a price-drift refusal. Best
-    /// effort: a version conflict re-reads once; anything else is logged —
-    /// the refusal itself stands either way.
-    async fn cancel_fresh_order(
-        &self,
-        tenant_id: TenantId,
-        store_id: i64,
-        order_id: &str,
-        version: i64,
-    ) {
-        let payload = serde_json::json!({ "version": version, "reason": "other" });
-        let result = self
-            .call_service(
-                tenant_id,
-                "POST",
-                &format!("stores/{store_id}/orders/{order_id}/cancel"),
-                None,
-                Some(payload),
-                None,
-            )
             .await;
-        let result = match result {
-            Ok(_) => Ok(()),
+        let reply = match reply {
+            Ok(reply) => reply,
+            // The approved pricing changed under the locks (an archived or
+            // re-priced method, moved prices): nothing was placed and the
+            // hold survives, so the shopper re-approves fresh terms.
             Err(ShopperError::Upstream(problem))
-                if problem.slug() == "ecommerce/version-conflict" =>
+                if problem.slug() == "ecommerce/checkout-price-changed" =>
             {
-                match self
-                    .call_service(
-                        tenant_id,
-                        "GET",
-                        &format!("stores/{store_id}/orders/{order_id}"),
-                        None,
-                        None,
-                        None,
-                    )
-                    .await
-                {
-                    Ok(reply) => {
-                        let current: OrderDoc = match parse_doc(&reply.body) {
-                            Ok(order) => order,
-                            Err(error) => {
-                                return tracing::warn!(%error, "price-drift cancel: re-read failed");
-                            }
-                        };
-                        let retry = serde_json::json!({
-                            "version": current.version,
-                            "reason": "other",
-                        });
-                        self.call_service(
-                            tenant_id,
-                            "POST",
-                            &format!("stores/{store_id}/orders/{order_id}/cancel"),
-                            None,
-                            Some(retry),
-                            None,
-                        )
-                        .await
-                        .map(|_| ())
-                    }
-                    Err(error) => Err(error),
-                }
+                return Err(ShopperError::PriceChanged);
             }
-            Err(error) => Err(error),
+            Err(error) => return Err(error),
         };
-        if let Err(error) = result {
-            tracing::warn!(order_id, %error, "price-drift cancel failed; order remains placed");
-        }
+        let order: OrderDoc = parse_doc(&reply.body)?;
+        self.confirmation(tenant_id, store_id, order).await
     }
 
     async fn confirmation(
@@ -1546,9 +1474,6 @@ impl ShopperScope {
                 .map_err(ShopperError::from)?;
         let response = self.upstream.forward(&forward, &token).await?;
 
-        let replayed = response.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("idempotency-replayed") && value.eq_ignore_ascii_case("true")
-        });
         if response.status >= 400 {
             return match UpstreamProblem::parse(response.status, &response.body) {
                 Some(problem) => Err(ShopperError::Upstream(Box::new(problem))),
@@ -1565,7 +1490,7 @@ impl ShopperScope {
                 ShopperError::BadGateway(format!("upstream body is not JSON: {err}"))
             })?
         };
-        Ok(ServiceReply { replayed, body })
+        Ok(ServiceReply { body })
     }
 }
 
@@ -3228,117 +3153,57 @@ mod tests {
     // Placement
     // ------------------------------------------------------------------
 
-    struct PlaceConfig {
-        /// The unit price the placed order carries (drift detection).
-        order_price: i64,
-        replayed: bool,
-    }
-
-    fn place_harness(config: PlaceConfig) -> Harness {
-        harness(move |received| {
-            let config = &config;
-            match (received.method.as_str(), received.path.as_str()) {
-                ("GET", "stores/42") => (200, vec![], store_body()),
-                ("GET", "stores/42/products") => (
-                    200,
-                    vec![],
-                    serde_json::json!({
-                        "items": [product("700", "active", serde_json::json!([
-                            variant("900", 1200, false),
-                            variant("901", 1500, false)
-                        ]))],
-                        "next_cursor": serde_json::Value::Null
-                    }),
-                ),
-                ("GET", "stores/42/locations") => (
-                    200,
-                    vec![],
-                    serde_json::json!({"items": [{"id": "5"}], "next_after": serde_json::Value::Null}),
-                ),
-                ("GET", "stores/42/stock") => (
-                    200,
-                    vec![],
-                    serde_json::json!({"items": [
-                        {"location_id": "5", "variant_id": "900", "on_hand": 10, "safety_stock": 1, "held": 0, "available": 9},
-                        {"location_id": "5", "variant_id": "901", "on_hand": 3, "safety_stock": 1, "held": 0, "available": 2}
-                    ], "next_after": serde_json::Value::Null}),
-                ),
-                ("POST", "customers") => (
-                    201,
-                    vec![],
-                    serde_json::json!({"id": "700", "status": "active", "version": 1, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}),
-                ),
-                ("GET", "customers/700/addresses") => (
-                    200,
-                    vec![],
-                    serde_json::json!({"items": [], "next_cursor": serde_json::Value::Null}),
-                ),
-                ("POST", "customers/700/addresses") => (
-                    201,
-                    vec![],
-                    serde_json::json!({"id": "800", "customer_id": "700", "status": "active", "created_at": "2026-01-01T00:00:00Z"}),
-                ),
-                ("POST", "stores/42/reservations") => (
+    fn place_harness() -> Harness {
+        harness(
+            |received| match (received.method.as_str(), received.path.as_str()) {
+                ("POST", "stores/42/orders") => (
                     201,
                     vec![],
                     serde_json::json!({
-                        "id": "555", "store_id": "42", "status": "held",
-                        "expires_at": "2033-01-01T00:15:00Z", "created_at": "2033-01-01T00:00:00Z",
+                        "id": "888", "store_id": "42", "reservation_id": "555", "status": "placed",
+                        "channel": "web", "currency": "JPY",
+                        "subtotal_minor": 1200 * 2 + 1500,
+                        "tax_minor": 0, "total_minor": 1200 * 2 + 1500,
+                        "tax_mode": "none", "tax_lines": [],
                         "lines": [
-                            {"variant_id": "900", "location_id": "5", "quantity": 2},
-                            {"variant_id": "901", "location_id": "5", "quantity": 1}
-                        ]
-                    }),
-                ),
-                ("POST", "stores/42/orders") => {
-                    let mut headers = vec![];
-                    if config.replayed {
-                        headers.push(("idempotency-replayed".to_owned(), "true".to_owned()));
-                    }
-                    (
-                        201,
-                        headers,
-                        serde_json::json!({
-                            "id": "888", "store_id": "42", "reservation_id": "555", "status": "placed",
-                            "channel": "web", "currency": "JPY",
-                            "subtotal_minor": config.order_price * 2 + 1500,
-                            "tax_minor": 0, "total_minor": config.order_price * 2 + 1500,
-                            "tax_mode": "none", "tax_lines": [],
-                            "lines": [
-                                {"position": 0, "product_id": "700", "variant_id": "900", "location_id": "5",
-                                 "product_title": "Product 700", "sku": null, "options": {"size": "m"},
-                                 "unit_price_minor": config.order_price, "quantity": 2, "line_total_minor": config.order_price * 2},
-                                {"position": 1, "product_id": "700", "variant_id": "901", "location_id": "5",
-                                 "product_title": "Product 700", "sku": null, "options": {"size": "l"},
-                                 "unit_price_minor": 1500, "quantity": 1, "line_total_minor": 1500}
-                            ],
-                            "placed_at": "2033-01-01T00:00:00Z",
-                            "payment": {"status": "unpaid", "paid_minor": 0, "refunded_minor": 0, "due_minor": config.order_price * 2 + 1500, "pending_minor": 0, "pending_refund_minor": 0, "overpaid_minor": 0},
-                            "fulfillment": {"status": "unfulfilled", "lines": []},
-                            "version": 0, "updated_at": "2033-01-01T00:00:00Z"
-                        }),
-                    )
-                }
-                ("POST", "stores/42/orders/888/cancel") => (
-                    200,
-                    vec![],
-                    serde_json::json!({
-                        "id": "888", "store_id": "42", "reservation_id": "555", "status": "cancelled",
-                        "channel": "web", "currency": "JPY", "subtotal_minor": 0, "tax_minor": 0, "total_minor": 0,
-                        "tax_mode": "none", "tax_lines": [], "lines": [],
-                        "placed_at": "2033-01-01T00:00:00Z", "cancelled_at": "2033-01-01T00:01:00Z",
-                        "cancel_reason": "other",
-                        "payment": {"status": "unpaid", "paid_minor": 0, "refunded_minor": 0, "due_minor": 0, "pending_minor": 0, "pending_refund_minor": 0, "overpaid_minor": 0},
+                            {"position": 0, "product_id": "700", "variant_id": "900", "location_id": "5",
+                             "product_title": "Product 700", "sku": null, "options": {"size": "m"},
+                             "unit_price_minor": 1200, "quantity": 2, "line_total_minor": 2400},
+                            {"position": 1, "product_id": "700", "variant_id": "901", "location_id": "5",
+                             "product_title": "Product 700", "sku": null, "options": {"size": "l"},
+                             "unit_price_minor": 1500, "quantity": 1, "line_total_minor": 1500}
+                        ],
+                        "placed_at": "2033-01-01T00:00:00Z",
+                        "payment": {"status": "unpaid", "paid_minor": 0, "refunded_minor": 0, "due_minor": 1200 * 2 + 1500, "pending_minor": 0, "pending_refund_minor": 0, "overpaid_minor": 0},
                         "fulfillment": {"status": "unfulfilled", "lines": []},
-                        "version": 1, "updated_at": "2033-01-01T00:01:00Z"
+                        "version": 0, "updated_at": "2033-01-01T00:00:00Z"
                     }),
                 ),
                 _ => (404, vec![], problem_body("not-found", 404, "no such route")),
-            }
-        })
+            },
+        )
     }
 
-    async fn place_token() -> String {
+    /// The service refuses placement: the approved pricing changed under
+    /// the placement locks. Nothing was placed; the hold survives.
+    fn price_changed_harness() -> Harness {
+        harness(
+            |received| match (received.method.as_str(), received.path.as_str()) {
+                ("POST", "stores/42/orders") => (
+                    409,
+                    vec![],
+                    problem_body(
+                        "ecommerce/checkout-price-changed",
+                        409,
+                        "the approved pricing changed",
+                    ),
+                ),
+                _ => (404, vec![], problem_body("not-found", 404, "no such route")),
+            },
+        )
+    }
+
+    async fn place_token(shipping_method: Option<&str>) -> String {
         let claims = CheckoutClaims::new(
             "555".to_owned(),
             TenantId::try_from(1001_i64).unwrap(),
@@ -3359,12 +3224,20 @@ mod tests {
                 },
             ],
             QuotedTerms {
-                pricing_fingerprint: "v1:test".to_owned(),
-                shipping_method_id: None,
+                pricing_fingerprint: if shipping_method.is_some() {
+                    "v2:approved".to_owned()
+                } else {
+                    "v1:approved".to_owned()
+                },
+                shipping_method_id: shipping_method.map(str::to_owned),
                 subtotal_minor: 1200 * 2 + 1500,
-                shipping_minor: 0,
+                shipping_minor: if shipping_method.is_some() { 500 } else { 0 },
                 tax_minor: 0,
-                total_minor: 1200 * 2 + 1500,
+                total_minor: if shipping_method.is_some() {
+                    1200 * 2 + 1500 + 500
+                } else {
+                    1200 * 2 + 1500
+                },
             },
             "018f0000000070008000000000000000".to_owned(),
             chrono::DateTime::from_timestamp(NOW_SECS + 900, 0).unwrap(),
@@ -3375,12 +3248,9 @@ mod tests {
 
     #[tokio::test]
     async fn placement_returns_the_order_and_mints_the_credential() {
-        let Harness { upstream, scope } = place_harness(PlaceConfig {
-            order_price: 1200,
-            replayed: false,
-        });
+        let Harness { upstream, scope } = place_harness();
         let view = scope
-            .place_order("shop.acme.test", "key-9", &place_token().await)
+            .place_order("shop.acme.test", "key-9", &place_token(None).await)
             .await
             .unwrap();
         assert_eq!(view.order.id, "888");
@@ -3403,47 +3273,120 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_price_drift_refuses_and_cancels_the_fresh_order() {
-        let Harness { upstream, scope } = place_harness(PlaceConfig {
-            order_price: 1300,
-            replayed: false,
-        });
-        let error = scope
-            .place_order("shop.acme.test", "key-9", &place_token().await)
+    async fn placement_sends_fingerprint_and_method_from_claims() {
+        let Harness { upstream, scope } = place_harness();
+        scope
+            .place_order("shop.acme.test", "key-9", &place_token(Some("300")).await)
             .await
-            .unwrap_err();
-        assert_eq!(error, ShopperError::PriceChanged);
+            .unwrap();
+
+        let call = upstream
+            .calls_to("stores/42/orders")
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(call.body["reservation_id"], "555");
+        assert_eq!(call.body["channel"], "web");
         assert_eq!(
-            upstream.calls_to("stores/42/orders/888/cancel").len(),
-            1,
-            "the fresh order is cancelled, not silently charged"
+            call.body["expected_pricing_fingerprint"], "v2:approved",
+            "the claims' fingerprint is echoed verbatim"
+        );
+        assert_eq!(call.body["shipping_method_id"], "300");
+        assert_eq!(
+            call.headers
+                .iter()
+                .find(|(name, _)| name == "idempotency-key")
+                .map(|(_, value)| value.as_str()),
+            Some("web-order-key-9")
         );
     }
 
     #[tokio::test]
-    async fn a_replayed_placement_returns_the_original_order_without_the_price_check() {
-        let Harness { upstream, scope } = place_harness(PlaceConfig {
-            order_price: 1300,
-            replayed: true,
-        });
-        let view = scope
-            .place_order("shop.acme.test", "key-9", &place_token().await)
+    async fn price_changed_409_maps_to_price_changed_without_cancel_call() {
+        let Harness { upstream, scope } = price_changed_harness();
+        let error = scope
+            .place_order("shop.acme.test", "key-9", &place_token(None).await)
+            .await
+            .unwrap_err();
+        assert_eq!(error, ShopperError::PriceChanged);
+        assert!(
+            !upstream
+                .calls()
+                .iter()
+                .any(|call| call.path.contains("/cancel")),
+            "no compensating cancel: the service refused before placing, the hold survives"
+        );
+        assert_eq!(upstream.calls_to("stores/42/orders").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn timeout_retry_reuses_the_same_idempotency_key() {
+        // An ambiguous outcome (timeout after the request left) is retried
+        // by re-presenting the original request — never by minting a fresh
+        // sale or key.
+        let Harness { upstream, scope } = place_harness();
+        let token = place_token(None).await;
+        let first = scope
+            .place_order("shop.acme.test", "key-9", &token)
             .await
             .unwrap();
-        assert_eq!(view.order.id, "888");
+        let retry = scope
+            .place_order("shop.acme.test", "key-9", &token)
+            .await
+            .unwrap();
+        assert_eq!(first.order.id, retry.order.id);
+        let calls = upstream.calls_to("stores/42/orders");
+        assert_eq!(calls.len(), 2);
+        let keys: Vec<_> = calls
+            .iter()
+            .map(|call| {
+                call.headers
+                    .iter()
+                    .find(|(name, _)| name == "idempotency-key")
+                    .map(|(_, value)| value.clone())
+                    .unwrap()
+            })
+            .collect();
         assert_eq!(
-            upstream.calls_to("stores/42/orders/888/cancel").len(),
-            0,
-            "the snapshot of record already carries these prices"
+            keys,
+            vec!["web-order-key-9".to_owned(), "web-order-key-9".to_owned()],
+            "the retry carries the original placement's key"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_token_is_refused_before_any_upstream_call() {
+        let Harness { upstream, scope } = place_harness();
+        // The pre-quote token shape, properly signed: no quoted terms.
+        let legacy = serde_json::json!({
+            "iss": crate::domain::ISSUER,
+            "aud": crate::domain::CHECKOUT_AUDIENCE,
+            "sub": "555",
+            "tenant_id": "1001",
+            "store_id": "42",
+            "customer_id": "700",
+            "shipping_address_id": "800",
+            "currency": "JPY",
+            "lines": [{"variant_id": "900", "unit_price_minor": 1200, "quantity": 2}],
+            "jti": "018f0000000070008000000000000000",
+            "iat": NOW_SECS,
+            "exp": NOW_SECS + 900,
+        });
+        let token = format!("checkout:{}", serde_json::to_string(&legacy).unwrap());
+        let error = scope
+            .place_order("shop.acme.test", "key-9", &token)
+            .await
+            .unwrap_err();
+        assert_eq!(error, ShopperError::CheckoutRefreshRequired);
+        assert!(
+            upstream.calls().is_empty(),
+            "an unguarded token never reaches the service"
         );
     }
 
     #[tokio::test]
     async fn an_expired_checkout_token_is_a_typed_expiry_refusal() {
-        let Harness { upstream: _, scope } = place_harness(PlaceConfig {
-            order_price: 1200,
-            replayed: false,
-        });
+        let Harness { upstream: _, scope } = place_harness();
         let claims = CheckoutClaims::new(
             "555".to_owned(),
             TenantId::try_from(1001_i64).unwrap(),
@@ -3453,7 +3396,7 @@ mod tests {
             "JPY".to_owned(),
             vec![],
             QuotedTerms {
-                pricing_fingerprint: "v1:test".to_owned(),
+                pricing_fingerprint: "v1:approved".to_owned(),
                 shipping_method_id: None,
                 subtotal_minor: 0,
                 shipping_minor: 0,
