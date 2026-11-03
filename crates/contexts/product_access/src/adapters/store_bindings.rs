@@ -1,7 +1,11 @@
 //! Sqlx adapter for the tenant's published-store binding (the phase-14
-//! host → store decision). Platform-scoped: one row per tenant, no RLS —
-//! the tenant id is the primary key and the store of record lives in
-//! ecommerce-service, so validity is re-checked there, not here.
+//! host → store decision). One row per tenant, under the canonical
+//! `tenant_isolation` RLS policy like every other tenant-scoped table:
+//! both paths know the tenant before they touch the table — the shopper
+//! read resolves host → tenant first, the staff publish runs inside the
+//! authenticated tenant session — so every access opens a scoped
+//! transaction (`SET LOCAL sanvi.tenant_id`). The store of record lives
+//! in ecommerce-service, so validity is re-checked there, not here.
 
 use async_trait::async_trait;
 use sanvi_kernel::TenantId;
@@ -23,13 +27,21 @@ impl StoreBindings for SqlxStoreBindings {
         &self,
         tenant_id: TenantId,
     ) -> Result<Option<i64>, ProductAccessError> {
+        let mut tx = self
+            .0
+            .begin_for(tenant_id.as_i64())
+            .await
+            .map_err(|err| ProductAccessError::Storage(err.to_string()))?;
         let row = sqlx::query!(
             "SELECT store_id FROM platform.ecommerce_public_store_bindings WHERE tenant_id = $1",
             tenant_id.as_i64()
         )
-        .fetch_optional(self.0.pool())
+        .fetch_optional(&mut **tx.tx_mut().as_inner())
         .await
         .map_err(|err| ProductAccessError::Storage(err.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|err| ProductAccessError::Storage(err.to_string()))?;
         Ok(row.map(|record| record.store_id))
     }
 
@@ -40,7 +52,7 @@ impl StoreBindings for SqlxStoreBindings {
     ) -> Result<(), ProductAccessError> {
         let mut tx = self
             .0
-            .begin()
+            .begin_for(tenant_id.as_i64())
             .await
             .map_err(|err| ProductAccessError::Storage(err.to_string()))?;
         if let Some(store_id) = store_id {
@@ -51,7 +63,7 @@ impl StoreBindings for SqlxStoreBindings {
                 tenant_id.as_i64(),
                 store_id
             )
-            .execute(&mut **tx.as_inner())
+            .execute(&mut **tx.tx_mut().as_inner())
             .await
             .map_err(|err| ProductAccessError::Storage(err.to_string()))?;
         } else {
@@ -59,7 +71,7 @@ impl StoreBindings for SqlxStoreBindings {
                 "DELETE FROM platform.ecommerce_public_store_bindings WHERE tenant_id = $1",
                 tenant_id.as_i64()
             )
-            .execute(&mut **tx.as_inner())
+            .execute(&mut **tx.tx_mut().as_inner())
             .await
             .map_err(|err| ProductAccessError::Storage(err.to_string()))?;
         }

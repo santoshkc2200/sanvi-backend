@@ -1,0 +1,20 @@
+-- Platform adoption (2026-11-04) gate repair: the published-store binding
+-- table joins the canonical RLS shape.
+--
+-- Context: platform. Reversible counterpart:
+-- 20261104000000_platform_ecommerce_public_store_bindings_rls.down.sql
+--
+-- 20261101000000_platform_ecommerce_public_store_bindings.sql created this
+-- table without RLS, reasoning that "tenant scoping is the tenant_id key
+-- itself". That contradicts the frozen isolation invariant (threat model
+-- T1, apps/api/tests/integration/rls_matrix.rs): every tenant_id table is
+-- ENABLE + FORCE RLS with exactly one canonical tenant_isolation policy,
+-- and the only no-RLS exemptions (domains.live_hostnames,
+-- platform.archives) are frozen matrix decisions. This table is neither.
+--
+-- Both access paths know the tenant before they touch the table — the
+-- shopper read resolves host → tenant first, the staff publish runs inside
+-- the authenticated tenant session — so the adapter now opens
+-- TxManager::begin_for (SET LOCAL sanvi.tenant_id) and the canonical policy
+-- does the isolating, like every other tenant-scoped table.
+SELECT platform.enable_tenant_rls('platform', 'ecommerce_public_store_bindings');
