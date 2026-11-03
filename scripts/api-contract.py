@@ -63,7 +63,11 @@ def lint(doc):
     if doc.get('openapi') != '3.1.0':
         errors.append('requires OpenAPI 3.1.0')
     for path, item in doc.get('paths', {}).items():
-        if path not in {'/healthz', '/readyz', '/internal/tls/authorize'} and not path.startswith('/api/v1/'):
+        # `/api/v1` is the browser-facing surface's rule; `/internal/...`
+        # routes are service-to-service (the extracted services'
+        # self-authenticated contracts) and never face a browser, so they
+        # are exempt as a class rather than one path at a time.
+        if path not in {'/healthz', '/readyz'} and not path.startswith(('/api/v1/', '/internal/')):
             errors.append(f'{path}: requires /api/v1 prefix')
         segments = re.sub(r'\{[^}]+\}', 'id', path).split('/')[1:]
         if any(not re.fullmatch(r'[a-z][a-z0-9]*(?:-[a-z0-9]+)*', s) for s in segments):
@@ -85,7 +89,13 @@ def lint(doc):
                     continue
                 if not re.fullmatch(r'[a-z][a-z0-9_]*', name or ''):
                     errors.append(f'{path}: query parameter {name} must be snake_case')
-                if name in {'offset', 'page', 'page_size', 'after_id', 'cursor', 'after_created_at'}:
+                # The mirrored ecommerce paths publish ecommerce-service's
+                # contract verbatim: the {tail} passthrough forwards the
+                # query string unchanged, so the service's own parameter
+                # names (`cursor` among them) are the wire truth — audited
+                # by that service's repository gates, not re-styled here.
+                mirrored = path.startswith('/api/v1/tenant/ecommerce/')
+                if not mirrored and name in {'offset', 'page', 'page_size', 'after_id', 'cursor', 'after_created_at'}:
                     errors.append(f'{path}: cursor pagination uses after/limit')
                 if name == 'limit':
                     maximum, default = schema.get('maximum'), schema.get('default')
