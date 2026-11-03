@@ -51,6 +51,11 @@ async fn upstream_handler(
         return HttpResponse::NoContent().finish();
     }
     match request.path() {
+        "/v1/no-store" => HttpResponse::Ok()
+            .content_type("application/json")
+            .insert_header(("Cache-Control", "no-store"))
+            .insert_header(("X-Internal", "leak"))
+            .body(r#"{"quoted":true}"#),
         "/v1/unauthorized" => HttpResponse::Unauthorized().finish(),
         "/v1/missing" => HttpResponse::NotFound()
             .content_type("application/problem+json")
@@ -548,4 +553,27 @@ async fn tenant_without_ecommerce_gets_the_feature_problem() {
         "feature not enabled: products.ecommerce.enabled"
     );
     assert!(log.lock().unwrap().is_empty());
+}
+
+/// The quote and shipping-list answers are `Cache-Control: no-store` by
+/// contract; the proxy's response allow-list must carry the header to the
+/// browser while still dropping the service's internals.
+#[actix_web::test]
+async fn proxy_returns_no_store_from_upstream() {
+    let (address, _) = start_upstream().await;
+    let app = app!(state(&format!("http://{address}"), manager()));
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v1/tenant/ecommerce/no-store")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    assert!(
+        response.headers().get("x-internal").is_none(),
+        "the allow-list still filters service internals"
+    );
 }

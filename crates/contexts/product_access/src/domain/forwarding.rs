@@ -18,7 +18,9 @@ const REQUEST_HEADERS: &[&str] = &[
 ];
 
 /// Response headers the browser may see from a product service.
-const RESPONSE_HEADERS: &[&str] = &["content-type", "idempotency-replayed"];
+/// `cache-control` carries the services' `no-store` on quote-derived and
+/// shipping-list answers past the proxy.
+const RESPONSE_HEADERS: &[&str] = &["content-type", "idempotency-replayed", "cache-control"];
 
 /// Whether a browser request header is forwarded.
 pub fn forwards_request_header(name: &str) -> bool {
@@ -184,5 +186,13 @@ mod tests {
         assert!(returns_response_header("idempotency-replayed"));
         assert!(!returns_response_header("set-cookie"));
         assert!(!returns_response_header("server"));
+    }
+
+    #[test]
+    fn response_allow_list_includes_cache_control() {
+        // The quote and shipping-list responses are cache-busting by
+        // contract (`no-store`); the proxy must not strip the header.
+        assert!(returns_response_header("cache-control"));
+        assert!(returns_response_header("Cache-Control"));
     }
 }
