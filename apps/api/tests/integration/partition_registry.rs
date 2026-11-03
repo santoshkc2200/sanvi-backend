@@ -213,8 +213,25 @@ async fn readiness_probe_fires_for_missing_next_month_from_the_25th() {
     let pool = db.migrator_pool().await;
 
     // The probe's reference date is parameterised; late-month = the 26th.
-    let late = "2026-10-26".parse::<chrono::NaiveDate>().unwrap();
-    let early = "2026-10-24".parse::<chrono::NaiveDate>().unwrap();
+    // The months come from the real clock: ensure refuses to create past
+    // months ("ahead exists to pre-create the future"), so a fabricated
+    // fixed month stops working once the calendar passes it — this test
+    // did exactly that when November 2026 arrived and its repair call
+    // could no longer recreate the dropped child.
+    let month_start = chrono::Utc::now().date_naive();
+    let month_start = chrono::NaiveDate::from_ymd_opt(
+        month_start.format("%Y").to_string().parse().unwrap(),
+        month_start.format("%m").to_string().parse().unwrap(),
+        1,
+    )
+    .unwrap();
+    let late = month_start.checked_add_days(chrono::Days::new(25)).unwrap();
+    let early = month_start.checked_add_days(chrono::Days::new(23)).unwrap();
+    let next_month = month_start
+        .checked_add_months(chrono::Months::new(1))
+        .unwrap();
+    // The probe names the bare child (schema and table travel separately).
+    let missing_child = format!("entries_{}", next_month.format("%Y%m"));
 
     let breaches_on = |date: chrono::NaiveDate, pool: &sqlx::PgPool| {
         let pool = pool.clone();
@@ -231,44 +248,39 @@ async fn readiness_probe_fires_for_missing_next_month_from_the_25th() {
         }
     };
 
-    // The migrations pre-created 202610 and 202611 — but the probe's months
-    // are relative to the *reference date*, so first align the registry's
-    // horizon with it, then simulate a disabled job by dropping the child.
-    sqlx::query("SELECT platform.ensure_monthly_partitions('2026-10-10')")
+    // The migrations pre-created the current and next month — but the
+    // probe's months are relative to the *reference date*, so first align
+    // the registry's horizon with it, then simulate a disabled job by
+    // dropping the child.
+    sqlx::query("SELECT platform.ensure_monthly_partitions($1)")
+        .bind(month_start)
         .execute(&pool)
         .await
         .expect("ensure");
-    sqlx::query(
-        "DO $$
-         DECLARE m date;
-         BEGIN
-           FOR m IN SELECT generate_series(date_trunc('month', '2026-10-26'::date),
-                                           date_trunc('month', '2026-10-26'::date)
-                                             + interval '1 month',
-                                           interval '1 month')::date LOOP
-             PERFORM platform.ensure_monthly_partitions(m);
-           END LOOP;
-         END $$",
-    )
-    .execute(&pool)
-    .await
-    .expect("ensure horizon");
     assert!(
         breaches_on(late, &pool).await.is_empty(),
         "probe must be quiet while every next-month child exists"
     );
 
-    // A disabled job: October passes, nobody creates November's audit child.
-    sqlx::query("DROP TABLE IF EXISTS audit.entries_202611")
-        .execute(&pool)
-        .await
-        .expect("drop child");
+    // A disabled job: the month passes, nobody creates next month's audit
+    // child. (The dynamic identifier is built inside the database, keeping
+    // the Rust-side statement a literal.)
+    sqlx::query(
+        "DO $$
+         BEGIN
+           EXECUTE format('DROP TABLE IF EXISTS audit.entries_%s',
+             to_char(date_trunc('month', current_date) + interval '1 month', 'YYYYMM'));
+         END $$",
+    )
+    .execute(&pool)
+    .await
+    .expect("drop child");
 
     let breaches = breaches_on(late, &pool).await;
     assert!(
         breaches
             .iter()
-            .any(|(s, t, c)| s == "audit" && t == "entries" && c == "entries_202611"),
+            .any(|(s, t, c)| s == "audit" && t == "entries" && *c == missing_child),
         "probe must name the missing child by name; got {breaches:?}"
     );
 
@@ -279,8 +291,10 @@ async fn readiness_probe_fires_for_missing_next_month_from_the_25th() {
         "the same missing child must not page before the 25th (FR-1128 deadline)"
     );
 
-    // The repair path: one ensure call clears the breach.
-    sqlx::query("SELECT platform.ensure_monthly_partitions('2026-10-10')")
+    // The repair path: one ensure call clears the breach (the target month
+    // is the current one, so the ahead horizon includes next month).
+    sqlx::query("SELECT platform.ensure_monthly_partitions($1)")
+        .bind(month_start)
         .execute(&pool)
         .await
         .expect("ensure");

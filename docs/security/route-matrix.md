@@ -345,7 +345,7 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | apps/api/src/compliance.rs | `c49932d63d0b68e66ff03eaa8b13ca08c779475b62b7e9fd2763eaa8ac269d6f` |
 | apps/api/src/config.rs | `eeb168738bb5b3a55eecdcf07ef7c65550f2b9b4d6089c704f694cd0e63ca7ea` |
 | apps/api/src/domains.rs | `12c067de12ceea752c9549a1f4697378427a463cc5ce48bf2fbed22bd740f504` |
-| apps/api/src/lib.rs | `9461fa0f35442f28f2c6ae19d9c03240c22181f27a2f9e9c86e16a30e5c6b289` |
+| apps/api/src/lib.rs | `d01471b6f922399864ee97543607c69bda027e459d16e6acfbacbcff086c1b5a` |
 | apps/api/src/main.rs | `a073c7156e44aab848d37f9e9413847b626e4e2bde0bf2c525a9079758cffb2b` |
 | apps/api/src/openapi.rs | `db1aa9d8698b19eccf89fe395f02229597dd11807cba21bf216b13a5f1437c9e` |
 | apps/api/src/payments.rs | `645348eb6ae43ac181325b82891867dc684ea1f546340c83eb1bdfb1d3b3287f` |
@@ -416,9 +416,9 @@ Review these sources alongside their affected rows; hashes exclude test modules.
 | crates/contexts/product_access/src/adapters/http/handlers.rs | `f473c438b7e3925e6a438c0ec3da5cf8e9a018c6a063e27e58a8c79785e59f16` |
 | crates/contexts/product_access/src/adapters/http/mod.rs | `a4560ca1f00004ed1a2533319bebd2b0362300d596f6dd978c96855ab46364f3` |
 | crates/contexts/product_access/src/adapters/http/routes.rs | `4efdb17033a66cc9cdf47b4eac40970e41e06506f0d65221c91441846327b5a0` |
-| crates/contexts/product_access/src/adapters/http/shopper_handlers.rs | `4453e9583eb02c0a0e2c04c1c62894e26b067e0da267bb48cb842244b7f907f2` |
+| crates/contexts/product_access/src/adapters/http/shopper_handlers.rs | `ba6ab8bcc83e94034bae5ff0ead5ef23b1da6a8c047ee657f792a76befae1b85` |
 | crates/contexts/product_access/src/application/mod.rs | `8e486700d7f0b7131d58a6f9f1979a9bc5fe603ccd290893359208416ace49a1` |
-| crates/contexts/product_access/src/application/shopper.rs | `6a868eff2d59d5e49bc840d759f5c5083b48c07c25bf3c0704978a79dcc9a0d9` |
+| crates/contexts/product_access/src/application/shopper.rs | `023044148ee579e457314576e77e7076b9b7115e058b9bbb740d28a32e22fd81` |
 | crates/contexts/product_access/src/domain/delegation.rs | `cdc158a4936885dd08e2ec10ccf092877f0175f18d5c50dae47547563d0ce5d3` |
 | crates/contexts/product_access/src/domain/shopper.rs | `a3335ac9fec2def7bfc4248e828c8ee399351820c58363e6f0ddf50c92491ad3` |
 | crates/contexts/system/src/adapters/http/handlers.rs | `e960b2e416f59193f64a5dcdf9838e5dd518dcd0b0e086829c2d925ecb5ec8f7` |

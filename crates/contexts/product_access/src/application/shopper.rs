@@ -185,7 +185,9 @@ pub struct ShopperOrderView {
     pub cancel_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+/// No `Debug`: the payload carries the purchase credential — a bearer
+/// secret that must never ride into a log line via formatting.
+#[derive(Clone, Serialize, ToSchema)]
 pub struct ShopperOrderConfirmationView {
     pub order: ShopperOrderView,
     /// The purchase credential: short-lived, scoped to this order, the
@@ -3339,7 +3341,7 @@ mod tests {
         let view = scope
             .place_order("shop.acme.test", "key-9", &place_token(None).await)
             .await
-            .unwrap();
+            .unwrap_or_else(|error| panic!("placement failed: {error}"));
         assert_eq!(view.order.id, "888");
         assert_eq!(view.order.total_minor, 1200 * 2 + 1500);
         assert_eq!(view.order.payment.status, "unpaid");
@@ -3365,7 +3367,7 @@ mod tests {
         scope
             .place_order("shop.acme.test", "key-9", &place_token(Some("300")).await)
             .await
-            .unwrap();
+            .unwrap_or_else(|error| panic!("placement failed: {error}"));
 
         let call = upstream
             .calls_to("stores/42/orders")
@@ -3391,10 +3393,13 @@ mod tests {
     #[tokio::test]
     async fn price_changed_409_maps_to_price_changed_without_cancel_call() {
         let Harness { upstream, scope } = price_changed_harness();
-        let error = scope
+        let error = match scope
             .place_order("shop.acme.test", "key-9", &place_token(None).await)
             .await
-            .unwrap_err();
+        {
+            Err(error) => error,
+            Ok(_) => panic!("the price-changed refusal must not place"),
+        };
         assert_eq!(error, ShopperError::PriceChanged);
         assert!(
             !upstream
@@ -3416,11 +3421,11 @@ mod tests {
         let first = scope
             .place_order("shop.acme.test", "key-9", &token)
             .await
-            .unwrap();
+            .unwrap_or_else(|error| panic!("placement failed: {error}"));
         let retry = scope
             .place_order("shop.acme.test", "key-9", &token)
             .await
-            .unwrap();
+            .unwrap_or_else(|error| panic!("placement failed: {error}"));
         assert_eq!(first.order.id, retry.order.id);
         let calls = upstream.calls_to("stores/42/orders");
         assert_eq!(calls.len(), 2);
@@ -3460,10 +3465,10 @@ mod tests {
             "exp": NOW_SECS + 900,
         });
         let token = format!("checkout:{}", serde_json::to_string(&legacy).unwrap());
-        let error = scope
-            .place_order("shop.acme.test", "key-9", &token)
-            .await
-            .unwrap_err();
+        let error = match scope.place_order("shop.acme.test", "key-9", &token).await {
+            Err(error) => error,
+            Ok(_) => panic!("the legacy token must not place"),
+        };
         assert_eq!(error, ShopperError::CheckoutRefreshRequired);
         assert!(
             upstream.calls().is_empty(),

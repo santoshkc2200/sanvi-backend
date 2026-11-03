@@ -102,11 +102,16 @@ fn every_bounded_collection_declares_an_ordering_tie_broken_by_id() {
 }
 
 /// The unique key a collection's ordering must end in. `id` everywhere,
-/// with two documented exceptions where the row's identity is named
+/// with documented exceptions where the row's identity is named
 /// differently: the audit log's chain position `seq` *is* the entry id,
-/// and a membership row is keyed by `(tenant_id, user_id)` — it has no
-/// other id.
-const NON_ID_UNIQUE_KEYS: &[(&str, &str)] = &[("list_audit", "seq"), ("list_members", "user_id")];
+/// a membership row is keyed by `(tenant_id, user_id)` — it has no other
+/// id — and a stock level row is keyed by `(location_id, variant_id)`,
+/// with the location fixed by the query, so `variant_id` is the identity.
+const NON_ID_UNIQUE_KEYS: &[(&str, &str)] = &[
+    ("list_audit", "seq"),
+    ("list_members", "user_id"),
+    ("ecommerce_list_stock", "variant_id"),
+];
 
 fn unique_tie_breaker(operation_id: &str, last_key: &str) -> Result<(), String> {
     if last_key == "id" {

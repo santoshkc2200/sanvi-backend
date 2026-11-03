@@ -45,9 +45,17 @@ ordering moves into the tasks' `Depends on` / `Blocked by` lines and the shared 
   `7562cf6`): define and grant the five `ecommerce.order.read`/`.manage`,
   `ecommerce.customer.read`/`.manage`/`.privacy` permissions (the delegated v2 token then carries
   them — no proxy route change; the `{tail}` GET/POST forward already serves the paths), and
-  extend the `ecommerce-contract.yaml` mirror with the orders + customers surfaces. Staff-side
-  placement/quotes/discounts, payment recording, refunds, fulfillment, returns and shipping
-  management are later phases.
+  extend the `ecommerce-contract.yaml` mirror with the orders + customers surfaces.
+- **Ecommerce platform adoption (2026-11-04)** — the backend now consumes the service's quote,
+  shipping, discount, fulfillment, return and payment contracts: staff roles gain
+  `ecommerce.order.discount`/`.fulfillment.record`/`.return.record`/`.payment.record`/`.refund`,
+  guest checkout prices its hold with the service quote (the opaque fingerprint and totals are
+  signed into the checkout claims; placement sends `expected_pricing_fingerprint` and maps the
+  service's `ecommerce/checkout-price-changed` to re-approval instead of compensating cancels),
+  the proxy forwards `Cache-Control: no-store`, the public scope lists active shipping methods,
+  and the contract mirror publishes the quote/shipping/discount/fulfillment/return/payment
+  surfaces. Still a gap: the provider-payment gateway adapter and the `sanvi.events.payments`
+  stream (separate plan) and the storefront/admin UI (frontend repo).
 
 ## Phase map
 

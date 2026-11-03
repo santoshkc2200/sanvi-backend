@@ -238,6 +238,7 @@ pub async fn get_public_store(
 
 /// `GET /api/v1/public/ecommerce/products` — one page of active products
 /// with sellable variants, server-priced and server-availability-marked.
+/// Ordered by id DESC.
 #[utoipa::path(
     get,
     path = "/api/v1/public/ecommerce/products",
