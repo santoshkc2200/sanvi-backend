@@ -109,7 +109,8 @@ pub struct ShopperCheckoutLineView {
 }
 
 /// The checkout-start answer: the only pricing a checkout page may show,
-/// plus the opaque token that carries it to placement. `expires_at` is the
+/// plus the opaque token that carries it to placement. Every amount is
+/// the service quote's (the approved terms), and `expires_at` is the
 /// reservation's server timestamp; the TTL is rendered from it, never
 /// assumed.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -120,8 +121,18 @@ pub struct ShopperCheckoutView {
     /// RFC 3339 instant the hold expires at (server clock).
     pub expires_at: String,
     pub lines: Vec<ShopperCheckoutLineView>,
-    /// Sum of the line totals, minor units, in `currency`.
+    /// Quoted merchandise subtotal, minor units, in `currency`.
     pub subtotal_minor: i64,
+    /// Quoted shipping charge, minor units (0 with no method selected).
+    pub shipping_minor: i64,
+    /// Quoted tax owed, minor units.
+    pub tax_minor: i64,
+    /// Quoted amount due, minor units: what placement will charge.
+    pub total_minor: i64,
+    /// The service's display name for the selected shipping method, when
+    /// one was quoted. The fingerprint itself never travels outside the
+    /// signed token.
+    pub shipping_method_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -245,12 +256,18 @@ pub struct ShopperGuestLine {
 }
 
 /// Guest checkout start: contact + address + identifier lines. No prices,
-/// no totals — the server prices everything.
+/// no totals — the server prices everything via the service's quote.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ShopperStartCheckoutRequest {
     pub contact: ShopperGuestContact,
     pub address: ShopperGuestAddress,
     pub lines: Vec<ShopperGuestLine>,
+    /// Shipping method (decimal Snowflake) chosen from the checkout's
+    /// shipping-method list, or absent for no shipping. The quote prices
+    /// it against the guest's address; the fingerprint and amounts are
+    /// signed into the checkout claims, never taken from the browser.
+    #[serde(default)]
+    pub shipping_method_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -632,6 +649,15 @@ impl ShopperScope {
     ) -> Result<ShopperCheckoutView, ShopperError> {
         valid_shopper_key(shopper_key)?;
         let input = validate_checkout_input(request)?;
+        let shipping_method_id = request
+            .shipping_method_id
+            .as_deref()
+            .map(|id| {
+                canonical_id(id).ok_or_else(|| ShopperError::CheckoutInvalid {
+                    detail: "shipping_method_id must be a canonical positive decimal".to_owned(),
+                })
+            })
+            .transpose()?;
         let (tenant_id, store_id) = self.store_context(host).await?;
         let store = self.active_store(tenant_id, store_id).await?;
 
@@ -742,30 +768,28 @@ impl ShopperScope {
         }
         let expires_at = parse_rfc3339(&reservation.expires_at)?;
 
-        let checkout_lines: Vec<CheckoutLine> = priced
-            .iter()
-            .map(|(index, _, variant)| CheckoutLine {
-                variant_id: variant.id.clone(),
-                unit_price_minor: variant.price.amount_minor,
-                quantity: input.lines[*index].quantity,
-            })
-            .collect();
-        let subtotal_minor: i64 = checkout_lines
-            .iter()
-            .map(|line| line.unit_price_minor * line.quantity)
-            .sum();
-
-        // Interim: the terms are still catalog-derived until this
-        // orchestration requests the service quote (the next adoption
-        // task); the fingerprint then becomes the service's, signed as
-        // received.
-        let quoted = QuotedTerms {
-            pricing_fingerprint: String::new(),
-            shipping_method_id: None,
-            subtotal_minor,
-            shipping_minor: 0,
-            tax_minor: 0,
-            total_minor: subtotal_minor,
+        // Price the hold the way placement would: the service's quote is
+        // the approved money's only source (the catalog scan above stays
+        // for availability). On any failure the fresh hold is released
+        // best-effort — the reservation's expiry remains the backstop —
+        // and the original refusal surfaces unchanged.
+        let quoted = match self
+            .quote(
+                tenant_id,
+                store_id,
+                &reservation.id,
+                &customer_id,
+                &address_id,
+                shipping_method_id.as_deref(),
+            )
+            .await
+        {
+            Ok(quoted) => quoted,
+            Err(error) => {
+                self.release_hold(tenant_id, store_id, &reservation.id)
+                    .await;
+                return Err(error);
+            }
         };
 
         let claims = CheckoutClaims::new(
@@ -775,8 +799,8 @@ impl ShopperScope {
             customer_id,
             address_id,
             store.currency.clone(),
-            checkout_lines,
-            quoted,
+            quoted.lines,
+            quoted.terms,
             uuid::Uuid::now_v7().simple().to_string(),
             expires_at,
             (self.clock)(),
@@ -796,8 +820,87 @@ impl ShopperScope {
                     line_total_minor: line.unit_price_minor * line.quantity,
                 })
                 .collect(),
-            subtotal_minor,
+            subtotal_minor: claims.subtotal_minor,
+            shipping_minor: claims.shipping_minor,
+            tax_minor: claims.tax_minor,
+            total_minor: claims.total_minor,
+            shipping_method_name: quoted.shipping_method_name,
         })
+    }
+
+    /// Prices the held reservation exactly as placing it would, per the
+    /// service's quote (`POST stores/{id}/orders/quote`). The returned
+    /// fingerprint is opaque and is signed as received — never parsed,
+    /// recomputed or replaced. A quote writes nothing upstream, so no
+    /// idempotency key is spent on it.
+    async fn quote(
+        &self,
+        tenant_id: TenantId,
+        store_id: i64,
+        reservation_id: &str,
+        customer_id: &str,
+        address_id: &str,
+        shipping_method_id: Option<&str>,
+    ) -> Result<QuotedCheckout, ShopperError> {
+        let payload = serde_json::json!({
+            "reservation_id": reservation_id,
+            "customer_id": customer_id,
+            "shipping_address_id": address_id,
+        })
+        .pipe_optional("shipping_method_id", shipping_method_id);
+        let reply = self
+            .call_service(
+                tenant_id,
+                "POST",
+                &format!("stores/{store_id}/orders/quote"),
+                None,
+                Some(payload),
+                None,
+            )
+            .await?;
+        let quote: QuoteDoc = parse_doc(&reply.body)?;
+        Ok(QuotedCheckout {
+            terms: QuotedTerms {
+                pricing_fingerprint: quote.pricing_fingerprint,
+                shipping_method_id: quote.shipping.as_ref().map(|s| s.method_id.clone()),
+                subtotal_minor: quote.subtotal_minor,
+                shipping_minor: quote.shipping_minor,
+                tax_minor: quote.tax_minor,
+                total_minor: quote.total_minor,
+            },
+            lines: quote
+                .lines
+                .into_iter()
+                .map(|line| CheckoutLine {
+                    variant_id: line.variant_id,
+                    unit_price_minor: line.unit_price_minor,
+                    quantity: line.quantity,
+                })
+                .collect(),
+            shipping_method_name: quote.shipping.map(|s| s.name),
+        })
+    }
+
+    /// Releases a hold this orchestration just created, ignoring failures:
+    /// the reservation's own expiry is the recovery backstop.
+    async fn release_hold(&self, tenant_id: TenantId, store_id: i64, reservation_id: &str) {
+        let result = self
+            .call_service(
+                tenant_id,
+                "POST",
+                &format!("stores/{store_id}/reservations/{reservation_id}/release"),
+                None,
+                None,
+                None,
+            )
+            .await;
+        if let Err(error) = result {
+            tracing::warn!(
+                reservation_id,
+                %error,
+                "checkout setup failed; the hold release failed too — expiry is the backstop"
+            );
+        }
     }
 
     async fn reuse_or_create_address(
@@ -1882,6 +1985,37 @@ pub struct ReservationDoc {
     pub lines: Vec<ReservationLineDoc>,
 }
 
+/// The selected shipping service inside a quote reply.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuoteShippingDoc {
+    pub method_id: String,
+    pub name: String,
+}
+
+/// One priced line inside a quote reply (the fields the orchestration
+/// reads; the rest of the service's line body is ignored).
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuoteLineDoc {
+    pub variant_id: String,
+    pub unit_price_minor: i64,
+    pub quantity: i64,
+}
+
+/// The service's quote: what placing the hold would cost right now, with
+/// the fingerprint placement sends back as `expected_pricing_fingerprint`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuoteDoc {
+    pub pricing_fingerprint: String,
+    pub subtotal_minor: i64,
+    pub shipping_minor: i64,
+    pub tax_minor: i64,
+    pub total_minor: i64,
+    #[serde(default)]
+    pub shipping: Option<QuoteShippingDoc>,
+    #[serde(default)]
+    pub lines: Vec<QuoteLineDoc>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CustomerDoc {
     pub id: String,
@@ -1991,6 +2125,15 @@ struct ReservationLineIn {
     variant_id: String,
     location_id: String,
     quantity: i64,
+}
+
+/// What the service's quote returned, parsed: the approved terms, the
+/// priced lines, and the selected method's display name (view metadata
+/// only; the signed terms stay the source of truth).
+struct QuotedCheckout {
+    terms: QuotedTerms,
+    lines: Vec<CheckoutLine>,
+    shipping_method_name: Option<String>,
 }
 
 #[derive(Default)]
@@ -2321,6 +2464,7 @@ mod tests {
                     quantity: 1,
                 },
             ],
+            shipping_method_id: None,
         }
     }
 
@@ -2562,8 +2706,14 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn checkout_harness() -> Harness {
+        checkout_harness_where_quote(None)
+    }
+
+    /// The checkout harness with the quote's answer overridden (an
+    /// upstream typed problem), for the release-on-failure path.
+    fn checkout_harness_where_quote(quote_failure: Option<(u16, serde_json::Value)>) -> Harness {
         harness(
-            |received| match (received.method.as_str(), received.path.as_str()) {
+            move |received| match (received.method.as_str(), received.path.as_str()) {
                 ("GET", "stores/42") => (200, vec![], store_body()),
                 ("GET", "stores/42/products") => (
                     200,
@@ -2654,9 +2804,61 @@ mod tests {
                         ]
                     }),
                 ),
+                ("POST", "stores/42/orders/quote") => {
+                    if let Some((status, body)) = &quote_failure {
+                        return (*status, vec![], body.clone());
+                    }
+                    let method = received
+                        .body
+                        .get("shipping_method_id")
+                        .and_then(|value| value.as_str())
+                        .map(|id| (id.to_owned(), "Standard delivery".to_owned(), 500_i64));
+                    (200, vec![], quote_body(method))
+                }
                 _ => (404, vec![], problem_body("not-found", 404, "no such route")),
             },
         )
+    }
+
+    /// The service's quote reply: `v1:` terms without a method, `v2:` with
+    /// one. Both quote the same merchandise subtotal; the fingerprint is
+    /// opaque and only ever echoed.
+    fn quote_body(method: Option<(String, String, i64)>) -> serde_json::Value {
+        let (fingerprint, shipping, shipping_minor, total) = match method {
+            None => ("v1:quote-1", serde_json::Value::Null, 0, 3900),
+            Some((ref id, ref name, amount)) => (
+                "v2:quote-ship",
+                serde_json::json!({
+                    "method_id": id, "name": name, "tax_class": null, "tax_rate_ppm": null
+                }),
+                amount,
+                3900 + amount,
+            ),
+        };
+        serde_json::json!({
+            "store_id": "42", "reservation_id": "555",
+            "expires_at": "2026-01-01T00:15:00Z", "currency": "JPY",
+            "lines": [
+                {"position": 0, "variant_id": "900", "product_title": "Product 700", "options": {"size": "m"},
+                 "unit_price_minor": 1200, "quantity": 2, "line_total_minor": 2400,
+                 "discount_minor": 0, "net_line_total_minor": 2400},
+                {"position": 1, "variant_id": "901", "product_title": "Product 700", "options": {"size": "l"},
+                 "unit_price_minor": 1500, "quantity": 1, "line_total_minor": 1500,
+                 "discount_minor": 0, "net_line_total_minor": 1500}
+            ],
+            "subtotal_minor": 3900,
+            "shipping_minor": shipping_minor,
+            "discount_minor": 0,
+            "discount_reason": null,
+            "tax_minor": 0,
+            "total_minor": total,
+            "tax_mode": "none",
+            "tax_lines": [],
+            "tax_destination": null,
+            "tax_rounding": null,
+            "pricing_fingerprint": fingerprint,
+            "shipping": shipping,
+        })
     }
 
     #[tokio::test]
@@ -2753,6 +2955,132 @@ mod tests {
                 .iter()
                 .any(|call| call.path == "customers/777/addresses"),
             "the adopted customer gets the shipping address"
+        );
+    }
+
+    #[tokio::test]
+    async fn checkout_requests_quote_after_hold_and_signs_its_terms() {
+        let Harness { upstream, scope } = checkout_harness();
+        let view = scope
+            .start_checkout("shop.acme.test", "key-1", &request_checkout())
+            .await
+            .unwrap();
+
+        let calls = upstream.calls();
+        let hold = calls
+            .iter()
+            .position(|call| call.path == "stores/42/reservations")
+            .expect("the hold is created");
+        let quote = calls
+            .iter()
+            .position(|call| call.path == "stores/42/orders/quote")
+            .expect("the service quotes the hold");
+        assert!(hold < quote, "the quote prices a hold that already exists");
+        let quote_call = &calls[quote];
+        assert_eq!(quote_call.method, "POST");
+        assert_eq!(quote_call.body["reservation_id"], "555");
+        assert_eq!(quote_call.body["customer_id"], "700");
+        assert_eq!(quote_call.body["shipping_address_id"], "800");
+        assert_eq!(
+            quote_call.body.get("shipping_method_id"),
+            None,
+            "no method is sent when none was chosen"
+        );
+
+        // The signed claims carry the service's quoted terms verbatim.
+        let verified = JsonSigner.verify_json(&view.checkout).unwrap();
+        let claims = CheckoutClaims::from_verified(verified).unwrap();
+        assert_eq!(claims.pricing_fingerprint, "v1:quote-1");
+        assert_eq!(claims.shipping_method_id, None);
+        assert_eq!(claims.subtotal_minor, 3900);
+        assert_eq!(claims.shipping_minor, 0);
+        assert_eq!(claims.tax_minor, 0);
+        assert_eq!(claims.total_minor, 3900);
+        assert_eq!(claims.lines[0].unit_price_minor, 1200);
+
+        // The view exposes the quoted money; the fingerprint travels only
+        // inside the signed token.
+        assert_eq!(view.subtotal_minor, 3900);
+        assert_eq!(view.shipping_minor, 0);
+        assert_eq!(view.tax_minor, 0);
+        assert_eq!(view.total_minor, 3900);
+        assert_eq!(view.shipping_method_name, None);
+        let rendered = serde_json::to_value(&view).unwrap();
+        assert!(rendered.get("pricing_fingerprint").is_none());
+    }
+
+    #[tokio::test]
+    async fn checkout_with_shipping_method_requires_address_and_quotes_v2() {
+        let Harness { upstream, scope } = checkout_harness();
+        let mut request = request_checkout();
+        request.shipping_method_id = Some("300".to_owned());
+        let view = scope
+            .start_checkout("shop.acme.test", "key-ship", &request)
+            .await
+            .unwrap();
+
+        let quote_call = upstream
+            .calls_to("stores/42/orders/quote")
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(quote_call.body["shipping_method_id"], "300");
+        assert_eq!(
+            quote_call.body["shipping_address_id"], "800",
+            "a method ships to the guest's address"
+        );
+        assert_eq!(quote_call.body["customer_id"], "700");
+
+        let verified = JsonSigner.verify_json(&view.checkout).unwrap();
+        let claims = CheckoutClaims::from_verified(verified).unwrap();
+        assert_eq!(
+            claims.pricing_fingerprint, "v2:quote-ship",
+            "the service's shipping fingerprint is signed verbatim"
+        );
+        assert_eq!(claims.shipping_method_id.as_deref(), Some("300"));
+        assert_eq!(claims.shipping_minor, 500);
+        assert_eq!(claims.total_minor, 4400);
+        assert_eq!(view.shipping_minor, 500);
+        assert_eq!(view.total_minor, 4400);
+        assert_eq!(
+            view.shipping_method_name.as_deref(),
+            Some("Standard delivery")
+        );
+    }
+
+    #[tokio::test]
+    async fn quote_failure_releases_hold_best_effort() {
+        let Harness { upstream, scope } = checkout_harness_where_quote(Some((
+            422,
+            problem_body(
+                "ecommerce/destination-not-served",
+                422,
+                "the destination is not served",
+            ),
+        )));
+        let error = scope
+            .start_checkout("shop.acme.test", "key-fail", &request_checkout())
+            .await
+            .unwrap_err();
+        // The original refusal is returned, not a manufactured one.
+        let problem = match &error {
+            ShopperError::Upstream(problem) => problem.slug().to_owned(),
+            other => panic!("expected the upstream refusal, got {other:?}"),
+        };
+        assert_eq!(problem, "ecommerce/destination-not-served");
+        assert_eq!(
+            upstream
+                .calls_to("stores/42/reservations/555/release")
+                .len(),
+            1,
+            "the fresh hold is released best-effort"
+        );
+        assert!(
+            upstream
+                .calls()
+                .iter()
+                .any(|call| call.path == "stores/42/reservations"),
+            "the hold was created before the quote failed"
         );
     }
 

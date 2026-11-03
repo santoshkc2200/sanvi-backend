@@ -305,12 +305,14 @@ pub async fn get_public_product(
 
 /// `POST /api/v1/public/ecommerce/checkout` — guest checkout start with an
 /// `Idempotency-Key`: validates the guest contact + address, reuses or
-/// creates the guest customer and address, prices the lines from the
-/// catalog, picks reservation locations from live stock and holds the
-/// reservation. The response is the only pricing a checkout page may
-/// show; the opaque `checkout` token carries it to placement and dies
-/// with the hold. Refusals: 409 `ecommerce/insufficient-stock` (with
-/// `lines` indexes; nothing is held), 400 validation.
+/// creates the guest customer and address, picks reservation locations
+/// from live stock, holds the reservation and then prices the hold with
+/// the service's quote. The response is the only pricing a checkout page
+/// may show — the quoted totals, with the fingerprint bound inside the
+/// opaque `checkout` token that dies with the hold. A failed quote
+/// releases the fresh hold best-effort. Refusals: 409
+/// `ecommerce/insufficient-stock` (with `lines` indexes; nothing is
+/// held), the quote's own typed 409/422 problems, 400 validation.
 #[utoipa::path(
     post,
     path = "/api/v1/public/ecommerce/checkout",
@@ -322,10 +324,11 @@ pub async fn get_public_product(
     ),
     request_body = crate::application::shopper::ShopperStartCheckoutRequest,
     responses(
-        (status = 200, description = "The held, priced checkout summary", body = crate::application::shopper::ShopperCheckoutView),
+        (status = 200, description = "The held, quoted checkout summary", body = crate::application::shopper::ShopperCheckoutView),
         (status = 400, description = "Validation refusal (bounds, ids, duplicate lines)", body = sanvi_http::ProblemDetail),
         (status = 404, description = "No store is available for this host", body = sanvi_http::ProblemDetail),
-        (status = 409, description = "Stock unavailable on one or more lines (`lines` extension; nothing held)", body = sanvi_http::ProblemDetail),
+        (status = 409, description = "Stock unavailable on one or more lines (`lines` extension; nothing held), or the quote refused (reservation expired, address archived)", body = sanvi_http::ProblemDetail),
+        (status = 422, description = "The quote refused (destination not served, total too large)", body = sanvi_http::ProblemDetail),
         (status = 502, description = "The store service answered unexpectedly", body = sanvi_http::ProblemDetail),
         (status = 503, description = "The store service is not configured or unreachable", body = sanvi_http::ProblemDetail)
     )
