@@ -595,6 +595,31 @@ pub const PERMISSIONS: &[PermissionDef] = &[
         scope: PermissionScope::Tenant,
         description: "Export a customer's data for an access request and erase it for an erasure request",
     },
+    PermissionDef {
+        key: "ecommerce.order.discount",
+        scope: PermissionScope::Tenant,
+        description: "Quote and place ecommerce orders with a staff-approved fixed merchandise discount",
+    },
+    PermissionDef {
+        key: "ecommerce.fulfillment.record",
+        scope: PermissionScope::Tenant,
+        description: "Record goods handed over for the tenant's ecommerce orders (shipping and pickup)",
+    },
+    PermissionDef {
+        key: "ecommerce.return.record",
+        scope: PermissionScope::Tenant,
+        description: "Record returned goods and their restock for the tenant's ecommerce orders",
+    },
+    PermissionDef {
+        key: "ecommerce.payment.record",
+        scope: PermissionScope::Tenant,
+        description: "Record money received for the tenant's ecommerce orders",
+    },
+    PermissionDef {
+        key: "ecommerce.payment.refund",
+        scope: PermissionScope::Tenant,
+        description: "Record refunds taken from the tenant's ecommerce order payments",
+    },
 ];
 
 /// Registry lookup.

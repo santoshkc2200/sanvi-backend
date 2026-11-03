@@ -269,6 +269,13 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.customer.read",
             "ecommerce.customer.manage",
             "ecommerce.customer.privacy",
+            // Ecommerce platform adoption 2026-11-04: staff record the
+            // order's discounts, fulfillments, returns and payments.
+            "ecommerce.order.discount",
+            "ecommerce.fulfillment.record",
+            "ecommerce.return.record",
+            "ecommerce.payment.record",
+            "ecommerce.payment.refund",
         ],
     },
     RoleSeed {
@@ -321,6 +328,13 @@ pub const SYSTEM_ROLE_SEEDS: &[RoleSeed] = &[
             "ecommerce.customer.read",
             "ecommerce.customer.manage",
             "ecommerce.customer.privacy",
+            // Ecommerce platform adoption 2026-11-04: staff record the
+            // order's discounts, fulfillments, returns and payments.
+            "ecommerce.order.discount",
+            "ecommerce.fulfillment.record",
+            "ecommerce.return.record",
+            "ecommerce.payment.record",
+            "ecommerce.payment.refund",
         ],
     },
     RoleSeed {
@@ -533,6 +547,43 @@ mod tests {
             "ecommerce.customer.read",
             "ecommerce.customer.manage",
             "ecommerce.customer.privacy",
+        ] {
+            assert!(
+                !member.contains(&permission),
+                "member must not have {permission}"
+            );
+        }
+    }
+
+    #[test]
+    fn staff_roles_hold_discount_fulfillment_return_and_payment_permissions() {
+        let owner = seed_by_key("tenant_owner").unwrap().permissions;
+        let admin = seed_by_key("tenant_admin").unwrap().permissions;
+        for permission in [
+            "ecommerce.order.discount",
+            "ecommerce.fulfillment.record",
+            "ecommerce.return.record",
+            "ecommerce.payment.record",
+            "ecommerce.payment.refund",
+        ] {
+            assert!(
+                crate::domain::permissions::lookup(permission).is_some(),
+                "{permission} must be registered"
+            );
+            assert!(owner.contains(&permission), "owner needs {permission}");
+            assert!(admin.contains(&permission), "admin needs {permission}");
+        }
+    }
+
+    #[test]
+    fn tenant_member_holds_none_of_the_ecommerce_write_permissions() {
+        let member = seed_by_key("tenant_member").unwrap().permissions;
+        for permission in [
+            "ecommerce.order.discount",
+            "ecommerce.fulfillment.record",
+            "ecommerce.return.record",
+            "ecommerce.payment.record",
+            "ecommerce.payment.refund",
         ] {
             assert!(
                 !member.contains(&permission),
