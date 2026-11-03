@@ -171,6 +171,7 @@ pub fn shopper_problem(error: ShopperError) -> HttpResponse {
                 "ecommerce/credential-invalid" => "Order Access Denied",
                 "ecommerce/credential-expired" => "Order Link Expired",
                 "ecommerce/checkout-expired" => "Checkout Expired",
+                "checkout-refresh-required" => "Checkout Refresh Required",
                 "ecommerce/price-changed" => "Prices Changed",
                 "bad-request" => "Bad Request",
                 "not-found" => "Not Found",
@@ -359,6 +360,7 @@ pub async fn post_public_checkout(
     responses(
         (status = 204, description = "Released (or already released, committed, or expired)"),
         (status = 400, description = "The checkout reference is not valid", body = sanvi_http::ProblemDetail),
+        (status = 409, description = "Checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token cannot be released; its hold expires)", body = sanvi_http::ProblemDetail),
         (status = 502, description = "The store service answered unexpectedly", body = sanvi_http::ProblemDetail),
         (status = 503, description = "The store service is not configured or unreachable", body = sanvi_http::ProblemDetail)
     )
@@ -400,7 +402,7 @@ pub async fn post_public_checkout_release(
         (status = 200, description = "The placed order (a replayed intent returns the original)", body = crate::application::shopper::ShopperOrderConfirmationView),
         (status = 400, description = "The checkout reference is not valid", body = sanvi_http::ProblemDetail),
         (status = 404, description = "No store for this host", body = sanvi_http::ProblemDetail),
-        (status = 409, description = "Checkout expired, prices changed, reservation expired or already ordered (typed problem)", body = sanvi_http::ProblemDetail),
+        (status = 409, description = "Checkout expired, checkout terms need re-approval (`checkout-refresh-required`: a legacy pre-quote token), prices changed, reservation expired or already ordered (typed problem)", body = sanvi_http::ProblemDetail),
         (status = 422, description = "Upstream refusal (total too large, destination not served)", body = sanvi_http::ProblemDetail),
         (status = 502, description = "The store service answered unexpectedly", body = sanvi_http::ProblemDetail),
         (status = 503, description = "The store service is not configured or unreachable", body = sanvi_http::ProblemDetail)

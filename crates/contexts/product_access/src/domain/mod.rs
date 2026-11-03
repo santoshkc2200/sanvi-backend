@@ -18,6 +18,6 @@ pub use ports::{ProductUpstream, RolePermissions, TenantEntitlements, TokenSigne
 pub use product::{CONNECTORS, ECOMMERCE, ISSUER, Product};
 pub use shopper::{
     CHECKOUT_AUDIENCE, CREDENTIAL_AUDIENCE, CheckoutClaims, CheckoutLine,
-    DEFAULT_CREDENTIAL_TTL_SECS, HostTenants, PurchaseCredentialClaims, ShopperError,
+    DEFAULT_CREDENTIAL_TTL_SECS, HostTenants, PurchaseCredentialClaims, QuotedTerms, ShopperError,
     ShopperTenant, StoreBindings, UpstreamProblem, WEB_CHECKOUT_PERMISSIONS, WEB_CHECKOUT_USER_ID,
 };

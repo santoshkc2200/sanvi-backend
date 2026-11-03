@@ -87,6 +87,11 @@ pub enum ShopperError {
     /// The checkout's hold has expired; re-validation is the recovery.
     #[error("the checkout has expired")]
     CheckoutExpired,
+    /// The checkout token predates the quote-bound shape (a legacy,
+    /// unguarded token): the shopper must restart checkout for fresh
+    /// approval of the current terms.
+    #[error("checkout terms need re-approval")]
+    CheckoutRefreshRequired,
     /// The placed order's prices differ from the checkout summary the
     /// shopper approved. The order is cancelled and the hold released.
     #[error("prices have changed since checkout started")]
@@ -234,6 +239,7 @@ impl ShopperError {
             Self::CredentialExpired => Some("ecommerce/credential-expired"),
             Self::CheckoutInvalid { .. } => Some("bad-request"),
             Self::CheckoutExpired => Some("ecommerce/checkout-expired"),
+            Self::CheckoutRefreshRequired => Some("checkout-refresh-required"),
             Self::PriceChanged => Some("ecommerce/price-changed"),
             Self::Upstream(_) | Self::Unavailable(_) | Self::BadGateway(_) | Self::Storage(_) => {
                 None
@@ -247,7 +253,7 @@ impl ShopperError {
             Self::NotFound { .. } => 404,
             Self::CredentialInvalid | Self::CredentialExpired => 401,
             Self::CheckoutInvalid { .. } => 400,
-            Self::CheckoutExpired | Self::PriceChanged => 409,
+            Self::CheckoutExpired | Self::CheckoutRefreshRequired | Self::PriceChanged => 409,
             Self::Upstream(problem) => problem.status,
             Self::Unavailable(_) => 503,
             Self::BadGateway(_) => 502,
@@ -294,6 +300,26 @@ pub struct CheckoutLine {
     pub quantity: i64,
 }
 
+/// The quote's approved terms, signed into the checkout claims: the
+/// service's opaque fingerprint and the complete amounts it priced.
+/// `pricing_fingerprint` is never parsed or recomputed — it is signed as
+/// received and echoed back verbatim at placement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotedTerms {
+    /// The service's versioned fingerprint (`v1:`, `v2:`, `v3:` …).
+    pub pricing_fingerprint: String,
+    /// The shipping method the quote priced, when one was selected.
+    pub shipping_method_id: Option<String>,
+    /// Merchandise subtotal, minor units.
+    pub subtotal_minor: i64,
+    /// Shipping charge, minor units (0 with no method).
+    pub shipping_minor: i64,
+    /// Tax owed, minor units.
+    pub tax_minor: i64,
+    /// Amount due, minor units.
+    pub total_minor: i64,
+}
+
 /// Signed checkout-summary claims. `exp` mirrors the reservation's
 /// `expires_at`, so the token dies with the hold it names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,9 +334,41 @@ pub struct CheckoutClaims {
     pub shipping_address_id: String,
     pub currency: String,
     pub lines: Vec<CheckoutLine>,
+    /// The approved quote fingerprint (opaque; echo back at placement).
+    pub pricing_fingerprint: String,
+    /// The shipping method the approved quote priced, when one was selected.
+    #[serde(default)]
+    pub shipping_method_id: Option<String>,
+    /// Approved merchandise subtotal, minor units.
+    pub subtotal_minor: i64,
+    /// Approved shipping charge, minor units.
+    pub shipping_minor: i64,
+    /// Approved tax, minor units.
+    pub tax_minor: i64,
+    /// Approved amount due, minor units.
+    pub total_minor: i64,
     pub jti: String,
     pub iat: i64,
     pub exp: i64,
+}
+
+/// The verification-time shape: every quote-adoption field optional, so a
+/// legacy (pre-quote) token parses and can be told apart from a malformed
+/// one.
+#[derive(Deserialize)]
+struct ClaimsShape {
+    iss: String,
+    aud: String,
+    #[serde(default)]
+    pricing_fingerprint: Option<String>,
+    #[serde(default)]
+    subtotal_minor: Option<i64>,
+    #[serde(default)]
+    shipping_minor: Option<i64>,
+    #[serde(default)]
+    tax_minor: Option<i64>,
+    #[serde(default)]
+    total_minor: Option<i64>,
 }
 
 impl CheckoutClaims {
@@ -323,6 +381,7 @@ impl CheckoutClaims {
         shipping_address_id: String,
         currency: String,
         lines: Vec<CheckoutLine>,
+        quoted: QuotedTerms,
         jti: String,
         expires_at: DateTime<Utc>,
         now: DateTime<Utc>,
@@ -337,6 +396,12 @@ impl CheckoutClaims {
             shipping_address_id,
             currency,
             lines,
+            pricing_fingerprint: quoted.pricing_fingerprint,
+            shipping_method_id: quoted.shipping_method_id,
+            subtotal_minor: quoted.subtotal_minor,
+            shipping_minor: quoted.shipping_minor,
+            tax_minor: quoted.tax_minor,
+            total_minor: quoted.total_minor,
             jti,
             iat: now.timestamp(),
             exp: expires_at.timestamp(),
@@ -344,17 +409,31 @@ impl CheckoutClaims {
     }
 
     /// Interprets a signature-verified payload as checkout claims, refusing
-    /// anything addressed to another audience.
+    /// anything addressed to another audience. A token carrying the old,
+    /// unguarded shape (no quoted terms) is refused with
+    /// [`ShopperError::CheckoutRefreshRequired`]: it must be re-approved,
+    /// never silently accepted.
     pub fn from_verified(value: serde_json::Value) -> Result<Self, ShopperError> {
-        let claims: Self =
-            serde_json::from_value(value).map_err(|_| ShopperError::CheckoutInvalid {
-                detail: "the checkout reference is not valid".to_owned(),
-            })?;
-        if claims.aud != CHECKOUT_AUDIENCE || claims.iss != ISSUER {
-            return Err(ShopperError::CheckoutInvalid {
-                detail: "the checkout reference is not valid".to_owned(),
-            });
+        let invalid = || ShopperError::CheckoutInvalid {
+            detail: "the checkout reference is not valid".to_owned(),
+        };
+        let shape: ClaimsShape = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
+        if shape.aud != CHECKOUT_AUDIENCE || shape.iss != ISSUER {
+            return Err(invalid());
         }
+        // Legacy token: right identity, no quote approval inside.
+        if shape.pricing_fingerprint.is_none() {
+            return Err(ShopperError::CheckoutRefreshRequired);
+        }
+        // A fingerprint without the totals it approved is malformed.
+        if shape.subtotal_minor.is_none()
+            || shape.shipping_minor.is_none()
+            || shape.tax_minor.is_none()
+            || shape.total_minor.is_none()
+        {
+            return Err(invalid());
+        }
+        let claims: Self = serde_json::from_value(value).map_err(|_| invalid())?;
         Ok(claims)
     }
 }
@@ -456,6 +535,15 @@ mod tests {
                 unit_price_minor: 1200,
                 quantity: 2,
             }],
+            QuotedTerms {
+                pricing_fingerprint:
+                    "v1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
+                shipping_method_id: None,
+                subtotal_minor: 2400,
+                shipping_minor: 0,
+                tax_minor: 266,
+                total_minor: 2666,
+            },
             "018f0000000070008000000000000000".to_owned(),
             DateTime::from_timestamp(1_800_000_900, 0).unwrap(),
             NOW,
@@ -469,6 +557,120 @@ mod tests {
         wrong["aud"] = serde_json::json!("somewhere-else");
         assert_eq!(
             CheckoutClaims::from_verified(wrong),
+            Err(ShopperError::CheckoutInvalid {
+                detail: "the checkout reference is not valid".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn claims_round_trip_with_quoted_terms() {
+        let claims = CheckoutClaims::new(
+            "555".to_owned(),
+            tenant(),
+            42,
+            "700".to_owned(),
+            "800".to_owned(),
+            "JPY".to_owned(),
+            vec![CheckoutLine {
+                variant_id: "900".to_owned(),
+                unit_price_minor: 1200,
+                quantity: 2,
+            }],
+            QuotedTerms {
+                pricing_fingerprint: "v2:abcd".to_owned(),
+                shipping_method_id: Some("300".to_owned()),
+                subtotal_minor: 2400,
+                shipping_minor: 500,
+                tax_minor: 266,
+                total_minor: 3166,
+            },
+            "018f0000000070008000000000000000".to_owned(),
+            DateTime::from_timestamp(1_800_000_900, 0).unwrap(),
+            NOW,
+        );
+        assert_eq!(claims.pricing_fingerprint, "v2:abcd");
+        assert_eq!(claims.shipping_method_id.as_deref(), Some("300"));
+        assert_eq!(claims.total_minor, 3166);
+        let json = serde_json::to_value(&claims).unwrap();
+        let parsed = CheckoutClaims::from_verified(json).unwrap();
+        assert_eq!(parsed, claims);
+    }
+
+    #[test]
+    fn legacy_claims_without_fingerprint_require_refresh() {
+        // The pre-quote token shape: priced lines, no quoted terms. It is
+        // never silently accepted — placement demands a re-approval.
+        let legacy = serde_json::json!({
+            "iss": ISSUER,
+            "aud": CHECKOUT_AUDIENCE,
+            "sub": "555",
+            "tenant_id": "1001",
+            "store_id": "42",
+            "customer_id": "700",
+            "shipping_address_id": "800",
+            "currency": "JPY",
+            "lines": [{"variant_id": "900", "unit_price_minor": 1200, "quantity": 2}],
+            "jti": "018f0000000070008000000000000000",
+            "iat": NOW.timestamp(),
+            "exp": NOW.timestamp() + 900,
+        });
+        assert_eq!(
+            CheckoutClaims::from_verified(legacy),
+            Err(ShopperError::CheckoutRefreshRequired)
+        );
+    }
+
+    #[test]
+    fn wrong_audience_still_invalid() {
+        let claims = CheckoutClaims::new(
+            "555".to_owned(),
+            tenant(),
+            42,
+            "700".to_owned(),
+            "800".to_owned(),
+            "JPY".to_owned(),
+            vec![],
+            QuotedTerms {
+                pricing_fingerprint: "v1:abc".to_owned(),
+                shipping_method_id: None,
+                subtotal_minor: 2400,
+                shipping_minor: 0,
+                tax_minor: 0,
+                total_minor: 2400,
+            },
+            "018f0000000070008000000000000000".to_owned(),
+            DateTime::from_timestamp(1_800_000_900, 0).unwrap(),
+            NOW,
+        );
+        let mut wrong = serde_json::to_value(&claims).unwrap();
+        wrong["aud"] = serde_json::json!("somewhere-else");
+        assert_eq!(
+            CheckoutClaims::from_verified(wrong),
+            Err(ShopperError::CheckoutInvalid {
+                detail: "the checkout reference is not valid".to_owned(),
+            })
+        );
+
+        // A legacy-shape token with the wrong audience is invalid too —
+        // the identity check precedes the refresh demand.
+        let mut legacy_wrong = serde_json::json!({
+            "iss": ISSUER,
+            "aud": CHECKOUT_AUDIENCE,
+            "sub": "555",
+            "tenant_id": "1001",
+            "store_id": "42",
+            "customer_id": "700",
+            "shipping_address_id": "800",
+            "currency": "JPY",
+            "lines": [],
+            "jti": "018f0000000070008000000000000000",
+            "iat": NOW.timestamp(),
+            "exp": NOW.timestamp() + 900,
+        });
+        legacy_wrong["aud"] = serde_json::json!("somewhere-else");
+        assert_eq!(
+            CheckoutClaims::from_verified(legacy_wrong),
             Err(ShopperError::CheckoutInvalid {
                 detail: "the checkout reference is not valid".to_owned(),
             })
@@ -560,6 +762,7 @@ mod tests {
         );
         assert_eq!(ShopperError::CheckoutExpired.status(), 409);
         assert_eq!(ShopperError::PriceChanged.status(), 409);
+        assert_eq!(ShopperError::CheckoutRefreshRequired.status(), 409);
     }
 
     #[test]

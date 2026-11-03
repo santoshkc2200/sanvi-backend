@@ -284,7 +284,9 @@ mod tests {
 
     #[test]
     fn checkout_and_credential_tokens_verify_and_tamper_fails() {
-        use crate::domain::{CHECKOUT_AUDIENCE, CheckoutLine, PurchaseCredentialClaims};
+        use crate::domain::{
+            CHECKOUT_AUDIENCE, CheckoutLine, PurchaseCredentialClaims, QuotedTerms,
+        };
         use chrono::DateTime;
 
         let signer = Ed25519Signer::from_seed_hex("dev-ed25519-1", SEED).unwrap();
@@ -301,6 +303,14 @@ mod tests {
                 unit_price_minor: 1200,
                 quantity: 2,
             }],
+            QuotedTerms {
+                pricing_fingerprint: "v1:test".into(),
+                shipping_method_id: None,
+                subtotal_minor: 2400,
+                shipping_minor: 0,
+                tax_minor: 0,
+                total_minor: 2400,
+            },
             "018f0000000070008000000000000000".into(),
             DateTime::from_timestamp(1_800_000_900, 0).unwrap(),
             now,
@@ -310,6 +320,7 @@ mod tests {
         assert_eq!(verified["aud"], CHECKOUT_AUDIENCE);
         assert_eq!(verified["sub"], "555");
         assert_eq!(verified["lines"][0]["unit_price_minor"], 1200);
+        assert_eq!(verified["pricing_fingerprint"], "v1:test");
 
         let credential = PurchaseCredentialClaims::new(
             "42".into(),

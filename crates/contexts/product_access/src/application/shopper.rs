@@ -31,8 +31,8 @@ use utoipa::ToSchema;
 
 use crate::domain::{
     CheckoutClaims, CheckoutLine, DelegationClaims, ECOMMERCE, ForwardRequest, HostTenants,
-    PurchaseCredentialClaims, ShopperError, StoreBindings, TenantEntitlements, TokenSigner,
-    UpstreamProblem, WEB_CHECKOUT_PERMISSIONS, WEB_CHECKOUT_USER_ID,
+    PurchaseCredentialClaims, QuotedTerms, ShopperError, StoreBindings, TenantEntitlements,
+    TokenSigner, UpstreamProblem, WEB_CHECKOUT_PERMISSIONS, WEB_CHECKOUT_USER_ID,
 };
 
 /// Longest forwarded idempotency key the orchestration builds: the
@@ -755,6 +755,19 @@ impl ShopperScope {
             .map(|line| line.unit_price_minor * line.quantity)
             .sum();
 
+        // Interim: the terms are still catalog-derived until this
+        // orchestration requests the service quote (the next adoption
+        // task); the fingerprint then becomes the service's, signed as
+        // received.
+        let quoted = QuotedTerms {
+            pricing_fingerprint: String::new(),
+            shipping_method_id: None,
+            subtotal_minor,
+            shipping_minor: 0,
+            tax_minor: 0,
+            total_minor: subtotal_minor,
+        };
+
         let claims = CheckoutClaims::new(
             reservation.id,
             tenant_id,
@@ -763,6 +776,7 @@ impl ShopperScope {
             address_id,
             store.currency.clone(),
             checkout_lines,
+            quoted,
             uuid::Uuid::now_v7().simple().to_string(),
             expires_at,
             (self.clock)(),
@@ -2856,6 +2870,14 @@ mod tests {
                 "800".to_owned(),
                 "JPY".to_owned(),
                 vec![],
+                QuotedTerms {
+                    pricing_fingerprint: "v1:test".to_owned(),
+                    shipping_method_id: None,
+                    subtotal_minor: 0,
+                    shipping_minor: 0,
+                    tax_minor: 0,
+                    total_minor: 0,
+                },
                 "018f0000000070008000000000000000".to_owned(),
                 chrono::DateTime::from_timestamp(NOW_SECS + 900, 0).unwrap(),
                 chrono::DateTime::from_timestamp(NOW_SECS, 0).unwrap(),
@@ -3008,6 +3030,14 @@ mod tests {
                     quantity: 1,
                 },
             ],
+            QuotedTerms {
+                pricing_fingerprint: "v1:test".to_owned(),
+                shipping_method_id: None,
+                subtotal_minor: 1200 * 2 + 1500,
+                shipping_minor: 0,
+                tax_minor: 0,
+                total_minor: 1200 * 2 + 1500,
+            },
             "018f0000000070008000000000000000".to_owned(),
             chrono::DateTime::from_timestamp(NOW_SECS + 900, 0).unwrap(),
             chrono::DateTime::from_timestamp(NOW_SECS, 0).unwrap(),
@@ -3094,6 +3124,14 @@ mod tests {
             "800".to_owned(),
             "JPY".to_owned(),
             vec![],
+            QuotedTerms {
+                pricing_fingerprint: "v1:test".to_owned(),
+                shipping_method_id: None,
+                subtotal_minor: 0,
+                shipping_minor: 0,
+                tax_minor: 0,
+                total_minor: 0,
+            },
             "018f0000000070008000000000000000".to_owned(),
             chrono::DateTime::from_timestamp(NOW_SECS - 1, 0).unwrap(),
             chrono::DateTime::from_timestamp(NOW_SECS - 1000, 0).unwrap(),
