@@ -13,12 +13,15 @@
 #
 # Phase-13 surface: stores (incl. tax, archive, locations read), products
 # with variants and prices, and read-only stock. Phase-15 adds the staff
-# orders surface (list, read, cancel) and the tenant-level customers surface
-# (records, addresses — add and archive only, no edit exists — export and
-# erase). Reservations, checkout quotes, order placement, payment
-# attempts/payments/refunds, fulfillments, returns and shipping methods stay
-# un-mirrored until their phases land. The proxy forwards GET and POST only;
-# every update is a POST to `.../update`.
+# orders surface (list, read, cancel, guarded placement) and the tenant-level
+# customers surface (records, addresses — add and archive only, no edit
+# exists — export and erase). The ecommerce platform adoption (2026-11-04)
+# adds the checkout quote, shipping methods, and the order's fulfillment,
+# return, payment and refund recording, with the staff discount object.
+# Reservations and hosted payment attempts stay un-mirrored (attempts are
+# the public shopper surface; manual payments and refunds are mirrored).
+# The proxy forwards GET and POST only; every update is a POST to
+# `.../update`.
 components:
   schemas:
     AddressBody:
@@ -395,10 +398,121 @@ components:
       enum:
       - active
       - erased
+    DiscountRequest:
+      type: object
+      description: |-
+        A staff-approved fixed merchandise discount. Quoting or placing with it
+        requires the `ecommerce.order.discount` permission on the acting identity.
+      required:
+      - amount_minor
+      - reason
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: |-
+            1 to 999999999999999 minor units, and no more than the reservation's
+            locked merchandise subtotal. Zero is not a discount: leave the object
+            out for none.
+          example: 150
+        reason:
+          type: string
+          description: '`promotion`, `goodwill`, `price_match` or `other`.'
+          example: promotion
+      additionalProperties: false
     EraseCustomerRequest:
       type: object
       description: An erasure request has no fields; send `{}`.
       additionalProperties: false
+    FulfillmentBody:
+      type: object
+      description: |-
+        Goods recorded as handed over for an order. Immutable: a mistaken
+        handover needs a returns workflow, not an edit.
+      required:
+      - id
+      - store_id
+      - order_id
+      - method
+      - lines
+      - recorded_at
+      properties:
+        id:
+          type: string
+          description: Fulfillment identifier.
+          example: '7401234567890120000'
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/FulfillmentLineBody'
+          description: Lines in position order.
+        method:
+          type: string
+          description: How the goods left.
+          example: pickup
+        order_id:
+          type: string
+          description: The order fulfilled.
+          example: '7401234567890120000'
+        recorded_at:
+          type: string
+          format: date-time
+          description: When the handover was recorded.
+        store_id:
+          type: string
+          description: Store identifier.
+          example: '7401234567890120000'
+    FulfillmentLineBody:
+      type: object
+      description: One line of a fulfillment.
+      required:
+      - line_position
+      - quantity
+      properties:
+        line_position:
+          type: integer
+          format: int32
+          description: Zero-based position of the order line.
+          example: 0
+        quantity:
+          type: integer
+          format: int64
+          description: Units handed over.
+          example: 2
+    FulfillmentLineRequest:
+      type: object
+      description: One line of a handover.
+      required:
+      - line_position
+      - quantity
+      properties:
+        line_position:
+          type: integer
+          format: int32
+          description: Zero-based position of the order line, as the API returns it.
+          example: 0
+        quantity:
+          type: integer
+          format: int64
+          description: Units handed over, 1 to 10000.
+          example: 2
+      additionalProperties: false
+    FulfillmentPageBody:
+      type: object
+      description: One page of an order's fulfillments, newest first.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FulfillmentBody'
+          description: Fulfillments on this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Pass as `cursor` for the next page; absent on the last page.
     LocationBody:
       type: object
       description: A stored stock location.
@@ -938,6 +1052,174 @@ components:
           format: int64
           description: Tax owed on them.
           example: 266
+    PaymentBody:
+      type: object
+      description: A recorded payment with the refunds taken from it.
+      required:
+      - id
+      - order_id
+      - method
+      - source
+      - amount_minor
+      - currency
+      - recorded_at
+      - refunds
+      - refundable_minor
+      - pending_refund_minor
+      - refund_requests
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: Amount received, in minor units.
+          example: 1800
+        attempt_id:
+          type:
+          - string
+          - 'null'
+          description: The payment attempt a provider payment settled; null for manual ones.
+          example: null
+        currency:
+          type: string
+          description: The order's currency.
+          example: JPY
+        external_ref:
+          type:
+          - string
+          - 'null'
+          description: The reference given when it was recorded; null when none was.
+          example: APPROVAL-123456
+        id:
+          type: string
+          description: Payment identifier.
+          example: '7401234567890120000'
+        method:
+          type: string
+          description: How it was taken.
+          example: cash
+        order_id:
+          type: string
+          description: The order paid for.
+          example: '7401234567890120000'
+        pending_refund_minor:
+          type: integer
+          format: int64
+          description: Of it, what is on its way back through the provider.
+          example: 0
+        recorded_at:
+          type: string
+          format: date-time
+          description: When it was recorded.
+        refund_requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/RefundRequestBody'
+          description: |-
+            Refunds asked of the provider for a provider payment, in any status;
+            a succeeded one is also in `refunds`.
+        refundable_minor:
+          type: integer
+          format: int64
+          description: |-
+            What may still be refunded from it, in minor units: its amount less
+            its refunds and pending refund requests.
+          example: 1800
+        refunds:
+          type: array
+          items:
+            $ref: '#/components/schemas/RefundBody'
+          description: Refunds taken from it, oldest first.
+        source:
+          type: string
+          description: |-
+            `manual` (a person recorded it) or `provider` (the payment provider
+            reported it; method `online`).
+          example: manual
+    PaymentListBody:
+      type: object
+      description: |-
+        Every payment of an order, oldest first. An order has at most 100, so
+        the list is never paged.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentBody'
+          description: The payments, each with its refunds.
+    PlaceOrderRequest:
+      type: object
+      description: |-
+        A request to turn a held reservation into an order. Lines and prices come
+        from the reservation and the catalog, never from the client.
+      required:
+      - reservation_id
+      - channel
+      properties:
+        billing_address_id:
+          type:
+          - string
+          - 'null'
+          description: An active address of that customer to bill to; needs `customer_id`.
+          example: '7401234567890120000'
+        channel:
+          type: string
+          description: '`web` or `pos`.'
+          example: pos
+        customer_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An active customer of the tenant buying; leave out for an anonymous
+            sale. Only the id is kept with the order.
+          example: '7401234567890120000'
+        discount:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/DiscountRequest'
+            description: |-
+              Staff-approved fixed merchandise discount to allocate across the
+              reservation's lines before tax. Requires the
+              `ecommerce.order.discount` permission. Leave out or send null for
+              none; it never reduces shipping.
+        expected_pricing_fingerprint:
+          type:
+          - string
+          - 'null'
+          description: |-
+            The `pricing_fingerprint` a quote returned for the same reservation
+            and customer/address context. Leave it out or send null to place at
+            current prices with no precondition, as before.
+          example: v1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        reservation_id:
+          type: string
+          description: A held, unexpired reservation of the store.
+          example: '7401234567890120000'
+        shipping_address_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An active address of that customer to ship to; needs `customer_id`.
+            Only the id is kept with the order.
+          example: '7401234567890120000'
+        shipping_method_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An active shipping method of the store. Requires `customer_id` and
+            `shipping_address_id`. Leave out or send null to place with no shipping.
+          example: '7401234567890120000'
+        terminal_ref:
+          type:
+          - string
+          - 'null'
+          description: Opaque terminal reference, 1 to 64 characters; `pos` only.
+          example: till-1
+      additionalProperties: false
     ProductBody:
       type: object
       description: A stored product.
@@ -1024,6 +1306,485 @@ components:
       - draft
       - active
       - archived
+    QuoteBody:
+      type: object
+      description: |-
+        What placing a held reservation would cost right now. A current
+        observation of live data: requote for fresh terms.
+      required:
+      - store_id
+      - reservation_id
+      - expires_at
+      - currency
+      - lines
+      - subtotal_minor
+      - shipping_minor
+      - discount_minor
+      - tax_minor
+      - total_minor
+      - tax_mode
+      - tax_lines
+      - pricing_fingerprint
+      properties:
+        currency:
+          type: string
+          description: The store currency.
+          example: JPY
+        discount_minor:
+          type: integer
+          format: int64
+          description: |-
+            Fixed merchandise discount the quote prices; 0 when none was
+            requested.
+          example: 150
+        discount_reason:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Why the discount was granted: `promotion`, `goodwill`, `price_match`
+            or `other`; null when none was requested.
+          example: promotion
+        expires_at:
+          type: string
+          format: date-time
+          description: The hold's deadline; the quote's only limit.
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderLineBody'
+          description: The sale's lines with their current prices.
+        pricing_fingerprint:
+          type: string
+          description: |-
+            Send back as `expected_pricing_fingerprint` to place the order on
+            exactly these terms.
+          example: v1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        reservation_id:
+          type: string
+          description: The priced hold.
+          example: '7401234567890120000'
+        shipping:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/OrderShippingBody'
+            description: Selected shipping service snapshotted at quote; null when no method was selected.
+        shipping_minor:
+          type: integer
+          format: int64
+          description: Flat shipping charge, or 0 when no method was selected.
+          example: 500
+        store_id:
+          type: string
+          description: Store that would sell.
+          example: '7401234567890120000'
+        subtotal_minor:
+          type: integer
+          format: int64
+          description: Sum of line totals, in minor units.
+          example: 3600
+        tax_destination:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TaxDestinationBody'
+            description: Where the sale would be taxed; null when `tax_mode` is `none`.
+        tax_lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderTaxLineBody'
+          description: |-
+            Tax owed per class, `standard`, then `reduced`, then `exempt`; empty
+            when `tax_mode` is `none`.
+        tax_minor:
+          type: integer
+          format: int64
+          description: Tax owed, in minor units.
+          example: 266
+        tax_mode:
+          type: string
+          description: '`none`, `exclusive` or `inclusive`: the store''s current setting.'
+          example: inclusive
+        tax_rounding:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RoundingBody'
+            description: The store's current rounding rule; null when `tax_mode` is `none`.
+        total_minor:
+          type: integer
+          format: int64
+          description: |-
+            Amount due: the subtotal, less `discount_minor`, plus `shipping_minor`,
+            plus `tax_minor` when `tax_mode` is `exclusive`.
+          example: 3600
+    QuoteOrderRequest:
+      type: object
+      description: |-
+        A request to price a held reservation as placing it would. Lines and
+        prices come from the reservation and the catalog, never from the client;
+        channel and terminal metadata change no price and are not accepted.
+      required:
+      - reservation_id
+      properties:
+        billing_address_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An active address of that customer to bill to, used only when
+            nothing is shipped; needs `customer_id`.
+          example: '7401234567890120000'
+        customer_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An active customer of the tenant buying; leave out for an anonymous
+            sale. A quote writes nothing; only the prices depend on this.
+          example: '7401234567890120000'
+        discount:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/DiscountRequest'
+            description: |-
+              Staff-approved fixed merchandise discount to allocate across the
+              reservation's lines before tax. Requires the
+              `ecommerce.order.discount` permission. Leave out or send null for
+              none; it never reduces shipping.
+        reservation_id:
+          type: string
+          description: A held, unexpired reservation of the store.
+          example: '7401234567890120000'
+        shipping_address_id:
+          type:
+          - string
+          - 'null'
+          description: An active address of that customer to ship to; needs `customer_id`.
+          example: '7401234567890120000'
+        shipping_method_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            An active shipping method of the store. Requires `customer_id` and
+            `shipping_address_id`. Leave out or send null to quote with no shipping.
+          example: '7401234567890120000'
+      additionalProperties: false
+    RecordFulfillmentRequest:
+      type: object
+      description: |-
+        A request to record goods handed over for an order. Quantities name
+        order-line positions the API returned; nothing else about the lines is
+        taken from the client.
+      required:
+      - method
+      - lines
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/FulfillmentLineRequest'
+          description: |-
+            Lines handed over: at least one, at most one per order line, each
+            within what that line still owes.
+        method:
+          type: string
+          description: |-
+            `shipping` (handed to a carrier; not confirmed delivery) or `pickup`
+            (collected by the buyer, including at a POS counter).
+          example: pickup
+      additionalProperties: false
+    RecordPaymentRequest:
+      type: object
+      description: Money received for an order. The currency is always the order's.
+      required:
+      - method
+      - amount_minor
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: |-
+            Amount received, in minor units of the order's currency; at most what
+            the order still owes.
+          example: 1800
+        external_ref:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Opaque reference, 1 to 64 characters: a terminal's approval code or a
+            bank reference. Not for card numbers or other personal data.
+          example: APPROVAL-123456
+        method:
+          type: string
+          description: |-
+            `cash`, `card_terminal` (a standalone card machine), `bank_transfer`
+            or `other`.
+          example: cash
+      additionalProperties: false
+    RecordReturnRequest:
+      type: object
+      description: |-
+        A request to record goods received back for an order. Quantities name
+        order-line positions the API returned; nothing else about the lines is
+        taken from the client.
+      required:
+      - reason
+      - lines
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReturnLineRequest'
+          description: |-
+            Lines received back: at least one, at most one per order line, each
+            within what that line still has returnable.
+        reason:
+          type: string
+          description: '`customer_request`, `damaged`, `incorrect_item` or `other`.'
+          example: customer_request
+      additionalProperties: false
+    RefundBody:
+      type: object
+      description: Money returned from a payment, the way it was taken.
+      required:
+      - id
+      - payment_id
+      - order_id
+      - amount_minor
+      - currency
+      - reason
+      - recorded_at
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: Amount returned, in minor units.
+          example: 500
+        currency:
+          type: string
+          description: The order's currency.
+          example: JPY
+        id:
+          type: string
+          description: Refund identifier.
+          example: '7401234567890120000'
+        order_id:
+          type: string
+          description: The order the payment was for.
+          example: '7401234567890120000'
+        payment_id:
+          type: string
+          description: The payment refunded.
+          example: '7401234567890120000'
+        reason:
+          type: string
+          description: |-
+            `customer_request`, `returned_goods`, `order_cancelled`, `duplicate`,
+            `fraud` or `other`.
+          example: order_cancelled
+        recorded_at:
+          type: string
+          format: date-time
+          description: When it was recorded.
+    RefundPaymentRequest:
+      type: object
+      description: Money returned from one payment, the way it was taken.
+      required:
+      - amount_minor
+      - reason
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: |-
+            Amount returned, in minor units of the order's currency; at most what
+            is left of the payment.
+          example: 1800
+        reason:
+          type: string
+          description: |-
+            `customer_request`, `returned_goods`, `order_cancelled`, `duplicate`,
+            `fraud` or `other`.
+          example: order_cancelled
+      additionalProperties: false
+    RefundRequestBody:
+      type: object
+      description: |-
+        A refund of a provider payment asked of the provider. The money stands
+        paid until the provider confirms; then a refund records it.
+      required:
+      - id
+      - payment_id
+      - order_id
+      - amount_minor
+      - currency
+      - reason
+      - status
+      - created_at
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: Amount asked back, in minor units.
+          example: 500
+        created_at:
+          type: string
+          format: date-time
+          description: When it was asked.
+        currency:
+          type: string
+          description: The order's currency.
+          example: JPY
+        failure_code:
+          type:
+          - string
+          - 'null'
+          description: Why the provider refused it, when it did.
+          example: null
+        id:
+          type: string
+          description: Request identifier.
+          example: '7401234567890120000'
+        order_id:
+          type: string
+          description: The order the payment was for.
+          example: '7401234567890120000'
+        payment_id:
+          type: string
+          description: The payment refunded.
+          example: '7401234567890120000'
+        reason:
+          type: string
+          description: Why.
+          example: customer_request
+        settled_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When the provider settled it.
+        status:
+          type: string
+          description: '`pending`, `succeeded` or `failed`.'
+          example: pending
+    ReturnBody:
+      type: object
+      description: |-
+        Goods recorded as received back for an order. Immutable: what arrived
+        is a fact; correcting a restock needs a manual stock adjustment, not an
+        edit of the receipt.
+      required:
+      - id
+      - store_id
+      - order_id
+      - reason
+      - lines
+      - recorded_at
+      properties:
+        id:
+          type: string
+          description: Return identifier.
+          example: '7401234567890120000'
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReturnLineBody'
+          description: Lines in position order.
+        order_id:
+          type: string
+          description: The order the goods came back for.
+          example: '7401234567890120000'
+        reason:
+          type: string
+          description: Why they came back.
+          example: customer_request
+        recorded_at:
+          type: string
+          format: date-time
+          description: When the receipt was recorded.
+        store_id:
+          type: string
+          description: Store identifier.
+          example: '7401234567890120000'
+    ReturnLineBody:
+      type: object
+      description: One line of a return.
+      required:
+      - line_position
+      - quantity
+      - restock_quantity
+      properties:
+        line_position:
+          type: integer
+          format: int32
+          description: Zero-based position of the order line.
+          example: 0
+        quantity:
+          type: integer
+          format: int64
+          description: Units received back.
+          example: 2
+        restock_location_id:
+          type:
+          - string
+          - 'null'
+          description: Where the restocked units landed; absent when nothing was restocked.
+          example: '7401234567890120000'
+        restock_quantity:
+          type: integer
+          format: int64
+          description: Units of them back in saleable stock.
+          example: 1
+    ReturnLineRequest:
+      type: object
+      description: One line of a receipt.
+      required:
+      - line_position
+      - quantity
+      - restock_quantity
+      properties:
+        line_position:
+          type: integer
+          format: int32
+          description: Zero-based position of the order line, as the API returns it.
+          example: 0
+        quantity:
+          type: integer
+          format: int64
+          description: Units received back, 1 to 10000.
+          example: 2
+        restock_location_id:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Where the restocked units land: any stock location of the store,
+            not only the line's original one. Required when and only when
+            `restock_quantity` is positive.
+          example: '7401234567890120000'
+        restock_quantity:
+          type: integer
+          format: int64
+          description: Units of them that go back into saleable stock, 0 to `quantity`.
+          example: 1
+      additionalProperties: false
+    ReturnPageBody:
+      type: object
+      description: One page of an order's returns, newest first.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReturnBody'
+          description: Returns on this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Pass as `cursor` for the next page; absent on the last page.
     RoundingBody:
       type: object
       description: How tax is rounded.
@@ -1069,6 +1830,84 @@ components:
           description: The `version` the change is based on, as last read.
           example: 1
       additionalProperties: false
+    ShippingMethodBody:
+      type: object
+      description: A stored shipping method.
+      required:
+      - id
+      - store_id
+      - name
+      - currency
+      - amount_minor
+      - tax_class
+      - status
+      - version
+      - created_at
+      - updated_at
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: Flat charge in minor units.
+          example: 500
+        created_at:
+          type: string
+          format: date-time
+          description: Creation time.
+        currency:
+          type: string
+          description: Store's currency.
+          example: USD
+        id:
+          type: string
+          description: Shipping method id (decimal Snowflake).
+          example: '7401234567890120000'
+        name:
+          type: string
+          description: Display name.
+          example: Standard delivery
+        status:
+          $ref: '#/components/schemas/ShippingMethodStatusBody'
+          description: Lifecycle status.
+        store_id:
+          type: string
+          description: Store id.
+          example: '7401234567890120001'
+        tax_class:
+          type: string
+          description: Tax class for rate application.
+          example: standard
+        updated_at:
+          type: string
+          format: date-time
+          description: Time of the last change, or the creation time.
+        version:
+          type: integer
+          format: int64
+          description: Starts at 1 and grows with every change.
+          example: 1
+    ShippingMethodPageBody:
+      type: object
+      description: One page of shipping methods, newest first.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShippingMethodBody'
+          description: Methods on this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Pass as `cursor` for the next page; absent on the last page.
+    ShippingMethodStatusBody:
+      type: string
+      description: Shipping method lifecycle status.
+      enum:
+      - active
+      - archived
     StockLevelBody:
       type: object
       description: Stock level for a variant at a location.
@@ -2522,6 +3361,106 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetail'
+    post:
+      tags:
+      - product_access
+      summary: Turn a held reservation into an order.
+      description: |-
+        Commits the reservation and records the catalog's current prices in one
+        transaction. With `expected_pricing_fingerprint` from a quote, the order
+        commits only when the terms under the placement locks still match it; a
+        mismatch is refused with nothing placed
+        (`ecommerce/checkout-price-changed`) and the hold survives. Retrying with
+        the same `Idempotency-Key` and body returns the order the first request
+        placed, with `Idempotency-Replayed: true`.
+      operationId: ecommerce_place_order
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: 1 to 255 visible ASCII characters, unique per store
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceOrderRequest'
+        required: true
+      responses:
+        '201':
+          description: Placed, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderBody'
+        '400':
+          description: Invalid fields or a missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.order.place`, or `ecommerce.order.discount` for a
+            discounted order (the service's refusal), or the platform refused the
+            request: the tenant lacks `products.ecommerce.enabled`, or the user
+            holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No active store, no such reservation in it, no such customer in the tenant, or no such address of the customer (`ecommerce/address-not-found`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: |-
+            Reservation expired, not held, or already ordered (`order_id`), the
+            customer was erased, an address was archived
+            (`ecommerce/address-archived`), or the approved pricing changed
+            (`ecommerce/checkout-price-changed`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: |-
+            Idempotency-Key reused with a different body, a total too large, a
+            discount larger than the merchandise subtotal
+            (`ecommerce/discount-exceeds-subtotal`, with `subtotal_minor`), an
+            address without `customer_id` (`ecommerce/address-needs-customer`), or
+            a destination outside the zones of a store that blocks them
+            (`ecommerce/destination-not-served`, naming `source` and `address_id`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
   /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}:
     get:
       tags:
@@ -2642,6 +3581,805 @@ paths:
             attempt is pending (`ecommerce/payment-in-progress`, with `attempt_id`):
             cancel it first; or any goods were handed over
             (`ecommerce/order-has-fulfillments`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/fulfillments:
+    get:
+      tags:
+      - product_access
+      summary: List an order's fulfillments, newest first.
+      operationId: ecommerce_list_fulfillments
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size, 1 to 100 (default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: '`next_cursor` from the previous page.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FulfillmentPageBody'
+        '403':
+          description: |-
+            Missing `ecommerce.order.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+    post:
+      tags:
+      - product_access
+      summary: Record goods handed over for an order.
+      description: |-
+        A staff member attests a completed handover: to a carrier (`shipping`)
+        or into the buyer's hands (`pickup`). Retrying with the same
+        `Idempotency-Key` and body returns the fulfillment the first request
+        recorded, with `Idempotency-Replayed: true`.
+      operationId: ecommerce_record_fulfillment
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: 1 to 255 visible ASCII characters, unique per store
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordFulfillmentRequest'
+        required: true
+      responses:
+        '201':
+          description: Recorded, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FulfillmentBody'
+        '400':
+          description: Invalid fields or a missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.fulfillment.record` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: The order was cancelled (`ecommerce/order-cancelled`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: |-
+            Idempotency-Key reused with a different body, a position the order does
+            not have (`ecommerce/fulfillment-line-not-found`, with
+            `line_position`), or more than a line still owes
+            (`ecommerce/fulfillment-exceeds-remaining`, with `line_position` and
+            `remaining_quantity`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/fulfillments/{fulfillment_id}:
+    get:
+      tags:
+      - product_access
+      summary: Read one fulfillment of an order.
+      operationId: ecommerce_get_fulfillment
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: fulfillment_id
+        in: path
+        description: A fulfillment of that order (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The fulfillment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FulfillmentBody'
+        '403':
+          description: |-
+            Missing `ecommerce.order.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant, or no such fulfillment of it
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/payments:
+    get:
+      tags:
+      - product_access
+      summary: List an order's payments with their refunds, oldest first.
+      operationId: ecommerce_list_payments
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Every payment, oldest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentListBody'
+        '403':
+          description: |-
+            Missing `ecommerce.order.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+    post:
+      tags:
+      - product_access
+      summary: Record money received for an order.
+      description: |-
+        A manual payment (cash, a standalone card machine, a bank transfer). The
+        currency is always the order's. Retrying with the same `Idempotency-Key`
+        and body returns the payment the first request recorded, with
+        `Idempotency-Replayed: true`.
+      operationId: ecommerce_record_payment
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: 1 to 255 visible ASCII characters, unique per store
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordPaymentRequest'
+        required: true
+      responses:
+        '201':
+          description: Recorded, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentBody'
+        '400':
+          description: Invalid fields or a missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.payment.record` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: The order was cancelled (`ecommerce/order-cancelled`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: |-
+            Idempotency-Key reused with a different body, more than the order owes
+            (`ecommerce/payment-exceeds-due`, with `due_minor`), the order's 100th
+            payment already recorded (`ecommerce/payment-limit-reached`), or
+            payments past 64 bits (`ecommerce/payment-total-too-large`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/payments/{payment_id}/refunds:
+    post:
+      tags:
+      - product_access
+      summary: Refund part or all of a payment.
+      description: |-
+        The money goes back the way the payment came. A manual payment's refund
+        is recorded at once (201). A provider payment's refund is asked of the
+        payment provider (202, a refund request); the refund is recorded when the
+        provider confirms, and until then the money still stands paid. Retrying
+        with the same `Idempotency-Key` and body returns what the first request
+        did, with `Idempotency-Replayed: true`.
+      operationId: ecommerce_refund_payment
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: payment_id
+        in: path
+        description: A payment of that order (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: 1 to 255 visible ASCII characters, unique per store
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundPaymentRequest'
+        required: true
+      responses:
+        '201':
+          description: Refunded (a manual payment), or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentBody'
+        '202':
+          description: Asked of the payment provider (a provider payment), or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentBody'
+        '400':
+          description: Invalid fields or a missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.payment.refund` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant, or no such payment of it
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: |-
+            Idempotency-Key reused with a different body, or more than is left of
+            the payment less pending refund requests
+            (`ecommerce/refund-exceeds-payment`, with `refundable_minor`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/quote:
+    post:
+      tags:
+      - product_access
+      summary: Price a held reservation as placing it would.
+      description: |-
+        Returns the complete, tax-aware amount due for the hold under the same
+        locks and rules placement uses, with a `pricing_fingerprint` to send back
+        as `expected_pricing_fingerprint`. A quote is a current observation: it
+        creates no record, changes no state, and only the reservation's own
+        deadline limits it.
+      operationId: ecommerce_quote_order
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteOrderRequest'
+        required: true
+      responses:
+        '200':
+          description: The quoted amount due
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteBody'
+        '400':
+          description: Invalid fields
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.order.place`, or `ecommerce.order.discount` for a
+            discounted quote (the service's refusal), or the platform refused the
+            request: the tenant lacks `products.ecommerce.enabled`, or the user
+            holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No active store, no such reservation in it, no such customer in the tenant, or no such address of the customer (`ecommerce/address-not-found`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: Reservation expired or not held, the customer was erased, or an address was archived (`ecommerce/address-archived`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: |-
+            A total too large, a discount larger than the merchandise subtotal
+            (`ecommerce/discount-exceeds-subtotal`, with `subtotal_minor`), an
+            address without `customer_id` (`ecommerce/address-needs-customer`), or
+            a destination outside the zones of a store that blocks them
+            (`ecommerce/destination-not-served`, naming `source` and `address_id`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/returns:
+    get:
+      tags:
+      - product_access
+      summary: List an order's returns, newest first.
+      operationId: ecommerce_list_returns
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size, 1 to 100 (default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: '`next_cursor` from the previous page.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnPageBody'
+        '403':
+          description: |-
+            Missing `ecommerce.order.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+    post:
+      tags:
+      - product_access
+      summary: Record goods received back for an order.
+      description: |-
+        A staff member attests what arrived and how much went back into saleable
+        stock, restocked at any location of the store. Retrying with the same
+        `Idempotency-Key` and body returns the return the first request recorded,
+        with `Idempotency-Replayed: true`.
+      operationId: ecommerce_record_return
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: 1 to 255 visible ASCII characters, unique per store
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordReturnRequest'
+        required: true
+      responses:
+        '201':
+          description: Recorded, or replayed for a repeated key
+          headers:
+            Idempotency-Replayed:
+              schema:
+                type: string
+              description: '`true` when replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnBody'
+        '400':
+          description: Invalid fields or a missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.return.record` (the service's refusal), or the
+            platform refused the request: the tenant lacks
+            `products.ecommerce.enabled`, or the user holds no `ecommerce.*`
+            permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: The order was cancelled (`ecommerce/order-cancelled`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '422':
+          description: |-
+            Idempotency-Key reused with a different body; a position the order does
+            not have (`ecommerce/return-line-not-found`, with `line_position`);
+            more than a line still has returnable
+            (`ecommerce/return-exceeds-remaining`, with `line_position` and
+            `returnable_quantity`); a restock destination or variant outside the
+            store (`ecommerce/return-restock-target-unavailable`, with
+            `line_position`); or a restock that does not fit in 64 bits with the
+            stored balance (`ecommerce/return-stock-overflow`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/returns/{return_id}:
+    get:
+      tags:
+      - product_access
+      summary: Read one return of an order.
+      operationId: ecommerce_get_return
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: order_id
+        in: path
+        description: An order of that store (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: return_id
+        in: path
+        description: A return of that order (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The return
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnBody'
+        '403':
+          description: |-
+            Missing `ecommerce.order.read` (the service's refusal), or the platform
+            refused the request: the tenant lacks `products.ecommerce.enabled`, or the
+            user holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: No such order in an active store of the tenant, or no such return of it (`ecommerce/return-not-found`)
           content:
             application/problem+json:
               schema:
@@ -2931,6 +4669,85 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
         '409':
           description: A newer version exists (`ecommerce/version-conflict`), a SKU is taken, or the edit changes imported fields without `acknowledge_import_overwrite` (`ecommerce/import-overwrite-warning`)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '502':
+          description: ecommerce-service rejected the platform's credentials or answered unusably
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: ecommerce-service is not configured or unreachable, or its database is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/tenant/ecommerce/stores/{store_id}/shipping-methods:
+    get:
+      tags:
+      - product_access
+      summary: List shipping methods of a store.
+      operationId: ecommerce_list_shipping_methods
+      parameters:
+      - name: store_id
+        in: path
+        description: An active store of the caller's tenant (decimal Snowflake)
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size, 1 to 100 (default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: Pass as cursor for the next page.
+        required: false
+        schema:
+          type: string
+      - name: status
+        in: query
+        description: 'Status filter: active (default), archived or all.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: One page
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: '`no-store`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShippingMethodPageBody'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          description: |-
+            Missing `ecommerce.store.read` or requesting archived methods without
+            staff access (the service's refusal), or the platform refused the
+            request: the tenant lacks `products.ecommerce.enabled`, or the user
+            holds no `ecommerce.*` permission
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: Store not found
           content:
             application/problem+json:
               schema:

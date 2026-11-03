@@ -214,6 +214,7 @@ use utoipa::OpenApi;
         sanvi_product_access::adapters::http::shopper_handlers::get_public_store,
         sanvi_product_access::adapters::http::shopper_handlers::get_public_products,
         sanvi_product_access::adapters::http::shopper_handlers::get_public_product,
+        sanvi_product_access::adapters::http::shopper_handlers::get_public_shipping_methods,
         sanvi_product_access::adapters::http::shopper_handlers::post_public_checkout,
         sanvi_product_access::adapters::http::shopper_handlers::post_public_checkout_release,
         sanvi_product_access::adapters::http::shopper_handlers::post_public_order,
@@ -355,12 +356,14 @@ impl utoipa::Modify for AdvertisingContract {
 }
 
 /// The ecommerce surface the product_access proxy forwards, mirrored from
-/// `ecommerce-service/api/openapi.yaml` v0.1.0 (phases 13 and 15): stores,
-/// products with variants/prices, read-only stock, and the staff orders
-/// surface (list, read, cancel) plus the tenant-level customers surface
-/// (records, addresses, export, erase). The `{tail}` passthrough route
-/// stays as-is; this enumerates the routes the admin console's generated
-/// client types against.
+/// `ecommerce-service/api/openapi.yaml` v0.1.0 (phases 13 and 15, plus the
+/// 2026-11-04 platform adoption): stores, products with variants/prices,
+/// read-only stock, the staff orders surface (list, read, guarded
+/// placement) and the tenant-level customers surface (records, addresses,
+/// export, erase), with the checkout quote, shipping methods and the
+/// order's fulfillment, return, payment and refund recording. The `{tail}`
+/// passthrough route stays as-is; this enumerates the routes the admin
+/// console's generated client types against.
 struct EcommerceContract;
 impl utoipa::Modify for EcommerceContract {
     fn modify(&self, document: &mut utoipa::openapi::OpenApi) {

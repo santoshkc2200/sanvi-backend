@@ -1434,6 +1434,179 @@ const SHAPE_A_EXCLUSIONS: &[(&str, &str, &str)] = &[
         "/api/v1/tenant/ecommerce/{tail}",
         "the {tail} slot is a path into ecommerce-service, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
     ),
+    // The mirrored paths (contract publication for the admin console) are
+    // the same delegated proxy underneath: their id slots name
+    // ecommerce-service entities, never platform entity ids.
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/archive",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/locations",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/products",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/products",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}",
+        "{store_id} and {product_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/products/{product_id}/update",
+        "{store_id} and {product_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/stock",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/tax",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/unarchive",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/update",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/cancel",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/quote",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/fulfillments",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/fulfillments",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/fulfillments/{fulfillment_id}",
+        "every id slot names an ecommerce-service entity, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/payments",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/payments",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/payments/{payment_id}/refunds",
+        "every id slot names an ecommerce-service entity, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/returns",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/returns",
+        "{store_id} and {order_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/orders/{order_id}/returns/{return_id}",
+        "every id slot names an ecommerce-service entity, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/stores/{store_id}/shipping-methods",
+        "{store_id} names an ecommerce-service store, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}",
+        "{customer_id} names an ecommerce-service customer, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses",
+        "{customer_id} names an ecommerce-service customer, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses",
+        "{customer_id} names an ecommerce-service customer, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}",
+        "{customer_id} and {address_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}/addresses/{address_id}/archive",
+        "{customer_id} and {address_id} name ecommerce-service entities, not platform entity ids; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}/erase",
+        "{customer_id} names an ecommerce-service customer, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "GET",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}/export",
+        "{customer_id} names an ecommerce-service customer, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
+    (
+        "POST",
+        "/api/v1/tenant/ecommerce/customers/{customer_id}/update",
+        "{customer_id} names an ecommerce-service customer, not a platform entity id; that service isolates its ids by the delegated tenant (forced RLS), covered by its two-tenant HTTP and PostgreSQL tests",
+    ),
     (
         "GET",
         "/api/v1/tenant/ecommerce-imports/stores/{store_id}/connections/{provider}/callback",

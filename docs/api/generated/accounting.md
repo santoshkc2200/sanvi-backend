@@ -10,7 +10,7 @@ Operation: `complete_accounting_authorization`
 
 
 
-Responses: 200, 400, 403, 503
+Responses: 200, 400, 403, 502, 503
 
 ### Request journey (en-US / USD, cents)
 
@@ -114,7 +114,7 @@ Operation: `list_accounting_books`
 
 
 
-Responses: 200, 403
+Responses: 200, 403, 502, 503
 
 ### Response 200 (en-US / USD, cents)
 
@@ -196,7 +196,7 @@ Operation: `create_accounting_book`
 
 
 
-Responses: 201, 400, 403, 409
+Responses: 201, 400, 403, 409, 502, 503
 
 ### Request journey (en-US / USD, cents)
 
@@ -298,7 +298,7 @@ Operation: `get_accounting_book`
 
 
 
-Responses: 200, 403, 404
+Responses: 200, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -380,7 +380,7 @@ Operation: `activate_accounting_book`
 
 
 
-Responses: 200, 400, 403, 404, 409, 422, 503
+Responses: 200, 400, 403, 404, 409, 422, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -491,7 +491,7 @@ Operation: `register_accounting_connection`
 
 
 
-Responses: 200, 400, 403, 404, 409
+Responses: 200, 400, 403, 404, 409, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -618,7 +618,7 @@ Operation: `revoke_accounting_authorization`
 
 
 
-Responses: 204, 403, 404, 409, 503
+Responses: 204, 403, 404, 409, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -631,7 +631,7 @@ Operation: `start_accounting_authorization`
 
 
 
-Responses: 200, 403, 404, 503
+Responses: 200, 403, 404, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -660,7 +660,7 @@ Operation: `cancel_accounting_switch`
 
 
 
-Responses: 200, 400, 403, 404, 409
+Responses: 200, 400, 403, 404, 409, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -743,7 +743,7 @@ Operation: `schedule_accounting_switch`
 
 
 
-Responses: 200, 400, 403, 404, 409, 422, 503
+Responses: 200, 400, 403, 404, 409, 422, 502, 503
 
 | Parameter | Location | Required | Type / bounds / default |
 | --- | --- | --- | --- |
@@ -847,3 +847,27 @@ If-Match: example
   "scheduled_switch": null
 }
 ```
+
+## POST /internal/accounting/audit
+
+Operation: `ingest_accounting_audit`
+
+
+
+Responses: 204, 401, 403, 409
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `x-accounting-delegation` | header | yes | type="string" |
+
+## POST /internal/accounting/events
+
+Operation: `ingest_accounting_event`
+
+Receive service-owned outbox events without a distributed transaction.
+
+Responses: 204, 401, 403, 409
+
+| Parameter | Location | Required | Type / bounds / default |
+| --- | --- | --- | --- |
+| `x-accounting-delegation` | header | yes | type="string" |
