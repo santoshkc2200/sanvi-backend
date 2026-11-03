@@ -21,9 +21,9 @@ use super::handlers::{
 };
 use super::shopper_handlers::{
     get_public_order, get_public_payment, get_public_product, get_public_products,
-    get_public_store, get_published_store, post_public_checkout, post_public_checkout_release,
-    post_public_order, post_public_order_cancel, post_public_payment, post_public_payment_cancel,
-    put_published_store,
+    get_public_shipping_methods, get_public_store, get_published_store, post_public_checkout,
+    post_public_checkout_release, post_public_order, post_public_order_cancel, post_public_payment,
+    post_public_payment_cancel, put_published_store,
 };
 
 /// Public shopper routes (phase 14): full-path resources, no tenant or
@@ -40,6 +40,10 @@ pub fn product_access_public_routes(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/api/v1/public/ecommerce/products/{product_id}")
             .route(web::get().to(get_public_product)),
+    )
+    .service(
+        web::resource("/api/v1/public/ecommerce/shipping-methods")
+            .route(web::get().to(get_public_shipping_methods)),
     )
     .service(
         web::resource("/api/v1/public/ecommerce/checkout")

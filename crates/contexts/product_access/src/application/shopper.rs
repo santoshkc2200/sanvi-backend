@@ -46,6 +46,9 @@ const MAX_SHOPPER_KEY_BYTES: usize = 200;
 const CATALOG_PAGE_LIMIT: u32 = 200;
 const MAX_SCAN_PAGES: usize = 25;
 const LOCATION_PAGE_LIMIT: u32 = 200;
+/// The service's shipping-method page ceiling is 100; the checkout reads
+/// the whole active list paged at it.
+const SHIPPING_METHOD_PAGE_LIMIT: u32 = 100;
 const MAX_LOCATION_PAGES: usize = 5;
 const STOCK_PAGE_LIMIT: u32 = 1000;
 const MAX_STOCK_PAGES_PER_LOCATION: usize = 5;
@@ -216,6 +219,20 @@ pub struct ShopperPaymentStartView {
 pub struct ShopperPaymentStatusView {
     /// The latest attempt, or `None` before the first one starts.
     pub attempt: Option<ShopperPaymentAttemptView>,
+}
+
+/// One shipping method a checkout may select: the store's active methods
+/// only, priced by the service for display. Selection prices through the
+/// quote; this list never carries approval.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ShopperShippingMethodView {
+    /// Shipping method id (decimal Snowflake).
+    pub id: String,
+    pub name: String,
+    /// Flat charge, minor units, in the store's currency.
+    pub amount_minor: i64,
+    /// Tax class for rate application (`standard`, `reduced`, `exempt`).
+    pub tax_class: String,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -638,6 +655,56 @@ impl ShopperScope {
     // ------------------------------------------------------------------
     // Guest checkout
     // ------------------------------------------------------------------
+
+    /// The checkout's shipping-method list: the store's active methods
+    /// only, read under the web-checkout permission set. Listing needs no
+    /// store management (`ecommerce.store.read` suffices at the service);
+    /// the `status` filter is hardcoded here, so no client parameter can
+    /// widen it and no archived method reaches the picker.
+    pub async fn shipping_methods(
+        &self,
+        host: &str,
+    ) -> Result<Vec<ShopperShippingMethodView>, ShopperError> {
+        let (tenant_id, store_id) = self.store_context(host).await?;
+        self.active_store(tenant_id, store_id).await?;
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_LOCATION_PAGES {
+            let mut query = format!("status=active&limit={SHIPPING_METHOD_PAGE_LIMIT}");
+            if let Some(after) = &cursor {
+                query.push_str("&cursor=");
+                query.push_str(&urlencode(after));
+            }
+            let reply = self
+                .call_service(
+                    tenant_id,
+                    "GET",
+                    &format!("stores/{store_id}/shipping-methods"),
+                    Some(query),
+                    None,
+                    None,
+                )
+                .await?;
+            let page: ShippingMethodPageDoc = parse_doc(&reply.body)?;
+            items.extend(
+                page.items
+                    .into_iter()
+                    .filter(|method| method.status == "active")
+                    .map(|method| ShopperShippingMethodView {
+                        id: method.id,
+                        name: method.name,
+                        amount_minor: method.amount_minor,
+                        tax_class: method.tax_class,
+                    }),
+            );
+            cursor = page.next_cursor.filter(|value| !value.is_empty());
+            if cursor.is_none() {
+                return Ok(items);
+            }
+        }
+        tracing::warn!(store_id, "shipping-method scan hit the page cap");
+        Ok(items)
+    }
 
     pub async fn start_checkout(
         &self,
@@ -1973,6 +2040,26 @@ pub struct AddressDoc {
 pub struct AddressPageDoc {
     #[serde(default)]
     pub items: Vec<AddressDoc>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+}
+
+/// One shipping method inside a service page (the fields the checkout
+/// reads; currency and lifecycle timestamps stay service-side).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShippingMethodDoc {
+    pub id: String,
+    pub name: String,
+    pub amount_minor: i64,
+    pub tax_class: String,
+    #[serde(default)]
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ShippingMethodPageDoc {
+    #[serde(default)]
+    pub items: Vec<ShippingMethodDoc>,
     #[serde(default)]
     pub next_cursor: Option<String>,
 }
@@ -3412,6 +3499,78 @@ mod tests {
             scope.place_order("shop.acme.test", "key-9", &token).await,
             Err(ShopperError::CheckoutExpired)
         ));
+    }
+
+    // ------------------------------------------------------------------
+    // Shipping methods
+    // ------------------------------------------------------------------
+
+    fn shipping_harness() -> Harness {
+        harness(
+            |received| match (received.method.as_str(), received.path.as_str()) {
+                ("GET", "stores/42") => (200, vec![], store_body()),
+                ("GET", "stores/42/shipping-methods") => (
+                    200,
+                    vec![],
+                    serde_json::json!({
+                        "items": [
+                            {"id": "300", "store_id": "42", "name": "Standard delivery", "currency": "JPY",
+                             "amount_minor": 500, "tax_class": "standard", "status": "active",
+                             "version": 1, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+                            {"id": "301", "store_id": "42", "name": "Retired express", "currency": "JPY",
+                             "amount_minor": 900, "tax_class": "standard", "status": "archived",
+                             "version": 2, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z"}
+                        ],
+                        "next_cursor": serde_json::Value::Null
+                    }),
+                ),
+                _ => (404, vec![], problem_body("not-found", 404, "no such route")),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn lists_only_active_methods_under_checkout_permissions() {
+        let Harness { upstream, scope } = shipping_harness();
+        let methods = scope.shipping_methods("shop.acme.test").await.unwrap();
+        assert_eq!(
+            methods.len(),
+            1,
+            "the archived method never reaches the checkout"
+        );
+        assert_eq!(methods[0].id, "300");
+        assert_eq!(methods[0].name, "Standard delivery");
+        assert_eq!(methods[0].amount_minor, 500);
+        assert_eq!(methods[0].tax_class, "standard");
+
+        let call = upstream
+            .calls_to("stores/42/shipping-methods")
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(call.method, "GET");
+        assert_eq!(
+            call.query.as_deref(),
+            Some("status=active&limit=100"),
+            "the checkout identity reads active methods only"
+        );
+    }
+
+    #[tokio::test]
+    async fn archived_filter_cannot_be_requested_by_shopper() {
+        let Harness { upstream, scope } = shipping_harness();
+        scope.shipping_methods("shop.acme.test").await.unwrap();
+        let call = upstream
+            .calls_to("stores/42/shipping-methods")
+            .into_iter()
+            .next()
+            .unwrap();
+        // The orchestration hardcodes the filter: no client parameter can
+        // widen it to archived or all, and no store-manage grant exists to
+        // make the service accept one.
+        assert_eq!(call.query.as_deref(), Some("status=active&limit=100"));
+        assert!(!call.query.as_deref().unwrap().contains("archived"));
+        assert!(!call.query.as_deref().unwrap().contains("all"));
     }
 
     // ------------------------------------------------------------------

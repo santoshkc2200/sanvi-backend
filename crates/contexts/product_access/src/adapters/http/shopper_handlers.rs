@@ -303,6 +303,33 @@ pub async fn get_public_product(
     )
 }
 
+/// `GET /api/v1/public/ecommerce/shipping-methods` — the published
+/// store's active shipping methods, for the checkout's method picker.
+/// The service-side filter is hardcoded to active: a client-supplied
+/// `status` is ignored, and reading needs no store management. The
+/// answer is quote-derived pricing metadata and is always no-store.
+#[utoipa::path(
+    get,
+    path = "/api/v1/public/ecommerce/shipping-methods",
+    tag = "product_access",
+    operation_id = "public_ecommerce_shipping_methods",
+    params(("host" = Option<String>, Query, description = "Host override for server-side callers; defaults to the request Host")),
+    responses(
+        (status = 200, description = "The store's active shipping methods", body = Vec<crate::application::shopper::ShopperShippingMethodView>),
+        (status = 404, description = "No store is available for this host", body = sanvi_http::ProblemDetail),
+        (status = 502, description = "The store service answered unexpectedly", body = sanvi_http::ProblemDetail),
+        (status = 503, description = "The store service is not configured or unreachable", body = sanvi_http::ProblemDetail)
+    )
+)]
+pub async fn get_public_shipping_methods(
+    state: web::Data<ProductAccessState>,
+    request: HttpRequest,
+    query: web::Query<HostQuery>,
+) -> HttpResponse {
+    let host = shopper_host(&request, &query);
+    shopper_call!(state, state.shopper.shipping_methods(&host))
+}
+
 /// `POST /api/v1/public/ecommerce/checkout` — guest checkout start with an
 /// `Idempotency-Key`: validates the guest contact + address, reuses or
 /// creates the guest customer and address, picks reservation locations

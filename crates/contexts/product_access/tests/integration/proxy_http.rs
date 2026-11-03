@@ -18,7 +18,9 @@ use sanvi_product_access::domain::{
     CONNECTORS, ECOMMERCE, EntitlementView, HostTenants, ProductAccessError, RolePermissions,
     ShopperTenant, StoreBindings, TenantEntitlements,
 };
-use sanvi_product_access::routes::product_access_tenant_scope_routes;
+use sanvi_product_access::routes::{
+    product_access_public_routes, product_access_tenant_scope_routes,
+};
 
 const SERVICE_KEY: &str = "test-service-key-0001";
 const SEED: &str = "0909090909090909090909090909090909090909090909090909090909090909";
@@ -56,6 +58,17 @@ async fn upstream_handler(
             .insert_header(("Cache-Control", "no-store"))
             .insert_header(("X-Internal", "leak"))
             .body(r#"{"quoted":true}"#),
+        "/v1/stores/42" => HttpResponse::Ok()
+            .content_type("application/json")
+            .body(
+                r#"{"id":"42","name":"Acme Shop","currency":"JPY","status":"active"}"#,
+            ),
+        p if p.starts_with("/v1/stores/42/shipping-methods") => HttpResponse::Ok()
+            .content_type("application/json")
+            .insert_header(("Cache-Control", "no-store"))
+            .body(
+                r#"{"items":[{"id":"300","store_id":"42","name":"Standard delivery","currency":"JPY","amount_minor":500,"tax_class":"standard","status":"active","version":1,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}],"next_cursor":null}"#,
+            ),
         "/v1/unauthorized" => HttpResponse::Unauthorized().finish(),
         "/v1/missing" => HttpResponse::NotFound()
             .content_type("application/problem+json")
@@ -201,12 +214,68 @@ impl HostTenants for NoHostTenants {
     }
 }
 
+/// The state as the public shopper routes see it: host resolution and
+/// store binding succeed, everything else identical to the proxy state.
+fn public_state(base_url: &str, grants: Grants) -> ProductAccessState {
+    let grants = Arc::new(grants);
+    let signer = Arc::new(Ed25519Signer::from_seed_hex("test-kid", SEED).unwrap());
+    ProductAccessState {
+        ecommerce: Arc::new(ProxyRequest::new(
+            grants.clone(),
+            grants.clone(),
+            signer.clone(),
+            Arc::new(HttpProductUpstream::new(&ECOMMERCE, base_url, SERVICE_KEY).unwrap()),
+        )),
+        imports: Arc::new(ProxyImportRequest::new(
+            grants.clone(),
+            grants.clone(),
+            signer.clone(),
+            Arc::new(HttpProductUpstream::new(&CONNECTORS, base_url, SERVICE_KEY).unwrap()),
+        )),
+        shopper: Arc::new(ShopperScope::new(
+            Arc::new(FixedHosts),
+            grants.clone(),
+            Arc::new(BoundStore),
+            signer,
+            Arc::new(HttpProductUpstream::new(&ECOMMERCE, base_url, SERVICE_KEY).unwrap()),
+            3600,
+        )),
+    }
+}
+
 struct NoBindings;
 
 #[async_trait]
 impl StoreBindings for NoBindings {
     async fn published_store(&self, _: TenantId) -> Result<Option<i64>, ProductAccessError> {
         Ok(None)
+    }
+
+    async fn publish(&self, _: TenantId, _: Option<i64>) -> Result<(), ProductAccessError> {
+        Ok(())
+    }
+}
+
+/// Serves the public shopper routes with a resolvable host and a bound
+/// store, the way the mounted app does behind the middleware.
+struct FixedHosts;
+
+#[async_trait]
+impl HostTenants for FixedHosts {
+    async fn resolve(&self, _: &str) -> Result<Option<ShopperTenant>, ProductAccessError> {
+        Ok(Some(ShopperTenant {
+            tenant_id: TenantId::try_from(1001_i64).unwrap(),
+            active: true,
+        }))
+    }
+}
+
+struct BoundStore;
+
+#[async_trait]
+impl StoreBindings for BoundStore {
+    async fn published_store(&self, _: TenantId) -> Result<Option<i64>, ProductAccessError> {
+        Ok(Some(42))
     }
 
     async fn publish(&self, _: TenantId, _: Option<i64>) -> Result<(), ProductAccessError> {
@@ -575,5 +644,43 @@ async fn proxy_returns_no_store_from_upstream() {
     assert!(
         response.headers().get("x-internal").is_none(),
         "the allow-list still filters service internals"
+    );
+}
+
+/// The checkout's shipping-method list: `no-store` like every
+/// quote-derived answer, and the client's query parameters never widen
+/// the service-side filter.
+#[actix_web::test]
+async fn shipping_list_is_no_store() {
+    let (address, log) = start_upstream().await;
+    let st = public_state(&format!("http://{address}"), manager());
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(st))
+            .configure(product_access_public_routes),
+    )
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v1/public/ecommerce/shipping-methods?status=archived&limit=5")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("cache-control").unwrap(),
+        "private, no-store"
+    );
+
+    let received = log.lock().unwrap();
+    let methods = received
+        .iter()
+        .find(|r| r.uri.starts_with("/v1/stores/42/shipping-methods"))
+        .expect("the shipping-methods read reached the service");
+    assert_eq!(
+        methods.uri, "/v1/stores/42/shipping-methods?status=active&limit=100",
+        "the shopper's status/limit never reach the service"
     );
 }
