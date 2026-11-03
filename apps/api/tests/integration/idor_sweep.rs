@@ -388,6 +388,10 @@ fn body_for(method: &str, pattern: &str) -> Option<Value> {
             "success_url": format!("https://{HOST_A}/ok"),
             "cancel_url": format!("https://{HOST_A}/cancel")
         })),
+        // The binding route takes a JSON body the extractor reads before
+        // the permission gate (see the comment above); any canonical id
+        // reaches the denial.
+        "/api/v1/tenant/ecommerce-public-store" => Some(json!({"store_id": "42"})),
         "/api/v1/tenant/domains" => Some(json!({"hostname": "sweep.b.example"})),
         "/api/v1/tenant/domains/orders" => Some(json!({
             "hostname": "sweep-order.b.example",

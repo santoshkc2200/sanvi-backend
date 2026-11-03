@@ -3348,6 +3348,15 @@ pub fn build_app(
         // the longer siblings in actix's route tree (they 404).
         .configure(platform_admin_routes::platform_admin_routes)
         .configure(tenancy_routes::platform_routes)
+        // Phase-14: the public shopper scope (host-resolved, unauthenticated)
+        // and the tenant-side published-store binding routes. Both are
+        // full-path resources and must register before the tenant scope:
+        // actix commits to the first matching scope without backtracking,
+        // so a later registration would 404 behind `/api/v1/tenant`. The
+        // shopper scope fails closed with 503 while ecommerce-service is
+        // unconfigured, matching the tenant proxy's posture.
+        .configure(sanvi_product_access::routes::product_access_public_routes)
+        .configure(sanvi_product_access::routes::product_access_binding_routes)
         .service(tenant_scope)
         .configure(tenancy_routes::public_routes)
         .configure(identity_routes::identity_routes)
@@ -3452,14 +3461,6 @@ pub fn build_app(
             .configure(theming_routes::theming_platform_routes),
         None => app,
     };
-
-    // Phase-14: the public shopper scope (host-resolved, unauthenticated)
-    // and the tenant-side published-store binding routes. The shopper
-    // scope fails closed with 503 while ecommerce-service is unconfigured,
-    // matching the tenant proxy's posture.
-    let app = app
-        .configure(sanvi_product_access::routes::product_access_public_routes)
-        .configure(sanvi_product_access::routes::product_access_binding_routes);
 
     // Phase-08 gate: the domains context's platform and internal routes
     // (the tenant routes mount inside the shared tenant scope above). The
